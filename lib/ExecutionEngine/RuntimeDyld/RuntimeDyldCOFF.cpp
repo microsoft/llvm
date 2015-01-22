@@ -60,7 +60,7 @@ std::unique_ptr<RuntimeDyldCOFF>
 llvm::RuntimeDyldCOFF::create(Triple::ArchType Arch, RTDyldMemoryManager *MM) {
   switch (Arch) {
   default:
-    llvm_unreachable("Unsupported target for RuntimeDyldMachO.");
+    llvm_unreachable("Unsupported target for RuntimeDyldCOFF.");
     break;
   case Triple::x86_64: return make_unique<RuntimeDyldCOFF>(MM);
   }
@@ -151,12 +151,14 @@ void RuntimeDyldCOFF::finalizeLoad(ObjectImage &ObjImg,
 bool RuntimeDyldCOFF::isCompatibleFormat(const ObjectBuffer *Buffer) const {
   // Ensure there's space for the required header.
   size_t BufferSize = Buffer->getBufferSize();
+
   if (BufferSize < COFF::HeaderSize) {
     return false;
   }
   
   assert(COFF::HeaderSize == sizeof(COFF::header));
 
+  // This may not be sufficiently endian kosher...
   COFF::header * Header = (COFF::header *)(Buffer->getBufferStart());
   
   // (For now) insist we have X64 code...

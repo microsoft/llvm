@@ -372,7 +372,7 @@ bool COFFObjectFile::isSectionBSS(DataRefImpl Ref) const {
 bool COFFObjectFile::isSectionRequiredForExecution(DataRefImpl Ref) const {
   const coff_section *Sec = toSec(Ref);
   return !(Sec->Characteristics & 
-             (COFF::IMAGE_SCN_MEM_DISCARDABLE || COFF::IMAGE_SCN_LNK_INFO));
+             (COFF::IMAGE_SCN_MEM_DISCARDABLE | COFF::IMAGE_SCN_LNK_INFO));
 }
 
 bool COFFObjectFile::isSectionVirtual(DataRefImpl Ref) const {
