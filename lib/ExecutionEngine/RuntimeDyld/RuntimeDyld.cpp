@@ -13,6 +13,7 @@
 
 #include "llvm/ExecutionEngine/RuntimeDyld.h"
 #include "RuntimeDyldCheckerImpl.h"
+#include "RuntimeDyldCOFF.h"
 #include "RuntimeDyldELF.h"
 #include "RuntimeDyldImpl.h"
 #include "RuntimeDyldMachO.h"
@@ -813,6 +814,14 @@ RuntimeDyld::RuntimeDyld(RTDyldMemoryManager *mm) {
 
 RuntimeDyld::~RuntimeDyld() {}
 
+static std::unique_ptr<RuntimeDyldCOFF>
+createRuntimeDyldCOFF(Triple::ArchType Arch, RTDyldMemoryManager *MM,
+bool ProcessAllSections) {
+  std::unique_ptr<RuntimeDyldCOFF> Dyld(RuntimeDyldCOFF::create(Arch, MM));
+  Dyld->setProcessAllSections(ProcessAllSections);
+  return Dyld;
+}
+
 static std::unique_ptr<RuntimeDyldELF>
 createRuntimeDyldELF(RTDyldMemoryManager *MM, bool ProcessAllSections,
                      RuntimeDyldCheckerImpl *Checker) {
@@ -838,6 +847,10 @@ RuntimeDyld::loadObject(const ObjectFile &Obj) {
       Dyld = createRuntimeDyldELF(MM, ProcessAllSections, Checker);
     else if (Obj.isMachO())
       Dyld = createRuntimeDyldMachO(
+               static_cast<Triple::ArchType>(Obj.getArch()), MM,
+               ProcessAllSections, Checker);
+    else if (Obj.isCOFF())
+      Dyld = createRuntimeDyldCOFF(
                static_cast<Triple::ArchType>(Obj.getArch()), MM,
                ProcessAllSections, Checker);
     else
