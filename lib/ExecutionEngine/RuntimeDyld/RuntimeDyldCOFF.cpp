@@ -75,8 +75,21 @@ void RuntimeDyldCOFF::resolveX86_64Relocation(const SectionEntry &Section,
                                              uint64_t Offset, uint64_t Value,
                                              uint32_t Type, int64_t Addend,
                                              uint64_t SymOffset) {
-  // Stub
+  uint8_t *Target = Section.Address + Offset;
+
   switch (Type) {
+  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR32NB: {
+    uint32_t *TargetAddress = (uint32_t *)Target;
+    *TargetAddress = Value + Addend;
+    break;
+  }
+
+  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR64: {
+    uint64_t *TargetAddress = (uint64_t *)Target;
+    *TargetAddress = Value + Addend;
+    break;
+  }
+
   default:
     llvm_unreachable("Relocation type not implemented yet!");
     break;
@@ -109,18 +122,74 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
     StubMap &Stubs) {
   uint64_t RelType;
   Check1(RelI->getType(RelType));
-  uint64_t Addend;
-  Check1(RelI->getOffset(Addend));
+  uint64_t Offset;
+  Check1(RelI->getOffset(Offset));
   symbol_iterator Symbol = RelI->getSymbol();
+
+  // See if the fixup target has a nonzero addend
+  // to contribute to the overall fixup result.
+  uint64_t Addend = 0;
+  SectionEntry &Section = Sections[SectionID];
+  uint8_t *Target = Section.Address + Offset;
+  switch (RelType) {
+  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR32NB: {
+    uint32_t *TargetAddress = (uint32_t *)Target;
+    Addend = *TargetAddress;
+    break; 
+  }
+
+  case COFF::IMAGE_REL_AMD64_ADDR64: {
+    uint64_t *TargetAddress = (uint64_t *)Target;
+    Addend = *TargetAddress;
+    break;
+  }
+
+  default:
+    break;
+  }
 
   // Obtain the symbol name which is referenced in the relocation
   StringRef TargetName;
   if (Symbol != ObjImage.end_symbols())
     Symbol->getName(TargetName);
-  DEBUG(dbgs() << "\t\tRelType: " << RelType << " Addend: " << Addend
-        << " TargetName: " << TargetName << "\n");
+  DEBUG(dbgs() << "\t\tIn Section " << SectionID << " Offset " << Offset 
+        << " RelType: " << RelType << " TargetName: " << TargetName 
+        << " Addend " << Addend << "\n");
 
-  // Stub
+  // Obtain the relocation value....
+  RelocationValueRef Value;
+
+  // Determine location of target symbol.
+  // First search for the symbol in the local symbol table
+  SymbolTableMap::const_iterator lsi = Symbols.end();
+  SymbolRef::Type SymType = SymbolRef::ST_Unknown;
+  if (Symbol != ObjImage.end_symbols()) {
+    lsi = Symbols.find(TargetName.data());
+    Symbol->getType(SymType);
+  }
+
+  // Assert for now that any fixup be resolvable
+  // within the object scope.
+  if (lsi != Symbols.end()) {
+    Value.SectionID = lsi->second.first;
+    Value.Offset = lsi->second.second;
+    Value.Addend = Addend;
+  } else {
+    llvm_unreachable("External symbol reference?");
+  }
+
+  switch (RelType) {
+  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR64:
+  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR32NB:
+  {
+    RelocationEntry RE(SectionID, Offset, RelType, Value.Addend);
+    addRelocationForSymbol(RE, TargetName);
+    break;
+  }
+  default:
+    llvm_unreachable("Unhandled relocation type");
+  }
+
   return ++RelI;
 }
 
@@ -136,7 +205,7 @@ void RuntimeDyldCOFF::finalizeLoad(ObjectImage &ObjImg,
     const SectionRef &Section = i->first;
     StringRef Name;
     Section.getName(Name);
-    if (Name == ".pdata") {
+    if (Name == ".xdata") {
       UnregisteredEHFrameSections.push_back(i->second);
     }
   }
@@ -147,6 +216,10 @@ void RuntimeDyldCOFF::finalizeLoad(ObjectImage &ObjImg,
 bool RuntimeDyldCOFF::isCompatibleFormat(const ObjectBuffer *Buffer) const {
   // Ensure there's space for the required header.
   size_t BufferSize = Buffer->getBufferSize();
+
+  FILE * f = fopen("coff.obj", "wb");
+  fwrite(Buffer->getBufferStart(), sizeof(char), BufferSize, f);
+  fclose(f);
 
   if (BufferSize < COFF::HeaderSize) {
     return false;
@@ -172,16 +245,28 @@ bool RuntimeDyldCOFF::isCompatibleFormat(const ObjectBuffer *Buffer) const {
     return false;
   }
 
-  // There should be space for the symbol table.
+  // There should be space for the symbol table plus the length of the string
+  // table.
   if (Header->PointerToSymbolTable > 0) {
     unsigned int SymbolTableSize = Header->NumberOfSymbols * COFF::SymbolSize;
-    if (Header->PointerToSymbolTable + SymbolTableSize > BufferSize) {
+    unsigned int SymbolTableEnd = Header->PointerToSymbolTable + SymbolTableSize;
+    
+    if (SymbolTableEnd + 4 > BufferSize) {
+      return false;
+    }
+
+    // Fetch the length of the string table (including the length field).
+    unsigned int StringTableSize = 
+      *(unsigned int *)(Buffer->getBufferStart() + SymbolTableEnd);
+
+    // Ensure there's room for the string table.
+    if (SymbolTableEnd + StringTableSize > BufferSize) {
       return false;
     }
   }
 
   // Object should not have any characterisic flags set.
-  if (Header->SizeOfOptionalHeader != 0) {
+  if (Header->Characteristics != 0) {
     return false;
   }  
   
