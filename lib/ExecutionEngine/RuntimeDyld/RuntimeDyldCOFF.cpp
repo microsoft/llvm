@@ -215,11 +215,7 @@ void RuntimeDyldCOFF::finalizeLoad(ObjectImage &ObjImg,
 // We do some basic sanity checks here.
 bool RuntimeDyldCOFF::isCompatibleFormat(const ObjectBuffer *Buffer) const {
   // Ensure there's space for the required header.
-  size_t BufferSize = Buffer->getBufferSize();
-
-  FILE * f = fopen("coff.obj", "wb");
-  fwrite(Buffer->getBufferStart(), sizeof(char), BufferSize, f);
-  fclose(f);
+  const size_t BufferSize = Buffer->getBufferSize();
 
   if (BufferSize < COFF::HeaderSize) {
     return false;
@@ -245,11 +241,13 @@ bool RuntimeDyldCOFF::isCompatibleFormat(const ObjectBuffer *Buffer) const {
     return false;
   }
 
-  // There should be space for the symbol table plus the length of the string
-  // table.
-  if (Header->PointerToSymbolTable > 0) {
+  // There should be space for the symbol table plus the 4 byte 
+  // length of the string table.
+  const uint32_t SymbolTableOffset = Header->PointerToSymbolTable;
+
+  if (SymbolTableOffset > 0) {
     unsigned int SymbolTableSize = Header->NumberOfSymbols * COFF::SymbolSize;
-    unsigned int SymbolTableEnd = Header->PointerToSymbolTable + SymbolTableSize;
+    unsigned int SymbolTableEnd = SymbolTableOffset + SymbolTableSize;
     
     if (SymbolTableEnd + 4 > BufferSize) {
       return false;
