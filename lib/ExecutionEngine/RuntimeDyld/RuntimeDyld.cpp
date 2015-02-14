@@ -18,6 +18,7 @@
 #include "RuntimeDyldImpl.h"
 #include "RuntimeDyldMachO.h"
 #include "llvm/Object/ELFObjectFile.h"
+#include "llvm/Object/COFF.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MutexGuard.h"
 
@@ -262,6 +263,10 @@ static bool isRequiredForExecution(const SectionRef &Section) {
   const ObjectFile *Obj = Section.getObject();
   if (auto *ELFObj = dyn_cast<object::ELFObjectFileBase>(Obj))
     return ELFObj->getSectionFlags(Section) & ELF::SHF_ALLOC;
+  if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj))
+    return !(COFFObj->getCOFFSection(Section)->Characteristics &
+             (COFF::IMAGE_SCN_MEM_DISCARDABLE | COFF::IMAGE_SCN_LNK_INFO));
+  
   assert(isa<MachOObjectFile>(Obj));
   return true;
  }
@@ -271,6 +276,15 @@ static bool isReadOnlyData(const SectionRef &Section) {
   if (auto *ELFObj = dyn_cast<object::ELFObjectFileBase>(Obj))
     return !(ELFObj->getSectionFlags(Section) &
              (ELF::SHF_WRITE | ELF::SHF_EXECINSTR));
+  if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj))
+    return ((COFFObj->getCOFFSection(Section)->Characteristics &
+             (COFF::IMAGE_SCN_CNT_INITIALIZED_DATA
+             | COFF::IMAGE_SCN_MEM_READ
+             | COFF::IMAGE_SCN_MEM_WRITE))
+             ==
+             (COFF::IMAGE_SCN_CNT_INITIALIZED_DATA
+             | COFF::IMAGE_SCN_MEM_READ));
+
   assert(isa<MachOObjectFile>(Obj));
   return false;
 }
@@ -279,6 +293,9 @@ static bool isZeroInit(const SectionRef &Section) {
   const ObjectFile *Obj = Section.getObject();
   if (auto *ELFObj = dyn_cast<object::ELFObjectFileBase>(Obj))
     return ELFObj->getSectionType(Section) == ELF::SHT_NOBITS;
+  if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj))
+    return COFFObj->getCOFFSection(Section)->Characteristics &
+            COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA;
 
   auto *MachO = cast<MachOObjectFile>(Obj);
   unsigned SectionType = MachO->getSectionType(Section);
@@ -816,9 +833,10 @@ RuntimeDyld::~RuntimeDyld() {}
 
 static std::unique_ptr<RuntimeDyldCOFF>
 createRuntimeDyldCOFF(Triple::ArchType Arch, RTDyldMemoryManager *MM,
-bool ProcessAllSections) {
+                      bool ProcessAllSections, RuntimeDyldCheckerImpl *Checker) {
   std::unique_ptr<RuntimeDyldCOFF> Dyld(RuntimeDyldCOFF::create(Arch, MM));
   Dyld->setProcessAllSections(ProcessAllSections);
+  Dyld->setRuntimeDyldChecker(Checker);
   return Dyld;
 }
 

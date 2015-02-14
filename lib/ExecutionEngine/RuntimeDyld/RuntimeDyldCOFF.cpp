@@ -12,14 +12,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "RuntimeDyldCOFF.h"
-#include "JITRegistrar.h"
-#include "ObjectImageCommon.h"
 #include "llvm/ADT/IntervalMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
-#include "llvm/ExecutionEngine/ObjectBuffer.h"
-#include "llvm/ExecutionEngine/ObjectImage.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/COFF.h"
@@ -29,6 +25,22 @@ using namespace llvm;
 using namespace llvm::object;
 
 #define DEBUG_TYPE "dyld"
+
+namespace {
+
+class LoadedCOFFObjectInfo : public RuntimeDyld::LoadedObjectInfo {
+public:
+  LoadedCOFFObjectInfo(RuntimeDyldImpl &RTDyld, unsigned BeginIdx,
+                        unsigned EndIdx)
+    : RuntimeDyld::LoadedObjectInfo(RTDyld, BeginIdx, EndIdx) {}
+
+  OwningBinary<ObjectFile>
+  getObjectForDebug(const ObjectFile &Obj) const override {
+    return OwningBinary<ObjectFile>();
+  }
+};
+
+}
 
 namespace llvm {
 
@@ -50,15 +62,6 @@ void RuntimeDyldCOFF::deregisterEHFrames() {
   // Stub
 }
 
-ObjectImage *
-RuntimeDyldCOFF::createObjectImageFromFile(std::unique_ptr<object::ObjectFile> ObjFile) {
-  return new ObjectImageCommon(std::move(ObjFile));
-}
-
-ObjectImage *RuntimeDyldCOFF::createObjectImage(ObjectBuffer *Buffer) {
-  return new ObjectImageCommon(Buffer);
-}
-
 std::unique_ptr<RuntimeDyldCOFF>
 llvm::RuntimeDyldCOFF::create(Triple::ArchType Arch, RTDyldMemoryManager *MM) {
   switch (Arch) {
@@ -69,6 +72,15 @@ llvm::RuntimeDyldCOFF::create(Triple::ArchType Arch, RTDyldMemoryManager *MM) {
   }
 }
 
+std::unique_ptr<RuntimeDyld::LoadedObjectInfo>
+RuntimeDyldCOFF::loadObject(const object::ObjectFile &O) {
+  unsigned SectionStartIdx, SectionEndIdx;
+  std::tie(SectionStartIdx, SectionEndIdx) = loadObjectImpl(O);
+  return llvm::make_unique<LoadedCOFFObjectInfo>(*this, SectionStartIdx,
+                                                SectionEndIdx);
+}
+
+RuntimeDyldCOFF::RuntimeDyldCOFF(RTDyldMemoryManager *mm) : RuntimeDyldImpl(mm) {}
 RuntimeDyldCOFF::~RuntimeDyldCOFF() {}
 
 void RuntimeDyldCOFF::resolveX86_64Relocation(const SectionEntry &Section,
@@ -117,9 +129,8 @@ void RuntimeDyldCOFF::resolveRelocation(const SectionEntry &Section,
 }
 
 relocation_iterator RuntimeDyldCOFF::processRelocationRef(
-    unsigned SectionID, relocation_iterator RelI, ObjectImage &ObjImage,
-    ObjSectionToIDMap &ObjSectionToID, const SymbolTableMap &Symbols,
-    StubMap &Stubs) {
+    unsigned SectionID, relocation_iterator RelI, const ObjectFile &Obj,
+    ObjSectionToIDMap &ObjSectionToID, StubMap &Stubs) {
   uint64_t RelType;
   Check1(RelI->getType(RelType));
   uint64_t Offset;
@@ -150,7 +161,7 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
 
   // Obtain the symbol name which is referenced in the relocation
   StringRef TargetName;
-  if (Symbol != ObjImage.end_symbols())
+  if (Symbol != Obj.symbol_end())
     Symbol->getName(TargetName);
   DEBUG(dbgs() << "\t\tIn Section " << SectionID << " Offset " << Offset 
         << " RelType: " << RelType << " TargetName: " << TargetName 
@@ -161,19 +172,20 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
 
   // Determine location of target symbol.
   // First search for the symbol in the local symbol table
-  SymbolTableMap::const_iterator lsi = Symbols.end();
+  RTDyldSymbolTable::const_iterator lsi = GlobalSymbolTable.end();
   SymbolRef::Type SymType = SymbolRef::ST_Unknown;
-  if (Symbol != ObjImage.end_symbols()) {
-    lsi = Symbols.find(TargetName.data());
+  if (Symbol != Obj.symbol_end()) {
+    lsi = GlobalSymbolTable.find(TargetName.data());
     Symbol->getType(SymType);
   }
 
   // Assert for now that any fixup be resolvable
   // within the object scope.
-  if (lsi != Symbols.end()) {
-    Value.SectionID = lsi->second.first;
-    Value.Offset = lsi->second.second;
-    Value.Addend = Addend;
+  if (lsi != GlobalSymbolTable.end()) {
+    const auto &SymInfo = lsi->second;
+    Value.SectionID = SymInfo.getSectionID();
+    Value.Offset = SymInfo.getOffset();
+    Value.Addend = SymInfo.getOffset() + Addend;
   } else {
     llvm_unreachable("External symbol reference?");
   }
@@ -197,7 +209,7 @@ void RuntimeDyldCOFF::updateGOTEntries(StringRef Name, uint64_t Addr) {
   // Stub
 }
 
-void RuntimeDyldCOFF::finalizeLoad(ObjectImage &ObjImg,
+void RuntimeDyldCOFF::finalizeLoad(const ObjectFile &Obj,
                                   ObjSectionToIDMap &SectionMap) {
   // Look for and record the EH frame sections.
   ObjSectionToIDMap::iterator i, e;
@@ -211,69 +223,8 @@ void RuntimeDyldCOFF::finalizeLoad(ObjectImage &ObjImg,
   }
 }
 
-// COFF Object files do not have any magic signature we can key on.
-// We do some basic sanity checks here.
-bool RuntimeDyldCOFF::isCompatibleFormat(const ObjectBuffer *Buffer) const {
-  // Ensure there's space for the required header.
-  const size_t BufferSize = Buffer->getBufferSize();
-
-  if (BufferSize < COFF::HeaderSize) {
-    return false;
-  }
-  
-  assert(COFF::HeaderSize == sizeof(COFF::header));
-
-  // This may not be sufficiently endian kosher...
-  COFF::header * Header = (COFF::header *)(Buffer->getBufferStart());
-  
-  // (For now) insist we have X64 code...
-  if (Header->Machine != COFF::MachineTypes::IMAGE_FILE_MACHINE_AMD64) {
-    return false;
-  }
-
-  // Object should have at least one section or it's not interesting.
-  if (Header->NumberOfSections == 0) {
-    return false;
-  }
-
-  // Object should not have an optional header.
-  if (Header->SizeOfOptionalHeader != 0) {
-    return false;
-  }
-
-  // There should be space for the symbol table plus the 4 byte 
-  // length of the string table.
-  const uint32_t SymbolTableOffset = Header->PointerToSymbolTable;
-
-  if (SymbolTableOffset > 0) {
-    unsigned int SymbolTableSize = Header->NumberOfSymbols * COFF::SymbolSize;
-    unsigned int SymbolTableEnd = SymbolTableOffset + SymbolTableSize;
-    
-    if (SymbolTableEnd + 4 > BufferSize) {
-      return false;
-    }
-
-    // Fetch the length of the string table (including the length field).
-    unsigned int StringTableSize = 
-      *(unsigned int *)(Buffer->getBufferStart() + SymbolTableEnd);
-
-    // Ensure there's room for the string table.
-    if (SymbolTableEnd + StringTableSize > BufferSize) {
-      return false;
-    }
-  }
-
-  // Object should not have any characterisic flags set.
-  if (Header->Characteristics != 0) {
-    return false;
-  }  
-  
-  // Seems plausible this is a coff object file.
-  return true;
-}
-
-bool RuntimeDyldCOFF::isCompatibleFile(const object::ObjectFile *Obj) const {
-  return Obj->isCOFF();
+bool RuntimeDyldCOFF::isCompatibleFile(const object::ObjectFile &Obj) const {
+  return Obj.isCOFF();
 }
 
 } // namespace llvm

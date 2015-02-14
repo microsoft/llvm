@@ -359,46 +359,19 @@ bool COFFObjectFile::isSectionData(DataRefImpl Ref) const {
 
 bool COFFObjectFile::isSectionBSS(DataRefImpl Ref) const {
   const coff_section *Sec = toSec(Ref);
-  return Sec->Characteristics &
+  return (Sec->Characteristics &
     (COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA
     | COFF::IMAGE_SCN_MEM_READ
-    | COFF::IMAGE_SCN_MEM_WRITE)
+    | COFF::IMAGE_SCN_MEM_WRITE))
     ==
     (COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA
     | COFF::IMAGE_SCN_MEM_READ
     | COFF::IMAGE_SCN_MEM_WRITE);
 }
 
-bool COFFObjectFile::isSectionRequiredForExecution(DataRefImpl Ref) const {
-  const coff_section *Sec = toSec(Ref);
-  return !(Sec->Characteristics & 
-             (COFF::IMAGE_SCN_MEM_DISCARDABLE | COFF::IMAGE_SCN_LNK_INFO));
-}
-
 bool COFFObjectFile::isSectionVirtual(DataRefImpl Ref) const {
   const coff_section *Sec = toSec(Ref);
   return Sec->SizeOfRawData == 0;
-}
-
-bool COFFObjectFile::isSectionZeroInit(DataRefImpl Ref) const {
-  const coff_section *Sec = toSec(Ref);
-  return Sec->Characteristics & COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA;
-}
-
-bool COFFObjectFile::isSectionReadOnlyData(DataRefImpl Ref) const {
-  const coff_section *Sec = toSec(Ref);
-  return (Sec->Characteristics &
-            (COFF::IMAGE_SCN_CNT_INITIALIZED_DATA
-            | COFF::IMAGE_SCN_MEM_READ
-            | COFF::IMAGE_SCN_MEM_WRITE)) 
-            == 
-            (COFF::IMAGE_SCN_CNT_INITIALIZED_DATA 
-            | COFF::IMAGE_SCN_MEM_READ);
-}
-
-bool COFFObjectFile::isSectionVirtual(DataRefImpl Ref) const {
-  const coff_section *Sec = toSec(Ref);
-  return Sec->Characteristics & COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA;
 }
 
 bool COFFObjectFile::sectionContainsSymbol(DataRefImpl SecRef,
