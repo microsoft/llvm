@@ -108,6 +108,26 @@ void RuntimeDyldCOFF::resolveX86_64Relocation(const SectionEntry &Section,
   }
 }
 
+// The target location for the relocation is described by RE.SectionID and
+// RE.Offset.  RE.SectionID can be used to find the SectionEntry.  Each
+// SectionEntry has three members describing its location.
+// SectionEntry::Address is the address at which the section has been loaded
+// into memory in the current (host) process.  SectionEntry::LoadAddress is the
+// address that the section will have in the target process.
+// SectionEntry::ObjAddress is the address of the bits for this section in the
+// original emitted object image (also in the current address space).
+//
+// Relocations will be applied as if the section were loaded at
+// SectionEntry::LoadAddress, but they will be applied at an address based
+// on SectionEntry::Address.  SectionEntry::ObjAddress will be used to refer to
+// Target memory contents if they are required for value calculations.
+//
+// The Value parameter here is the load address of the symbol for the
+// relocation to be applied.  For relocations which refer to symbols in the
+// current object Value will be the LoadAddress of the section in which
+// the symbol resides (RE.Addend provides additional information about the
+// symbol location).  For external symbols, Value will be the address of the
+// symbol in the target address space.
 void RuntimeDyldCOFF::resolveRelocation(const RelocationEntry &RE,
                                         uint64_t Value) {
   const SectionEntry &Section = Sections[RE.SectionID];
@@ -126,6 +146,26 @@ void RuntimeDyldCOFF::resolveRelocation(const SectionEntry &Section,
   default:
     llvm_unreachable("Unsupported CPU type!");
   }
+}
+
+static uint64_t getSymbolOffset(const SymbolRef &Sym) {
+  uint64_t Address;
+  if (std::error_code EC = Sym.getAddress(Address))
+    return UnknownAddressOrSize;
+
+  if (Address == UnknownAddressOrSize)
+    return UnknownAddressOrSize;
+
+  const ObjectFile *Obj = Sym.getObject();
+  section_iterator SecI(Obj->section_end());
+  if (std::error_code EC = Sym.getSection(SecI))
+    return UnknownAddressOrSize;
+
+  if (SecI == Obj->section_end())
+    return UnknownAddressOrSize;
+
+  uint64_t SectionAddress = SecI->getAddress();
+  return Address - SectionAddress;
 }
 
 relocation_iterator RuntimeDyldCOFF::processRelocationRef(
@@ -167,26 +207,27 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
         << " RelType: " << RelType << " TargetName: " << TargetName 
         << " Addend " << Addend << "\n");
 
-  // Obtain the relocation value....
-  RelocationValueRef Value;
-
-  // Determine location of target symbol.
-  // First search for the symbol in the local symbol table
-  RTDyldSymbolTable::const_iterator lsi = GlobalSymbolTable.end();
-  SymbolRef::Type SymType = SymbolRef::ST_Unknown;
+  // Obtain the target offset and symbol kind
+  bool IsSectionDefinition = false;
+  unsigned TargetSectionID = 0;
+  uint64_t TargetOffset = UnknownAddressOrSize;
   if (Symbol != Obj.symbol_end()) {
-    lsi = GlobalSymbolTable.find(TargetName.data());
-    Symbol->getType(SymType);
+    const COFFObjectFile *COFFObj = cast<COFFObjectFile>(&Obj);
+    const COFFSymbolRef COFFSymbol = COFFObj->getCOFFSymbol(*Symbol);
+    IsSectionDefinition = COFFSymbol.isSectionDefinition();
+    if (IsSectionDefinition) {
+      section_iterator SecI(Obj.section_end());
+      Symbol->getSection(SecI);
+      if (SecI == Obj.section_end())
+        llvm_unreachable("Symbol section not found, bad object file");
+      bool IsCode = SecI->isText();
+      TargetSectionID = findOrEmitSection(Obj, *SecI, IsCode, ObjSectionToID);
+    }
+    TargetOffset = getSymbolOffset(*Symbol);
   }
 
-  // Assert for now that any fixup be resolvable
-  // within the object scope.
-  if (lsi != GlobalSymbolTable.end()) {
-    const auto &SymInfo = lsi->second;
-    Value.SectionID = SymInfo.getSectionID();
-    Value.Offset = SymInfo.getOffset();
-    Value.Addend = SymInfo.getOffset() + Addend;
-  } else {
+  // Assert for now that any fixup be resolvable within the object scope.
+  if (TargetOffset == UnknownAddressOrSize) {
     llvm_unreachable("External symbol reference?");
   }
 
@@ -194,8 +235,12 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
   case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR64:
   case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR32NB:
   {
-    RelocationEntry RE(SectionID, Offset, RelType, Value.Addend);
-    addRelocationForSymbol(RE, TargetName);
+    RelocationEntry RE(SectionID, Offset, RelType, TargetOffset + Addend);
+
+    if (IsSectionDefinition)
+      addRelocationForSection(RE, TargetSectionID);
+    else
+      addRelocationForSymbol(RE, TargetName);
     break;
   }
   default:

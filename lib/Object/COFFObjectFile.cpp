@@ -190,7 +190,9 @@ std::error_code COFFObjectFile::getSymbolType(DataRefImpl Ref,
     Result = SymbolRef::ST_Data;
   } else if (Symb.isFileRecord()) {
     Result = SymbolRef::ST_File;
-  } else if (SectionNumber == COFF::IMAGE_SYM_DEBUG) {
+  } else if (SectionNumber == COFF::IMAGE_SYM_DEBUG ||
+             Symb.isSectionDefinition()) {
+    // TODO: perhaps we need a new symbol type ST_Section.
     Result = SymbolRef::ST_Debug;
   } else if (!COFF::isReservedSectionNumber(SectionNumber)) {
     const coff_section *Section = nullptr;
