@@ -9,10 +9,9 @@
 #ifndef LLVM_DEBUGINFO_PDB_PDBSYMBOLANNOTATION_H
 #define LLVM_DEBUGINFO_PDB_PDBSYMBOLANNOTATION_H
 
-#include <string>
-
 #include "PDBSymbol.h"
 #include "PDBTypes.h"
+#include <string>
 
 namespace llvm {
 
@@ -25,7 +24,7 @@ public:
 
   DECLARE_PDB_SYMBOL_CONCRETE_TYPE(PDB_SymType::Annotation)
 
-  void dump(raw_ostream &OS, int Indent, PDB_DumpLevel Level) const override;
+  void dump(raw_ostream &OS, int Indent, PDB_DumpLevel Level, PDB_DumpFlags Flags) const override;
 
   FORWARD_SYMBOL_METHOD(getAddressOffset)
   FORWARD_SYMBOL_METHOD(getAddressSection)

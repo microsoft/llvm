@@ -10,10 +10,9 @@
 #ifndef LLVM_DEBUGINFO_PDB_PDBSYMBOLTHUNK_H
 #define LLVM_DEBUGINFO_PDB_PDBSYMBOLTHUNK_H
 
-#include <string>
-
 #include "PDBSymbol.h"
 #include "PDBTypes.h"
+#include <string>
 
 namespace llvm {
 
@@ -26,7 +25,7 @@ public:
 
   DECLARE_PDB_SYMBOL_CONCRETE_TYPE(PDB_SymType::Thunk)
 
-  void dump(raw_ostream &OS, int Indent, PDB_DumpLevel Level) const override;
+  void dump(raw_ostream &OS, int Indent, PDB_DumpLevel Level, PDB_DumpFlags Flags) const override;
 
   FORWARD_SYMBOL_METHOD(getAccess)
   FORWARD_SYMBOL_METHOD(getAddressOffset)

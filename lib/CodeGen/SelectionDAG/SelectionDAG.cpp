@@ -1484,6 +1484,34 @@ SDValue SelectionDAG::getVectorShuffle(EVT VT, SDLoc dl, SDValue N1,
   if (N1.getOpcode() == ISD::UNDEF)
     commuteShuffle(N1, N2, MaskVec);
 
+  // If shuffling a splat, try to blend the splat instead. We do this here so
+  // that even when this arises during lowering we don't have to re-handle it.
+  auto BlendSplat = [&](BuildVectorSDNode *BV, int Offset) {
+    BitVector UndefElements;
+    SDValue Splat = BV->getSplatValue(&UndefElements);
+    if (!Splat)
+      return;
+
+    for (int i = 0; i < (int)NElts; ++i) {
+      if (MaskVec[i] < Offset || MaskVec[i] >= (Offset + (int)NElts))
+        continue;
+
+      // If this input comes from undef, mark it as such.
+      if (UndefElements[MaskVec[i] - Offset]) {
+        MaskVec[i] = -1;
+        continue;
+      }
+
+      // If we can blend a non-undef lane, use that instead.
+      if (!UndefElements[i])
+        MaskVec[i] = i + Offset;
+    }
+  };
+  if (auto *N1BV = dyn_cast<BuildVectorSDNode>(N1))
+    BlendSplat(N1BV, 0);
+  if (auto *N2BV = dyn_cast<BuildVectorSDNode>(N2))
+    BlendSplat(N2BV, NElts);
+
   // Canonicalize all index into lhs, -> shuffle lhs, undef
   // Canonicalize all index into rhs, -> shuffle rhs, undef
   bool AllLHS = true, AllRHS = true;
@@ -1553,24 +1581,19 @@ SDValue SelectionDAG::getVectorShuffle(EVT VT, SDLoc dl, SDValue N1,
             return N1;
       }
 
-      // If the shuffle itself creates a constant splat, build the vector
-      // directly.
+      // If the shuffle itself creates a splat, build the vector directly.
       if (AllSame && SameNumElts) {
-         const SDValue &Splatted = BV->getOperand(MaskVec[0]);
-         if (isa<ConstantSDNode>(Splatted) || isa<ConstantFPSDNode>(Splatted)) {
-           SmallVector<SDValue, 8> Ops;
-           for (unsigned i = 0; i != NElts; ++i)
-             Ops.push_back(Splatted);
+        const SDValue &Splatted = BV->getOperand(MaskVec[0]);
+        SmallVector<SDValue, 8> Ops(NElts, Splatted);
 
-           SDValue NewBV =
-               getNode(ISD::BUILD_VECTOR, dl, BV->getValueType(0), Ops);
+        EVT BuildVT = BV->getValueType(0);
+        SDValue NewBV = getNode(ISD::BUILD_VECTOR, dl, BuildVT, Ops);
 
-           // We may have jumped through bitcasts, so the type of the
-           // BUILD_VECTOR may not match the type of the shuffle.
-           if (BV->getValueType(0) != VT)
-             NewBV = getNode(ISD::BITCAST, dl, VT, NewBV);
-           return NewBV;
-         }
+        // We may have jumped through bitcasts, so the type of the
+        // BUILD_VECTOR may not match the type of the shuffle.
+        if (BuildVT != VT)
+          NewBV = getNode(ISD::BITCAST, dl, VT, NewBV);
+        return NewBV;
       }
     }
   }
@@ -3971,9 +3994,7 @@ static SDValue getMemcpyLoadsAndStores(SelectionDAG &DAG, SDLoc dl,
   bool DstAlignCanChange = false;
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo *MFI = MF.getFrameInfo();
-  bool OptSize =
-    MF.getFunction()->getAttributes().
-      hasAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
+  bool OptSize = MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
   FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Dst);
   if (FI && !MFI->isFixedObjectIndex(FI->getIndex()))
     DstAlignCanChange = true;
@@ -4086,8 +4107,7 @@ static SDValue getMemmoveLoadsAndStores(SelectionDAG &DAG, SDLoc dl,
   bool DstAlignCanChange = false;
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo *MFI = MF.getFrameInfo();
-  bool OptSize = MF.getFunction()->getAttributes().
-    hasAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
+  bool OptSize = MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
   FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Dst);
   if (FI && !MFI->isFixedObjectIndex(FI->getIndex()))
     DstAlignCanChange = true;
@@ -4181,8 +4201,7 @@ static SDValue getMemsetStores(SelectionDAG &DAG, SDLoc dl,
   bool DstAlignCanChange = false;
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo *MFI = MF.getFrameInfo();
-  bool OptSize = MF.getFunction()->getAttributes().
-    hasAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
+  bool OptSize = MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
   FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Dst);
   if (FI && !MFI->isFixedObjectIndex(FI->getIndex()))
     DstAlignCanChange = true;

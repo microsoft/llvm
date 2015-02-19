@@ -8,8 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "MipsOptionRecord.h"
-#include "MipsTargetStreamer.h"
 #include "MipsELFStreamer.h"
+#include "MipsTargetStreamer.h"
 #include "llvm/MC/MCSectionELF.h"
 
 using namespace llvm;
@@ -34,7 +34,7 @@ void MipsRegInfoRecord::EmitMipsOptionRecord() {
     MCA.getOrCreateSectionData(*Sec).setAlignment(8);
     Streamer->SwitchSection(Sec);
 
-    Streamer->EmitIntValue(1, 1);  // kind
+    Streamer->EmitIntValue(ELF::ODK_REGINFO, 1);  // kind
     Streamer->EmitIntValue(40, 1); // size
     Streamer->EmitIntValue(0, 2);  // section
     Streamer->EmitIntValue(0, 4);  // info

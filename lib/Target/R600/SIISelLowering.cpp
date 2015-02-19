@@ -211,6 +211,7 @@ SITargetLowering::SITargetLowering(TargetMachine &TM,
   }
 
   setOperationAction(ISD::FDIV, MVT::f32, Custom);
+  setOperationAction(ISD::FDIV, MVT::f64, Custom);
 
   setTargetDAGCombine(ISD::FADD);
   setTargetDAGCombine(ISD::FSUB);
@@ -445,7 +446,7 @@ SDValue SITargetLowering::LowerFormalArguments(
       // We REALLY want the ORIGINAL number of vertex elements here, e.g. a
       // three or five element vertex only needs three or five registers,
       // NOT four or eigth.
-      Type *ParamType = FType->getParamType(Arg.OrigArgIndex);
+      Type *ParamType = FType->getParamType(Arg.getOrigArgIndex());
       unsigned NumElements = ParamType->getVectorNumElements();
 
       for (unsigned j = 0; j != NumElements; ++j) {
@@ -528,7 +529,7 @@ SDValue SITargetLowering::LowerFormalArguments(
                                    Offset, Ins[i].Flags.isSExt());
 
       const PointerType *ParamTy =
-          dyn_cast<PointerType>(FType->getParamType(Ins[i].OrigArgIndex));
+        dyn_cast<PointerType>(FType->getParamType(Ins[i].getOrigArgIndex()));
       if (Subtarget->getGeneration() == AMDGPUSubtarget::SOUTHERN_ISLANDS &&
           ParamTy && ParamTy->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS) {
         // On SI local pointers are just offsets into LDS, so they are always
@@ -563,7 +564,7 @@ SDValue SITargetLowering::LowerFormalArguments(
     if (Arg.VT.isVector()) {
 
       // Build a vector from the registers
-      Type *ParamType = FType->getParamType(Arg.OrigArgIndex);
+      Type *ParamType = FType->getParamType(Arg.getOrigArgIndex());
       unsigned NumElements = ParamType->getVectorNumElements();
 
       SmallVector<SDValue, 4> Regs;
@@ -576,8 +577,7 @@ SDValue SITargetLowering::LowerFormalArguments(
 
       // Fill up the missing vector elements
       NumElements = Arg.VT.getVectorNumElements() - NumElements;
-      for (unsigned j = 0; j != NumElements; ++j)
-        Regs.push_back(DAG.getUNDEF(VT));
+      Regs.append(NumElements, DAG.getUNDEF(VT));
 
       InVals.push_back(DAG.getNode(ISD::BUILD_VECTOR, DL, Arg.VT, Regs));
       continue;
@@ -777,15 +777,12 @@ SDValue SITargetLowering::LowerBRCOND(SDValue BRCOND,
   assert(Intr->getOpcode() == ISD::INTRINSIC_W_CHAIN);
 
   // Build the result and
-  SmallVector<EVT, 4> Res;
-  for (unsigned i = 1, e = Intr->getNumValues(); i != e; ++i)
-    Res.push_back(Intr->getValueType(i));
+  ArrayRef<EVT> Res(Intr->value_begin() + 1, Intr->value_end());
 
   // operands of the new intrinsic call
   SmallVector<SDValue, 4> Ops;
   Ops.push_back(BRCOND.getOperand(0));
-  for (unsigned i = 1, e = Intr->getNumOperands(); i != e; ++i)
-    Ops.push_back(Intr->getOperand(i));
+  Ops.append(Intr->op_begin() + 1, Intr->op_end());
   Ops.push_back(Target);
 
   // build the new intrinsic call
@@ -1130,7 +1127,70 @@ SDValue SITargetLowering::LowerFDIV32(SDValue Op, SelectionDAG &DAG) const {
 }
 
 SDValue SITargetLowering::LowerFDIV64(SDValue Op, SelectionDAG &DAG) const {
-  return SDValue();
+  if (DAG.getTarget().Options.UnsafeFPMath)
+    return LowerFastFDIV(Op, DAG);
+
+  SDLoc SL(Op);
+  SDValue X = Op.getOperand(0);
+  SDValue Y = Op.getOperand(1);
+
+  const SDValue One = DAG.getConstantFP(1.0, MVT::f64);
+
+  SDVTList ScaleVT = DAG.getVTList(MVT::f64, MVT::i1);
+
+  SDValue DivScale0 = DAG.getNode(AMDGPUISD::DIV_SCALE, SL, ScaleVT, Y, Y, X);
+
+  SDValue NegDivScale0 = DAG.getNode(ISD::FNEG, SL, MVT::f64, DivScale0);
+
+  SDValue Rcp = DAG.getNode(AMDGPUISD::RCP, SL, MVT::f64, DivScale0);
+
+  SDValue Fma0 = DAG.getNode(ISD::FMA, SL, MVT::f64, NegDivScale0, Rcp, One);
+
+  SDValue Fma1 = DAG.getNode(ISD::FMA, SL, MVT::f64, Rcp, Fma0, Rcp);
+
+  SDValue Fma2 = DAG.getNode(ISD::FMA, SL, MVT::f64, NegDivScale0, Fma1, One);
+
+  SDValue DivScale1 = DAG.getNode(AMDGPUISD::DIV_SCALE, SL, ScaleVT, X, Y, X);
+
+  SDValue Fma3 = DAG.getNode(ISD::FMA, SL, MVT::f64, Fma1, Fma2, Fma1);
+  SDValue Mul = DAG.getNode(ISD::FMUL, SL, MVT::f64, DivScale1, Fma3);
+
+  SDValue Fma4 = DAG.getNode(ISD::FMA, SL, MVT::f64,
+                             NegDivScale0, Mul, DivScale1);
+
+  SDValue Scale;
+
+  if (Subtarget->getGeneration() == AMDGPUSubtarget::SOUTHERN_ISLANDS) {
+    // Workaround a hardware bug on SI where the condition output from div_scale
+    // is not usable.
+
+    const SDValue Hi = DAG.getConstant(1, MVT::i32);
+
+    // Figure out if the scale to use for div_fmas.
+    SDValue NumBC = DAG.getNode(ISD::BITCAST, SL, MVT::v2i32, X);
+    SDValue DenBC = DAG.getNode(ISD::BITCAST, SL, MVT::v2i32, Y);
+    SDValue Scale0BC = DAG.getNode(ISD::BITCAST, SL, MVT::v2i32, DivScale0);
+    SDValue Scale1BC = DAG.getNode(ISD::BITCAST, SL, MVT::v2i32, DivScale1);
+
+    SDValue NumHi = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, SL, MVT::i32, NumBC, Hi);
+    SDValue DenHi = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, SL, MVT::i32, DenBC, Hi);
+
+    SDValue Scale0Hi
+      = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, SL, MVT::i32, Scale0BC, Hi);
+    SDValue Scale1Hi
+      = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, SL, MVT::i32, Scale1BC, Hi);
+
+    SDValue CmpDen = DAG.getSetCC(SL, MVT::i1, DenHi, Scale0Hi, ISD::SETEQ);
+    SDValue CmpNum = DAG.getSetCC(SL, MVT::i1, NumHi, Scale1Hi, ISD::SETEQ);
+    Scale = DAG.getNode(ISD::XOR, SL, MVT::i1, CmpNum, CmpDen);
+  } else {
+    Scale = DivScale1.getValue(1);
+  }
+
+  SDValue Fmas = DAG.getNode(AMDGPUISD::DIV_FMAS, SL, MVT::f64,
+                             Fma4, Fma3, Mul, Scale);
+
+  return DAG.getNode(AMDGPUISD::DIV_FIXUP, SL, MVT::f64, Fmas, Y, X);
 }
 
 SDValue SITargetLowering::LowerFDIV(SDValue Op, SelectionDAG &DAG) const {
@@ -1694,9 +1754,7 @@ SDValue SITargetLowering::PerformDAGCombine(SDNode *N,
     if (Ptr.getOpcode() == ISD::SHL && AS != AMDGPUAS::PRIVATE_ADDRESS) {
       SDValue NewPtr = performSHLPtrCombine(Ptr.getNode(), AS, DCI);
       if (NewPtr) {
-        SmallVector<SDValue, 8> NewOps;
-        for (unsigned I = 0, E = MemNode->getNumOperands(); I != E; ++I)
-          NewOps.push_back(MemNode->getOperand(I));
+        SmallVector<SDValue, 8> NewOps(MemNode->op_begin(), MemNode->op_end());
 
         NewOps[N->getOpcode() == ISD::STORE ? 2 : 1] = NewPtr;
         return SDValue(DAG.UpdateNodeOperands(MemNode, NewOps), 0);
@@ -1734,13 +1792,11 @@ int32_t SITargetLowering::analyzeImmediate(const SDNode *N) const {
       static_cast<const SIInstrInfo *>(Subtarget->getInstrInfo());
 
   if (const ConstantSDNode *Node = dyn_cast<ConstantSDNode>(N)) {
-    if (Node->getZExtValue() >> 32)
-      return -1;
-
     if (TII->isInlineConstant(Node->getAPIntValue()))
       return 0;
 
-    return Node->getZExtValue();
+    uint64_t Val = Node->getZExtValue();
+    return isUInt<32>(Val) ? Val : -1;
   }
 
   if (const ConstantFPSDNode *Node = dyn_cast<ConstantFPSDNode>(N)) {
@@ -1876,8 +1932,7 @@ void SITargetLowering::adjustWritemask(MachineSDNode *&Node,
   // Adjust the writemask in the node
   std::vector<SDValue> Ops;
   Ops.push_back(DAG.getTargetConstant(NewDmask, MVT::i32));
-  for (unsigned i = 1, e = Node->getNumOperands(); i != e; ++i)
-    Ops.push_back(Node->getOperand(i));
+  Ops.insert(Ops.end(), Node->op_begin() + 1, Node->op_end());
   Node = (MachineSDNode*)DAG.UpdateNodeOperands(Node, Ops);
 
   // If we only got one lane, replace it with a copy
@@ -2134,8 +2189,7 @@ MachineSDNode *SITargetLowering::AdjustRegClass(MachineSDNode *N,
 
     // Copy remaining operands so we keep any chain and glue nodes that follow
     // the normal operands.
-    for (unsigned I = 2, E = N->getNumOperands(); I != E; ++I)
-      Ops.push_back(N->getOperand(I));
+    Ops.append(N->op_begin() + 2, N->op_end());
 
     return DAG.getMachineNode(NewOpcode, DL, N->getVTList(), Ops);
   }

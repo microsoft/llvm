@@ -36,29 +36,27 @@ class SCEV;
 /// the user why vectorization did not occur.
 class VectorizationReport {
   std::string Message;
-  raw_string_ostream Out;
   Instruction *Instr;
 
 public:
-  VectorizationReport(Instruction *I = nullptr) : Out(Message), Instr(I) {
-    Out << "loop not vectorized: ";
-  }
+  VectorizationReport(Instruction *I = nullptr)
+      : Message("loop not vectorized: "), Instr(I) {}
 
   template <typename A> VectorizationReport &operator<<(const A &Value) {
+    raw_string_ostream Out(Message);
     Out << Value;
     return *this;
   }
 
   Instruction *getInstr() { return Instr; }
 
-  std::string &str() { return Out.str(); }
-  operator Twine() { return Out.str(); }
+  std::string &str() { return Message; }
+  operator Twine() { return Message; }
 
   /// \brief Emit an analysis note with the debug location from the instruction
   /// in \p Message if available.  Otherwise use the location of \p TheLoop.
   static void emitAnalysis(VectorizationReport &Message,
-                           const Function *TheFunction,
-                           const Loop *TheLoop);
+                           const Function *TheFunction, const Loop *TheLoop);
 };
 
 /// \brief Drive the analysis of memory accesses in the loop
@@ -75,7 +73,7 @@ public:
 /// generates run-time checks to prove independence.  This is done by
 /// AccessAnalysis::canCheckPtrAtRT and the checks are maintained by the
 /// RuntimePointerCheck class.
-class LoopAccessAnalysis {
+class LoopAccessInfo {
 public:
   /// \brief Collection of parameters used from the vectorizer.
   struct VectorizerParams {
@@ -91,14 +89,13 @@ public:
     /// make more than this number of comparisons.
     unsigned RuntimeMemoryCheckThreshold;
 
-    VectorizerParams(unsigned MaxVectorWidth,
-                     unsigned VectorizationFactor,
+    VectorizerParams(unsigned MaxVectorWidth, unsigned VectorizationFactor,
                      unsigned VectorizationInterleave,
-                     unsigned RuntimeMemoryCheckThreshold) :
-        MaxVectorWidth(MaxVectorWidth),
-        VectorizationFactor(VectorizationFactor),
-        VectorizationInterleave(VectorizationInterleave),
-        RuntimeMemoryCheckThreshold(RuntimeMemoryCheckThreshold) {}
+                     unsigned RuntimeMemoryCheckThreshold)
+        : MaxVectorWidth(MaxVectorWidth),
+          VectorizationFactor(VectorizationFactor),
+          VectorizationInterleave(VectorizationInterleave),
+          RuntimeMemoryCheckThreshold(RuntimeMemoryCheckThreshold) {}
   };
 
   /// This struct holds information about the memory runtime legality check that
@@ -121,6 +118,10 @@ public:
     void insert(ScalarEvolution *SE, Loop *Lp, Value *Ptr, bool WritePtr,
                 unsigned DepSetId, unsigned ASId, ValueToValueMap &Strides);
 
+    /// \brief Decide whether we need to issue a run-time check for pointer at
+    /// index \p I and \p J to prove their independence.
+    bool needsChecking(unsigned I, unsigned J) const;
+
     /// This flag indicates if we need to add the runtime check.
     bool Need;
     /// Holds the pointers that we need to check.
@@ -138,13 +139,13 @@ public:
     SmallVector<unsigned, 2> AliasSetId;
   };
 
-  LoopAccessAnalysis(Function *F, Loop *L, ScalarEvolution *SE,
-                     const DataLayout *DL, const TargetLibraryInfo *TLI,
-                     AliasAnalysis *AA, DominatorTree *DT,
-                     const VectorizerParams &VectParams) :
-      TheFunction(F), TheLoop(L), SE(SE), DL(DL), TLI(TLI), AA(AA), DT(DT),
-      NumLoads(0), NumStores(0), MaxSafeDepDistBytes(-1U),
-      VectParams(VectParams) {}
+  LoopAccessInfo(Function *F, Loop *L, ScalarEvolution *SE,
+                 const DataLayout *DL, const TargetLibraryInfo *TLI,
+                 AliasAnalysis *AA, DominatorTree *DT,
+                 const VectorizerParams &VectParams)
+      : TheFunction(F), TheLoop(L), SE(SE), DL(DL), TLI(TLI), AA(AA), DT(DT),
+        NumLoads(0), NumStores(0), MaxSafeDepDistBytes(-1U),
+        VectParams(VectParams) {}
 
   /// Return true we can analyze the memory accesses in the loop and there are
   /// no memory dependence cycles.  Replaces symbolic strides using Strides.
@@ -154,7 +155,8 @@ public:
 
   /// Return true if the block BB needs to be predicated in order for the loop
   /// to be vectorized.
-  bool blockNeedsPredication(BasicBlock *BB);
+  static bool blockNeedsPredication(BasicBlock *BB, Loop *TheLoop,
+                                    DominatorTree *DT);
 
   /// Returns true if the value V is uniform within the loop.
   bool isUniform(Value *V);

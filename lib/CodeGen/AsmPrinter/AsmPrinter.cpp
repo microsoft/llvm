@@ -1181,7 +1181,9 @@ void AsmPrinter::EmitJumpTableInfo() {
   bool JTInDiffSection = !TLOF.shouldPutJumpTableInFunctionSection(
       MJTI->getEntryKind() == MachineJumpTableInfo::EK_LabelDifference32,
       *F);
-  if (JTInDiffSection) {
+  if (!JTInDiffSection) {
+    OutStreamer.SwitchSection(TLOF.SectionForGlobal(F, *Mang, TM));
+  } else {
     // Otherwise, drop it in the readonly section.
     const MCSection *ReadOnlySection =
         TLOF.getSectionForJumpTable(*F, *Mang, TM);
@@ -2062,7 +2064,7 @@ void AsmPrinter::printOffset(int64_t Offset, raw_ostream &OS) const {
 
 /// GetTempSymbol - Return the MCSymbol corresponding to the assembler
 /// temporary label with the specified stem and unique ID.
-MCSymbol *AsmPrinter::GetTempSymbol(Twine Name, unsigned ID) const {
+MCSymbol *AsmPrinter::GetTempSymbol(const Twine &Name, unsigned ID) const {
   const DataLayout *DL = TM.getDataLayout();
   return OutContext.GetOrCreateSymbol(Twine(DL->getPrivateGlobalPrefix()) +
                                       Name + Twine(ID));
@@ -2070,7 +2072,7 @@ MCSymbol *AsmPrinter::GetTempSymbol(Twine Name, unsigned ID) const {
 
 /// GetTempSymbol - Return an assembler temporary label with the specified
 /// stem.
-MCSymbol *AsmPrinter::GetTempSymbol(Twine Name) const {
+MCSymbol *AsmPrinter::GetTempSymbol(const Twine &Name) const {
   const DataLayout *DL = TM.getDataLayout();
   return OutContext.GetOrCreateSymbol(Twine(DL->getPrivateGlobalPrefix())+
                                       Name);

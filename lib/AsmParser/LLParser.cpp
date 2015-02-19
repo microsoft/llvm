@@ -749,7 +749,7 @@ bool LLParser::ParseGlobal(const std::string &Name, LocTy NameLoc,
       return true;
   }
 
-  if (Ty->isFunctionTy() || Ty->isLabelTy())
+  if (Ty->isFunctionTy() || !PointerType::isValidElementType(Ty))
     return Error(TyLoc, "invalid type for global variable");
 
   GlobalValue *GVal = nullptr;
@@ -1633,6 +1633,7 @@ bool LLParser::ParseIndexList(SmallVectorImpl<unsigned> &Indices,
 
   while (EatIfPresent(lltok::comma)) {
     if (Lex.getKind() == lltok::MetadataVar) {
+      if (Indices.empty()) return TokError("expected index");
       AteExtraComma = true;
       return false;
     }
@@ -3275,7 +3276,7 @@ bool LLParser::ParseGenericDebugNode(MDNode *&Result, bool IsDistinct) {
 ///   ::= !MDSubrange(count: 30, lowerBound: 2)
 bool LLParser::ParseMDSubrange(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
-  REQUIRED(count, MDUnsignedField, (0, UINT64_MAX >> 1));                      \
+  REQUIRED(count, MDSignedField, (-1, -1, INT64_MAX));                         \
   OPTIONAL(lowerBound, MDSignedField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
@@ -3288,8 +3289,8 @@ bool LLParser::ParseMDSubrange(MDNode *&Result, bool IsDistinct) {
 ///   ::= !MDEnumerator(value: 30, name: "SomeKind")
 bool LLParser::ParseMDEnumerator(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
-  REQUIRED(value, MDSignedField, );                                            \
-  REQUIRED(name, MDStringField, );
+  REQUIRED(name, MDStringField, );                                             \
+  REQUIRED(value, MDSignedField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
@@ -3514,37 +3515,33 @@ bool LLParser::ParseMDNamespace(MDNode *&Result, bool IsDistinct) {
 }
 
 /// ParseMDTemplateTypeParameter:
-///   ::= !MDTemplateTypeParameter(scope: !0, name: "Ty", type: !1)
+///   ::= !MDTemplateTypeParameter(name: "Ty", type: !1)
 bool LLParser::ParseMDTemplateTypeParameter(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
-  REQUIRED(scope, MDField, );                                                  \
   OPTIONAL(name, MDStringField, );                                             \
   REQUIRED(type, MDField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
-  Result = GET_OR_DISTINCT(MDTemplateTypeParameter,
-                           (Context, scope.Val, name.Val, type.Val));
+  Result =
+      GET_OR_DISTINCT(MDTemplateTypeParameter, (Context, name.Val, type.Val));
   return false;
 }
 
 /// ParseMDTemplateValueParameter:
 ///   ::= !MDTemplateValueParameter(tag: DW_TAG_template_value_parameter,
-///                                 scope: !0, name: "V", type: !1,
-///                                 value: i32 7)
+///                                 name: "V", type: !1, value: i32 7)
 bool LLParser::ParseMDTemplateValueParameter(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
   REQUIRED(tag, DwarfTagField, );                                              \
-  REQUIRED(scope, MDField, );                                                  \
   OPTIONAL(name, MDStringField, );                                             \
   REQUIRED(type, MDField, );                                                   \
   REQUIRED(value, MDField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
-  Result = GET_OR_DISTINCT(
-      MDTemplateValueParameter,
-      (Context, tag.Val, scope.Val, name.Val, type.Val, value.Val));
+  Result = GET_OR_DISTINCT(MDTemplateValueParameter,
+                           (Context, tag.Val, name.Val, type.Val, value.Val));
   return false;
 }
 
@@ -5109,16 +5106,16 @@ bool LLParser::ParseCall(Instruction *&Inst, PerFunctionState &PFS,
 ///   ::= 'alloca' 'inalloca'? Type (',' TypeAndValue)? (',' 'align' i32)?
 int LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS) {
   Value *Size = nullptr;
-  LocTy SizeLoc;
+  LocTy SizeLoc, TyLoc;
   unsigned Alignment = 0;
   Type *Ty = nullptr;
 
   bool IsInAlloca = EatIfPresent(lltok::kw_inalloca);
 
-  if (ParseType(Ty)) return true;
+  if (ParseType(Ty, TyLoc)) return true;
 
-  if (!PointerType::isValidElementType(Ty))
-    return TokError("pointer to this type is invalid");
+  if (Ty->isFunctionTy() || !PointerType::isValidElementType(Ty))
+    return Error(TyLoc, "invalid type for alloca");
 
   bool AteExtraComma = false;
   if (EatIfPresent(lltok::comma)) {

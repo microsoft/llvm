@@ -1836,11 +1836,9 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::mips_fill_h:
   case Intrinsic::mips_fill_w:
   case Intrinsic::mips_fill_d: {
-    SmallVector<SDValue, 16> Ops;
     EVT ResTy = Op->getValueType(0);
-
-    for (unsigned i = 0; i < ResTy.getVectorNumElements(); ++i)
-      Ops.push_back(Op->getOperand(1));
+    SmallVector<SDValue, 16> Ops(ResTy.getVectorNumElements(),
+                                 Op->getOperand(1));
 
     // If ResTy is v2i64 then the type legalizer will break this node down into
     // an equivalent v4i32.
@@ -2291,9 +2289,9 @@ lowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const {
 static bool isConstantOrUndef(const SDValue Op) {
   if (Op->getOpcode() == ISD::UNDEF)
     return true;
-  if (dyn_cast<ConstantSDNode>(Op))
+  if (isa<ConstantSDNode>(Op))
     return true;
-  if (dyn_cast<ConstantFPSDNode>(Op))
+  if (isa<ConstantFPSDNode>(Op))
     return true;
   return false;
 }

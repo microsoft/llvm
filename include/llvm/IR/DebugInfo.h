@@ -186,7 +186,7 @@ public:
   // FIXME: This operator bool isn't actually protecting anything at the
   // moment due to the conversion operator above making DIDescriptor nodes
   // implicitly convertable to bool.
-  LLVM_EXPLICIT operator bool() const { return DbgNode != nullptr; }
+  explicit operator bool() const { return DbgNode != nullptr; }
 
   bool operator==(DIDescriptor Other) const { return DbgNode == Other.DbgNode; }
   bool operator!=(DIDescriptor Other) const { return !operator==(Other); }
@@ -294,6 +294,7 @@ public:
 };
 
 template <typename T> class DIRef;
+typedef DIRef<DIDescriptor> DIDescriptorRef;
 typedef DIRef<DIScope> DIScopeRef;
 typedef DIRef<DIType> DITypeRef;
 typedef DITypedArray<DITypeRef> DITypeArray;
@@ -382,6 +383,12 @@ template <typename T> StringRef DIRef<T>::getName() const {
   const MDString *MS = cast<MDString>(Val);
   return MS->getString();
 }
+
+/// \brief Handle fields that are references to DIDescriptors.
+template <>
+DIDescriptorRef DIDescriptor::getFieldAs<DIDescriptorRef>(unsigned Elt) const;
+/// \brief Specialize DIRef constructor for DIDescriptorRef.
+template <> DIRef<DIDescriptor>::DIRef(const Metadata *V);
 
 /// \brief Handle fields that are references to DIScopes.
 template <> DIScopeRef DIDescriptor::getFieldAs<DIScopeRef>(unsigned Elt) const;
@@ -725,7 +732,6 @@ public:
 
   StringRef getName() const { return getHeaderField(1); }
 
-  DIScopeRef getContext() const { return getFieldAs<DIScopeRef>(1); }
   DITypeRef getType() const { return getFieldAs<DITypeRef>(2); }
   bool Verify() const;
 };
@@ -738,7 +744,6 @@ public:
 
   StringRef getName() const { return getHeaderField(1); }
 
-  DIScopeRef getContext() const { return getFieldAs<DIScopeRef>(1); }
   DITypeRef getType() const { return getFieldAs<DITypeRef>(2); }
   Metadata *getValue() const;
   bool Verify() const;
@@ -1029,7 +1034,7 @@ class DIImportedEntity : public DIDescriptor {
 public:
   explicit DIImportedEntity(const MDNode *N) : DIDescriptor(N) {}
   DIScope getContext() const { return getFieldAs<DIScope>(1); }
-  DIScopeRef getEntity() const { return getFieldAs<DIScopeRef>(2); }
+  DIDescriptorRef getEntity() const { return getFieldAs<DIDescriptorRef>(2); }
   unsigned getLineNumber() const { return getHeaderFieldAs<unsigned>(1); }
   StringRef getName() const { return getHeaderField(2); }
   bool Verify() const;

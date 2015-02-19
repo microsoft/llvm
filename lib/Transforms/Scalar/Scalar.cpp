@@ -20,7 +20,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/PassManager.h"
+#include "llvm/IR/LegacyPassManager.h"
 
 using namespace llvm;
 
@@ -28,6 +28,7 @@ using namespace llvm;
 /// ScalarOpts library.
 void llvm::initializeScalarOpts(PassRegistry &Registry) {
   initializeADCEPass(Registry);
+  initializeBDCEPass(Registry);
   initializeAlignmentFromAssumptionsPass(Registry);
   initializeSampleProfileLoaderPass(Registry);
   initializeConstantHoistingPass(Registry);
@@ -81,6 +82,10 @@ void LLVMInitializeScalarOpts(LLVMPassRegistryRef R) {
 
 void LLVMAddAggressiveDCEPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createAggressiveDCEPass());
+}
+
+void LLVMAddBitTrackingDCEPass(LLVMPassManagerRef PM) {
+  unwrap(PM)->add(createBitTrackingDCEPass());
 }
 
 void LLVMAddAlignmentFromAssumptionsPass(LLVMPassManagerRef PM) {

@@ -7,13 +7,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <memory>
-#include <utility>
+#include "llvm/DebugInfo/PDB/PDBSymbol.h"
 
 #include "llvm/DebugInfo/PDB/IPDBEnumChildren.h"
 #include "llvm/DebugInfo/PDB/IPDBRawSymbol.h"
-#include "llvm/DebugInfo/PDB/PDBSymbol.h"
-
 #include "llvm/DebugInfo/PDB/PDBSymbolAnnotation.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolBlock.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolCompiland.h"
@@ -45,6 +42,11 @@
 #include "llvm/DebugInfo/PDB/PDBSymbolTypeVTableShape.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolUnknown.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolUsingNamespace.h"
+#include <memory>
+#include <utility>
+
+#include <memory>
+#include <utility>
 
 using namespace llvm;
 
@@ -106,7 +108,12 @@ void PDBSymbol::defaultDump(raw_ostream &OS, int Indent,
 PDB_SymType PDBSymbol::getSymTag() const { return RawSymbol->getSymTag(); }
 
 std::unique_ptr<IPDBEnumSymbols> PDBSymbol::findAllChildren() const {
-  return RawSymbol->findChildren(PDB_SymType::None);
+  return findAllChildren(PDB_SymType::None);
+}
+
+std::unique_ptr<IPDBEnumSymbols>
+PDBSymbol::findAllChildren(PDB_SymType Type) const {
+  return RawSymbol->findChildren(Type);
 }
 
 std::unique_ptr<IPDBEnumSymbols>

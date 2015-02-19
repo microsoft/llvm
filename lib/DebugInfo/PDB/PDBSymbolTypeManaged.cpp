@@ -7,10 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <utility>
+#include "llvm/DebugInfo/PDB/PDBSymbolTypeManaged.h"
 
 #include "llvm/DebugInfo/PDB/PDBSymbol.h"
-#include "llvm/DebugInfo/PDB/PDBSymbolTypeManaged.h"
+
+#include <utility>
 
 using namespace llvm;
 
@@ -19,4 +20,4 @@ PDBSymbolTypeManaged::PDBSymbolTypeManaged(
     : PDBSymbol(PDBSession, std::move(Symbol)) {}
 
 void PDBSymbolTypeManaged::dump(raw_ostream &OS, int Indent,
-                                PDB_DumpLevel Level) const {}
+                                PDB_DumpLevel Level, PDB_DumpFlags Flags) const {}

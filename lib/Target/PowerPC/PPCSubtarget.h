@@ -114,12 +114,7 @@ protected:
   bool HasICBT;
   bool HasInvariantFunctionDescriptors;
 
-  enum {
-    PPC_ABI_UNKNOWN,
-    PPC_ABI_ELFv1,
-    PPC_ABI_ELFv2
-  } TargetABI;
-
+  const PPCTargetMachine &TM;
   PPCFrameLowering FrameLowering;
   PPCInstrInfo InstrInfo;
   PPCTargetLowering TLInfo;
@@ -164,6 +159,7 @@ public:
   const PPCRegisterInfo *getRegisterInfo() const override {
     return &getInstrInfo()->getRegisterInfo();
   }
+  const PPCTargetMachine &getTargetMachine() const { return TM; }
 
   /// initializeSubtargetDependencies - Initializes using a CPU and feature string
   /// so that we can use initializer lists for subtarget initialization.
@@ -176,7 +172,7 @@ private:
 public:
   /// isPPC64 - Return true if we are generating code for 64-bit pointer mode.
   ///
-  bool isPPC64() const { return IsPPC64; }
+  bool isPPC64() const;
 
   /// has64BitSupport - Return true if the selected CPU supports 64-bit
   /// instructions, regardless of whether we are in 32-bit or 64-bit mode.
@@ -194,8 +190,7 @@ public:
   /// hasLazyResolverStub - Return true if accesses to the specified global have
   /// to go through a dyld lazy resolution stub.  This means that an extra load
   /// is required to get the address of the global.
-  bool hasLazyResolverStub(const GlobalValue *GV,
-                           const TargetMachine &TM) const;
+  bool hasLazyResolverStub(const GlobalValue *GV) const;
 
   // isLittleEndian - True if generating little-endian code
   bool isLittleEndian() const { return IsLittleEndian; }
@@ -245,9 +240,9 @@ public:
   bool isTargetELF() const { return TargetTriple.isOSBinFormatELF(); }
   bool isTargetMachO() const { return TargetTriple.isOSBinFormatMachO(); }
 
-  bool isDarwinABI() const { return isDarwin(); }
-  bool isSVR4ABI() const { return !isDarwin(); }
-  bool isELFv2ABI() const { return TargetABI == PPC_ABI_ELFv2; }
+  bool isDarwinABI() const { return isTargetMachO() || isDarwin(); }
+  bool isSVR4ABI() const { return !isDarwinABI(); }
+  bool isELFv2ABI() const;
 
   bool enableEarlyIfConversion() const override { return hasISEL(); }
 

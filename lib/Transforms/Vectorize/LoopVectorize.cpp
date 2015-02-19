@@ -107,13 +107,13 @@ STATISTIC(LoopsVectorized, "Number of loops vectorized");
 STATISTIC(LoopsAnalyzed, "Number of loops analyzed for vectorization");
 
 static cl::opt<unsigned>
-VectorizationFactor("force-vector-width", cl::init(0), cl::Hidden,
-                    cl::desc("Sets the SIMD width. Zero is autoselect."));
+    VectorizationFactor("force-vector-width", cl::init(0), cl::Hidden,
+                        cl::desc("Sets the SIMD width. Zero is autoselect."));
 
 static cl::opt<unsigned>
-VectorizationInterleave("force-vector-interleave", cl::init(0), cl::Hidden,
-                    cl::desc("Sets the vectorization interleave count. "
-                             "Zero is autoselect."));
+    VectorizationInterleave("force-vector-interleave", cl::init(0), cl::Hidden,
+                            cl::desc("Sets the vectorization interleave count. "
+                                     "Zero is autoselect."));
 
 static cl::opt<bool>
 EnableIfConversion("enable-if-conversion", cl::init(true), cl::Hidden,
@@ -548,11 +548,10 @@ public:
                             DominatorTree *DT, TargetLibraryInfo *TLI,
                             AliasAnalysis *AA, Function *F,
                             const TargetTransformInfo *TTI)
-      : NumPredStores(0), TheLoop(L), SE(SE), DL(DL),
-        TLI(TLI), TheFunction(F), TTI(TTI), Induction(nullptr),
-        WidestIndTy(nullptr),
-        LAA(F, L, SE, DL, TLI, AA, DT,
-            LoopAccessAnalysis::VectorizerParams(
+      : NumPredStores(0), TheLoop(L), SE(SE), DL(DL), TLI(TLI), TheFunction(F),
+        TTI(TTI), DT(DT), Induction(nullptr), WidestIndTy(nullptr),
+        LAI(F, L, SE, DL, TLI, AA, DT,
+            LoopAccessInfo::VectorizerParams(
                 MaxVectorWidth, VectorizationFactor, VectorizationInterleave,
                 RuntimeMemoryCheckThreshold)),
         HasFunNoNaNAttr(false) {}
@@ -740,19 +739,17 @@ public:
   bool isUniformAfterVectorization(Instruction* I) { return Uniforms.count(I); }
 
   /// Returns the information that we collected about runtime memory check.
-  LoopAccessAnalysis::RuntimePointerCheck *getRuntimePointerCheck() {
-    return LAA.getRuntimePointerCheck();
+  LoopAccessInfo::RuntimePointerCheck *getRuntimePointerCheck() {
+    return LAI.getRuntimePointerCheck();
   }
 
-  LoopAccessAnalysis *getLAA() {
-    return &LAA;
-  }
+  LoopAccessInfo *getLAI() { return &LAI; }
 
   /// This function returns the identity element (or neutral element) for
   /// the operation K.
   static Constant *getReductionIdentity(ReductionKind K, Type *Tp);
 
-  unsigned getMaxSafeDepDistBytes() { return LAA.getMaxSafeDepDistBytes(); }
+  unsigned getMaxSafeDepDistBytes() { return LAI.getMaxSafeDepDistBytes(); }
 
   bool hasStride(Value *V) { return StrideSet.count(V); }
   bool mustCheckStrides() { return !StrideSet.empty(); }
@@ -773,18 +770,11 @@ public:
   }
   /// Returns true if vector representation of the instruction \p I
   /// requires mask.
-  bool isMaskRequired(const Instruction* I) {
-    return (MaskedOp.count(I) != 0);
-  }
-  unsigned getNumStores() const {
-    return LAA.getNumStores();
-  }
-  unsigned getNumLoads() const {
-    return LAA.getNumLoads();
-  }
-  unsigned getNumPredStores() const {
-    return NumPredStores;
-  }
+  bool isMaskRequired(const Instruction *I) { return (MaskedOp.count(I) != 0); }
+  unsigned getNumStores() const { return LAI.getNumStores(); }
+  unsigned getNumLoads() const { return LAI.getNumLoads(); }
+  unsigned getNumPredStores() const { return NumPredStores; }
+
 private:
   /// Check if a single basic block loop is vectorizable.
   /// At this point we know that this is a loop with a constant trip count
@@ -853,6 +843,8 @@ private:
   Function *TheFunction;
   /// Target Transform Info
   const TargetTransformInfo *TTI;
+  /// Dominator Tree.
+  DominatorTree *DT;
 
   //  ---  vectorization state --- //
 
@@ -873,8 +865,8 @@ private:
   SmallPtrSet<Value*, 4> AllowedExit;
   /// This set holds the variables which are known to be uniform after
   /// vectorization.
-  SmallPtrSet<Instruction*, 4> Uniforms;
-  LoopAccessAnalysis LAA;
+  SmallPtrSet<Instruction *, 4> Uniforms;
+  LoopAccessInfo LAI;
   /// Can we assume the absence of NaNs.
   bool HasFunNoNaNAttr;
 
@@ -1657,9 +1649,7 @@ int LoopVectorizationLegality::isConsecutivePtr(Value *Ptr) {
   return 0;
 }
 
-bool LoopVectorizationLegality::isUniform(Value *V) {
-  return LAA.isUniform(V);
-}
+bool LoopVectorizationLegality::isUniform(Value *V) { return LAI.isUniform(V); }
 
 InnerLoopVectorizer::VectorParts&
 InnerLoopVectorizer::getVectorValue(Value *V) {
@@ -2230,7 +2220,7 @@ void InnerLoopVectorizer::createEmptyLoop() {
   // faster.
   Instruction *MemRuntimeCheck;
   std::tie(FirstCheckInst, MemRuntimeCheck) =
-    Legal->getLAA()->addRuntimeCheck(LastBypassBlock->getTerminator());
+    Legal->getLAI()->addRuntimeCheck(LastBypassBlock->getTerminator());
   if (MemRuntimeCheck) {
     // Create a new block containing the memory check.
     BasicBlock *CheckBlock =
@@ -3397,10 +3387,10 @@ bool LoopVectorizationLegality::canVectorize() {
   // Collect all of the variables that remain uniform after vectorization.
   collectLoopUniforms();
 
-  DEBUG(dbgs() << "LV: We can vectorize this loop" <<
-        (LAA.getRuntimePointerCheck()->Need ? " (with a runtime bound check)" :
-         "")
-        <<"!\n");
+  DEBUG(dbgs() << "LV: We can vectorize this loop"
+               << (LAI.getRuntimePointerCheck()->Need
+                       ? " (with a runtime bound check)"
+                       : "") << "!\n");
 
   // Okay! We can vectorize. At this point we don't have any other mem analysis
   // which may limit our maximum vectorization factor, so just return true with
@@ -3454,9 +3444,8 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
   // Look for the attribute signaling the absence of NaNs.
   Function &F = *Header->getParent();
   if (F.hasFnAttribute("no-nans-fp-math"))
-    HasFunNoNaNAttr = F.getAttributes().getAttribute(
-      AttributeSet::FunctionIndex,
-      "no-nans-fp-math").getValueAsString() == "true";
+    HasFunNoNaNAttr =
+        F.getFnAttribute("no-nans-fp-math").getValueAsString() == "true";
 
   // For each block in the loop.
   for (Loop::block_iterator bb = TheLoop->block_begin(),
@@ -3824,7 +3813,7 @@ void LoopVectorizationLegality::collectLoopUniforms() {
 }
 
 bool LoopVectorizationLegality::canVectorizeMemory() {
-  return LAA.canVectorizeMemory(Strides);
+  return LAI.canVectorizeMemory(Strides);
 }
 
 static bool hasMultipleUsesOf(Instruction *I,
@@ -4168,7 +4157,7 @@ bool LoopVectorizationLegality::isInductionVariable(const Value *V) {
 }
 
 bool LoopVectorizationLegality::blockNeedsPredication(BasicBlock *BB)  {
-  return LAA.blockNeedsPredication(BB);
+  return LoopAccessInfo::blockNeedsPredication(BB, TheLoop, DT);
 }
 
 bool LoopVectorizationLegality::blockCanBePredicated(BasicBlock *BB,
@@ -4913,7 +4902,11 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I, unsigned VF) {
 
     // Wide load/stores.
     unsigned Cost = TTI.getAddressComputationCost(VectorTy);
-    Cost += TTI.getMemoryOpCost(I->getOpcode(), VectorTy, Alignment, AS);
+    if (Legal->isMaskRequired(I))
+      Cost += TTI.getMaskedMemoryOpCost(I->getOpcode(), VectorTy, Alignment,
+                                        AS);
+    else
+      Cost += TTI.getMemoryOpCost(I->getOpcode(), VectorTy, Alignment, AS);
 
     if (Reverse)
       Cost += TTI.getShuffleCost(TargetTransformInfo::SK_Reverse,

@@ -308,10 +308,10 @@ public:
 public:
   /// Return the MCSymbol corresponding to the assembler temporary label with
   /// the specified stem and unique ID.
-  MCSymbol *GetTempSymbol(Twine Name, unsigned ID) const;
+  MCSymbol *GetTempSymbol(const Twine &Name, unsigned ID) const;
 
   /// Return an assembler temporary label with the specified stem.
-  MCSymbol *GetTempSymbol(Twine Name) const;
+  MCSymbol *GetTempSymbol(const Twine &Name) const;
 
   /// Return the MCSymbol for a private symbol with global value name as its
   /// base, with the specified suffix.
@@ -406,7 +406,7 @@ public:
                          const MCSymbol *SectionLabel) const;
 
   /// Get the value for DW_AT_APPLE_isa. Zero if no isa encoding specified.
-  virtual unsigned getISAEncoding() { return 0; }
+  virtual unsigned getISAEncoding(const Function *) { return 0; }
 
   /// Emit a dwarf register operation for describing
   /// - a small value occupying only part of a register or

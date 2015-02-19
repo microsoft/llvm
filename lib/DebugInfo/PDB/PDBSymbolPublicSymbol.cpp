@@ -7,10 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <utility>
+#include "llvm/DebugInfo/PDB/PDBSymbolPublicSymbol.h"
 
 #include "llvm/DebugInfo/PDB/PDBSymbol.h"
-#include "llvm/DebugInfo/PDB/PDBSymbolPublicSymbol.h"
+
+#include <utility>
 
 using namespace llvm;
 
@@ -19,7 +20,7 @@ PDBSymbolPublicSymbol::PDBSymbolPublicSymbol(
     : PDBSymbol(PDBSession, std::move(Symbol)) {}
 
 void PDBSymbolPublicSymbol::dump(raw_ostream &OS, int Indent,
-                                 PDB_DumpLevel Level) const {
+                                 PDB_DumpLevel Level, PDB_DumpFlags Flags) const {
   OS << stream_indent(Indent);
   OS << "public symbol: " << getName();
 }

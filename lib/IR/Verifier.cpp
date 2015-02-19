@@ -518,8 +518,7 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
       continue;
 
     if (const User *U = dyn_cast<User>(V)) {
-      for (unsigned I = 0, N = U->getNumOperands(); I != N; ++I)
-        WorkStack.push_back(U->getOperand(I));
+      WorkStack.append(U->op_begin(), U->op_end());
     }
 
     if (const ConstantExpr *CE = dyn_cast<ConstantExpr>(V)) {
@@ -877,7 +876,7 @@ Verifier::visitModuleFlag(const MDNode *Op,
             "invalid behavior operand in module flag (unexpected constant)",
             Op->getOperand(0));
   }
-  MDString *ID = dyn_cast<MDString>(Op->getOperand(1));
+  MDString *ID = dyn_cast_or_null<MDString>(Op->getOperand(1));
   Assert1(ID,
           "invalid ID operand in module flag (expected metadata string)",
           Op->getOperand(1));

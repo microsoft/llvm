@@ -10,10 +10,9 @@
 #ifndef LLVM_DEBUGINFO_PDB_PDBSYMBOLCUSTOM_H
 #define LLVM_DEBUGINFO_PDB_PDBSYMBOLCUSTOM_H
 
-#include "llvm/ADT/SmallVector.h"
-
 #include "PDBSymbol.h"
 #include "PDBTypes.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
 
@@ -29,7 +28,7 @@ public:
 
   DECLARE_PDB_SYMBOL_CONCRETE_TYPE(PDB_SymType::Custom)
 
-  void dump(raw_ostream &OS, int Indent, PDB_DumpLevel Level) const override;
+  void dump(raw_ostream &OS, int Indent, PDB_DumpLevel Level, PDB_DumpFlags Flags) const override;
 
   void getDataBytes(llvm::SmallVector<uint8_t, 32> &bytes);
   FORWARD_SYMBOL_METHOD(getSymIndexId)

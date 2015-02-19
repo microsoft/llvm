@@ -7,11 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <utility>
+#include "llvm/DebugInfo/PDB/PDBSymbolCompilandEnv.h"
 
 #include "llvm/DebugInfo/PDB/IPDBRawSymbol.h"
 #include "llvm/DebugInfo/PDB/PDBSymbol.h"
-#include "llvm/DebugInfo/PDB/PDBSymbolCompilandEnv.h"
+
+#include <utility>
 
 using namespace llvm;
 
@@ -25,4 +26,4 @@ std::string PDBSymbolCompilandEnv::getValue() const {
 }
 
 void PDBSymbolCompilandEnv::dump(raw_ostream &OS, int Indent,
-                                 PDB_DumpLevel Level) const {}
+                                 PDB_DumpLevel Level, PDB_DumpFlags Flags) const {}

@@ -7,10 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <utility>
+#include "llvm/DebugInfo/PDB/PDBSymbolAnnotation.h"
 
 #include "llvm/DebugInfo/PDB/PDBSymbol.h"
-#include "llvm/DebugInfo/PDB/PDBSymbolAnnotation.h"
+
+#include <utility>
 
 using namespace llvm;
 
@@ -19,4 +20,4 @@ PDBSymbolAnnotation::PDBSymbolAnnotation(const IPDBSession &PDBSession,
     : PDBSymbol(PDBSession, std::move(Symbol)) {}
 
 void PDBSymbolAnnotation::dump(raw_ostream &OS, int Indent,
-                               PDB_DumpLevel Level) const {}
+                               PDB_DumpLevel Level, PDB_DumpFlags Flags) const {}

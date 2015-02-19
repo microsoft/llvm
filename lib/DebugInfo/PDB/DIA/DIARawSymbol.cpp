@@ -8,10 +8,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/DebugInfo/PDB/PDBExtras.h"
 #include "llvm/DebugInfo/PDB/DIA/DIAEnumSymbols.h"
 #include "llvm/DebugInfo/PDB/DIA/DIARawSymbol.h"
 #include "llvm/DebugInfo/PDB/DIA/DIASession.h"
+#include "llvm/DebugInfo/PDB/PDBExtras.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -352,7 +352,7 @@ DIARawSymbol::findChildren(PDB_SymType Type) const {
   enum SymTagEnum EnumVal = static_cast<enum SymTagEnum>(Type);
 
   CComPtr<IDiaEnumSymbols> DiaEnumerator;
-  if (S_OK != Symbol->findChildren(EnumVal, nullptr, nsNone, &DiaEnumerator))
+  if (S_OK != Symbol->findChildrenEx(EnumVal, nullptr, nsNone, &DiaEnumerator))
     return nullptr;
 
   return llvm::make_unique<DIAEnumSymbols>(Session, DiaEnumerator);
@@ -370,7 +370,7 @@ DIARawSymbol::findChildren(PDB_SymType Type, StringRef Name,
 
   CComPtr<IDiaEnumSymbols> DiaEnumerator;
   if (S_OK !=
-      Symbol->findChildren(EnumVal, Name16Str, CompareFlags, &DiaEnumerator))
+      Symbol->findChildrenEx(EnumVal, Name16Str, CompareFlags, &DiaEnumerator))
     return nullptr;
 
   return llvm::make_unique<DIAEnumSymbols>(Session, DiaEnumerator);

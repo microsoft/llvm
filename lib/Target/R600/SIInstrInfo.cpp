@@ -332,6 +332,21 @@ SIInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     return;
 
   } else if (AMDGPU::SReg_64RegClass.contains(DestReg)) {
+    if (DestReg == AMDGPU::VCC) {
+      if (AMDGPU::SReg_64RegClass.contains(SrcReg)) {
+        BuildMI(MBB, MI, DL, get(AMDGPU::S_MOV_B64), AMDGPU::VCC)
+          .addReg(SrcReg, getKillRegState(KillSrc));
+      } else {
+        // FIXME: Hack until VReg_1 removed.
+        assert(AMDGPU::VGPR_32RegClass.contains(SrcReg));
+        BuildMI(MBB, MI, DL, get(AMDGPU::V_CMP_NE_I32_e32), AMDGPU::VCC)
+          .addImm(0)
+          .addReg(SrcReg, getKillRegState(KillSrc));
+      }
+
+      return;
+    }
+
     assert(AMDGPU::SReg_64RegClass.contains(SrcReg));
     BuildMI(MBB, MI, DL, get(AMDGPU::S_MOV_B64), DestReg)
             .addReg(SrcReg, getKillRegState(KillSrc));
@@ -735,7 +750,7 @@ MachineInstr *SIInstrInfo::commuteInstruction(MachineInstr *MI,
       (!isOperandLegal(MI, Src0Idx, &Src1) ||
        !isOperandLegal(MI, Src1Idx, &Src0))) {
     return nullptr;
-    }
+  }
 
   if (!Src1.isReg()) {
     // Allow commuting instructions with Imm operands.
@@ -977,15 +992,25 @@ bool SIInstrInfo::isInlineConstant(const APInt &Imm) const {
          (FloatToBits(-4.0f) == Val);
 }
 
-bool SIInstrInfo::isInlineConstant(const MachineOperand &MO) const {
-  if (MO.isImm())
-    return isInlineConstant(APInt(32, MO.getImm(), true));
+bool SIInstrInfo::isInlineConstant(const MachineOperand &MO,
+                                   unsigned OpSize) const {
+  if (MO.isImm()) {
+    // MachineOperand provides no way to tell the true operand size, since it
+    // only records a 64-bit value. We need to know the size to determine if a
+    // 32-bit floating point immediate bit pattern is legal for an integer
+    // immediate. It would be for any 32-bit integer operand, but would not be
+    // for a 64-bit one.
+
+    unsigned BitSize = 8 * OpSize;
+    return isInlineConstant(APInt(BitSize, MO.getImm(), true));
+  }
 
   return false;
 }
 
-bool SIInstrInfo::isLiteralConstant(const MachineOperand &MO) const {
-  return MO.isImm() && !isInlineConstant(MO);
+bool SIInstrInfo::isLiteralConstant(const MachineOperand &MO,
+                                    unsigned OpSize) const {
+  return MO.isImm() && !isInlineConstant(MO, OpSize);
 }
 
 static bool compareMachineOp(const MachineOperand &Op0,
@@ -1015,7 +1040,8 @@ bool SIInstrInfo::isImmOperandLegal(const MachineInstr *MI, unsigned OpNo,
   if (OpInfo.RegClass < 0)
     return false;
 
-  if (isLiteralConstant(MO))
+  unsigned OpSize = RI.getRegClass(OpInfo.RegClass)->getSize();
+  if (isLiteralConstant(MO, OpSize))
     return RI.opCanUseLiteralConstant(OpInfo.OperandType);
 
   return RI.opCanUseInlineConstant(OpInfo.OperandType);
@@ -1070,9 +1096,10 @@ bool SIInstrInfo::hasModifiersSet(const MachineInstr &MI,
 }
 
 bool SIInstrInfo::usesConstantBus(const MachineRegisterInfo &MRI,
-                                  const MachineOperand &MO) const {
+                                  const MachineOperand &MO,
+                                  unsigned OpSize) const {
   // Literal constants use the constant bus.
-  if (isLiteralConstant(MO))
+  if (isLiteralConstant(MO, OpSize))
     return true;
 
   if (!MO.isReg() || !MO.isUse())
@@ -1124,6 +1151,8 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr *MI,
       return false;
     }
 
+    int RegClass = Desc.OpInfo[i].RegClass;
+
     switch (Desc.OpInfo[i].OperandType) {
     case MCOI::OPERAND_REGISTER:
       if (MI->getOperand(i).isImm()) {
@@ -1134,7 +1163,8 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr *MI,
     case AMDGPU::OPERAND_REG_IMM32:
       break;
     case AMDGPU::OPERAND_REG_INLINE_C:
-      if (MI->getOperand(i).isImm() && !isInlineConstant(MI->getOperand(i))) {
+      if (isLiteralConstant(MI->getOperand(i),
+                            RI.getRegClass(RegClass)->getSize())) {
         ErrInfo = "Illegal immediate value for operand.";
         return false;
       }
@@ -1155,7 +1185,6 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr *MI,
     if (!MI->getOperand(i).isReg())
       continue;
 
-    int RegClass = Desc.OpInfo[i].RegClass;
     if (RegClass != -1) {
       unsigned Reg = MI->getOperand(i).getReg();
       if (TargetRegisterInfo::isVirtualRegister(Reg))
@@ -1182,9 +1211,8 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr *MI,
     for (int OpIdx : OpIndices) {
       if (OpIdx == -1)
         break;
-
       const MachineOperand &MO = MI->getOperand(OpIdx);
-      if (usesConstantBus(MRI, MO)) {
+      if (usesConstantBus(MRI, MO, getOpSize(Opcode, OpIdx))) {
         if (MO.isReg()) {
           if (MO.getReg() != SGPRUsed)
             ++ConstantBusCount;
@@ -1196,31 +1224,6 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr *MI,
     }
     if (ConstantBusCount > 1) {
       ErrInfo = "VOP* instruction uses the constant bus more than once";
-      return false;
-    }
-  }
-
-  // Verify SRC1 for VOP2 and VOPC
-  if (Src1Idx != -1 && (isVOP2(Opcode) || isVOPC(Opcode))) {
-    const MachineOperand &Src1 = MI->getOperand(Src1Idx);
-    if (Src1.isImm()) {
-      ErrInfo = "VOP[2C] src1 cannot be an immediate.";
-      return false;
-    }
-  }
-
-  // Verify VOP3
-  if (isVOP3(Opcode)) {
-    if (Src0Idx != -1 && isLiteralConstant(MI->getOperand(Src0Idx))) {
-      ErrInfo = "VOP3 src0 cannot be a literal constant.";
-      return false;
-    }
-    if (Src1Idx != -1 && isLiteralConstant(MI->getOperand(Src1Idx))) {
-      ErrInfo = "VOP3 src1 cannot be a literal constant.";
-      return false;
-    }
-    if (Src2Idx != -1 && isLiteralConstant(MI->getOperand(Src2Idx))) {
-      ErrInfo = "VOP3 src2 cannot be a literal constant.";
       return false;
     }
   }
@@ -1312,7 +1315,7 @@ const TargetRegisterClass *SIInstrInfo::getOpRegClass(const MachineInstr &MI,
 
     if (TargetRegisterInfo::isVirtualRegister(Reg))
       return MRI.getRegClass(Reg);
-    return RI.getRegClass(Reg);
+    return RI.getPhysRegClass(Reg);
   }
 
   unsigned RCID = Desc.OpInfo[OpNo].RegClass;
@@ -1456,14 +1459,16 @@ bool SIInstrInfo::isOperandLegal(const MachineInstr *MI, unsigned OpIdx,
   if (!MO)
     MO = &MI->getOperand(OpIdx);
 
-  if (isVALU(InstDesc.Opcode) && usesConstantBus(MRI, *MO)) {
+  if (isVALU(InstDesc.Opcode) &&
+      usesConstantBus(MRI, *MO, DefinedRC->getSize())) {
     unsigned SGPRUsed =
         MO->isReg() ? MO->getReg() : (unsigned)AMDGPU::NoRegister;
     for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
       if (i == OpIdx)
         continue;
-      if (usesConstantBus(MRI, MI->getOperand(i)) &&
-          MI->getOperand(i).isReg() && MI->getOperand(i).getReg() != SGPRUsed) {
+      const MachineOperand &Op = MI->getOperand(i);
+      if (Op.isReg() && Op.getReg() != SGPRUsed &&
+          usesConstantBus(MRI, Op, getOpSize(*MI, i))) {
         return false;
       }
     }
@@ -1556,7 +1561,7 @@ void SIInstrInfo::legalizeOperands(MachineInstr *MI) const {
           // We can use one SGPR in each VOP3 instruction.
           continue;
         }
-      } else if (!isLiteralConstant(MO)) {
+      } else if (!isLiteralConstant(MO, getOpSize(MI->getOpcode(), Idx))) {
         // If it is not a register and not a literal constant, then it must be
         // an inline constant which is always legal.
         continue;

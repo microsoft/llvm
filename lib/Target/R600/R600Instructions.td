@@ -580,6 +580,7 @@ i32imm:$COUNT, i32imm:$Enabled),
   let ALT_CONST = 0;
   let WHOLE_QUAD_MODE = 0;
   let BARRIER = 1;
+  let isCodeGenOnly = 1;
   let UseNamedOperandTable = 1;
 
   let Inst{31-0} = Word0;
@@ -642,6 +643,7 @@ def FETCH_CLAUSE : AMDGPUInst <(outs),
   field bits<8> Inst;
   bits<8> num;
   let Inst = num;
+  let isCodeGenOnly = 1;
 }
 
 def ALU_CLAUSE : AMDGPUInst <(outs),
@@ -649,10 +651,13 @@ def ALU_CLAUSE : AMDGPUInst <(outs),
   field bits<8> Inst;
   bits<8> num;
   let Inst = num;
+  let isCodeGenOnly = 1;
 }
 
 def LITERALS : AMDGPUInst <(outs),
 (ins LITERAL:$literal1, LITERAL:$literal2), "$literal1, $literal2", [] > {
+  let isCodeGenOnly = 1;
+
   field bits<64> Inst;
   bits<32> literal1;
   bits<32> literal2;
@@ -1184,7 +1189,7 @@ let Predicates = [isR600] in {
   def TGSI_LIT_Z_r600 : TGSI_LIT_Z_Common<MUL_LIT_r600, LOG_CLAMPED_r600, EXP_IEEE_r600>;
 
   def : Pat<(fsqrt f32:$src), (MUL $src, (RECIPSQRT_CLAMPED_r600 $src))>;
-  defm : RsqPat<RECIPSQRT_IEEE_r600, f32>;
+  def : RsqPat<RECIPSQRT_IEEE_r600, f32>;
 
   def R600_ExportSwz : ExportSwzInst {
     let Word1{20-17} = 0; // BURST_COUNT
@@ -1238,6 +1243,7 @@ let Predicates = [isR600] in {
   def CF_PUSH_ELSE_R600 : CF_CLAUSE_R600<12, (ins i32imm:$ADDR),
   "PUSH_ELSE @$ADDR"> {
     let CNT = 0;
+    let POP_COUNT = 0; // FIXME?
   }
   def CF_ELSE_R600 : CF_CLAUSE_R600<13, (ins i32imm:$ADDR, i32imm:$POP_COUNT),
   "ELSE @$ADDR POP:$POP_COUNT"> {

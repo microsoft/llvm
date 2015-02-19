@@ -7,12 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <utility>
-
-#include "llvm/DebugInfo/PDB/PDBSymbol.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolThunk.h"
 
+#include "llvm/DebugInfo/PDB/PDBSymbol.h"
 #include "llvm/Support/Format.h"
+
+#include <utility>
 
 using namespace llvm;
 
@@ -21,7 +21,7 @@ PDBSymbolThunk::PDBSymbolThunk(const IPDBSession &PDBSession,
     : PDBSymbol(PDBSession, std::move(Symbol)) {}
 
 void PDBSymbolThunk::dump(raw_ostream &OS, int Indent,
-                          PDB_DumpLevel Level) const {
+                          PDB_DumpLevel Level, PDB_DumpFlags Flags) const {
   OS.indent(Indent);
   OS << "thunk ";
   PDB_ThunkOrdinal Ordinal = getThunkOrdinal();

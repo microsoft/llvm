@@ -606,8 +606,8 @@ private:
   /// Add all of the functions arguments, basic blocks, and instructions.
   void processFunction();
 
-  SlotTracker(const SlotTracker &) LLVM_DELETED_FUNCTION;
-  void operator=(const SlotTracker &) LLVM_DELETED_FUNCTION;
+  SlotTracker(const SlotTracker &) = delete;
+  void operator=(const SlotTracker &) = delete;
 };
 
 SlotTracker *createSlotTracker(const Module *M) {
@@ -1361,8 +1361,8 @@ static void writeMDEnumerator(raw_ostream &Out, const MDEnumerator *N,
                               TypePrinting *, SlotTracker *, const Module *) {
   Out << "!MDEnumerator(";
   FieldSeparator FS;
-  Out << FS << "value: " << N->getValue();
   Out << FS << "name: \"" << N->getName() << "\"";
+  Out << FS << "value: " << N->getValue();
   Out << ")";
 }
 
@@ -1685,8 +1685,6 @@ static void writeMDTemplateTypeParameter(raw_ostream &Out,
                                          const Module *Context) {
   Out << "!MDTemplateTypeParameter(";
   FieldSeparator FS;
-  Out << FS << "scope: ";
-  writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
   Out << FS << "name: \"" << N->getName() << "\"";
   Out << FS << "type: ";
   writeMetadataAsOperand(Out, N->getType(), TypePrinter, Machine, Context);
@@ -1701,8 +1699,6 @@ static void writeMDTemplateValueParameter(raw_ostream &Out,
   Out << "!MDTemplateValueParameter(";
   FieldSeparator FS;
   writeTag(Out, FS, N);
-  Out << FS << "scope: ";
-  writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
   Out << FS << "name: \"" << N->getName() << "\"";
   Out << FS << "type: ";
   writeMetadataAsOperand(Out, N->getType(), TypePrinter, Machine, Context);

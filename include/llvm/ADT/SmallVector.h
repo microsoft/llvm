@@ -307,8 +307,11 @@ protected:
 
   /// Copy the range [I, E) onto the uninitialized memory
   /// starting with "Dest", constructing elements into it as needed.
-  template<typename T1, typename T2>
-  static void uninitialized_copy(T1 *I, T1 *E, T2 *Dest) {
+  template <typename T1, typename T2>
+  static void uninitialized_copy(
+      T1 *I, T1 *E, T2 *Dest,
+      typename std::enable_if<std::is_same<typename std::remove_const<T1>::type,
+                                           T2>::value>::type * = nullptr) {
     // Use memcpy for PODs iterated by pointers (which includes SmallVector
     // iterators): std::uninitialized_copy optimizes to memmove, but we can
     // use memcpy here.
@@ -340,7 +343,7 @@ template <typename T>
 class SmallVectorImpl : public SmallVectorTemplateBase<T, isPodLike<T>::value> {
   typedef SmallVectorTemplateBase<T, isPodLike<T>::value > SuperClass;
 
-  SmallVectorImpl(const SmallVectorImpl&) LLVM_DELETED_FUNCTION;
+  SmallVectorImpl(const SmallVectorImpl&) = delete;
 public:
   typedef typename SuperClass::iterator iterator;
   typedef typename SuperClass::size_type size_type;
@@ -414,9 +417,7 @@ public:
       this->grow(this->size()+NumInputs);
 
     // Copy the new elements over.
-    // TODO: NEED To compile time dispatch on whether in_iter is a random access
-    // iterator to use the fast uninitialized_copy.
-    std::uninitialized_copy(in_start, in_end, this->end());
+    this->uninitialized_copy(in_start, in_end, this->end());
     this->setEnd(this->end() + NumInputs);
   }
 
@@ -632,50 +633,12 @@ public:
     return I;
   }
 
-#if LLVM_HAS_VARIADIC_TEMPLATES
   template <typename... ArgTypes> void emplace_back(ArgTypes &&... Args) {
     if (LLVM_UNLIKELY(this->EndX >= this->CapacityX))
       this->grow();
     ::new ((void *)this->end()) T(std::forward<ArgTypes>(Args)...);
     this->setEnd(this->end() + 1);
   }
-#else
-private:
-  template <typename Constructor> void emplace_back_impl(Constructor construct) {
-    if (LLVM_UNLIKELY(this->EndX >= this->CapacityX))
-      this->grow();
-    construct((void *)this->end());
-    this->setEnd(this->end() + 1);
-  }
-
-public:
-  void emplace_back() {
-    emplace_back_impl([](void *Mem) { ::new (Mem) T(); });
-  }
-  template <typename T1> void emplace_back(T1 &&A1) {
-    emplace_back_impl([&](void *Mem) { ::new (Mem) T(std::forward<T1>(A1)); });
-  }
-  template <typename T1, typename T2> void emplace_back(T1 &&A1, T2 &&A2) {
-    emplace_back_impl([&](void *Mem) {
-      ::new (Mem) T(std::forward<T1>(A1), std::forward<T2>(A2));
-    });
-  }
-  template <typename T1, typename T2, typename T3>
-  void emplace_back(T1 &&A1, T2 &&A2, T3 &&A3) {
-    T(std::forward<T1>(A1), std::forward<T2>(A2), std::forward<T3>(A3));
-    emplace_back_impl([&](void *Mem) {
-      ::new (Mem)
-          T(std::forward<T1>(A1), std::forward<T2>(A2), std::forward<T3>(A3));
-    });
-  }
-  template <typename T1, typename T2, typename T3, typename T4>
-  void emplace_back(T1 &&A1, T2 &&A2, T3 &&A3, T4 &&A4) {
-    emplace_back_impl([&](void *Mem) {
-      ::new (Mem) T(std::forward<T1>(A1), std::forward<T2>(A2),
-                    std::forward<T3>(A3), std::forward<T4>(A4));
-    });
-  }
-#endif // LLVM_HAS_VARIADIC_TEMPLATES
 
   SmallVectorImpl &operator=(const SmallVectorImpl &RHS);
 

@@ -545,8 +545,7 @@ void RegAllocPBQP::initializeGraph(PBQPRAGraph &G, VirtRegMap &VRM,
     if (VRegAllowed.empty()) {
       SmallVector<unsigned, 8> NewVRegs;
       spillVReg(VReg, NewVRegs, MF, LIS, VRM, VRegSpiller);
-      for (auto NewVReg : NewVRegs)
-        Worklist.push_back(NewVReg);
+      Worklist.insert(Worklist.end(), NewVRegs.begin(), NewVRegs.end());
       continue;
     }
 
@@ -621,8 +620,6 @@ bool RegAllocPBQP::mapPBQPToRegAlloc(const PBQPRAGraph &G,
       assert(PReg != 0 && "Invalid preg selected.");
       VRM.assignVirt2Phys(VReg, PReg);
     } else {
-      assert(G.getNodeMetadata(NId).isSpillable() &&
-             "Spilling a node which can not be spilled.");
       // Spill VReg. If this introduces new intervals we'll need another round
       // of allocation.
       SmallVector<unsigned, 8> NewVRegs;

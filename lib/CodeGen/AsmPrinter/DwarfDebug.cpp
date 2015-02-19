@@ -841,7 +841,8 @@ static bool piecesOverlap(DIExpression P1, DIExpression P2) {
 // 1 | |    [x, (reg1, piece 32, 32)] <- IsPieceOfPrevEntry
 // 2 | |    ...
 // 3   |    [clobber reg0]
-// 4        [x, (mem, piece 0, 64)] <- overlapping with both previous pieces of x.
+// 4        [x, (mem, piece 0, 64)] <- overlapping with both previous pieces of
+//                                     x.
 //
 // Output:
 //
@@ -949,11 +950,9 @@ DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
       continue;
 
     LexicalScope *Scope = nullptr;
-    if (MDNode *IA = DV.getInlinedAt()) {
-      DebugLoc DL = DebugLoc::getFromDILocation(IA);
-      Scope = LScopes.findInlinedScope(DebugLoc::get(
-          DL.getLine(), DL.getCol(), DV.getContext(), IA));
-    } else
+    if (MDNode *IA = DV.getInlinedAt())
+      Scope = LScopes.findInlinedScope(DV.getContext(), IA);
+    else
       Scope = LScopes.findLexicalScope(DV.getContext());
     // If variable scope is not found then skip this variable.
     if (!Scope)
@@ -1355,8 +1354,8 @@ void DwarfDebug::emitSectionLabels() {
   if (useSplitDwarf()) {
     DwarfInfoDWOSectionSym =
         emitSectionSym(Asm, TLOF.getDwarfInfoDWOSection(), "section_info_dwo");
-    DwarfTypesDWOSectionSym =
-        emitSectionSym(Asm, TLOF.getDwarfTypesDWOSection(), "section_types_dwo");
+    DwarfTypesDWOSectionSym = emitSectionSym(
+        Asm, TLOF.getDwarfTypesDWOSection(), "section_types_dwo");
   }
   DwarfAbbrevSectionSym =
       emitSectionSym(Asm, TLOF.getDwarfAbbrevSection(), "section_abbrev");
@@ -1726,7 +1725,7 @@ void DwarfDebug::emitDebugLocValue(ByteStreamer &Streamer,
       // Complex address entry.
       if (Loc.getOffset()) {
         DwarfExpr.AddMachineRegIndirect(Loc.getReg(), Loc.getOffset());
-        DwarfExpr.AddExpression(Expr, PieceOffsetInBits);
+        DwarfExpr.AddExpression(Expr.begin(), Expr.end(), PieceOffsetInBits);
       } else
         DwarfExpr.AddMachineRegExpression(Expr, Loc.getReg(),
                                           PieceOffsetInBits);

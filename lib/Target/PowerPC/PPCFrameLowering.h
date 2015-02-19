@@ -26,6 +26,8 @@ class PPCFrameLowering: public TargetFrameLowering {
   const unsigned ReturnSaveOffset;
   const unsigned TOCSaveOffset;
   const unsigned FramePointerSaveOffset;
+  const unsigned LinkageSize;
+  const unsigned BasePointerSaveOffset;
 
 public:
   PPCFrameLowering(const PPCSubtarget &STI);
@@ -82,26 +84,11 @@ public:
 
   /// getBasePointerSaveOffset - Return the previous frame offset to save the
   /// base pointer.
-  static unsigned getBasePointerSaveOffset(bool isPPC64,
-                                           bool isDarwinABI,
-                                           bool isPIC) {
-    if (isDarwinABI)
-      return isPPC64 ? -16U : -8U;
-
-    // SVR4 ABI: First slot in the general register save area.
-    return isPPC64 ? -16U : isPIC ? -12U : -8U;
-  }
+  unsigned getBasePointerSaveOffset() const { return BasePointerSaveOffset; }
 
   /// getLinkageSize - Return the size of the PowerPC ABI linkage area.
   ///
-  static unsigned getLinkageSize(bool isPPC64, bool isDarwinABI,
-                                 bool isELFv2ABI) {
-    if (isDarwinABI || isPPC64)
-      return (isELFv2ABI ? 4 : 6) * (isPPC64 ? 8 : 4);
-
-    // SVR4 ABI:
-    return 8;
-  }
+  unsigned getLinkageSize() const { return LinkageSize; }
 
   const SpillSlot *
   getCalleeSavedSpillSlots(unsigned &NumEntries) const override;

@@ -393,17 +393,14 @@ static void MoveBelowOrigChain(SelectionDAG *CurDAG, SDValue Load,
     Ops.clear();
     Ops.push_back(NewChain);
   }
-  for (unsigned i = 1, e = OrigChain.getNumOperands(); i != e; ++i)
-    Ops.push_back(OrigChain.getOperand(i));
+  Ops.append(OrigChain->op_begin() + 1, OrigChain->op_end());
   CurDAG->UpdateNodeOperands(OrigChain.getNode(), Ops);
   CurDAG->UpdateNodeOperands(Load.getNode(), Call.getOperand(0),
                              Load.getOperand(1), Load.getOperand(2));
 
-  unsigned NumOps = Call.getNode()->getNumOperands();
   Ops.clear();
   Ops.push_back(SDValue(Load.getNode(), 1));
-  for (unsigned i = 1, e = NumOps; i != e; ++i)
-    Ops.push_back(Call.getOperand(i));
+  Ops.append(Call->op_begin() + 1, Call->op_end());
   CurDAG->UpdateNodeOperands(Call.getNode(), Ops);
 }
 
@@ -451,8 +448,7 @@ static bool isCalleeLoad(SDValue Callee, SDValue &Chain, bool HasCallSeq) {
 
 void X86DAGToDAGISel::PreprocessISelDAG() {
   // OptForSize is used in pattern predicates that isel is matching.
-  OptForSize = MF->getFunction()->getAttributes().
-    hasAttribute(AttributeSet::FunctionIndex, Attribute::OptimizeForSize);
+  OptForSize = MF->getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
 
   for (SelectionDAG::allnodes_iterator I = CurDAG->allnodes_begin(),
        E = CurDAG->allnodes_end(); I != E; ) {
