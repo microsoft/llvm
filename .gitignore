@@ -58,8 +58,8 @@ tools/llgo
 tools/polly
 # Sphinx build tree, if building in-source dir.
 docs/_build
-# llvm-msilc, which is tracked independently.
-tools/llvm-msilc
+# llilc, which is tracked independently.
+tools/llilc
 
 #==============================================================================#
 # Files created in tree by the Go bindings.
