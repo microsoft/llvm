@@ -2,6 +2,7 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
+// Copyright (c) Microsoft. All rights reserved.
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
@@ -262,6 +263,8 @@ void RuntimeDyldCOFF::finalizeLoad(const ObjectFile &Obj,
     const SectionRef &Section = i->first;
     StringRef Name;
     Section.getName(Name);
+    // Note unwind info is split across .pdata and .xdata, so this
+    // may not be sufficiently general for all users.
     if (Name == ".xdata") {
       UnregisteredEHFrameSections.push_back(i->second);
     }
