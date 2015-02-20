@@ -2,6 +2,7 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
+// Copyright (c) Microsoft. All rights reserved.
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
@@ -62,7 +63,7 @@ class RuntimeDyldCOFF : public RuntimeDyldImpl {
   void updateGOTEntries(StringRef Name, uint64_t Addr) override;
 
   // When a module is loaded we save the SectionID of the unwind
-  // sectionsin a table until we receive a request to register all 
+  // sections in a table until we receive a request to register all 
   // unregisteredEH frame sections with the memory manager.
   SmallVector<SID, 2> UnregisteredEHFrameSections;
   SmallVector<SID, 2> RegisteredEHFrameSections;
