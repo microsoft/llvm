@@ -2,7 +2,6 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// Portions copyright (c) Microsoft. All rights reserved.
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //

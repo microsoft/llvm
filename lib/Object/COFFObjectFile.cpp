@@ -373,7 +373,9 @@ bool COFFObjectFile::isSectionBSS(DataRefImpl Ref) const {
 
 bool COFFObjectFile::isSectionVirtual(DataRefImpl Ref) const {
   const coff_section *Sec = toSec(Ref);
-  return Sec->SizeOfRawData == 0;
+  // In COFF, a virtual section won't have any in-file 
+  // content, so the file pointer to the content will be zero.
+  return Sec->PointerToRawData == 0;
 }
 
 bool COFFObjectFile::sectionContainsSymbol(DataRefImpl SecRef,

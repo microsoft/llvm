@@ -2,7 +2,6 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// Copyright (c) Microsoft. All rights reserved.
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
@@ -48,8 +47,7 @@ namespace llvm {
 void RuntimeDyldCOFF::registerEHFrames() {
   if (!MemMgr)
     return;
-  for (int i = 0, e = UnregisteredEHFrameSections.size(); i != e; ++i) {
-    SID EHFrameSID = UnregisteredEHFrameSections[i];
+  for (auto const &EHFrameSID : UnregisteredEHFrameSections) {
     uint8_t *EHFrameAddr = Sections[EHFrameSID].Address;
     uint64_t EHFrameLoadAddr = Sections[EHFrameSID].LoadAddress;
     size_t EHFrameSize = Sections[EHFrameSID].Size;
@@ -91,13 +89,13 @@ void RuntimeDyldCOFF::resolveX86_64Relocation(const SectionEntry &Section,
   uint8_t *Target = Section.Address + Offset;
 
   switch (Type) {
-  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR32NB: {
+  case COFF::IMAGE_REL_AMD64_ADDR32NB: {
     uint32_t *TargetAddress = (uint32_t *)Target;
     *TargetAddress = Value + Addend;
     break;
   }
 
-  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR64: {
+  case COFF::IMAGE_REL_AMD64_ADDR64: {
     uint64_t *TargetAddress = (uint64_t *)Target;
     *TargetAddress = Value + Addend;
     break;
@@ -173,9 +171,9 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
     unsigned SectionID, relocation_iterator RelI, const ObjectFile &Obj,
     ObjSectionToIDMap &ObjSectionToID, StubMap &Stubs) {
   uint64_t RelType;
-  Check1(RelI->getType(RelType));
+  Check(RelI->getType(RelType));
   uint64_t Offset;
-  Check1(RelI->getOffset(Offset));
+  Check(RelI->getOffset(Offset));
   symbol_iterator Symbol = RelI->getSymbol();
 
   // See if the fixup target has a nonzero addend
@@ -184,7 +182,7 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
   SectionEntry &Section = Sections[SectionID];
   uint8_t *Target = Section.Address + Offset;
   switch (RelType) {
-  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR32NB: {
+  case COFF::IMAGE_REL_AMD64_ADDR32NB: {
     uint32_t *TargetAddress = (uint32_t *)Target;
     Addend = *TargetAddress;
     break; 
@@ -228,13 +226,12 @@ relocation_iterator RuntimeDyldCOFF::processRelocationRef(
   }
 
   // Assert for now that any fixup be resolvable within the object scope.
-  if (TargetOffset == UnknownAddressOrSize) {
+  if (TargetOffset == UnknownAddressOrSize)
     llvm_unreachable("External symbol reference?");
-  }
 
   switch (RelType) {
-  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR64:
-  case COFF::RelocationTypeAMD64::IMAGE_REL_AMD64_ADDR32NB:
+  case COFF::IMAGE_REL_AMD64_ADDR64:
+  case COFF::IMAGE_REL_AMD64_ADDR32NB:
   {
     RelocationEntry RE(SectionID, Offset, RelType, TargetOffset + Addend);
 
@@ -257,16 +254,15 @@ void RuntimeDyldCOFF::updateGOTEntries(StringRef Name, uint64_t Addr) {
 
 void RuntimeDyldCOFF::finalizeLoad(const ObjectFile &Obj,
                                   ObjSectionToIDMap &SectionMap) {
-  // Look for and record the EH frame sections.
-  ObjSectionToIDMap::iterator i, e;
-  for (i = SectionMap.begin(), e = SectionMap.end(); i != e; ++i) {
-    const SectionRef &Section = i->first;
+  // Look for and record the EH frame section IDs.
+  for (const auto &SectionPair : SectionMap) {
+    const SectionRef& Section = SectionPair.first;
     StringRef Name;
-    Section.getName(Name);
+    Check(Section.getName(Name));
     // Note unwind info is split across .pdata and .xdata, so this
     // may not be sufficiently general for all users.
     if (Name == ".xdata") {
-      UnregisteredEHFrameSections.push_back(i->second);
+      UnregisteredEHFrameSections.push_back(SectionPair.second);
     }
   }
 }
