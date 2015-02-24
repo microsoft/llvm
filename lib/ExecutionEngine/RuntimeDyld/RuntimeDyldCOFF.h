@@ -2,7 +2,6 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// Copyright (c) Microsoft. All rights reserved.
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
 //
@@ -24,16 +23,6 @@ using namespace llvm;
 
 namespace llvm {
 
-namespace {
-// Helper for extensive error checking in debug builds.
-std::error_code Check1(std::error_code Err) {
-  if (Err) {
-    report_fatal_error(Err.message());
-  }
-  return Err;
-}
-} // end anonymous namespace
-
 class RuntimeDyldCOFF : public RuntimeDyldImpl {
   void resolveRelocation(const SectionEntry &Section, uint64_t Offset,
                          uint64_t Value, uint32_t Type, int64_t Addend,
@@ -48,14 +37,8 @@ class RuntimeDyldCOFF : public RuntimeDyldImpl {
       return 20; // movz; movk; movk; movk; br
     if (Arch == Triple::arm || Arch == Triple::thumb)
       return 8; // 32-bit instruction and 32-bit address
-    else if (Arch == Triple::mipsel || Arch == Triple::mips)
-      return 16;
-    else if (Arch == Triple::ppc64 || Arch == Triple::ppc64le)
-      return 44;
     else if (Arch == Triple::x86_64)
       return 6; // 2-byte jmp instruction + 32-bit relative address
-    else if (Arch == Triple::systemz)
-      return 16;
     else
       return 0;
   }
