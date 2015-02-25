@@ -250,7 +250,7 @@ void emitSPUpdate(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
       }
     }
 
-    uint64_t ThisVal = (Offset > Chunk) ? Chunk : Offset;
+    uint64_t ThisVal = std::min(Offset, Chunk);
     if (ThisVal == (Is64BitTarget ? 8 : 4)) {
       // Use push / pop instead.
       unsigned Reg = isSub
@@ -309,38 +309,6 @@ void mergeSPUpdatesUp(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
     if (NumBytes)
       *NumBytes -= PI->getOperand(2).getImm();
     MBB.erase(PI);
-  }
-}
-
-/// mergeSPUpdatesDown - Merge two stack-manipulating instructions lower
-/// iterator.
-static
-void mergeSPUpdatesDown(MachineBasicBlock &MBB,
-                        MachineBasicBlock::iterator &MBBI,
-                        unsigned StackPtr, uint64_t *NumBytes = nullptr) {
-  // FIXME:  THIS ISN'T RUN!!!
-  return;
-
-  if (MBBI == MBB.end()) return;
-
-  MachineBasicBlock::iterator NI = std::next(MBBI);
-  if (NI == MBB.end()) return;
-
-  unsigned Opc = NI->getOpcode();
-  if ((Opc == X86::ADD64ri32 || Opc == X86::ADD64ri8 ||
-       Opc == X86::ADD32ri || Opc == X86::ADD32ri8) &&
-      NI->getOperand(0).getReg() == StackPtr) {
-    if (NumBytes)
-      *NumBytes -= NI->getOperand(2).getImm();
-    MBB.erase(NI);
-    MBBI = NI;
-  } else if ((Opc == X86::SUB64ri32 || Opc == X86::SUB64ri8 ||
-              Opc == X86::SUB32ri || Opc == X86::SUB32ri8) &&
-             NI->getOperand(0).getReg() == StackPtr) {
-    if (NumBytes)
-      *NumBytes += NI->getOperand(2).getImm();
-    MBB.erase(NI);
-    MBBI = NI;
   }
 }
 
@@ -490,7 +458,7 @@ static unsigned calculateSetFPREG(uint64_t SPAdjust) {
   const uint64_t Win64MaxSEHOffset = 128;
   uint64_t SEHFrameOffset = std::min(SPAdjust, Win64MaxSEHOffset);
   // Win64 ABI requires 16-byte alignment for the UWOP_SET_FPREG opcode.
-  return static_cast<unsigned>(RoundUpToAlignment(SEHFrameOffset, 16));
+  return SEHFrameOffset & -16;
 }
 
 // If we're forcing a stack realignment we can't rely on just the frame
@@ -704,14 +672,12 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     // If required, include space for extra hidden slot for stashing base pointer.
     if (X86FI->getRestoreBasePointer())
       FrameSize += SlotSize;
-    if (RegInfo->needsStackRealignment(MF)) {
-      // Callee-saved registers are pushed on stack before the stack
-      // is realigned.
-      FrameSize -= X86FI->getCalleeSavedFrameSize();
-      NumBytes = RoundUpToAlignment(FrameSize, MaxAlign);
-    } else {
-      NumBytes = FrameSize - X86FI->getCalleeSavedFrameSize();
-    }
+
+    NumBytes = FrameSize - X86FI->getCalleeSavedFrameSize();
+
+    // Callee-saved registers are pushed on stack before the stack is realigned.
+    if (RegInfo->needsStackRealignment(MF) && !IsWinEH)
+      NumBytes = RoundUpToAlignment(NumBytes, MaxAlign);
 
     // Get the offset of the stack slot for the EBP register, which is
     // guaranteed to be the last slot by processFunctionBeforeFrameFinalized.
@@ -823,10 +789,6 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
   // the callee has more arguments then the caller.
   NumBytes -= mergeSPUpdates(MBB, MBBI, StackPtr, true);
 
-  // If there is an ADD32ri or SUB32ri of ESP immediately after this
-  // instruction, merge the two instructions.
-  mergeSPUpdatesDown(MBB, MBBI, StackPtr, &NumBytes);
-
   // Adjust stack pointer: ESP -= numbytes.
 
   // Windows and cygwin/mingw require a prologue helper routine when allocating
@@ -837,7 +799,10 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
   // responsible for adjusting the stack pointer.  Touching the stack at 4K
   // increments is necessary to ensure that the guard pages used by the OS
   // virtual memory manager are allocated in correct sequence.
-  if (NumBytes >= StackProbeSize && UseStackProbe) {
+  uint64_t AlignedNumBytes = NumBytes;
+  if (IsWinEH && RegInfo->needsStackRealignment(MF))
+    AlignedNumBytes = RoundUpToAlignment(AlignedNumBytes, MaxAlign);
+  if (AlignedNumBytes >= StackProbeSize && UseStackProbe) {
     // Check whether EAX is livein for this function.
     bool isEAXAlive = isEAXLiveIn(MF);
 
@@ -855,9 +820,19 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     if (Is64Bit) {
       // Handle the 64-bit Windows ABI case where we need to call __chkstk.
       // Function prologue is responsible for adjusting the stack pointer.
-      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::RAX)
-        .addImm(NumBytes)
-        .setMIFlag(MachineInstr::FrameSetup);
+      if (isUInt<32>(NumBytes)) {
+        BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
+            .addImm(NumBytes)
+            .setMIFlag(MachineInstr::FrameSetup);
+      } else if (isInt<32>(NumBytes)) {
+        BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri32), X86::RAX)
+            .addImm(NumBytes)
+            .setMIFlag(MachineInstr::FrameSetup);
+      } else {
+        BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::RAX)
+            .addImm(NumBytes)
+            .setMIFlag(MachineInstr::FrameSetup);
+      }
     } else {
       // Allocate NumBytes-4 bytes on stack in case of isEAXAlive.
       // We'll also use 4 already allocated bytes for EAX.
@@ -898,8 +873,11 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
   int SEHFrameOffset = 0;
   if (IsWinEH && HasFP) {
     SEHFrameOffset = calculateSetFPREG(NumBytes);
-    addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::LEA64r), FramePtr),
-                 StackPtr, false, SEHFrameOffset);
+    if (SEHFrameOffset)
+      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::LEA64r), FramePtr),
+                   StackPtr, false, SEHFrameOffset);
+    else
+      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rr), FramePtr).addReg(StackPtr);
 
     if (NeedsWinEH)
       BuildMI(MBB, MBBI, DL, TII.get(X86::SEH_SetFrame))
@@ -1002,8 +980,8 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   bool Is64Bit = STI.is64Bit();
   // standard x86_64 and NaCl use 64-bit frame/stack pointers, x32 - 32-bit.
   const bool Uses64BitFramePtr = STI.isTarget64BitLP64() || STI.isTargetNaCl64();
+  bool HasFP = hasFP(MF);
   const bool Is64BitILP32 = STI.isTarget64BitILP32();
-  bool UseLEA = STI.useLeaForSP();
   unsigned SlotSize = RegInfo->getSlotSize();
   unsigned FramePtr = RegInfo->getFrameRegister(MF);
   unsigned MachineFramePtr =
@@ -1013,10 +991,24 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
 
   bool IsWinEH = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
   bool NeedsWinEH = IsWinEH && MF.getFunction()->needsUnwindTableEntry();
+  bool UseLEAForSP = false;
+
+  // We can't use LEA instructions for adjusting the stack pointer if this is a
+  // leaf function in the Win64 ABI.  Only ADD instructions may be used to
+  // deallocate the stack.
+  if (STI.useLeaForSP()) {
+    if (!IsWinEH) {
+      // We *aren't* using the Win64 ABI which means we are free to use LEA.
+      UseLEAForSP = true;
+    } else if (HasFP) {
+      // We *have* a frame pointer which means we are permitted to use LEA.
+      UseLEAForSP = true;
+    }
+  }
 
   switch (RetOpcode) {
   default:
-    llvm_unreachable("Can only insert epilog into returning blocks");
+    llvm_unreachable("Can only insert epilogue into returning blocks");
   case X86::RETQ:
   case X86::RETL:
   case X86::RETIL:
@@ -1041,14 +1033,12 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   if (hasFP(MF)) {
     // Calculate required stack adjustment.
     uint64_t FrameSize = StackSize - SlotSize;
-    if (RegInfo->needsStackRealignment(MF)) {
-      // Callee-saved registers were pushed on stack before the stack
-      // was realigned.
-      FrameSize -= CSSize;
-      NumBytes = (FrameSize + MaxAlign - 1) / MaxAlign * MaxAlign;
-    } else {
-      NumBytes = FrameSize - CSSize;
-    }
+    NumBytes = FrameSize - CSSize;
+
+    // Callee-saved registers were pushed on stack before the stack was
+    // realigned.
+    if (RegInfo->needsStackRealignment(MF) && !IsWinEH)
+      NumBytes = RoundUpToAlignment(FrameSize, MaxAlign);
 
     // Pop EBP.
     BuildMI(MBB, MBBI, DL,
@@ -1085,6 +1075,12 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     if (RegInfo->needsStackRealignment(MF))
       MBBI = FirstCSPop;
     if (IsWinEH) {
+      // There are only two legal forms of epilogue:
+      // - add SEHAllocationSize, %rsp
+      // - lea SEHAllocationSize(%FramePtr), %rsp
+      //
+      // We are *not* permitted to use 'mov %FramePtr, %rsp' because the Win64
+      // unwinder will not recognize 'mov' as an epilogue instruction.
       unsigned SEHFrameOffset = calculateSetFPREG(SEHStackAllocAmt);
       addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::LEA64r), StackPtr),
                    FramePtr, false, SEHStackAllocAmt - SEHFrameOffset);
@@ -1102,8 +1098,8 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     }
   } else if (NumBytes) {
     // Adjust stack pointer back: ESP += numbytes.
-    emitSPUpdate(MBB, MBBI, StackPtr, NumBytes, Is64Bit, Uses64BitFramePtr, UseLEA,
-                 TII, *RegInfo);
+    emitSPUpdate(MBB, MBBI, StackPtr, NumBytes, Is64Bit, Uses64BitFramePtr,
+                 UseLEAForSP, TII, *RegInfo);
     --MBBI;
   }
 
@@ -1149,7 +1145,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
       // Check for possible merge with preceding ADD instruction.
       Offset += mergeSPUpdates(MBB, MBBI, StackPtr, true);
       emitSPUpdate(MBB, MBBI, StackPtr, Offset, Is64Bit, Uses64BitFramePtr,
-                   UseLEA, TII, *RegInfo);
+                   UseLEAForSP, TII, *RegInfo);
     }
 
     // Jump to label or value in register.
@@ -1197,8 +1193,8 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
 
     // Check for possible merge with preceding ADD instruction.
     delta += mergeSPUpdates(MBB, MBBI, StackPtr, true);
-    emitSPUpdate(MBB, MBBI, StackPtr, delta, Is64Bit, Uses64BitFramePtr, UseLEA, TII,
-                 *RegInfo);
+    emitSPUpdate(MBB, MBBI, StackPtr, delta, Is64Bit, Uses64BitFramePtr,
+                 UseLEAForSP, TII, *RegInfo);
   }
 }
 
@@ -1221,25 +1217,15 @@ int X86FrameLowering::getFrameIndexOffset(const MachineFunction &MF,
   int64_t FPDelta = 0;
 
   if (IsWinEH) {
-    uint64_t NumBytes = 0;
+    assert(!MFI->hasCalls() || (StackSize % 16) == 8);
+
     // Calculate required stack adjustment.
     uint64_t FrameSize = StackSize - SlotSize;
     // If required, include space for extra hidden slot for stashing base pointer.
     if (X86FI->getRestoreBasePointer())
       FrameSize += SlotSize;
-    uint64_t SEHStackAllocAmt = StackSize;
-    if (RegInfo->needsStackRealignment(MF)) {
-      // Callee-saved registers are pushed on stack before the stack
-      // is realigned.
-      FrameSize -= CSSize;
+    uint64_t NumBytes = FrameSize - CSSize;
 
-      uint64_t MaxAlign =
-          calculateMaxStackAlign(MF); // Desired stack alignment.
-      NumBytes = RoundUpToAlignment(FrameSize, MaxAlign);
-      SEHStackAllocAmt = RoundUpToAlignment(SEHStackAllocAmt, 16);
-    } else {
-      NumBytes = FrameSize - CSSize;
-    }
     uint64_t SEHFrameOffset = calculateSetFPREG(NumBytes);
     if (FI && FI == X86FI->getFAIndex())
       return -SEHFrameOffset;
@@ -1248,7 +1234,9 @@ int X86FrameLowering::getFrameIndexOffset(const MachineFunction &MF,
     // pointer followed by return address and the location required by the
     // restricted Win64 prologue.
     // Add FPDelta to all offsets below that go through the frame pointer.
-    FPDelta = SEHStackAllocAmt - SEHFrameOffset;
+    FPDelta = FrameSize - SEHFrameOffset;
+    assert((!MFI->hasCalls() || (FPDelta % 16) == 0) &&
+           "FPDelta isn't aligned per the Win64 ABI!");
   }
 
 
@@ -1273,8 +1261,6 @@ int X86FrameLowering::getFrameIndexOffset(const MachineFunction &MF,
   } else {
     if (!HasFP)
       return Offset + StackSize;
-    if (IsWinEH)
-      return Offset + FPDelta;
 
     // Skip the saved EBP.
     Offset += SlotSize;
@@ -1285,7 +1271,7 @@ int X86FrameLowering::getFrameIndexOffset(const MachineFunction &MF,
       Offset -= TailCallReturnAddrDelta;
   }
 
-  return Offset;
+  return Offset + FPDelta;
 }
 
 int X86FrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
