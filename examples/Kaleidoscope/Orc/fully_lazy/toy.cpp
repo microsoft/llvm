@@ -20,7 +20,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
 using namespace llvm;
+using namespace llvm::orc;
 
 //===----------------------------------------------------------------------===//
 // Lexer
@@ -684,7 +686,6 @@ public:
   LLVMContext& getLLVMContext() const { return Context; }
   void addPrototypeAST(std::unique_ptr<PrototypeAST> P);
   PrototypeAST* getPrototypeAST(const std::string &Name);
-  std::map<std::string, std::unique_ptr<FunctionAST>> FunctionDefs; 
 private:
   typedef std::map<std::string, std::unique_ptr<PrototypeAST>> PrototypeMap;
   LLVMContext &Context;
@@ -1204,17 +1205,15 @@ public:
     return LazyEmitLayer.findSymbol(Name, true);
   }
 
+  JITSymbol findMangledSymbolIn(ModuleHandleT H, const std::string &Name) {
+    return LazyEmitLayer.findSymbolIn(H, Name, true);
+  }
+
   JITSymbol findSymbol(const std::string &Name) {
     return findMangledSymbol(Mangle(Name));
   }
 
-  JITSymbol findMangledSymbolIn(LazyEmitLayerT::ModuleSetHandleT H,
-                                const std::string &Name) {
-    return LazyEmitLayer.findSymbolIn(H, Name, true);
-  }
-
-  JITSymbol findSymbolIn(LazyEmitLayerT::ModuleSetHandleT H,
-                         const std::string &Name) {
+  JITSymbol findSymbolIn(ModuleHandleT H, const std::string &Name) {
     return findMangledSymbolIn(H, Mangle(Name));
   }
 
@@ -1235,8 +1234,9 @@ private:
     // FIXME: What happens if IRGen fails?
     auto H = irGenStub(std::move(DefI->second));
 
-    // Remove the map entry now that we're done with it.
-    Session.FunctionDefs.erase(DefI);
+    // Remove the function definition's AST now that we're
+    // finished with it.
+    FunctionDefs.erase(DefI);
 
     // Return the address of the stub.
     return findMangledSymbolIn(H, Name).getAddress();
@@ -1280,11 +1280,11 @@ private:
     //
     //   The update action will update FunctionBodyPointer to point at the newly
     // compiled function.
-    CallbackInfo.setCompileAction(
-      [this, Fn = std::shared_ptr<FunctionAST>(std::move(FnAST))](){
-        auto H = addModule(IRGen(Session, *Fn));
-        return findSymbolIn(H, Fn->Proto->Name).getAddress();
-      });
+    std::shared_ptr<FunctionAST> Fn = std::move(FnAST);
+    CallbackInfo.setCompileAction([this, Fn]() {
+      auto H = addModule(IRGen(Session, *Fn));
+      return findSymbolIn(H, Fn->Proto->Name).getAddress();
+    });
     CallbackInfo.setUpdateAction(
       CompileCallbacks.getLocalFPUpdater(H, Mangle(BodyPtrName)));
 
@@ -1299,9 +1299,9 @@ private:
   CompileLayerT CompileLayer;
   LazyEmitLayerT LazyEmitLayer;
 
-  JITCompileCallbackManager<LazyEmitLayerT, OrcX86_64> CompileCallbacks;
-
   std::map<std::string, std::unique_ptr<FunctionAST>> FunctionDefs;
+
+  JITCompileCallbackManager<LazyEmitLayerT, OrcX86_64> CompileCallbacks;
 };
 
 static void HandleDefinition(SessionContext &S, KaleidoscopeJIT &J) {

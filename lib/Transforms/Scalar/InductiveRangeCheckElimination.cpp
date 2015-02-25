@@ -143,17 +143,17 @@ public:
   /// R.getEnd() sle R.getBegin(), then R denotes the empty range.
 
   class Range {
-    Value *Begin;
-    Value *End;
+    const SCEV *Begin;
+    const SCEV *End;
 
   public:
-    Range(Value *Begin, Value *End) : Begin(Begin), End(End) {
+    Range(const SCEV *Begin, const SCEV *End) : Begin(Begin), End(End) {
       assert(Begin->getType() == End->getType() && "ill-typed range!");
     }
 
     Type *getType() const { return Begin->getType(); }
-    Value *getBegin() const { return Begin; }
-    Value *getEnd() const { return End; }
+    const SCEV *getBegin() const { return Begin; }
+    const SCEV *getEnd() const { return End; }
   };
 
   typedef SpecificBumpPtrAllocator<InductiveRangeCheck> AllocatorTy;
@@ -162,9 +162,11 @@ public:
   /// branch to take the hot successor (see (1) above).
   bool getPassingDirection() { return true; }
 
-  /// Computes a range for the induction variable in which the range check is
-  /// redundant and can be constant-folded away.
+  /// Computes a range for the induction variable (IndVar) in which the range
+  /// check is redundant and can be constant-folded away.  The induction
+  /// variable is not required to be the canonical {0,+,1} induction variable.
   Optional<Range> computeSafeIterationSpace(ScalarEvolution &SE,
+                                            const SCEVAddRecExpr *IndVar,
                                             IRBuilder<> &B) const;
 
   /// Create an inductive range check out of BI if possible, else return
@@ -394,21 +396,6 @@ InductiveRangeCheck::create(InductiveRangeCheck::AllocatorTy &A, BranchInst *BI,
   return IRC;
 }
 
-static Value *MaybeSimplify(Value *V) {
-  if (Instruction *I = dyn_cast<Instruction>(V))
-    if (Value *Simplified = SimplifyInstruction(I))
-      return Simplified;
-  return V;
-}
-
-static Value *ConstructSMinOf(Value *X, Value *Y, IRBuilder<> &B) {
-  return MaybeSimplify(B.CreateSelect(B.CreateICmpSLT(X, Y), X, Y));
-}
-
-static Value *ConstructSMaxOf(Value *X, Value *Y, IRBuilder<> &B) {
-  return MaybeSimplify(B.CreateSelect(B.CreateICmpSGT(X, Y), X, Y));
-}
-
 namespace {
 
 /// This class is used to constrain loops to run within a given iteration space.
@@ -632,10 +619,7 @@ bool LoopConstrainer::recognizeLoop(LoopStructure &LoopStructureOut,
   }
 
   PHINode *CIV = OriginalLoop.getCanonicalInductionVariable();
-  if (!CIV) {
-    FailureReason = "no CIV";
-    return false;
-  }
+  assert(CIV && "precondition");
 
   BasicBlock *Header = OriginalLoop.getHeader();
   BasicBlock *Preheader = OriginalLoop.getLoopPreheader();
@@ -738,35 +722,36 @@ LoopConstrainer::calculateSubRanges(Value *&HeaderCountOut) const {
   SCEVExpander Expander(SE, "irce");
   Instruction *InsertPt = OriginalPreheader->getTerminator();
 
-  Value *LatchCountV =
-      MaybeSimplify(Expander.expandCodeFor(LatchTakenCount, Ty, InsertPt));
-
-  IRBuilder<> B(InsertPt);
-
   LoopConstrainer::SubRanges Result;
 
   // I think we can be more aggressive here and make this nuw / nsw if the
   // addition that feeds into the icmp for the latch's terminating branch is nuw
   // / nsw.  In any case, a wrapping 2's complement addition is safe.
   ConstantInt *One = ConstantInt::get(Ty, 1);
-  HeaderCountOut = MaybeSimplify(B.CreateAdd(LatchCountV, One, "header.count"));
+  const SCEV *HeaderCountSCEV = SE.getAddExpr(LatchTakenCount, SE.getSCEV(One));
+  HeaderCountOut = Expander.expandCodeFor(HeaderCountSCEV, Ty, InsertPt);
 
-  const SCEV *RangeBegin = SE.getSCEV(Range.getBegin());
-  const SCEV *RangeEnd = SE.getSCEV(Range.getEnd());
-  const SCEV *HeaderCountSCEV = SE.getSCEV(HeaderCountOut);
   const SCEV *Zero = SE.getConstant(Ty, 0);
 
   // In some cases we can prove that we don't need a pre or post loop
 
   bool ProvablyNoPreloop =
-      SE.isKnownPredicate(ICmpInst::ICMP_SLE, RangeBegin, Zero);
-  if (!ProvablyNoPreloop)
-    Result.ExitPreLoopAt = ConstructSMinOf(HeaderCountOut, Range.getBegin(), B);
+    SE.isKnownPredicate(ICmpInst::ICMP_SLE, Range.getBegin(), Zero);
+  if (!ProvablyNoPreloop) {
+    const SCEV *ExitPreLoopAtSCEV =
+      SE.getSMinExpr(HeaderCountSCEV, Range.getBegin());
+    Result.ExitPreLoopAt =
+      Expander.expandCodeFor(ExitPreLoopAtSCEV, Ty, InsertPt);
+  }
 
   bool ProvablyNoPostLoop =
-      SE.isKnownPredicate(ICmpInst::ICMP_SLE, HeaderCountSCEV, RangeEnd);
-  if (!ProvablyNoPostLoop)
-    Result.ExitMainLoopAt = ConstructSMinOf(HeaderCountOut, Range.getEnd(), B);
+    SE.isKnownPredicate(ICmpInst::ICMP_SLE, HeaderCountSCEV, Range.getEnd());
+  if (!ProvablyNoPostLoop) {
+    const SCEV *ExitMainLoopAtSCEV =
+      SE.getSMinExpr(HeaderCountSCEV, Range.getEnd());
+    Result.ExitMainLoopAt =
+      Expander.expandCodeFor(ExitMainLoopAtSCEV, Ty, InsertPt);
+  }
 
   return Result;
 }
@@ -1096,53 +1081,69 @@ bool LoopConstrainer::run() {
   return true;
 }
 
-/// Computes and returns a range of values for the induction variable in which
-/// the range check can be safely elided.  If it cannot compute such a range,
-/// returns None.
+/// Computes and returns a range of values for the induction variable (IndVar)
+/// in which the range check can be safely elided.  If it cannot compute such a
+/// range, returns None.
 Optional<InductiveRangeCheck::Range>
 InductiveRangeCheck::computeSafeIterationSpace(ScalarEvolution &SE,
-                                               IRBuilder<> &B) const {
-
-  // Currently we support inequalities of the form:
+                                               const SCEVAddRecExpr *IndVar,
+                                               IRBuilder<> &) const {
+  // IndVar is of the form "A + B * I" (where "I" is the canonical induction
+  // variable, that may or may not exist as a real llvm::Value in the loop) and
+  // this inductive range check is a range check on the "C + D * I" ("C" is
+  // getOffset() and "D" is getScale()).  We rewrite the value being range
+  // checked to "M + N * IndVar" where "N" = "D * B^(-1)" and "M" = "C - NA".
+  // Currently we support this only for "B" = "D" = { 1 or -1 }, but the code
+  // can be generalized as needed.
   //
-  //   0 <= Offset + 1 * CIV < L given L >= 0
+  // The actual inequalities we solve are of the form
   //
-  // The inequality is satisfied by -Offset <= CIV < (L - Offset) [^1].  All
-  // additions and subtractions are twos-complement wrapping and comparisons are
-  // signed.
+  //   0 <= M + 1 * IndVar < L given L >= 0  (i.e. N == 1)
+  //
+  // The inequality is satisfied by -M <= IndVar < (L - M) [^1].  All additions
+  // and subtractions are twos-complement wrapping and comparisons are signed.
   //
   // Proof:
   //
-  //   If there exists CIV such that -Offset <= CIV < (L - Offset) then it
-  //   follows that -Offset <= (-Offset + L) [== Eq. 1].  Since L >= 0, if
-  //   (-Offset + L) sign-overflows then (-Offset + L) < (-Offset).  Hence by
-  //   [Eq. 1], (-Offset + L) could not have overflown.
+  //   If there exists IndVar such that -M <= IndVar < (L - M) then it follows
+  //   that -M <= (-M + L) [== Eq. 1].  Since L >= 0, if (-M + L) sign-overflows
+  //   then (-M + L) < (-M).  Hence by [Eq. 1], (-M + L) could not have
+  //   overflown.
   //
-  //   This means CIV = t + (-Offset) for t in [0, L).  Hence (CIV + Offset) =
-  //   t.  Hence 0 <= (CIV + Offset) < L
+  //   This means IndVar = t + (-M) for t in [0, L).  Hence (IndVar + M) = t.
+  //   Hence 0 <= (IndVar + M) < L
 
-  // [^1]: Note that the solution does _not_ apply if L < 0; consider values
-  // Offset = 127, CIV = 126 and L = -2 in an i8 world.
+  // [^1]: Note that the solution does _not_ apply if L < 0; consider values M =
+  // 127, IndVar = 126 and L = -2 in an i8 world.
 
-  const SCEVConstant *ScaleC = dyn_cast<SCEVConstant>(getScale());
-  if (!(ScaleC && ScaleC->getValue()->getValue() == 1)) {
-    DEBUG(dbgs() << "irce: could not compute safe iteration space for:\n";
-          print(dbgs()));
+  if (!IndVar->isAffine())
     return None;
-  }
 
-  Value *OffsetV = SCEVExpander(SE, "safe.itr.space").expandCodeFor(
-      getOffset(), getOffset()->getType(), B.GetInsertPoint());
-  OffsetV = MaybeSimplify(OffsetV);
+  const SCEV *A = IndVar->getStart();
+  const SCEVConstant *B = dyn_cast<SCEVConstant>(IndVar->getStepRecurrence(SE));
+  if (!B)
+    return None;
 
-  Value *Begin = MaybeSimplify(B.CreateNeg(OffsetV));
-  Value *End = MaybeSimplify(B.CreateSub(getLength(), OffsetV));
+  const SCEV *C = getOffset();
+  const SCEVConstant *D = dyn_cast<SCEVConstant>(getScale());
+  if (D != B)
+    return None;
+
+  ConstantInt *ConstD = D->getValue();
+  if (!(ConstD->isMinusOne() || ConstD->isOne()))
+    return None;
+
+  const SCEV *M = SE.getMinusSCEV(C, A);
+
+  const SCEV *Begin = SE.getNegativeSCEV(M);
+  const SCEV *End = SE.getMinusSCEV(SE.getSCEV(getLength()), M);
 
   return InductiveRangeCheck::Range(Begin, End);
 }
 
 static Optional<InductiveRangeCheck::Range>
-IntersectRange(const Optional<InductiveRangeCheck::Range> &R1,
+IntersectRange(ScalarEvolution &SE,
+               const Optional<InductiveRangeCheck::Range> &R1,
                const InductiveRangeCheck::Range &R2, IRBuilder<> &B) {
   if (!R1.hasValue())
     return R2;
@@ -1153,9 +1154,10 @@ IntersectRange(const Optional<InductiveRangeCheck::Range> &R1,
   if (R1Value.getType() != R2.getType())
     return None;
 
-  Value *NewMin = ConstructSMaxOf(R1Value.getBegin(), R2.getBegin(), B);
-  Value *NewMax = ConstructSMinOf(R1Value.getEnd(), R2.getEnd(), B);
-  return InductiveRangeCheck::Range(NewMin, NewMax);
+  const SCEV *NewBegin = SE.getSMaxExpr(R1Value.getBegin(), R2.getBegin());
+  const SCEV *NewEnd = SE.getSMinExpr(R1Value.getEnd(), R2.getEnd());
+
+  return InductiveRangeCheck::Range(NewBegin, NewEnd);
 }
 
 bool InductiveRangeCheckElimination::runOnLoop(Loop *L, LPPassManager &LPM) {
@@ -1175,6 +1177,13 @@ bool InductiveRangeCheckElimination::runOnLoop(Loop *L, LPPassManager &LPM) {
   SmallVector<InductiveRangeCheck *, 16> RangeChecks;
   ScalarEvolution &SE = getAnalysis<ScalarEvolution>();
   BranchProbabilityInfo &BPI = getAnalysis<BranchProbabilityInfo>();
+
+  PHINode *CIV = L->getCanonicalInductionVariable();
+  if (!CIV) {
+    DEBUG(dbgs() << "irce: loop has no canonical induction variable\n");
+    return false;
+  }
+  const SCEVAddRecExpr *IndVar = cast<SCEVAddRecExpr>(SE.getSCEV(CIV));
 
   for (auto BBI : L->getBlocks())
     if (BranchInst *TBI = dyn_cast<BranchInst>(BBI->getTerminator()))
@@ -1199,10 +1208,10 @@ bool InductiveRangeCheckElimination::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   IRBuilder<> B(ExprInsertPt);
   for (InductiveRangeCheck *IRC : RangeChecks) {
-    auto Result = IRC->computeSafeIterationSpace(SE, B);
+    auto Result = IRC->computeSafeIterationSpace(SE, IndVar, B);
     if (Result.hasValue()) {
       auto MaybeSafeIterRange =
-        IntersectRange(SafeIterRange, Result.getValue(), B);
+        IntersectRange(SE, SafeIterRange, Result.getValue(), B);
       if (MaybeSafeIterRange.hasValue()) {
         RangeChecksToEliminate.push_back(IRC);
         SafeIterRange = MaybeSafeIterRange.getValue();

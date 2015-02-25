@@ -14,11 +14,12 @@
 #ifndef LLVM_EXECUTIONENGINE_ORC_JITSYMBOL_H
 #define LLVM_EXECUTIONENGINE_ORC_JITSYMBOL_H
 
-#include "llvm/Support/Compiler.h"
+#include "llvm/Support/DataTypes.h"
 #include <cassert>
 #include <functional>
 
 namespace llvm {
+namespace orc {
 
 /// @brief Represents an address in the target process's address space.
 typedef uint64_t TargetAddress;
@@ -28,10 +29,25 @@ class JITSymbol {
 public:
   typedef std::function<TargetAddress()> GetAddressFtor;
 
+  /// @brief Create a 'null' symbol that represents failure to find a symbol
+  ///        definition.
   JITSymbol(std::nullptr_t) : CachedAddr(0) {}
 
+  /// @brief Create a symbol for a definition with a known address.
+  JITSymbol(TargetAddress Addr)
+    : CachedAddr(Addr) {}
+
+  /// @brief Create a symbol for a definition that doesn't have a known address
+  ///        yet.
+  /// @param GetAddress A functor to materialize a definition (fixing the
+  ///        address) on demand.
+  ///
+  ///   This constructor allows a JIT layer to provide a reference to a symbol
+  /// definition without actually materializing the definition up front. The
+  /// user can materialize the definition at any time by calling the getAddress
+  /// method.
   JITSymbol(GetAddressFtor GetAddress)
-      : CachedAddr(0), GetAddress(std::move(GetAddress)) {}
+    : CachedAddr(0), GetAddress(std::move(GetAddress)) {}
 
   /// @brief Returns true if the symbol exists, false otherwise.
   explicit operator bool() const { return CachedAddr || GetAddress; }
@@ -52,6 +68,7 @@ private:
   GetAddressFtor GetAddress;
 };
 
-}
+} // End namespace orc.
+} // End namespace llvm.
 
 #endif // LLVM_EXECUTIONENGINE_ORC_JITSYMBOL_H
