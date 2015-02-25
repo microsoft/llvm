@@ -393,7 +393,8 @@ namespace llvm {
       FMSUB_RND,
       FNMSUB_RND,
       FMADDSUB_RND,
-      FMSUBADD_RND,     
+      FMSUBADD_RND,
+      RNDSCALE,
 
       // Compress and expand
       COMPRESS,
@@ -957,7 +958,6 @@ namespace llvm {
     SDValue lowerEH_SJLJ_LONGJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINIT_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFLT_ROUNDS_(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerSIGN_EXTEND_INREG(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerWin64_i128OP(SDValue Op, SelectionDAG &DAG) const;
 
     SDValue
