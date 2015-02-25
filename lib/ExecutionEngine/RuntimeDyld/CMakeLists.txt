@@ -5,4 +5,5 @@ add_llvm_library(LLVMRuntimeDyld
   RuntimeDyldCOFF.cpp
   RuntimeDyldELF.cpp
   RuntimeDyldMachO.cpp
+  Targets/RuntimeDyldCOFFX86_64.cpp
   )
