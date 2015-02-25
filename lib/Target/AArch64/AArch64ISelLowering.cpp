@@ -730,13 +730,6 @@ MVT AArch64TargetLowering::getScalarShiftAmountTy(EVT LHSTy) const {
   return MVT::i64;
 }
 
-unsigned AArch64TargetLowering::getMaximalGlobalOffset() const {
-  // FIXME: On AArch64, this depends on the type.
-  // Basically, the addressable offsets are up to 4095 * Ty.getSizeInBytes().
-  // and the offset has to be a multiple of the related size in bytes.
-  return 4095;
-}
-
 FastISel *
 AArch64TargetLowering::createFastISel(FunctionLoweringInfo &funcInfo,
                                       const TargetLibraryInfo *libInfo) const {
@@ -2203,8 +2196,7 @@ void AArch64TargetLowering::saveVarArgRegisters(CCState &CCInfo,
                                           AArch64::X3, AArch64::X4, AArch64::X5,
                                           AArch64::X6, AArch64::X7 };
   static const unsigned NumGPRArgRegs = array_lengthof(GPRArgRegs);
-  unsigned FirstVariadicGPR =
-      CCInfo.getFirstUnallocated(GPRArgRegs, NumGPRArgRegs);
+  unsigned FirstVariadicGPR = CCInfo.getFirstUnallocated(GPRArgRegs);
 
   unsigned GPRSaveSize = 8 * (NumGPRArgRegs - FirstVariadicGPR);
   int GPRIdx = 0;
@@ -2232,8 +2224,7 @@ void AArch64TargetLowering::saveVarArgRegisters(CCState &CCInfo,
         AArch64::Q0, AArch64::Q1, AArch64::Q2, AArch64::Q3,
         AArch64::Q4, AArch64::Q5, AArch64::Q6, AArch64::Q7};
     static const unsigned NumFPRArgRegs = array_lengthof(FPRArgRegs);
-    unsigned FirstVariadicFPR =
-        CCInfo.getFirstUnallocated(FPRArgRegs, NumFPRArgRegs);
+    unsigned FirstVariadicFPR = CCInfo.getFirstUnallocated(FPRArgRegs);
 
     unsigned FPRSaveSize = 16 * (NumFPRArgRegs - FirstVariadicFPR);
     int FPRIdx = 0;
@@ -6535,6 +6526,34 @@ bool AArch64TargetLowering::isTruncateFree(EVT VT1, EVT VT2) const {
   return NumBits1 > NumBits2;
 }
 
+/// Check if it is profitable to hoist instruction in then/else to if.
+/// Not profitable if I and it's user can form a FMA instruction
+/// because we prefer FMSUB/FMADD.
+bool AArch64TargetLowering::isProfitableToHoist(Instruction *I) const {
+  if (I->getOpcode() != Instruction::FMul)
+    return true;
+
+  if (I->getNumUses() != 1)
+    return true;
+
+  Instruction *User = I->user_back();
+
+  if (User &&
+      !(User->getOpcode() == Instruction::FSub ||
+        User->getOpcode() == Instruction::FAdd))
+    return true;
+
+  const TargetOptions &Options = getTargetMachine().Options;
+  EVT VT = getValueType(User->getOperand(0)->getType());
+
+  if (isFMAFasterThanFMulAndFAdd(VT) &&
+      isOperationLegalOrCustom(ISD::FMA, VT) &&
+      (Options.AllowFPOpFusion == FPOpFusion::Fast || Options.UnsafeFPMath))
+    return false;
+
+  return true;
+}
+
 // All 32-bit GPR operations implicitly zero the high-half of the corresponding
 // 64-bit GPR.
 bool AArch64TargetLowering::isZExtFree(Type *Ty1, Type *Ty2) const {
@@ -7973,7 +7992,7 @@ static SDValue performPostLD1Combine(SDNode *N,
                                            LoadSDN->getMemOperand());
 
     // Update the uses.
-    std::vector<SDValue> NewResults;
+    SmallVector<SDValue, 2> NewResults;
     NewResults.push_back(SDValue(LD, 0));             // The result of load
     NewResults.push_back(SDValue(UpdN.getNode(), 2)); // Chain
     DCI.CombineTo(LD, NewResults);

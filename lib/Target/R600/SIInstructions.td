@@ -1494,10 +1494,10 @@ defm V_XOR_B32 : VOP2Inst <vop2<0x1d, 0x15>, "v_xor_b32", VOP_I32_I32_I32>;
 defm V_MAC_F32 : VOP2Inst <vop2<0x1f, 0x16>, "v_mac_f32", VOP_F32_F32_F32>;
 } // End isCommutable = 1
 
-defm V_MADMK_F32 : VOP2Inst <vop2<0x20, 0x17>, "v_madmk_f32", VOP_F32_F32_F32>;
+defm V_MADMK_F32 : VOP2MADK <vop2<0x20, 0x17>, "v_madmk_f32">;
 
 let isCommutable = 1 in {
-defm V_MADAK_F32 : VOP2Inst <vop2<0x21, 0x18>, "v_madak_f32", VOP_F32_F32_F32>;
+defm V_MADAK_F32 : VOP2MADK <vop2<0x21, 0x18>, "v_madak_f32">;
 } // End isCommutable = 1
 
 let isCommutable = 1, Defs = [VCC] in { // Carry-out goes to VCC
@@ -1969,17 +1969,6 @@ def SI_INDIRECT_DST_V8 : SI_INDIRECT_DST<VReg_256>;
 def SI_INDIRECT_DST_V16 : SI_INDIRECT_DST<VReg_512>;
 
 } // Uses = [EXEC,VCC,M0], Defs = [EXEC,VCC,M0]
-
-let usesCustomInserter = 1 in {
-
-def V_SUB_F64 : InstSI <
-  (outs VReg_64:$dst),
-  (ins VReg_64:$src0, VReg_64:$src1),
-  "v_sub_f64 $dst, $src0, $src1",
-  [(set f64:$dst, (fsub f64:$src0, f64:$src1))]
->;
-
-} // end usesCustomInserter
 
 multiclass SI_SPILL_SGPR <RegisterClass sgpr_class> {
 
@@ -2782,9 +2771,6 @@ def : Pat <
   (mulhs i32:$src0, i32:$src1),
   (V_MUL_HI_I32 $src0, $src1)
 >;
-
-def : Vop3ModPat<V_MAD_F32, VOP_F32_F32_F32_F32, AMDGPUmad>;
-
 
 defm : BFIPatterns <V_BFI_B32, S_MOV_B32, SReg_64>;
 def : ROTRPattern <V_ALIGNBIT_B32>;

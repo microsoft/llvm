@@ -1249,7 +1249,7 @@ void PPCDarwinAsmPrinter::EmitStartOfAsmFile(Module &M) {
   // FIXME: How should we merge darwin directives?
   unsigned Directive = PPC::DIR_NONE;
   for (const Function &F : M) {
-    const PPCSubtarget &STI = TM.getSubtarget<PPCSubtarget>(&F);
+    const PPCSubtarget &STI = TM.getSubtarget<PPCSubtarget>(F);
     unsigned FDir = STI.getDarwinDirective();
     Directive = Directive > FDir ? FDir : STI.getDarwinDirective();
     if (STI.hasMFOCRF() && Directive < PPC::DIR_970)
@@ -1303,8 +1303,17 @@ static MCSymbol *GetAnonSym(MCSymbol *Sym, MCContext &Ctx) {
 void PPCDarwinAsmPrinter::
 EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
   bool isPPC64 = TM.getDataLayout()->getPointerSizeInBits() == 64;
-  bool isDarwin = Subtarget->isDarwin();
-  
+
+  // Construct a local MCSubtargetInfo and shadow EmitToStreamer here.
+  // This is because the MachineFunction won't exist (but have not yet been
+  // freed) and since we're at the global level we can use the default
+  // constructed subtarget.
+  std::unique_ptr<MCSubtargetInfo> STI(TM.getTarget().createMCSubtargetInfo(
+      TM.getTargetTriple(), TM.getTargetCPU(), TM.getTargetFeatureString()));
+  auto EmitToStreamer = [&STI] (MCStreamer &S, const MCInst &Inst) {
+    S.EmitInstruction(Inst, *STI);
+  };
+
   const TargetLoweringObjectFileMachO &TLOFMacho = 
     static_cast<const TargetLoweringObjectFileMachO &>(getObjFileLowering());
 
@@ -1343,7 +1352,7 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
       // mflr r11
       EmitToStreamer(OutStreamer, MCInstBuilder(PPC::MFLR).addReg(PPC::R11));
       // addis r11, r11, ha16(LazyPtr - AnonSymbol)
-      const MCExpr *SubHa16 = PPCMCExpr::CreateHa(Sub, isDarwin, OutContext);
+      const MCExpr *SubHa16 = PPCMCExpr::CreateHa(Sub, true, OutContext);
       EmitToStreamer(OutStreamer, MCInstBuilder(PPC::ADDIS)
         .addReg(PPC::R11)
         .addReg(PPC::R11)
@@ -1353,7 +1362,7 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
 
       // ldu r12, lo16(LazyPtr - AnonSymbol)(r11)
       // lwzu r12, lo16(LazyPtr - AnonSymbol)(r11)
-      const MCExpr *SubLo16 = PPCMCExpr::CreateLo(Sub, isDarwin, OutContext);
+      const MCExpr *SubLo16 = PPCMCExpr::CreateLo(Sub, true, OutContext);
       EmitToStreamer(OutStreamer, MCInstBuilder(isPPC64 ? PPC::LDU : PPC::LWZU)
         .addReg(PPC::R12)
         .addExpr(SubLo16).addExpr(SubLo16)
@@ -1399,7 +1408,7 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
 
     // lis r11, ha16(LazyPtr)
     const MCExpr *LazyPtrHa16 =
-      PPCMCExpr::CreateHa(LazyPtrExpr, isDarwin, OutContext);
+      PPCMCExpr::CreateHa(LazyPtrExpr, true, OutContext);
     EmitToStreamer(OutStreamer, MCInstBuilder(PPC::LIS)
       .addReg(PPC::R11)
       .addExpr(LazyPtrHa16));
@@ -1407,7 +1416,7 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
     // ldu r12, lo16(LazyPtr)(r11)
     // lwzu r12, lo16(LazyPtr)(r11)
     const MCExpr *LazyPtrLo16 =
-      PPCMCExpr::CreateLo(LazyPtrExpr, isDarwin, OutContext);
+      PPCMCExpr::CreateLo(LazyPtrExpr, true, OutContext);
     EmitToStreamer(OutStreamer, MCInstBuilder(isPPC64 ? PPC::LDU : PPC::LWZU)
       .addReg(PPC::R12)
       .addExpr(LazyPtrLo16).addExpr(LazyPtrLo16)

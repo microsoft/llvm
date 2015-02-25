@@ -10,9 +10,9 @@ entry:
   store i32 0, i32* %retval
   %0 = load i32* %b, align 4
   %1 = load i32* %c, align 4
-  %add = add nsw i32 %0, %1
-  store i32 %add, i32* %a, align 4
+  %xor = xor i32 %0, %1
+  store i32 %xor, i32* %a, align 4
   ret i32 0
 }
 
-; CHECK: addu16
+; CHECK: xor16
