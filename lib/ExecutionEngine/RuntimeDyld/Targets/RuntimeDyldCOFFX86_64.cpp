@@ -129,21 +129,20 @@ relocation_iterator RuntimeDyldCOFFX86_64::processRelocationRef(
       section_iterator SecI(Obj.section_end());
       Symbol->getSection(SecI);
       if (SecI == Obj.section_end())
-        llvm_unreachable("Symbol section not found, bad object file");
+        report_fatal_error("Symbol section not found, bad object file");
       bool IsCode = SecI->isText();
       TargetSectionID = findOrEmitSection(Obj, *SecI, IsCode, ObjSectionToID);
     }
     TargetOffset = getSymbolOffset(*Symbol);
   }
 
-  // Assert for now that any fixup be resolvable within the object scope.
+  // Verify for now that any fixup be resolvable within the object scope.
   if (TargetOffset == UnknownAddressOrSize)
-    llvm_unreachable("External symbol reference?");
+    report_fatal_error("External symbol reference");
 
   switch (RelType) {
   case COFF::IMAGE_REL_AMD64_ADDR64:
-  case COFF::IMAGE_REL_AMD64_ADDR32NB:
-  {
+  case COFF::IMAGE_REL_AMD64_ADDR32NB: {
     RelocationEntry RE(SectionID, Offset, RelType, TargetOffset + Addend);
 
     if (IsSectionDefinition)
@@ -163,7 +162,7 @@ void RuntimeDyldCOFFX86_64::finalizeLoad(const ObjectFile &Obj,
   ObjSectionToIDMap &SectionMap) {
   // Look for and record the EH frame section IDs.
   for (const auto &SectionPair : SectionMap) {
-    const SectionRef& Section = SectionPair.first;
+    const SectionRef &Section = SectionPair.first;
     StringRef Name;
     Check(Section.getName(Name));
     // Note unwind info is split across .pdata and .xdata, so this
