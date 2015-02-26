@@ -266,9 +266,14 @@ static bool isRequiredForExecution(const SectionRef &Section) {
   const ObjectFile *Obj = Section.getObject();
   if (auto *ELFObj = dyn_cast<object::ELFObjectFileBase>(Obj))
     return ELFObj->getSectionFlags(Section) & ELF::SHF_ALLOC;
-  if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj))
-    return !(COFFObj->getCOFFSection(Section)->Characteristics &
-             (COFF::IMAGE_SCN_MEM_DISCARDABLE | COFF::IMAGE_SCN_LNK_INFO));
+  if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj)) {
+    const coff_section *CoffSection = COFFObj->getCOFFSection(Section);
+    bool HasContent = (CoffSection->VirtualSize > 0) 
+      || (CoffSection->SizeOfRawData > 0);
+    bool IsDiscardable = CoffSection->Characteristics &
+      (COFF::IMAGE_SCN_MEM_DISCARDABLE | COFF::IMAGE_SCN_LNK_INFO);
+    return HasContent && !IsDiscardable;
+  }
   
   assert(isa<MachOObjectFile>(Obj));
   return true;
@@ -530,7 +535,6 @@ unsigned RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
                                       const SectionRef &Section, bool IsCode) {
 
   StringRef data;
-  Check(Section.getContents(data));
   uint64_t Alignment64 = Section.getAlignment();
 
   unsigned Alignment = (unsigned)Alignment64 & 0xffffffffL;
@@ -560,6 +564,7 @@ unsigned RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
   // Some sections, such as debug info, don't need to be loaded for execution.
   // Leave those where they are.
   if (IsRequired) {
+    Check(Section.getContents(data));
     Allocate = DataSize + PaddingSize + StubBufSize;
     Addr = IsCode ? MemMgr->allocateCodeSection(Allocate, Alignment, SectionID,
                                                 Name)
