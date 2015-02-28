@@ -60,9 +60,32 @@ void RuntimeDyldCOFFX86_64::resolveRelocation(const RelocationEntry &RE,
   uint8_t *Target = Section.Address + RE.Offset;
 
   switch (RE.RelType) {
-  case COFF::IMAGE_REL_AMD64_ADDR32NB: {
+
+  case COFF::IMAGE_REL_AMD64_REL32:
+  case COFF::IMAGE_REL_AMD64_REL32_1:
+  case COFF::IMAGE_REL_AMD64_REL32_2:
+  case COFF::IMAGE_REL_AMD64_REL32_3:
+  case COFF::IMAGE_REL_AMD64_REL32_4:
+  case COFF::IMAGE_REL_AMD64_REL32_5:  {
     uint32_t *TargetAddress = (uint32_t *)Target;
-    *TargetAddress = Value + RE.Addend;
+    uint64_t FinalAddress = Section.LoadAddress + RE.Offset;
+    Value -= FinalAddress + 4;
+    uint64_t Result = Value + RE.Addend;
+    assert(((int64_t)Result <= INT32_MAX) && "Relocation overflow");
+    assert(((int64_t)Result >= INT32_MIN) && "Relocation underflow");
+    *TargetAddress = Result;
+    break;
+  }
+
+  case COFF::IMAGE_REL_AMD64_ADDR32NB: {
+    // Note ADDR32NB requires a well-established notion of
+    // image base. This address must be less than or equal
+    // to every section's load address, and all sections must be
+    // within a 32 bit offset from the base.
+    //
+    // For now we just set these to zero.
+    uint32_t *TargetAddress = (uint32_t *)Target;
+    *TargetAddress = 0;
     break;
   }
 
@@ -81,27 +104,59 @@ void RuntimeDyldCOFFX86_64::resolveRelocation(const RelocationEntry &RE,
 relocation_iterator RuntimeDyldCOFFX86_64::processRelocationRef(
   unsigned SectionID, relocation_iterator RelI, const ObjectFile &Obj,
   ObjSectionToIDMap &ObjSectionToID, StubMap &Stubs) {
+
+  // Find the symbol referred to in the relocation, and
+  // get its section and offset.
+  //
+  // Insist for now that all symbols be resolvable within
+  // the scope of this object file.
+  symbol_iterator Symbol = RelI->getSymbol();
+  if (Symbol == Obj.symbol_end())
+    report_fatal_error("Unknown symbol in relocation");
+  unsigned TargetSectionID = 0;
+  uint64_t TargetOffset = UnknownAddressOrSize;
+  const COFFObjectFile *COFFObj = cast<COFFObjectFile>(&Obj);
+  const COFFSymbolRef COFFSymbol = COFFObj->getCOFFSymbol(*Symbol);
+  section_iterator SecI(Obj.section_end());
+  Symbol->getSection(SecI);
+  if (SecI == Obj.section_end())
+    report_fatal_error("Unknown section in relocation");
+  bool IsCode = SecI->isText();
+  TargetSectionID = findOrEmitSection(Obj, *SecI, IsCode, ObjSectionToID);
+  TargetOffset = getSymbolOffset(*Symbol);
+
+  // Determine the Addend used to adjust the relocation value.
   uint64_t RelType;
   Check(RelI->getType(RelType));
   uint64_t Offset;
   Check(RelI->getOffset(Offset));
-  symbol_iterator Symbol = RelI->getSymbol();
-
-  // See if the fixup target has a nonzero addend
-  // to contribute to the overall fixup result.
   uint64_t Addend = 0;
   SectionEntry &Section = Sections[SectionID];
-  uint8_t *Target = Section.Address + Offset;
+  uintptr_t ObjTarget = Section.ObjAddress + Offset;
+
   switch (RelType) {
+
+  case COFF::IMAGE_REL_AMD64_REL32: 
+  case COFF::IMAGE_REL_AMD64_REL32_1:
+  case COFF::IMAGE_REL_AMD64_REL32_2:
+  case COFF::IMAGE_REL_AMD64_REL32_3:
+  case COFF::IMAGE_REL_AMD64_REL32_4:
+  case COFF::IMAGE_REL_AMD64_REL32_5: {
+    uint32_t Delta = (RelType - COFF::IMAGE_REL_AMD64_REL32);
+    uint32_t *Displacement = (uint32_t*)ObjTarget;
+    Addend = *Displacement + Delta;
+    break;
+  }
+
   case COFF::IMAGE_REL_AMD64_ADDR32NB: {
-    uint32_t *TargetAddress = (uint32_t *)Target;
-    Addend = *TargetAddress;
+    uint32_t *Displacement = (uint32_t*)ObjTarget;
+    Addend = *Displacement;
     break;
   }
 
   case COFF::IMAGE_REL_AMD64_ADDR64: {
-    uint64_t *TargetAddress = (uint64_t *)Target;
-    Addend = *TargetAddress;
+    uint64_t *Displacement = (uint64_t *)ObjTarget;
+    Addend = *Displacement;
     break;
   }
 
@@ -109,51 +164,14 @@ relocation_iterator RuntimeDyldCOFFX86_64::processRelocationRef(
     break;
   }
 
-  // Obtain the symbol name which is referenced in the relocation
   StringRef TargetName;
-  if (Symbol != Obj.symbol_end())
-    Symbol->getName(TargetName);
+  Symbol->getName(TargetName);
   DEBUG(dbgs() << "\t\tIn Section " << SectionID << " Offset " << Offset
     << " RelType: " << RelType << " TargetName: " << TargetName
     << " Addend " << Addend << "\n");
 
-  // Obtain the target offset and symbol kind
-  bool IsSectionDefinition = false;
-  unsigned TargetSectionID = 0;
-  uint64_t TargetOffset = UnknownAddressOrSize;
-  if (Symbol != Obj.symbol_end()) {
-    const COFFObjectFile *COFFObj = cast<COFFObjectFile>(&Obj);
-    const COFFSymbolRef COFFSymbol = COFFObj->getCOFFSymbol(*Symbol);
-    IsSectionDefinition = COFFSymbol.isSectionDefinition();
-    if (IsSectionDefinition) {
-      section_iterator SecI(Obj.section_end());
-      Symbol->getSection(SecI);
-      if (SecI == Obj.section_end())
-        report_fatal_error("Symbol section not found, bad object file");
-      bool IsCode = SecI->isText();
-      TargetSectionID = findOrEmitSection(Obj, *SecI, IsCode, ObjSectionToID);
-    }
-    TargetOffset = getSymbolOffset(*Symbol);
-  }
-
-  // Verify for now that any fixup be resolvable within the object scope.
-  if (TargetOffset == UnknownAddressOrSize)
-    report_fatal_error("External symbol reference");
-
-  switch (RelType) {
-  case COFF::IMAGE_REL_AMD64_ADDR64:
-  case COFF::IMAGE_REL_AMD64_ADDR32NB: {
-    RelocationEntry RE(SectionID, Offset, RelType, TargetOffset + Addend);
-
-    if (IsSectionDefinition)
-      addRelocationForSection(RE, TargetSectionID);
-    else
-      addRelocationForSymbol(RE, TargetName);
-    break;
-  }
-  default:
-    llvm_unreachable("Unhandled relocation type");
-  }
+  RelocationEntry RE(SectionID, Offset, RelType, TargetOffset + Addend);
+  addRelocationForSection(RE, TargetSectionID);
 
   return ++RelI;
 }
