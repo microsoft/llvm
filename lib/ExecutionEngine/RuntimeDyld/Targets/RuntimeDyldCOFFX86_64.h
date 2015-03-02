@@ -25,16 +25,14 @@ namespace llvm {
 class RuntimeDyldCOFFX86_64 : public RuntimeDyldCOFF {
 
 private:
-
   // When a module is loaded we save the SectionID of the unwind
-  // sections in a table until we receive a request to register all 
+  // sections in a table until we receive a request to register all
   // unregisteredEH frame sections with the memory manager.
   SmallVector<SID, 2> UnregisteredEHFrameSections;
   SmallVector<SID, 2> RegisteredEHFrameSections;
 
 public:
-
-  RuntimeDyldCOFFX86_64(RTDyldMemoryManager *mm) : RuntimeDyldCOFF(mm) {}
+  RuntimeDyldCOFFX86_64(RTDyldMemoryManager *MM) : RuntimeDyldCOFF(MM) {}
 
   unsigned getMaxStubSize() override {
     return 6; // 2-byte jmp instruction + 32-bit relative address
@@ -42,16 +40,17 @@ public:
 
   void resolveRelocation(const RelocationEntry &RE, uint64_t Value) override;
 
-  relocation_iterator
-    processRelocationRef(unsigned SectionID, relocation_iterator RelI,
-    const ObjectFile &Obj, ObjSectionToIDMap &ObjSectionToID,
-    StubMap &Stubs) override;
+  relocation_iterator processRelocationRef(unsigned SectionID,
+                                           relocation_iterator RelI,
+                                           const ObjectFile &Obj,
+                                           ObjSectionToIDMap &ObjSectionToID,
+                                           StubMap &Stubs) override;
 
-  unsigned int getStubAlignment() override { return 1; }
+  unsigned getStubAlignment() override { return 1; }
   void registerEHFrames() override;
   void deregisterEHFrames() override;
   void finalizeLoad(const ObjectFile &Obj,
-    ObjSectionToIDMap &SectionMap) override;
+                    ObjSectionToIDMap &SectionMap) override;
 };
 
 } // end namespace llvm

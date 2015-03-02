@@ -1,4 +1,4 @@
-//===-- RuntimeDyldCOFF.h - Run-time dynamic linker for MC-JIT ---*- C++ -*-===//
+//===-- RuntimeDyldCOFF.h - Run-time dynamic linker for MC-JIT ---*- C++ -*-==//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -28,15 +28,14 @@ namespace llvm {
 class RuntimeDyldCOFF : public RuntimeDyldImpl {
 
 public:
-
   std::unique_ptr<RuntimeDyld::LoadedObjectInfo>
   loadObject(const object::ObjectFile &Obj) override;
   bool isCompatibleFile(const object::ObjectFile &Obj) const override;
   static std::unique_ptr<RuntimeDyldCOFF> create(Triple::ArchType Arch,
-                                                  RTDyldMemoryManager *mm);
-protected:
+                                                 RTDyldMemoryManager *MM);
 
-  RuntimeDyldCOFF(RTDyldMemoryManager *mm) : RuntimeDyldImpl(mm) {}
+protected:
+  RuntimeDyldCOFF(RTDyldMemoryManager *MM) : RuntimeDyldImpl(MM) {}
   uint64_t getSymbolOffset(const SymbolRef &Sym);
 };
 

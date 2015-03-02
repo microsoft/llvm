@@ -361,14 +361,10 @@ bool COFFObjectFile::isSectionData(DataRefImpl Ref) const {
 
 bool COFFObjectFile::isSectionBSS(DataRefImpl Ref) const {
   const coff_section *Sec = toSec(Ref);
-  return (Sec->Characteristics &
-    (COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA
-    | COFF::IMAGE_SCN_MEM_READ
-    | COFF::IMAGE_SCN_MEM_WRITE))
-    ==
-    (COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA
-    | COFF::IMAGE_SCN_MEM_READ
-    | COFF::IMAGE_SCN_MEM_WRITE);
+  const uint32_t BssFlags = COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA |
+                            COFF::IMAGE_SCN_MEM_READ |
+                            COFF::IMAGE_SCN_MEM_WRITE;
+  return (Sec->Characteristics & BssFlags) == BssFlags;
 }
 
 bool COFFObjectFile::isSectionVirtual(DataRefImpl Ref) const {

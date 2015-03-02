@@ -55,7 +55,7 @@ void RuntimeDyldCOFFX86_64::deregisterEHFrames() {
 // symbol location).  For external symbols, Value will be the address of the
 // symbol in the target address space.
 void RuntimeDyldCOFFX86_64::resolveRelocation(const RelocationEntry &RE,
-  uint64_t Value) {
+                                              uint64_t Value) {
   const SectionEntry &Section = Sections[RE.SectionID];
   uint8_t *Target = Section.Address + RE.Offset;
 
@@ -66,10 +66,13 @@ void RuntimeDyldCOFFX86_64::resolveRelocation(const RelocationEntry &RE,
   case COFF::IMAGE_REL_AMD64_REL32_2:
   case COFF::IMAGE_REL_AMD64_REL32_3:
   case COFF::IMAGE_REL_AMD64_REL32_4:
-  case COFF::IMAGE_REL_AMD64_REL32_5:  {
+  case COFF::IMAGE_REL_AMD64_REL32_5: {
     uint32_t *TargetAddress = (uint32_t *)Target;
     uint64_t FinalAddress = Section.LoadAddress + RE.Offset;
-    Value -= FinalAddress + 4;
+    // Delta is the distance from the start of the reloc to the end of the
+    // instruction with the reloc.
+    uint64_t Delta = 4 + (RE.RelType - COFF::IMAGE_REL_AMD64_REL32);
+    Value -= FinalAddress + Delta;
     uint64_t Result = Value + RE.Addend;
     assert(((int64_t)Result <= INT32_MAX) && "Relocation overflow");
     assert(((int64_t)Result >= INT32_MIN) && "Relocation underflow");
@@ -102,8 +105,8 @@ void RuntimeDyldCOFFX86_64::resolveRelocation(const RelocationEntry &RE,
 }
 
 relocation_iterator RuntimeDyldCOFFX86_64::processRelocationRef(
-  unsigned SectionID, relocation_iterator RelI, const ObjectFile &Obj,
-  ObjSectionToIDMap &ObjSectionToID, StubMap &Stubs) {
+    unsigned SectionID, relocation_iterator RelI, const ObjectFile &Obj,
+    ObjSectionToIDMap &ObjSectionToID, StubMap &Stubs) {
 
   // Find the symbol referred to in the relocation, and
   // get its section and offset.
@@ -136,20 +139,14 @@ relocation_iterator RuntimeDyldCOFFX86_64::processRelocationRef(
 
   switch (RelType) {
 
-  case COFF::IMAGE_REL_AMD64_REL32: 
+  case COFF::IMAGE_REL_AMD64_REL32:
   case COFF::IMAGE_REL_AMD64_REL32_1:
   case COFF::IMAGE_REL_AMD64_REL32_2:
   case COFF::IMAGE_REL_AMD64_REL32_3:
   case COFF::IMAGE_REL_AMD64_REL32_4:
-  case COFF::IMAGE_REL_AMD64_REL32_5: {
-    uint32_t Delta = (RelType - COFF::IMAGE_REL_AMD64_REL32);
-    uint32_t *Displacement = (uint32_t*)ObjTarget;
-    Addend = *Displacement + Delta;
-    break;
-  }
-
+  case COFF::IMAGE_REL_AMD64_REL32_5:
   case COFF::IMAGE_REL_AMD64_ADDR32NB: {
-    uint32_t *Displacement = (uint32_t*)ObjTarget;
+    uint32_t *Displacement = (uint32_t *)ObjTarget;
     Addend = *Displacement;
     break;
   }
@@ -167,8 +164,8 @@ relocation_iterator RuntimeDyldCOFFX86_64::processRelocationRef(
   StringRef TargetName;
   Symbol->getName(TargetName);
   DEBUG(dbgs() << "\t\tIn Section " << SectionID << " Offset " << Offset
-    << " RelType: " << RelType << " TargetName: " << TargetName
-    << " Addend " << Addend << "\n");
+               << " RelType: " << RelType << " TargetName: " << TargetName
+               << " Addend " << Addend << "\n");
 
   RelocationEntry RE(SectionID, Offset, RelType, TargetOffset + Addend);
   addRelocationForSection(RE, TargetSectionID);
@@ -177,7 +174,7 @@ relocation_iterator RuntimeDyldCOFFX86_64::processRelocationRef(
 }
 
 void RuntimeDyldCOFFX86_64::finalizeLoad(const ObjectFile &Obj,
-  ObjSectionToIDMap &SectionMap) {
+                                         ObjSectionToIDMap &SectionMap) {
   // Look for and record the EH frame section IDs.
   for (const auto &SectionPair : SectionMap) {
     const SectionRef &Section = SectionPair.first;
@@ -190,5 +187,4 @@ void RuntimeDyldCOFFX86_64::finalizeLoad(const ObjectFile &Obj,
     }
   }
 }
-
 }

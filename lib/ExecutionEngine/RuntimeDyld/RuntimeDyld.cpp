@@ -268,6 +268,11 @@ static bool isRequiredForExecution(const SectionRef &Section) {
     return ELFObj->getSectionFlags(Section) & ELF::SHF_ALLOC;
   if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj)) {
     const coff_section *CoffSection = COFFObj->getCOFFSection(Section);
+    // Avoid loading zero-sized COFF sections.
+    // In PE files, VirtualSize gives the section size, and SizeOfRawData
+    // may be zero for sections with content. In Obj files, SizeOfRawData 
+    // gives the section size, and VirtualSize is always zero. Hence
+    // the need to check for both cases below.
     bool HasContent = (CoffSection->VirtualSize > 0) 
       || (CoffSection->SizeOfRawData > 0);
     bool IsDiscardable = CoffSection->Characteristics &
