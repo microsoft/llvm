@@ -1,4 +1,4 @@
-//===-- RuntimeDyldCOFF.cpp - Run-time dynamic linker for MC-JIT -*- C++ -*-===//
+//===-- RuntimeDyldCOFF.cpp - Run-time dynamic linker for MC-JIT -*- C++ -*-==//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -27,15 +27,14 @@ namespace {
 class LoadedCOFFObjectInfo : public RuntimeDyld::LoadedObjectInfo {
 public:
   LoadedCOFFObjectInfo(RuntimeDyldImpl &RTDyld, unsigned BeginIdx,
-                        unsigned EndIdx)
-    : RuntimeDyld::LoadedObjectInfo(RTDyld, BeginIdx, EndIdx) {}
+                       unsigned EndIdx)
+      : RuntimeDyld::LoadedObjectInfo(RTDyld, BeginIdx, EndIdx) {}
 
   OwningBinary<ObjectFile>
   getObjectForDebug(const ObjectFile &Obj) const override {
     return OwningBinary<ObjectFile>();
   }
 };
-
 }
 
 namespace llvm {
@@ -46,7 +45,8 @@ llvm::RuntimeDyldCOFF::create(Triple::ArchType Arch, RTDyldMemoryManager *MM) {
   default:
     llvm_unreachable("Unsupported target for RuntimeDyldCOFF.");
     break;
-  case Triple::x86_64: return make_unique<RuntimeDyldCOFFX86_64>(MM);
+  case Triple::x86_64:
+    return make_unique<RuntimeDyldCOFFX86_64>(MM);
   }
 }
 
@@ -55,7 +55,7 @@ RuntimeDyldCOFF::loadObject(const object::ObjectFile &O) {
   unsigned SectionStartIdx, SectionEndIdx;
   std::tie(SectionStartIdx, SectionEndIdx) = loadObjectImpl(O);
   return llvm::make_unique<LoadedCOFFObjectInfo>(*this, SectionStartIdx,
-                                                SectionEndIdx);
+                                                 SectionEndIdx);
 }
 
 uint64_t RuntimeDyldCOFF::getSymbolOffset(const SymbolRef &Sym) {
