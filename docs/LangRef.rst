@@ -1014,19 +1014,22 @@ Currently, only the following parameter attributes are defined:
 
 .. _gc:
 
-Garbage Collector Names
------------------------
+Garbage Collector Strategy Names
+--------------------------------
 
-Each function may specify a garbage collector name, which is simply a
+Each function may specify a garbage collector strategy name, which is simply a
 string:
 
 .. code-block:: llvm
 
     define void @f() gc "name" { ... }
 
-The compiler declares the supported values of *name*. Specifying a
-collector will cause the compiler to alter its output in order to
-support the named garbage collection algorithm.
+The supported values of *name* includes those :ref:`built in to LLVM 
+<builtin-gc-strategies>` and any provided by loaded plugins.  Specifying a GC
+strategy will cause the compiler to alter its output in order to support the 
+named garbage collection algorithm.  Note that LLVM itself does not contain a 
+garbage collector, this functionality is restricted to generating machine code
+which can interoperate with a collector provided externally.  
 
 .. _prefixdata:
 
@@ -1366,6 +1369,11 @@ example:
     If a function that has an ``sspstrong`` attribute is inlined into a
     function that doesn't have an ``sspstrong`` attribute, then the
     resulting function will have an ``sspstrong`` attribute.
+``"thunk"``
+    This attribute indicates that the function will delegate to some other
+    function with a tail call. The prototype of a thunk should not be used for
+    optimization purposes. The caller is expected to cast the thunk prototype to
+    match the thunk target prototype.
 ``uwtable``
     This attribute indicates that the ABI being targeted requires that
     an unwind table entry be produce for this function even if we can
@@ -2834,6 +2842,8 @@ Metadata does not have a type, and is not a value.  If referenced from a
 
 All metadata are identified in syntax by a exclamation point ('``!``').
 
+.. _metadata-string:
+
 Metadata Nodes and Metadata Strings
 -----------------------------------
 
@@ -2893,15 +2903,298 @@ Specialized metadata nodes are custom data structures in metadata (as opposed
 to generic tuples).  Their fields are labelled, and can be specified in any
 order.
 
+These aren't inherently debug info centric, but currently all the specialized
+metadata nodes are related to debug info.
+
+MDCompileUnit
+"""""""""""""
+
+``MDCompileUnit`` nodes represent a compile unit.  The ``enums:``,
+``retainedTypes:``, ``subprograms:``, ``globals:`` and ``imports:`` fields are
+tuples containing the debug info to be emitted along with the compile unit,
+regardless of code optimizations (some nodes are only emitted if there are
+references to them from instructions).
+
+.. code-block:: llvm
+
+    !0 = !MDCompileUnit(language: DW_LANG_C99, file: !1, producer: "clang",
+                        isOptimized: true, flags: "-O2", runtimeVersion: 2,
+                        splitDebugFilename: "abc.debug", emissionKind: 1,
+                        enums: !2, retainedTypes: !3, subprograms: !4,
+                        globals: !5, imports: !6)
+
+MDFile
+""""""
+
+``MDFile`` nodes represent files.  The ``filename:`` can include slashes.
+
+.. code-block:: llvm
+
+    !0 = !MDFile(filename: "path/to/file", directory: "/path/to/dir")
+
+.. _MDLocation:
+
+MDBasicType
+"""""""""""
+
+``MDBasicType`` nodes represent primitive types.  ``tag:`` defaults to
+``DW_TAG_base_type``.
+
+.. code-block:: llvm
+
+    !0 = !MDBasicType(name: "unsigned char", size: 8, align: 8,
+                      encoding: DW_ATE_unsigned_char)
+    !1 = !MDBasicType(tag: DW_TAG_unspecified_type, name: "decltype(nullptr)")
+
+.. _MDSubroutineType:
+
+MDSubroutineType
+""""""""""""""""
+
+``MDSubroutineType`` nodes represent subroutine types.  Their ``types:`` field
+refers to a tuple; the first operand is the return type, while the rest are the
+types of the formal arguments in order.  If the first operand is ``null``, that
+represents a function with no return value (such as ``void foo() {}`` in C++).
+
+.. code-block:: llvm
+
+    !0 = !BasicType(name: "int", size: 32, align: 32, DW_ATE_signed)
+    !1 = !BasicType(name: "char", size: 8, align: 8, DW_ATE_signed_char)
+    !2 = !MDSubroutineType(types: !{null, !0, !1}) ; void (int, char)
+
+MDDerivedType
+"""""""""""""
+
+``MDDerivedType`` nodes represent types derived from other types, such as
+qualified types.
+
+.. code-block:: llvm
+
+    !0 = !MDBasicType(name: "unsigned char", size: 8, align: 8,
+                      encoding: DW_ATE_unsigned_char)
+    !1 = !MDDerivedType(tag: DW_TAG_pointer_type, baseType: !0, size: 32,
+                        align: 32)
+
+.. _MDCompositeType:
+
+MDCompositeType
+"""""""""""""""
+
+``MDCompositeType`` nodes represent types composed of other types, like
+structures and unions.  ``elements:`` points to a tuple of the composed types.
+
+If the source language supports ODR, the ``identifier:`` field gives the unique
+identifier used for type merging between modules.  When specified, other types
+can refer to composite types indirectly via a :ref:`metadata string
+<metadata-string>` that matches their identifier.
+
+.. code-block:: llvm
+
+    !0 = !MDEnumerator(name: "SixKind", value: 7)
+    !1 = !MDEnumerator(name: "SevenKind", value: 7)
+    !2 = !MDEnumerator(name: "NegEightKind", value: -8)
+    !3 = !MDCompositeType(tag: DW_TAG_enumeration_type, name: "Enum", file: !12,
+                          line: 2, size: 32, align: 32, identifier: "_M4Enum",
+                          elements: !{!0, !1, !2})
+
+MDSubrange
+""""""""""
+
+``MDSubrange`` nodes are the elements for ``DW_TAG_array_type`` variants of
+:ref:`MDCompositeType`.  ``count: -1`` indicates an empty array.
+
+.. code-block:: llvm
+
+    !0 = !MDSubrange(count: 5, lowerBound: 0) ; array counting from 0
+    !1 = !MDSubrange(count: 5, lowerBound: 1) ; array counting from 1
+    !2 = !MDSubrange(count: -1) ; empty array.
+
+MDEnumerator
+""""""""""""
+
+``MDEnumerator`` nodes are the elements for ``DW_TAG_enumeration_type``
+variants of :ref:`MDCompositeType`.
+
+.. code-block:: llvm
+
+    !0 = !MDEnumerator(name: "SixKind", value: 7)
+    !1 = !MDEnumerator(name: "SevenKind", value: 7)
+    !2 = !MDEnumerator(name: "NegEightKind", value: -8)
+
+MDTemplateTypeParameter
+"""""""""""""""""""""""
+
+``MDTemplateTypeParameter`` nodes represent type parameters to generic source
+language constructs.  They are used (optionally) in :ref:`MDCompositeType` and
+:ref:`MDSubprogram` ``templateParams:`` fields.
+
+.. code-block:: llvm
+
+    !0 = !MDTemplateTypeParameter(name: "Ty", type: !1)
+
+MDTemplateValueParameter
+""""""""""""""""""""""""
+
+``MDTemplateValueParameter`` nodes represent value parameters to generic source
+language constructs.  ``tag:`` defaults to ``DW_TAG_template_value_parameter``,
+but if specified can also be set to ``DW_TAG_GNU_template_template_param`` or
+``DW_TAG_GNU_template_param_pack``.  They are used (optionally) in
+:ref:`MDCompositeType` and :ref:`MDSubprogram` ``templateParams:`` fields.
+
+.. code-block:: llvm
+
+    !0 = !MDTemplateValueParameter(name: "Ty", type: !1, value: i32 7)
+
+MDNamespace
+"""""""""""
+
+``MDNamespace`` nodes represent namespaces in the source language.
+
+.. code-block:: llvm
+
+    !0 = !MDNamespace(name: "myawesomeproject", scope: !1, file: !2, line: 7)
+
+MDGlobalVariable
+""""""""""""""""
+
+``MDGlobalVariable`` nodes represent global variables in the source language.
+
+.. code-block:: llvm
+
+    !0 = !MDGlobalVariable(name: "foo", linkageName: "foo", scope: !1,
+                           file: !2, line: 7, type: !3, isLocal: true,
+                           isDefinition: false, variable: i32* @foo,
+                           declaration: !4)
+
+.. _MDSubprogram:
+
+MDSubprogram
+""""""""""""
+
+``MDSubprogram`` nodes represent functions from the source language.  The
+``variables:`` field points at :ref:`variables <MDLocalVariable>` that must be
+retained, even if their IR counterparts are optimized out of the IR.  The
+``type:`` field must point at an :ref:`MDSubroutineType`.
+
+.. code-block:: llvm
+
+    !0 = !MDSubprogram(name: "foo", linkageName: "_Zfoov", scope: !1,
+                       file: !2, line: 7, type: !3, isLocal: true,
+                       isDefinition: false, scopeLine: 8, containingType: !4,
+                       virtuality: DW_VIRTUALITY_pure_virtual, virtualIndex: 10,
+                       flags: DIFlagPrototyped, isOptimized: true,
+                       function: void ()* @_Z3foov,
+                       templateParams: !5, declaration: !6, variables: !7)
+
+.. _MDLexicalBlock:
+
+MDLexicalBlock
+""""""""""""""
+
+``MDLexicalBlock`` nodes represent lexical blocks in the source language (a
+scope).
+
+.. code-block:: llvm
+
+    !0 = !MDLexicalBlock(scope: !1, file: !2, line: 7, column: 35)
+
+.. _MDLexicalBlockFile:
+
+MDLexicalBlockFile
+""""""""""""""""""
+
+``MDLexicalBlockFile`` nodes are used to discriminate between sections of a
+:ref:`lexical block <MDLexicalBlock>`.  The ``file:`` field can be changed to
+indicate textual inclusion, or the ``discriminator:`` field can be used to
+discriminate between control flow within a single block in the source language.
+
+.. code-block:: llvm
+
+    !0 = !MDLexicalBlock(scope: !3, file: !4, line: 7, column: 35)
+    !1 = !MDLexicalBlockFile(scope: !0, file: !4, discriminator: 0)
+    !2 = !MDLexicalBlockFile(scope: !0, file: !4, discriminator: 1)
+
 MDLocation
 """"""""""
 
 ``MDLocation`` nodes represent source debug locations.  The ``scope:`` field is
-mandatory.
+mandatory, and points at an :ref:`MDLexicalBlockFile`, an
+:ref:`MDLexicalBlock`, or an :ref:`MDSubprogram`.
 
 .. code-block:: llvm
 
     !0 = !MDLocation(line: 2900, column: 42, scope: !1, inlinedAt: !2)
+
+.. _MDLocalVariable:
+
+MDLocalVariable
+"""""""""""""""
+
+``MDLocalVariable`` nodes represent local variables in the source language.
+Instead of ``DW_TAG_variable``, they use LLVM-specific fake tags to
+discriminate between local variables (``DW_TAG_auto_variable``) and subprogram
+arguments (``DW_TAG_arg_variable``).  In the latter case, the ``arg:`` field
+specifies the argument position, and this variable will be included in the
+``variables:`` field of its :ref:`MDSubprogram`.
+
+If set, the ``inlinedAt:`` field points at an :ref:`MDLocation`, and the
+variable represents an inlined version of a variable (with all other fields
+duplicated from the non-inlined version).
+
+.. code-block:: llvm
+
+    !0 = !MDLocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 0,
+                          scope: !3, file: !2, line: 7, type: !3,
+                          flags: DIFlagArtificial, inlinedAt: !4)
+    !1 = !MDLocalVariable(tag: DW_TAG_arg_variable, name: "x", arg: 1,
+                          scope: !4, file: !2, line: 7, type: !3,
+                          inlinedAt: !6)
+    !1 = !MDLocalVariable(tag: DW_TAG_auto_variable, name: "y",
+                          scope: !5, file: !2, line: 7, type: !3,
+                          inlinedAt: !6)
+
+MDExpression
+""""""""""""
+
+``MDExpression`` nodes represent DWARF expression sequences.  They are used in
+:ref:`debug intrinsics<dbg_intrinsics>` (such as ``llvm.dbg.declare``) to
+describe how the referenced LLVM variable relates to the source language
+variable.
+
+The current supported vocabulary is limited:
+
+- ``DW_OP_deref`` dereferences the working expression.
+- ``DW_OP_plus, 93`` adds ``93`` to the working expression.
+- ``DW_OP_bit_piece, 16, 8`` specifies the offset and size (``16`` and ``8``
+  here, respectively) of the variable piece from the working expression.
+
+.. code-block:: llvm
+
+    !0 = !MDExpression(DW_OP_deref)
+    !1 = !MDExpression(DW_OP_plus, 3)
+    !2 = !MDExpression(DW_OP_bit_piece, 3, 7)
+    !3 = !MDExpression(DW_OP_deref, DW_OP_plus, 3, DW_OP_bit_piece, 3, 7)
+
+MDObjCProperty
+""""""""""""""
+
+``MDObjCProperty`` nodes represent Objective-C property nodes.
+
+.. code-block:: llvm
+
+    !3 = !MDObjCProperty(name: "foo", file: !1, line: 7, setter: "setFoo",
+                         getter: "getFoo", attributes: 7, type: !2)
+
+MDImportedEntity
+""""""""""""""""
+
+``MDImportedEntity`` nodes represent entities (such as modules) imported into a
+compile unit.
+
+.. code-block:: llvm
+
+   !2 = !MDImportedEntity(tag: DW_TAG_imported_module, name: "foo", scope: !0,
+                          entity: !1, line: 7)
 
 '``tbaa``' Metadata
 ^^^^^^^^^^^^^^^^^^^
@@ -2981,7 +3274,7 @@ collection of memory access instructions that carry ``alias.scope`` metadata.
 Each type of metadata specifies a list of scopes where each scope has an id and
 a domain. When evaluating an aliasing query, if for some some domain, the set
 of scopes with that domain in one instruction's ``alias.scope`` list is a
-subset of (or qual to) the set of scopes for that domain in another
+subset of (or equal to) the set of scopes for that domain in another
 instruction's ``noalias`` list, then the two memory accesses are assumed not to
 alias.
 
@@ -3052,6 +3345,8 @@ number representing the maximum relative error, for example:
 .. code-block:: llvm
 
     !0 = !{ float 2.5 } ; maximum acceptable inaccuracy is 2.5 ULPs
+
+.. _range-metadata:
 
 '``range``' Metadata
 ^^^^^^^^^^^^^^^^^^^^
@@ -6623,9 +6918,7 @@ Arguments:
 
 The '``select``' instruction requires an 'i1' value or a vector of 'i1'
 values indicating the condition, and two values of the same :ref:`first
-class <t_firstclass>` type. If the val1/val2 are vectors and the
-condition is a scalar, then entire vectors are selected, not individual
-elements.
+class <t_firstclass>` type.
 
 Semantics:
 """"""""""
@@ -6636,6 +6929,9 @@ argument.
 
 If the condition is a vector of i1, then the value arguments must be
 vectors of the same size, and the selection is done element by element.
+
+If the condition is an i1 and the value arguments are vectors of the
+same size, then an entire vector is selected.
 
 Example:
 """"""""
@@ -7106,18 +7402,28 @@ arbitrarily complex and require, for example, memory allocation.
 Accurate Garbage Collection Intrinsics
 --------------------------------------
 
-LLVM support for `Accurate Garbage Collection <GarbageCollection.html>`_
-(GC) requires the implementation and generation of these intrinsics.
+LLVM's support for `Accurate Garbage Collection <GarbageCollection.html>`_
+(GC) requires the frontend to generate code containing appropriate intrinsic 
+calls and select an appropriate GC strategy which knows how to lower these 
+intrinsics in a manner which is appropriate for the target collector.
+
 These intrinsics allow identification of :ref:`GC roots on the
 stack <int_gcroot>`, as well as garbage collector implementations that
 require :ref:`read <int_gcread>` and :ref:`write <int_gcwrite>` barriers.
-Front-ends for type-safe garbage collected languages should generate
+Frontends for type-safe garbage collected languages should generate
 these intrinsics to make use of the LLVM garbage collectors. For more
-details, see `Accurate Garbage Collection with
-LLVM <GarbageCollection.html>`_.
+details, see `Garbage Collection with LLVM <GarbageCollection.html>`_.
 
-The garbage collection intrinsics only operate on objects in the generic
-address space (address space zero).
+Experimental Statepoint Intrinsics
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+LLVM provides an second experimental set of intrinsics for describing garbage
+collection safepoints in compiled code.  These intrinsics are an alternative 
+to the ``llvm.gcroot`` intrinsics, but are compatible with the ones for 
+:ref:`read <int_gcread>` and :ref:`write <int_gcwrite>` barriers.  The 
+differences in approach are covered in the `Garbage Collection with LLVM 
+<GarbageCollection.html>`_ documentation.  The intrinsics themselves are 
+described in :doc:`Statepoints`.
 
 .. _int_gcroot:
 
@@ -9201,6 +9507,8 @@ Examples:
 
       %a = load i16* @x, align 2
       %res = call float @llvm.convert.from.fp16(i16 %a)
+
+.. _dbg_intrinsics:
 
 Debugger Intrinsics
 -------------------

@@ -9,6 +9,7 @@
 
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "BitcodeReader.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
@@ -3062,9 +3063,22 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       InstructionList.push_back(I);
       break;
     }
-    case bitc::FUNC_CODE_INST_INBOUNDS_GEP:
-    case bitc::FUNC_CODE_INST_GEP: { // GEP: [n x operands]
+    case bitc::FUNC_CODE_INST_INBOUNDS_GEP_OLD:
+    case bitc::FUNC_CODE_INST_GEP_OLD:
+    case bitc::FUNC_CODE_INST_GEP: { // GEP: type, [n x operands]
       unsigned OpNum = 0;
+
+      Type *Ty;
+      bool InBounds;
+
+      if (BitCode == bitc::FUNC_CODE_INST_GEP) {
+        InBounds = Record[OpNum++];
+        Ty = getTypeByID(Record[OpNum++]);
+      } else {
+        InBounds = BitCode == bitc::FUNC_CODE_INST_INBOUNDS_GEP_OLD;
+        Ty = nullptr;
+      }
+
       Value *BasePtr;
       if (getValueTypePair(Record, OpNum, NextValueNo, BasePtr))
         return Error("Invalid record");
@@ -3078,8 +3092,10 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       }
 
       I = GetElementPtrInst::Create(BasePtr, GEPIdx);
+      (void)Ty;
+      assert(!Ty || Ty == cast<GetElementPtrInst>(I)->getSourceElementType());
       InstructionList.push_back(I);
-      if (BitCode == bitc::FUNC_CODE_INST_INBOUNDS_GEP)
+      if (InBounds)
         cast<GetElementPtrInst>(I)->setIsInBounds(true);
       break;
     }
@@ -3574,12 +3590,22 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       unsigned OpNum = 0;
       Value *Op;
       if (getValueTypePair(Record, OpNum, NextValueNo, Op) ||
-          OpNum+2 != Record.size())
+          (OpNum + 2 != Record.size() && OpNum + 3 != Record.size()))
         return Error("Invalid record");
+
+      Type *Ty = nullptr;
+      if (OpNum + 3 == Record.size())
+        Ty = getTypeByID(Record[OpNum++]);
+
       unsigned Align;
       if (std::error_code EC = parseAlignmentValue(Record[OpNum], Align))
         return EC;
       I = new LoadInst(Op, "", Record[OpNum+1], Align);
+
+      (void)Ty;
+      assert((!Ty || Ty == I->getType()) &&
+             "Explicit type doesn't match pointee type of the first operand");
+
       InstructionList.push_back(I);
       break;
     }
@@ -3588,8 +3614,12 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       unsigned OpNum = 0;
       Value *Op;
       if (getValueTypePair(Record, OpNum, NextValueNo, Op) ||
-          OpNum+4 != Record.size())
+          (OpNum + 4 != Record.size() && OpNum + 5 != Record.size()))
         return Error("Invalid record");
+
+      Type *Ty = nullptr;
+      if (OpNum + 5 == Record.size())
+        Ty = getTypeByID(Record[OpNum++]);
 
       AtomicOrdering Ordering = GetDecodedOrdering(Record[OpNum+2]);
       if (Ordering == NotAtomic || Ordering == Release ||
@@ -3603,6 +3633,11 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       if (std::error_code EC = parseAlignmentValue(Record[OpNum], Align))
         return EC;
       I = new LoadInst(Op, "", Record[OpNum+1], Align, Ordering, SynchScope);
+
+      (void)Ty;
+      assert((!Ty || Ty == I->getType()) &&
+             "Explicit type doesn't match pointee type of the first operand");
+
       InstructionList.push_back(I);
       break;
     }

@@ -111,7 +111,7 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
   }
 
   // Compute derived properties from the register classes
-  computeRegisterProperties();
+  computeRegisterProperties(Subtarget->getRegisterInfo());
 
   // Provide all sorts of operation actions
   setOperationAction(ISD::GlobalAddress, MVT::i64, Custom);
@@ -3356,11 +3356,12 @@ SDValue AArch64TargetLowering::LowerFCOPYSIGN(SDValue Op,
 
   EVT VecVT;
   EVT EltVT;
-  SDValue EltMask, VecVal1, VecVal2;
+  uint64_t EltMask;
+  SDValue VecVal1, VecVal2;
   if (VT == MVT::f32 || VT == MVT::v2f32 || VT == MVT::v4f32) {
     EltVT = MVT::i32;
     VecVT = MVT::v4i32;
-    EltMask = DAG.getConstant(0x80000000ULL, EltVT);
+    EltMask = 0x80000000ULL;
 
     if (!VT.isVector()) {
       VecVal1 = DAG.getTargetInsertSubreg(AArch64::ssub, DL, VecVT,
@@ -3378,7 +3379,7 @@ SDValue AArch64TargetLowering::LowerFCOPYSIGN(SDValue Op,
     // We want to materialize a mask with the the high bit set, but the AdvSIMD
     // immediate moves cannot materialize that in a single instruction for
     // 64-bit elements. Instead, materialize zero and then negate it.
-    EltMask = DAG.getConstant(0, EltVT);
+    EltMask = 0;
 
     if (!VT.isVector()) {
       VecVal1 = DAG.getTargetInsertSubreg(AArch64::dsub, DL, VecVT,
@@ -3393,11 +3394,7 @@ SDValue AArch64TargetLowering::LowerFCOPYSIGN(SDValue Op,
     llvm_unreachable("Invalid type for copysign!");
   }
 
-  std::vector<SDValue> BuildVectorOps;
-  for (unsigned i = 0; i < VecVT.getVectorNumElements(); ++i)
-    BuildVectorOps.push_back(EltMask);
-
-  SDValue BuildVec = DAG.getNode(ISD::BUILD_VECTOR, DL, VecVT, BuildVectorOps);
+  SDValue BuildVec = DAG.getConstant(EltMask, VecVT);
 
   // If we couldn't materialize the mask above, then the mask vector will be
   // the zero vector, and we need to negate it here.
@@ -4263,7 +4260,8 @@ AArch64TargetLowering::getSingleConstraintMatchWeight(
 
 std::pair<unsigned, const TargetRegisterClass *>
 AArch64TargetLowering::getRegForInlineAsmConstraint(
-    const std::string &Constraint, MVT VT) const {
+    const TargetRegisterInfo *TRI, const std::string &Constraint,
+    MVT VT) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     case 'r':
@@ -4292,7 +4290,7 @@ AArch64TargetLowering::getRegForInlineAsmConstraint(
   // Use the default implementation in TargetLowering to convert the register
   // constraint into a member of a register class.
   std::pair<unsigned, const TargetRegisterClass *> Res;
-  Res = TargetLowering::getRegForInlineAsmConstraint(Constraint, VT);
+  Res = TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
 
   // Not found as a standard register?
   if (!Res.second) {
@@ -6897,6 +6895,15 @@ static SDValue performMulCombine(SDNode *N, SelectionDAG &DAG,
                            N->getOperand(0));
       }
     } else {
+      // (mul x, -(2^N - 1)) => (sub x, (shl x, N))
+      APInt VNP1 = -Value + 1;
+      if (VNP1.isPowerOf2()) {
+        SDValue ShiftedVal =
+            DAG.getNode(ISD::SHL, SDLoc(N), VT, N->getOperand(0),
+                        DAG.getConstant(VNP1.logBase2(), MVT::i64));
+        return DAG.getNode(ISD::SUB, SDLoc(N), VT, N->getOperand(0),
+                           ShiftedVal);
+      }
       // (mul x, -(2^N + 1)) => - (add (shl x, N), x)
       APInt VNM1 = -Value - 1;
       if (VNM1.isPowerOf2()) {
@@ -6906,15 +6913,6 @@ static SDValue performMulCombine(SDNode *N, SelectionDAG &DAG,
         SDValue Add =
             DAG.getNode(ISD::ADD, SDLoc(N), VT, ShiftedVal, N->getOperand(0));
         return DAG.getNode(ISD::SUB, SDLoc(N), VT, DAG.getConstant(0, VT), Add);
-      }
-      // (mul x, -(2^N - 1)) => (sub x, (shl x, N))
-      APInt VNP1 = -Value + 1;
-      if (VNP1.isPowerOf2()) {
-        SDValue ShiftedVal =
-            DAG.getNode(ISD::SHL, SDLoc(N), VT, N->getOperand(0),
-                        DAG.getConstant(VNP1.logBase2(), MVT::i64));
-        return DAG.getNode(ISD::SUB, SDLoc(N), VT, N->getOperand(0),
-                           ShiftedVal);
       }
     }
   }

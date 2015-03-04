@@ -201,10 +201,6 @@ class DwarfDebug : public AsmPrinterHandler {
   // Size of each symbol emitted (for those symbols that have a specific size).
   DenseMap<const MCSymbol *, uint64_t> SymSize;
 
-  // Provides a unique id per text section.
-  typedef DenseMap<const MCSection *, SmallVector<SymbolCU, 8> > SectionMapType;
-  SectionMapType SectionMap;
-
   LexicalScopes LScopes;
 
   // Collection of abstract variables.
@@ -370,10 +366,6 @@ class DwarfDebug : public AsmPrinterHandler {
   /// \brief Finish off debug information after all functions have been
   /// processed.
   void finalizeModuleInfo();
-
-  /// \brief Emit labels to close any remaining sections that have been left
-  /// open.
-  void endSections();
 
   /// \brief Emit the debug info section.
   void emitDebugInfo();
@@ -548,9 +540,6 @@ public:
     SymSize[Sym] = Size;
   }
 
-  /// \brief Recursively Emits a debug information entry.
-  void emitDIE(DIE &Die);
-
   // Experimental DWARF5 features.
 
   /// \brief Returns whether or not to emit tables that dwarf consumers can
@@ -585,7 +574,8 @@ public:
 
   /// \brief Emit an entry for the debug loc section. This can be used to
   /// handle an entry that's going to be emitted into the debug loc section.
-  void emitDebugLocEntry(ByteStreamer &Streamer, const DebugLocEntry &Entry);
+  void emitDebugLocEntry(ByteStreamer &Streamer,
+                         const DebugLocEntry &Entry);
   /// \brief emit a single value for the debug loc section.
   void emitDebugLocValue(ByteStreamer &Streamer,
                          const DebugLocEntry::Value &Value,

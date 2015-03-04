@@ -18,6 +18,7 @@
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ELF.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -158,6 +159,12 @@ MCSymbol *MCContext::CreateSymbol(StringRef Name) {
       new (*this) MCSymbol(NameEntry.first->getKey(), isTemporary);
 
   return Result;
+}
+
+MCSymbol *MCContext::createTempSymbol(const Twine &Name) {
+  SmallString<128> NameSV;
+  raw_svector_ostream(NameSV) << MAI->getPrivateGlobalPrefix() << Name;
+  return CreateSymbol(NameSV);
 }
 
 MCSymbol *MCContext::GetOrCreateSymbol(const Twine &Name) {

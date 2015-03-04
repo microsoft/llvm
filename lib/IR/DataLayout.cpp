@@ -259,6 +259,8 @@ void DataLayout::parseSpecifier(StringRef Desc) {
             "Missing size specification for pointer in datalayout string");
       Split = split(Rest, ':');
       unsigned PointerMemSize = inBytes(getInt(Tok));
+      if (!PointerMemSize)
+        report_fatal_error("Invalid pointer size of 0 bytes");
 
       // ABI alignment.
       if (Rest.empty())
@@ -266,12 +268,18 @@ void DataLayout::parseSpecifier(StringRef Desc) {
             "Missing alignment specification for pointer in datalayout string");
       Split = split(Rest, ':');
       unsigned PointerABIAlign = inBytes(getInt(Tok));
+      if (!isPowerOf2_64(PointerABIAlign))
+        report_fatal_error(
+            "Pointer ABI alignment must be a power of 2");
 
       // Preferred alignment.
       unsigned PointerPrefAlign = PointerABIAlign;
       if (!Rest.empty()) {
         Split = split(Rest, ':');
         PointerPrefAlign = inBytes(getInt(Tok));
+        if (!isPowerOf2_64(PointerPrefAlign))
+          report_fatal_error(
+            "Pointer preferred alignment must be a power of 2");
       }
 
       setPointerAlignment(AddrSpace, PointerABIAlign, PointerPrefAlign,
@@ -304,6 +312,9 @@ void DataLayout::parseSpecifier(StringRef Desc) {
             "Missing alignment specification in datalayout string");
       Split = split(Rest, ':');
       unsigned ABIAlign = inBytes(getInt(Tok));
+      if (AlignType != AGGREGATE_ALIGN && !ABIAlign)
+        report_fatal_error(
+            "ABI alignment specification must be >0 for non-aggregate types");
 
       // Preferred alignment.
       unsigned PrefAlign = ABIAlign;
@@ -394,6 +405,10 @@ DataLayout::setAlignment(AlignTypeEnum align_type, unsigned abi_align,
     report_fatal_error("Invalid ABI alignment, must be a 16bit integer");
   if (!isUInt<16>(pref_align))
     report_fatal_error("Invalid preferred alignment, must be a 16bit integer");
+  if (abi_align != 0 && !isPowerOf2_64(abi_align))
+    report_fatal_error("Invalid ABI alignment, must be a power of 2");
+  if (pref_align != 0 && !isPowerOf2_64(pref_align))
+    report_fatal_error("Invalid preferred alignment, must be a power of 2");
 
   if (pref_align < abi_align)
     report_fatal_error(

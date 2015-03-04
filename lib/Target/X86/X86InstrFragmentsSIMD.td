@@ -282,6 +282,8 @@ def X86faddRnd   : SDNode<"X86ISD::FADD_RND",  SDTFPBinOpRound>;
 def X86fsubRnd   : SDNode<"X86ISD::FSUB_RND",  SDTFPBinOpRound>;
 def X86fmulRnd   : SDNode<"X86ISD::FMUL_RND",  SDTFPBinOpRound>;
 def X86fdivRnd   : SDNode<"X86ISD::FDIV_RND",  SDTFPBinOpRound>;
+def X86fmaxRnd   : SDNode<"X86ISD::FMAX",      SDTFPBinOpRound>;
+def X86fminRnd   : SDNode<"X86ISD::FMIN",      SDTFPBinOpRound>;
 
 def X86Fmadd     : SDNode<"X86ISD::FMADD",     SDTFma>;
 def X86Fnmadd    : SDNode<"X86ISD::FNMADD",    SDTFma>;
@@ -626,4 +628,56 @@ def vinsert256_insert : PatFrag<(ops node:$bigvec, node:$smallvec,
                                                    node:$index), [{
   return X86::isVINSERT256Index(N);
 }], INSERT_get_vinsert256_imm>;
+
+def masked_load_aligned128 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_load node:$src1, node:$src2, node:$src3), [{
+  if (dyn_cast<MaskedLoadSDNode>(N))
+    return cast<MaskedLoadSDNode>(N)->getAlignment() >= 16;
+  return false;
+}]>;
+
+def masked_load_aligned256 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_load node:$src1, node:$src2, node:$src3), [{
+  if (dyn_cast<MaskedLoadSDNode>(N))
+    return cast<MaskedLoadSDNode>(N)->getAlignment() >= 32;
+  return false;
+}]>;
+
+def masked_load_aligned512 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_load node:$src1, node:$src2, node:$src3), [{
+  if (dyn_cast<MaskedLoadSDNode>(N))
+    return cast<MaskedLoadSDNode>(N)->getAlignment() >= 64;
+  return false;
+}]>;
+
+def masked_load_unaligned : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_load node:$src1, node:$src2, node:$src3), [{
+  return (dyn_cast<MaskedLoadSDNode>(N) != 0);
+}]>;
+
+def masked_store_aligned128 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_store node:$src1, node:$src2, node:$src3), [{
+  if (dyn_cast<MaskedStoreSDNode>(N))
+    return cast<MaskedStoreSDNode>(N)->getAlignment() >= 16;
+  return false;
+}]>;
+
+def masked_store_aligned256 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_store node:$src1, node:$src2, node:$src3), [{
+  if (dyn_cast<MaskedStoreSDNode>(N))
+    return cast<MaskedStoreSDNode>(N)->getAlignment() >= 32;
+  return false;
+}]>;
+
+def masked_store_aligned512 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_store node:$src1, node:$src2, node:$src3), [{
+  if (dyn_cast<MaskedStoreSDNode>(N))
+    return cast<MaskedStoreSDNode>(N)->getAlignment() >= 64;
+  return false;
+}]>;
+
+def masked_store_unaligned : PatFrag<(ops node:$src1, node:$src2, node:$src3),
+                         (masked_store node:$src1, node:$src2, node:$src3), [{
+  return (dyn_cast<MaskedStoreSDNode>(N) != 0);
+}]>;
 

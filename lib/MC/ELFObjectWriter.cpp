@@ -1041,7 +1041,7 @@ ELFObjectWriter::computeSymbolTable(MCAssembler &Asm, const MCAsmLayout &Layout,
     // in defined ones.
     //
     // FIXME: All name handling should be done before we get to the writer,
-    // including dealing with GNU-style version suffixes.  Fixing this isn’t
+    // including dealing with GNU-style version suffixes.  Fixing this isn't
     // trivial.
     //
     // We thus have to be careful to not perform the symbol version replacement
@@ -1186,7 +1186,7 @@ getUncompressedData(MCAsmLayout &Layout,
 static bool
 prependCompressionHeader(uint64_t Size,
                          SmallVectorImpl<char> &CompressedContents) {
-  static const StringRef Magic = "ZLIB";
+  const StringRef Magic = "ZLIB";
   if (Size <= Magic.size() + sizeof(Size) + CompressedContents.size())
     return false;
   if (sys::IsLittleEndianHost)

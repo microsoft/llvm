@@ -18,6 +18,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/CodeGen/MachineValueType.h"
@@ -41,10 +42,10 @@ namespace llvm {
   struct MaskRolPair {
     unsigned Mask;
     uint8_t RotateLeft;
-    bool operator==(const MaskRolPair Other) {
+    bool operator==(const MaskRolPair Other) const {
       return Mask == Other.Mask && RotateLeft == Other.RotateLeft;
     }
-    bool operator!=(const MaskRolPair Other) {
+    bool operator!=(const MaskRolPair Other) const {
       return Mask != Other.Mask || RotateLeft != Other.RotateLeft;
     }
   };

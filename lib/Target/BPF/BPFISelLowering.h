@@ -20,6 +20,7 @@
 #include "llvm/Target/TargetLowering.h"
 
 namespace llvm {
+class BPFSubtarget;
 namespace BPFISD {
 enum {
   FIRST_NUMBER = ISD::BUILTIN_OP_END,
@@ -33,7 +34,7 @@ enum {
 
 class BPFTargetLowering : public TargetLowering {
 public:
-  explicit BPFTargetLowering(const TargetMachine &TM);
+  explicit BPFTargetLowering(const TargetMachine &TM, const BPFSubtarget &STI);
 
   // Provide custom lowering hooks for some operations.
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;

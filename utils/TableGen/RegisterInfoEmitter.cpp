@@ -610,17 +610,19 @@ static void printMask(raw_ostream &OS, unsigned Val) {
 static bool combine(const CodeGenSubRegIndex *Idx,
                     SmallVectorImpl<CodeGenSubRegIndex*> &Vec) {
   const CodeGenSubRegIndex::CompMap &Map = Idx->getComposites();
-  for (CodeGenSubRegIndex::CompMap::const_iterator
-       I = Map.begin(), E = Map.end(); I != E; ++I) {
-    CodeGenSubRegIndex *&Entry = Vec[I->first->EnumValue - 1];
-    if (Entry && Entry != I->second)
+  for (const auto &I : Map) {
+    CodeGenSubRegIndex *&Entry = Vec[I.first->EnumValue - 1];
+    if (Entry && Entry != I.second)
       return false;
   }
 
   // All entries are compatible. Make it so.
-  for (CodeGenSubRegIndex::CompMap::const_iterator
-       I = Map.begin(), E = Map.end(); I != E; ++I)
-    Vec[I->first->EnumValue - 1] = I->second;
+  for (const auto &I : Map) {
+    auto *&Entry = Vec[I.first->EnumValue - 1];
+    assert((!Entry || Entry == I.second) &&
+           "Expected EnumValue to be unique");
+    Entry = I.second;
+  }
   return true;
 }
 
@@ -714,16 +716,7 @@ RegisterInfoEmitter::emitComposeSubRegIndexLaneMask(raw_ostream &OS,
     for (size_t s = 0, se = Sequences.size(); s != se; ++s, SIdx = NextSIdx) {
       SmallVectorImpl<MaskRolPair> &Sequence = Sequences[s];
       NextSIdx = SIdx + Sequence.size() + 1;
-      if (Sequence.size() != IdxSequence.size())
-        continue;
-      bool Identical = true;
-      for (size_t o = 0, oe = Sequence.size(); o != oe; ++o) {
-        if (Sequence[o] != IdxSequence[o]) {
-          Identical = false;
-          break;
-        }
-      }
-      if (Identical) {
+      if (Sequence == IdxSequence) {
         Found = SIdx;
         break;
       }

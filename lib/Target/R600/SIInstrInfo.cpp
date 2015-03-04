@@ -583,10 +583,7 @@ unsigned SIInstrInfo::calculateLDSSpillAddress(MachineBasicBlock &MBB,
       unsigned TIDIGZReg = TRI->getPreloadedValue(*MF, SIRegisterInfo::TIDIG_Z);
       unsigned InputPtrReg =
           TRI->getPreloadedValue(*MF, SIRegisterInfo::INPUT_PTR);
-      static const unsigned TIDIGRegs[3] = {
-        TIDIGXReg, TIDIGYReg, TIDIGZReg
-      };
-      for (unsigned Reg : TIDIGRegs) {
+      for (unsigned Reg : {TIDIGXReg, TIDIGYReg, TIDIGZReg}) {
         if (!Entry.isLiveIn(Reg))
           Entry.addLiveIn(Reg);
       }
@@ -1870,7 +1867,10 @@ void SIInstrInfo::legalizeOperands(MachineInstr *MI) const {
                                               // This will be replaced later
                                               // with the new value of vaddr.
                   .addOperand(*SOffset)
-                  .addOperand(*Offset);
+                  .addOperand(*Offset)
+                  .addImm(0) // glc
+                  .addImm(0) // slc
+                  .addImm(0); // tfe
 
       MI->removeFromParent();
       MI = Addr64;
@@ -2050,6 +2050,9 @@ void SIInstrInfo::moveSMRDToVALU(MachineInstr *MI, MachineRegisterInfo &MRI) con
       MI->getOperand(1).setReg(SRsrc);
       MI->addOperand(*MBB->getParent(), MachineOperand::CreateImm(0));
       MI->addOperand(*MBB->getParent(), MachineOperand::CreateImm(ImmOffset));
+      MI->addOperand(*MBB->getParent(), MachineOperand::CreateImm(0)); // glc
+      MI->addOperand(*MBB->getParent(), MachineOperand::CreateImm(0)); // slc
+      MI->addOperand(*MBB->getParent(), MachineOperand::CreateImm(0)); // tfe
 
       const TargetRegisterClass *NewDstRC =
           RI.getRegClass(get(NewOpcode).OpInfo[0].RegClass);

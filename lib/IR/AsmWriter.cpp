@@ -1306,17 +1306,24 @@ static void writeTag(raw_ostream &Out, FieldSeparator &FS, const DebugNode *N) {
     Out << N->getTag();
 }
 
+static void writeStringField(raw_ostream &Out, FieldSeparator &FS,
+                             StringRef Name, StringRef Value,
+                             bool ShouldSkipEmpty = true) {
+  if (ShouldSkipEmpty && Value.empty())
+    return;
+
+  Out << FS << Name << ": \"";
+  PrintEscapedString(Value, Out);
+  Out << "\"";
+}
+
 static void writeGenericDebugNode(raw_ostream &Out, const GenericDebugNode *N,
                                   TypePrinting *TypePrinter,
                                   SlotTracker *Machine, const Module *Context) {
   Out << "!GenericDebugNode(";
   FieldSeparator FS;
   writeTag(Out, FS, N);
-  if (!N->getHeader().empty()) {
-    Out << FS << "header: \"";
-    PrintEscapedString(N->getHeader(), Out);
-    Out << "\"";
-  }
+  writeStringField(Out, FS, "header", N->getHeader());
   if (N->getNumDwarfOperands()) {
     Out << FS << "operands: {";
     FieldSeparator IFS;
@@ -1362,7 +1369,7 @@ static void writeMDEnumerator(raw_ostream &Out, const MDEnumerator *N,
                               TypePrinting *, SlotTracker *, const Module *) {
   Out << "!MDEnumerator(";
   FieldSeparator FS;
-  Out << FS << "name: \"" << N->getName() << "\"";
+  writeStringField(Out, FS, "name", N->getName(), /* ShouldSkipEmpty */ false);
   Out << FS << "value: " << N->getValue();
   Out << ")";
 }
@@ -1371,9 +1378,9 @@ static void writeMDBasicType(raw_ostream &Out, const MDBasicType *N,
                              TypePrinting *, SlotTracker *, const Module *) {
   Out << "!MDBasicType(";
   FieldSeparator FS;
-  writeTag(Out, FS, N);
-  if (!N->getName().empty())
-    Out << FS << "name: \"" << N->getName() << "\"";
+  if (N->getTag() != dwarf::DW_TAG_base_type)
+    writeTag(Out, FS, N);
+  writeStringField(Out, FS, "name", N->getName());
   if (N->getSizeInBits())
     Out << FS << "size: " << N->getSizeInBits();
   if (N->getAlignInBits())
@@ -1408,8 +1415,11 @@ static void writeMDDerivedType(raw_ostream &Out, const MDDerivedType *N,
   Out << "!MDDerivedType(";
   FieldSeparator FS;
   writeTag(Out, FS, N);
-  if (!N->getName().empty())
-    Out << FS << "name: \"" << N->getName() << "\"";
+  writeStringField(Out, FS, "name", N->getName());
+  if (N->getScope()) {
+    Out << FS << "scope: ";
+    writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
+  }
   if (N->getFile()) {
     Out << FS << "file: ";
     writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine,
@@ -1417,10 +1427,6 @@ static void writeMDDerivedType(raw_ostream &Out, const MDDerivedType *N,
   }
   if (N->getLine())
     Out << FS << "line: " << N->getLine();
-  if (N->getScope()) {
-    Out << FS << "scope: ";
-    writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
-  }
   Out << FS << "baseType: ";
   writeMetadataAsOperand(Out, N->getBaseType(), TypePrinter, Machine, Context);
   if (N->getSizeInBits())
@@ -1447,8 +1453,11 @@ static void writeMDCompositeType(raw_ostream &Out, const MDCompositeType *N,
   Out << "!MDCompositeType(";
   FieldSeparator FS;
   writeTag(Out, FS, N);
-  if (!N->getName().empty())
-    Out << FS << "name: \"" << N->getName() << "\"";
+  writeStringField(Out, FS, "name", N->getName());
+  if (N->getScope()) {
+    Out << FS << "scope: ";
+    writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
+  }
   if (N->getFile()) {
     Out << FS << "file: ";
     writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine,
@@ -1456,10 +1465,6 @@ static void writeMDCompositeType(raw_ostream &Out, const MDCompositeType *N,
   }
   if (N->getLine())
     Out << FS << "line: " << N->getLine();
-  if (N->getScope()) {
-    Out << FS << "scope: ";
-    writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
-  }
   if (N->getBaseType()) {
     Out << FS << "baseType: ";
     writeMetadataAsOperand(Out, N->getBaseType(), TypePrinter, Machine,
@@ -1498,8 +1503,7 @@ static void writeMDCompositeType(raw_ostream &Out, const MDCompositeType *N,
     writeMetadataAsOperand(Out, N->getTemplateParams(), TypePrinter, Machine,
                            Context);
   }
-  if (!N->getIdentifier().empty())
-    Out << FS << "identifier: \"" << N->getIdentifier() << "\"";
+  writeStringField(Out, FS, "identifier", N->getIdentifier());
   Out << ")";
 }
 
@@ -1521,8 +1525,10 @@ static void writeMDFile(raw_ostream &Out, const MDFile *N, TypePrinting *,
                         SlotTracker *, const Module *) {
   Out << "!MDFile(";
   FieldSeparator FS;
-  Out << FS << "filename: \"" << N->getFilename() << "\"";
-  Out << FS << "directory: \"" << N->getDirectory() << "\"";
+  writeStringField(Out, FS, "filename", N->getFilename(),
+                   /* ShouldSkipEmpty */ false);
+  writeStringField(Out, FS, "directory", N->getDirectory(),
+                   /* ShouldSkipEmpty */ false);
   Out << ")";
 }
 
@@ -1538,14 +1544,11 @@ static void writeMDCompileUnit(raw_ostream &Out, const MDCompileUnit *N,
     Out << N->getSourceLanguage();
   Out << FS << "file: ";
   writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine, Context);
-  if (!N->getProducer().empty())
-    Out << FS << "producer: \"" << N->getProducer() << "\"";
+  writeStringField(Out, FS, "producer", N->getProducer());
   Out << FS << "isOptimized: " << (N->isOptimized() ? "true" : "false");
-  if (!N->getFlags().empty())
-    Out << FS << "flags: \"" << N->getFlags() << "\"";
+  writeStringField(Out, FS, "flags", N->getFlags());
   Out << FS << "runtimeVersion: " << N->getRuntimeVersion();
-  if (!N->getSplitDebugFilename().empty())
-    Out << FS << "splitDebugFilename: \"" << N->getSplitDebugFilename() << "\"";
+  writeStringField(Out, FS, "splitDebugFilename", N->getSplitDebugFilename());
   Out << FS << "emissionKind: " << N->getEmissionKind();
   if (N->getEnumTypes()) {
     Out << FS << "enums: ";
@@ -1580,11 +1583,10 @@ static void writeMDSubprogram(raw_ostream &Out, const MDSubprogram *N,
                               const Module *Context) {
   Out << "!MDSubprogram(";
   FieldSeparator FS;
+  writeStringField(Out, FS, "name", N->getName());
+  writeStringField(Out, FS, "linkageName", N->getLinkageName());
   Out << FS << "scope: ";
   writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
-  Out << FS << "name: \"" << N->getName() << "\"";
-  if (!N->getLinkageName().empty())
-    Out << FS << "linkageName: \"" << N->getLinkageName() << "\"";
   if (N->getFile()) {
     Out << FS << "file: ";
     writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine,
@@ -1685,14 +1687,13 @@ static void writeMDNamespace(raw_ostream &Out, const MDNamespace *N,
                              const Module *Context) {
   Out << "!MDNamespace(";
   FieldSeparator FS;
+  writeStringField(Out, FS, "name", N->getName());
   Out << FS << "scope: ";
   writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
   if (N->getFile()) {
     Out << FS << "file: ";
     writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine, Context);
   }
-  if (!N->getName().empty())
-    Out << FS << "name: \"" << N->getName() << "\"";
   if (N->getLine())
     Out << FS << "line: " << N->getLine();
   Out << ")";
@@ -1705,7 +1706,7 @@ static void writeMDTemplateTypeParameter(raw_ostream &Out,
                                          const Module *Context) {
   Out << "!MDTemplateTypeParameter(";
   FieldSeparator FS;
-  Out << FS << "name: \"" << N->getName() << "\"";
+  writeStringField(Out, FS, "name", N->getName());
   Out << FS << "type: ";
   writeMetadataAsOperand(Out, N->getType(), TypePrinter, Machine, Context);
   Out << ")";
@@ -1718,10 +1719,13 @@ static void writeMDTemplateValueParameter(raw_ostream &Out,
                                           const Module *Context) {
   Out << "!MDTemplateValueParameter(";
   FieldSeparator FS;
-  writeTag(Out, FS, N);
-  Out << FS << "name: \"" << N->getName() << "\"";
-  Out << FS << "type: ";
-  writeMetadataAsOperand(Out, N->getType(), TypePrinter, Machine, Context);
+  if (N->getTag() != dwarf::DW_TAG_template_value_parameter)
+    writeTag(Out, FS, N);
+  writeStringField(Out, FS, "name", N->getName());
+  if (auto *Type = N->getType()) {
+    Out << FS << "type: ";
+    writeMetadataAsOperand(Out, Type, TypePrinter, Machine, Context);
+  }
   Out << FS << "value: ";
   writeMetadataAsOperand(Out, N->getValue(), TypePrinter, Machine, Context);
   Out << ")";
@@ -1732,11 +1736,10 @@ static void writeMDGlobalVariable(raw_ostream &Out, const MDGlobalVariable *N,
                                   SlotTracker *Machine, const Module *Context) {
   Out << "!MDGlobalVariable(";
   FieldSeparator FS;
+  writeStringField(Out, FS, "name", N->getName());
+  writeStringField(Out, FS, "linkageName", N->getLinkageName());
   Out << FS << "scope: ";
   writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
-  Out << FS << "name: \"" << N->getName() << "\"";
-  if (!N->getLinkageName().empty())
-    Out << FS << "linkageName: \"" << N->getLinkageName() << "\"";
   if (N->getFile()) {
     Out << FS << "file: ";
     writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine,
@@ -1770,9 +1773,11 @@ static void writeMDLocalVariable(raw_ostream &Out, const MDLocalVariable *N,
   Out << "!MDLocalVariable(";
   FieldSeparator FS;
   writeTag(Out, FS, N);
+  writeStringField(Out, FS, "name", N->getName());
+  if (N->getTag() == dwarf::DW_TAG_arg_variable || N->getArg())
+    Out << FS << "arg: " << N->getArg();
   Out << FS << "scope: ";
   writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
-  Out << FS << "name: \"" << N->getName() << "\"";
   if (N->getFile()) {
     Out << FS << "file: ";
     writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine,
@@ -1785,8 +1790,6 @@ static void writeMDLocalVariable(raw_ostream &Out, const MDLocalVariable *N,
     writeMetadataAsOperand(Out, N->getType(), TypePrinter, Machine,
                            Context);
   }
-  if (N->getTag() == dwarf::DW_TAG_arg_variable || N->getArg())
-    Out << FS << "arg: " << N->getArg();
   if (auto Flags = N->getFlags()) {
     Out << FS << "flags: ";
     writeDIFlags(Out, Flags);
@@ -1825,17 +1828,15 @@ static void writeMDObjCProperty(raw_ostream &Out, const MDObjCProperty *N,
                                 const Module *Context) {
   Out << "!MDObjCProperty(";
   FieldSeparator FS;
-  Out << FS << "name: \"" << N->getName() << "\"";
+  writeStringField(Out, FS, "name", N->getName());
   if (N->getFile()) {
     Out << FS << "file: ";
     writeMetadataAsOperand(Out, N->getFile(), TypePrinter, Machine, Context);
   }
   if (N->getLine())
     Out << FS << "line: " << N->getLine();
-  if (!N->getSetterName().empty())
-    Out << FS << "setter: \"" << N->getSetterName() << "\"";
-  if (!N->getGetterName().empty())
-    Out << FS << "getter: \"" << N->getGetterName() << "\"";
+  writeStringField(Out, FS, "setter", N->getSetterName());
+  writeStringField(Out, FS, "getter", N->getGetterName());
   if (N->getAttributes())
     Out << FS << "attributes: " << N->getAttributes();
   if (N->getType()) {
@@ -1851,6 +1852,7 @@ static void writeMDImportedEntity(raw_ostream &Out, const MDImportedEntity *N,
   Out << "!MDImportedEntity(";
   FieldSeparator FS;
   writeTag(Out, FS, N);
+  writeStringField(Out, FS, "name", N->getName());
   Out << FS << "scope: ";
   writeMetadataAsOperand(Out, N->getScope(), TypePrinter, Machine, Context);
   if (N->getEntity()) {
@@ -1859,7 +1861,6 @@ static void writeMDImportedEntity(raw_ostream &Out, const MDImportedEntity *N,
   }
   if (N->getLine())
     Out << FS << "line: " << N->getLine();
-  Out << FS << "name: \"" << N->getName() << "\"";
   Out << ")";
 }
 
@@ -2898,6 +2899,15 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     Out << ", ";
     TypePrinter.print(I.getType(), Out);
   } else if (Operand) {   // Print the normal way.
+    if (const auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+      Out << ' ';
+      TypePrinter.print(GEP->getSourceElementType(), Out);
+      Out << ',';
+    } else if (const auto *LI = dyn_cast<LoadInst>(&I)) {
+      Out << ' ';
+      TypePrinter.print(LI->getType(), Out);
+      Out << ',';
+    }
 
     // PrintAllTypes - Instructions who have operands of all the same type
     // omit the type from all but the first operand.  If the instruction has
@@ -2974,32 +2984,10 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
   printInfoComment(I);
 }
 
-static void WriteMDNodeComment(const MDNode *Node,
-                               formatted_raw_ostream &Out) {
-  if (Node->getNumOperands() < 1)
-    return;
-
-  Metadata *Op = Node->getOperand(0);
-  if (!Op || !isa<MDString>(Op))
-    return;
-
-  DIDescriptor Desc(Node);
-  if (!Desc.Verify())
-    return;
-
-  unsigned Tag = Desc.getTag();
-  Out.PadToColumn(50);
-  if (dwarf::TagString(Tag)) {
-    Out << "; ";
-    Desc.print(Out);
-  } else if (Tag == dwarf::DW_TAG_user_base) {
-    Out << "; [ DW_TAG_user_base ]";
-  }
-}
-
 void AssemblyWriter::writeMDNode(unsigned Slot, const MDNode *Node) {
   Out << '!' << Slot << " = ";
   printMDNodeBody(Node);
+  Out << "\n";
 }
 
 void AssemblyWriter::writeAllMDNodes() {
@@ -3016,8 +3004,6 @@ void AssemblyWriter::writeAllMDNodes() {
 
 void AssemblyWriter::printMDNodeBody(const MDNode *Node) {
   WriteMDNodeBodyInternal(Out, Node, &TypePrinter, &Machine, TheModule);
-  WriteMDNodeComment(Node, Out);
-  Out << "\n";
 }
 
 void AssemblyWriter::writeAllAttributeGroups() {
@@ -3214,20 +3200,26 @@ void Metadata::printAsOperand(raw_ostream &ROS, bool PrintType,
 }
 
 // Value::dump - allow easy printing of Values from the debugger.
+LLVM_DUMP_METHOD
 void Value::dump() const { print(dbgs()); dbgs() << '\n'; }
 
 // Type::dump - allow easy printing of Types from the debugger.
+LLVM_DUMP_METHOD
 void Type::dump() const { print(dbgs()); dbgs() << '\n'; }
 
 // Module::dump() - Allow printing of Modules from the debugger.
+LLVM_DUMP_METHOD
 void Module::dump() const { print(dbgs(), nullptr); }
 
 // \brief Allow printing of Comdats from the debugger.
+LLVM_DUMP_METHOD
 void Comdat::dump() const { print(dbgs()); }
 
 // NamedMDNode::dump() - Allow printing of NamedMDNodes from the debugger.
+LLVM_DUMP_METHOD
 void NamedMDNode::dump() const { print(dbgs()); }
 
+LLVM_DUMP_METHOD
 void Metadata::dump() const {
   print(dbgs());
   dbgs() << '\n';

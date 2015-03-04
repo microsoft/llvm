@@ -17,6 +17,7 @@
 #include "DwarfDebug.h"
 #include "DwarfExpression.h"
 #include "llvm/ADT/APFloat.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
@@ -43,6 +44,12 @@ GenerateDwarfTypeUnits("generate-type-units", cl::Hidden,
                        cl::desc("Generate DWARF4 type units."),
                        cl::init(false));
 
+DIEDwarfExpression::DIEDwarfExpression(const AsmPrinter &AP, DwarfUnit &DU,
+                                       DIELoc &DIE)
+    : DwarfExpression(*AP.MF->getSubtarget().getRegisterInfo(),
+                      AP.getDwarfDebug()->getDwarfVersion()),
+      AP(AP), DU(DU), DIE(DIE) {}
+
 void DIEDwarfExpression::EmitOp(uint8_t Op, const char* Comment) {
   DU.addUInt(DIE, dwarf::DW_FORM_data1, Op);
 }
@@ -53,7 +60,7 @@ void DIEDwarfExpression::EmitUnsigned(unsigned Value) {
   DU.addUInt(DIE, dwarf::DW_FORM_udata, Value);
 }
 bool DIEDwarfExpression::isFrameRegister(unsigned MachineReg) {
-  return MachineReg == getTRI()->getFrameRegister(*AP.MF);
+  return MachineReg == TRI.getFrameRegister(*AP.MF);
 }
 
 

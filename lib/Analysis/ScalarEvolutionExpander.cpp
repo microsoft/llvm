@@ -1216,6 +1216,12 @@ SCEVExpander::getAddRecExprPHILiterally(const SCEVAddRecExpr *Normalized,
   // Expand the step somewhere that dominates the loop header.
   Value *StepV = expandCodeFor(Step, IntTy, L->getHeader()->begin());
 
+  // The no-wrap behavior proved by IsIncrement(NUW|NSW) is only applicable if
+  // we actually do emit an addition.  It does not apply if we emit a
+  // subtraction.
+  bool IncrementIsNUW = !useSubtract && IsIncrementNUW(SE, Normalized);
+  bool IncrementIsNSW = !useSubtract && IsIncrementNSW(SE, Normalized);
+
   // Create the PHI.
   BasicBlock *Header = L->getHeader();
   Builder.SetInsertPoint(Header, Header->begin());
@@ -1243,9 +1249,9 @@ SCEVExpander::getAddRecExprPHILiterally(const SCEVAddRecExpr *Normalized,
     Value *IncV = expandIVInc(PN, StepV, L, ExpandTy, IntTy, useSubtract);
 
     if (isa<OverflowingBinaryOperator>(IncV)) {
-      if (IsIncrementNUW(SE, Normalized))
+      if (IncrementIsNUW)
         cast<BinaryOperator>(IncV)->setHasNoUnsignedWrap();
-      if (IsIncrementNSW(SE, Normalized))
+      if (IncrementIsNSW)
         cast<BinaryOperator>(IncV)->setHasNoSignedWrap();
     }
     PN->addIncoming(IncV, Pred);

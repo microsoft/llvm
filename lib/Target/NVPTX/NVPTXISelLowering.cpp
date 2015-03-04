@@ -271,7 +271,7 @@ NVPTXTargetLowering::NVPTXTargetLowering(const NVPTXTargetMachine &TM,
 
   // Now deduce the information based on the above mentioned
   // actions
-  computeRegisterProperties();
+  computeRegisterProperties(STI.getRegisterInfo());
 }
 
 const char *NVPTXTargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -1940,9 +1940,7 @@ NVPTXTargetLowering::LowerSTOREVector(SDValue Op, SelectionDAG &DAG) const {
     }
 
     // Then any remaining arguments
-    for (unsigned i = 2, e = N->getNumOperands(); i != e; ++i) {
-      Ops.push_back(N->getOperand(i));
-    }
+    Ops.append(N->op_begin() + 2, N->op_end());
 
     SDValue NewSt = DAG.getMemIntrinsicNode(
         Opcode, DL, DAG.getVTList(MVT::Other), Ops,
@@ -3762,7 +3760,8 @@ NVPTXTargetLowering::getConstraintType(const std::string &Constraint) const {
 }
 
 std::pair<unsigned, const TargetRegisterClass *>
-NVPTXTargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
+NVPTXTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
+                                                  const std::string &Constraint,
                                                   MVT VT) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
@@ -3783,7 +3782,7 @@ NVPTXTargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
       return std::make_pair(0U, &NVPTX::Float64RegsRegClass);
     }
   }
-  return TargetLowering::getRegForInlineAsmConstraint(Constraint, VT);
+  return TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
 }
 
 /// getFunctionAlignment - Return the Log2 alignment of this function.
@@ -4493,7 +4492,6 @@ NVPTXTargetObjectFile::~NVPTXTargetObjectFile() {
   delete DwarfLocSection;
   delete DwarfARangesSection;
   delete DwarfRangesSection;
-  delete DwarfMacroInfoSection;
 }
 
 const MCSection *

@@ -10,18 +10,41 @@
 #include "BinaryHolder.h"
 #include "DebugMap.h"
 #include "dsymutil.h"
+#include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
 #include <string>
 
 namespace llvm {
 namespace dsymutil {
 
 namespace {
+
+void warn(const Twine &Warning, const Twine &Context) {
+  errs() << Twine("while processing ") + Context + ":\n";
+  errs() << Twine("warning: ") + Warning + "\n";
+}
+
+bool error(const Twine &Error, const Twine &Context) {
+  errs() << Twine("while processing ") + Context + ":\n";
+  errs() << Twine("error: ") + Error + "\n";
+  return false;
+}
 
 /// \brief Stores all information relating to a compile unit, be it in
 /// its original instance in the object file to its brand new cloned
@@ -50,6 +73,111 @@ private:
   std::vector<DIEInfo> Info; ///< DIE info indexed by DIE index.
 };
 
+/// \brief The Dwarf streaming logic
+///
+/// All interactions with the MC layer that is used to build the debug
+/// information binary representation are handled in this class.
+class DwarfStreamer {
+  /// \defgroup MCObjects MC layer objects constructed by the streamer
+  /// @{
+  std::unique_ptr<MCRegisterInfo> MRI;
+  std::unique_ptr<MCAsmInfo> MAI;
+  std::unique_ptr<MCObjectFileInfo> MOFI;
+  std::unique_ptr<MCContext> MC;
+  MCAsmBackend *MAB; // Owned by MCStreamer
+  std::unique_ptr<MCInstrInfo> MII;
+  std::unique_ptr<MCSubtargetInfo> MSTI;
+  MCCodeEmitter *MCE; // Owned by MCStreamer
+  MCStreamer *MS;     // Owned by AsmPrinter
+  std::unique_ptr<TargetMachine> TM;
+  std::unique_ptr<AsmPrinter> Asm;
+  /// @}
+
+  /// \brief the file we stream the linked Dwarf to.
+  std::unique_ptr<raw_fd_ostream> OutFile;
+
+public:
+  /// \brief Actually create the streamer and the ouptut file.
+  ///
+  /// This could be done directly in the constructor, but it feels
+  /// more natural to handle errors through return value.
+  bool init(Triple TheTriple, StringRef OutputFilename);
+
+  ///\brief Dump the file to the disk.
+  bool finish();
+};
+
+bool DwarfStreamer::init(Triple TheTriple, StringRef OutputFilename) {
+  std::string ErrorStr;
+  std::string TripleName;
+  StringRef Context = "dwarf streamer init";
+
+  // Get the target.
+  const Target *TheTarget =
+      TargetRegistry::lookupTarget(TripleName, TheTriple, ErrorStr);
+  if (!TheTarget)
+    return error(ErrorStr, Context);
+  TripleName = TheTriple.getTriple();
+
+  // Create all the MC Objects.
+  MRI.reset(TheTarget->createMCRegInfo(TripleName));
+  if (!MRI)
+    return error(Twine("no register info for target ") + TripleName, Context);
+
+  MAI.reset(TheTarget->createMCAsmInfo(*MRI, TripleName));
+  if (!MAI)
+    return error("no asm info for target " + TripleName, Context);
+
+  MOFI.reset(new MCObjectFileInfo);
+  MC.reset(new MCContext(MAI.get(), MRI.get(), MOFI.get()));
+  MOFI->InitMCObjectFileInfo(TripleName, Reloc::Default, CodeModel::Default,
+                             *MC);
+
+  MAB = TheTarget->createMCAsmBackend(*MRI, TripleName, "");
+  if (!MAB)
+    return error("no asm backend for target " + TripleName, Context);
+
+  MII.reset(TheTarget->createMCInstrInfo());
+  if (!MII)
+    return error("no instr info info for target " + TripleName, Context);
+
+  MSTI.reset(TheTarget->createMCSubtargetInfo(TripleName, "", ""));
+  if (!MSTI)
+    return error("no subtarget info for target " + TripleName, Context);
+
+  MCE = TheTarget->createMCCodeEmitter(*MII, *MRI, *MSTI, *MC);
+  if (!MCE)
+    return error("no code emitter for target " + TripleName, Context);
+
+  // Create the output file.
+  std::error_code EC;
+  OutFile = llvm::make_unique<raw_fd_ostream>(OutputFilename, EC,
+                                              sys::fs::F_None);
+  if (EC)
+    return error(Twine(OutputFilename) + ": " + EC.message(), Context);
+
+  MS = TheTarget->createMCObjectStreamer(TripleName, *MC, *MAB, *OutFile, MCE,
+                                         *MSTI, false);
+  if (!MS)
+    return error("no object streamer for target " + TripleName, Context);
+
+  // Finally create the AsmPrinter we'll use to emit the DIEs.
+  TM.reset(TheTarget->createTargetMachine(TripleName, "", "", TargetOptions()));
+  if (!TM)
+    return error("no target machine for target " + TripleName, Context);
+
+  Asm.reset(TheTarget->createAsmPrinter(*TM, std::unique_ptr<MCStreamer>(MS)));
+  if (!Asm)
+    return error("no asm printer for target " + TripleName, Context);
+
+  return true;
+}
+
+bool DwarfStreamer::finish() {
+  MS->Finish();
+  return true;
+}
+
 /// \brief The core of the Dwarf linking logic.
 ///
 /// The link of the dwarf information from the object files will be
@@ -66,8 +194,9 @@ private:
 /// first step when we start processing a DebugMapObject.
 class DwarfLinker {
 public:
-  DwarfLinker(StringRef OutputFilename, bool Verbose)
-      : OutputFilename(OutputFilename), Verbose(Verbose), BinHolder(Verbose) {}
+  DwarfLinker(StringRef OutputFilename, const LinkOptions &Options)
+      : OutputFilename(OutputFilename), Options(Options),
+        BinHolder(Options.Verbose) {}
 
   /// \brief Link the contents of the DebugMap.
   bool link(const DebugMap &);
@@ -172,12 +301,15 @@ private:
 
   void reportWarning(const Twine &Warning, const DWARFUnit *Unit = nullptr,
                      const DWARFDebugInfoEntryMinimal *DIE = nullptr);
+
+  bool createStreamer(Triple TheTriple, StringRef OutputFilename);
   /// @}
 
 private:
   std::string OutputFilename;
-  bool Verbose;
+  LinkOptions Options;
   BinaryHolder BinHolder;
+  std::unique_ptr<DwarfStreamer> Streamer;
 
   /// The units of the current debug map object.
   std::vector<CompileUnit> Units;
@@ -219,17 +351,25 @@ const DWARFDebugInfoEntryMinimal *DwarfLinker::resolveDIEReference(
 /// information about a specific \p DIE related to the warning.
 void DwarfLinker::reportWarning(const Twine &Warning, const DWARFUnit *Unit,
                                 const DWARFDebugInfoEntryMinimal *DIE) {
+  StringRef Context = "<debug map>";
   if (CurrentDebugObject)
-    errs() << Twine("while processing ") +
-                  CurrentDebugObject->getObjectFilename() + ":\n";
-  errs() << Twine("warning: ") + Warning + "\n";
+    Context = CurrentDebugObject->getObjectFilename();
+  warn(Warning, Context);
 
-  if (!Verbose || !DIE)
+  if (!Options.Verbose || !DIE)
     return;
 
   errs() << "    in DIE:\n";
   DIE->dump(errs(), const_cast<DWARFUnit *>(Unit), 0 /* RecurseDepth */,
             6 /* Indent */);
+}
+
+bool DwarfLinker::createStreamer(Triple TheTriple, StringRef OutputFilename) {
+  if (Options.NoOutput)
+    return true;
+
+  Streamer = llvm::make_unique<DwarfStreamer>();
+  return Streamer->init(TheTriple, OutputFilename);
 }
 
 /// \brief Recursive helper to gather the child->parent relationships in the
@@ -378,7 +518,7 @@ bool DwarfLinker::hasValidRelocation(uint32_t StartOffset, uint32_t EndOffset,
     return false;
 
   const auto &ValidReloc = ValidRelocs[NextValidReloc++];
-  if (Verbose)
+  if (Options.Verbose)
     outs() << "Found valid debug map entry: " << ValidReloc.Mapping->getKey()
            << " " << format("\t%016" PRIx64 " => %016" PRIx64,
                             ValidReloc.Mapping->getValue().ObjectAddress,
@@ -442,7 +582,7 @@ unsigned DwarfLinker::shouldKeepVariableDIE(
       (Flags & TF_InFunctionScope))
     return Flags;
 
-  if (Verbose)
+  if (Options.Verbose)
     DIE.dump(outs(), const_cast<DWARFUnit *>(&OrigUnit), 0, 8 /* Indent */);
 
   return Flags | TF_Keep;
@@ -474,7 +614,7 @@ unsigned DwarfLinker::shouldKeepSubprogramDIE(
       !hasValidRelocation(LowPcOffset, LowPcEndOffset, MyInfo))
     return Flags;
 
-  if (Verbose)
+  if (Options.Verbose)
     DIE.dump(outs(), const_cast<DWARFUnit *>(&OrigUnit), 0, 8 /* Indent */);
 
   return Flags | TF_Keep;
@@ -502,7 +642,6 @@ unsigned DwarfLinker::shouldKeepDIE(const DWARFDebugInfoEntryMinimal &DIE,
 
   return Flags;
 }
-
 
 /// \brief Mark the passed DIE as well as all the ones it depends on
 /// as kept.
@@ -608,10 +747,13 @@ bool DwarfLinker::link(const DebugMap &Map) {
     return false;
   }
 
+  if (!createStreamer(Map.getTriple(), OutputFilename))
+    return false;
+
   for (const auto &Obj : Map.objects()) {
     CurrentDebugObject = Obj.get();
 
-    if (Verbose)
+    if (Options.Verbose)
       outs() << "DEBUG MAP OBJECT: " << Obj->getObjectFilename() << "\n";
     auto ErrOrObj = BinHolder.GetObjectFile(Obj->getObjectFilename());
     if (std::error_code EC = ErrOrObj.getError()) {
@@ -621,7 +763,7 @@ bool DwarfLinker::link(const DebugMap &Map) {
 
     // Look for relocations that correspond to debug map entries.
     if (!findValidRelocsInDebugInfo(*ErrOrObj, *Obj)) {
-      if (Verbose)
+      if (Options.Verbose)
         outs() << "No valid relocations found. Skipping.\n";
       continue;
     }
@@ -634,7 +776,7 @@ bool DwarfLinker::link(const DebugMap &Map) {
     // parent links that we will use during the next phase.
     for (const auto &CU : DwarfContext.compile_units()) {
       auto *CUDie = CU->getCompileUnitDIE(false);
-      if (Verbose) {
+      if (Options.Verbose) {
         outs() << "Input compilation unit:";
         CUDie->dump(outs(), CU.get(), 0);
       }
@@ -655,12 +797,13 @@ bool DwarfLinker::link(const DebugMap &Map) {
     endDebugObject();
   }
 
-  return true;
+  return Options.NoOutput ? true : Streamer->finish();
 }
 }
 
-bool linkDwarf(StringRef OutputFilename, const DebugMap &DM, bool Verbose) {
-  DwarfLinker Linker(OutputFilename, Verbose);
+bool linkDwarf(StringRef OutputFilename, const DebugMap &DM,
+               const LinkOptions &Options) {
+  DwarfLinker Linker(OutputFilename, Options);
   return Linker.link(DM);
 }
 }

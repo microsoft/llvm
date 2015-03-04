@@ -547,6 +547,18 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::UCOMISDrr,       X86::UCOMISDrm,           0 },
     { X86::UCOMISSrr,       X86::UCOMISSrm,           0 },
 
+    // MMX version of foldable instructions
+    { X86::MMX_CVTPD2PIirr,   X86::MMX_CVTPD2PIirm,   0 },
+    { X86::MMX_CVTPI2PDirr,   X86::MMX_CVTPI2PDirm,   0 },
+    { X86::MMX_CVTPS2PIirr,   X86::MMX_CVTPS2PIirm,   0 },
+    { X86::MMX_CVTTPD2PIirr,  X86::MMX_CVTTPD2PIirm,  0 },
+    { X86::MMX_CVTTPS2PIirr,  X86::MMX_CVTTPS2PIirm,  0 },
+    { X86::MMX_MOVD64to64rr,  X86::MMX_MOVQ64rm,      0 },
+    { X86::MMX_PABSBrr64,     X86::MMX_PABSBrm64,     0 },
+    { X86::MMX_PABSDrr64,     X86::MMX_PABSDrm64,     0 },
+    { X86::MMX_PABSWrr64,     X86::MMX_PABSWrm64,     0 },
+    { X86::MMX_PSHUFWri,      X86::MMX_PSHUFWmi,      0 },
+
     // AVX 128-bit versions of foldable instructions
     { X86::Int_VCOMISDrr,   X86::Int_VCOMISDrm,       0 },
     { X86::Int_VCOMISSrr,   X86::Int_VCOMISSrm,       0 },
@@ -1116,6 +1128,78 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::XOR8rr,          X86::XOR8rm,        0 },
     { X86::XORPDrr,         X86::XORPDrm,       TB_ALIGN_16 },
     { X86::XORPSrr,         X86::XORPSrm,       TB_ALIGN_16 },
+
+    // MMX version of foldable instructions
+    { X86::MMX_CVTPI2PSirr,   X86::MMX_CVTPI2PSirm,   0 },
+    { X86::MMX_PACKSSDWirr,   X86::MMX_PACKSSDWirm,   0 },
+    { X86::MMX_PACKSSWBirr,   X86::MMX_PACKSSWBirm,   0 },
+    { X86::MMX_PACKUSWBirr,   X86::MMX_PACKUSWBirm,   0 },
+    { X86::MMX_PADDBirr,      X86::MMX_PADDBirm,      0 },
+    { X86::MMX_PADDDirr,      X86::MMX_PADDDirm,      0 },
+    { X86::MMX_PADDQirr,      X86::MMX_PADDQirm,      0 },
+    { X86::MMX_PADDSBirr,     X86::MMX_PADDSBirm,     0 },
+    { X86::MMX_PADDSWirr,     X86::MMX_PADDSWirm,     0 },
+    { X86::MMX_PADDUSBirr,    X86::MMX_PADDUSBirm,    0 },
+    { X86::MMX_PADDUSWirr,    X86::MMX_PADDUSWirm,    0 },
+    { X86::MMX_PADDWirr,      X86::MMX_PADDWirm,      0 },
+    { X86::MMX_PALIGNR64irr,  X86::MMX_PALIGNR64irm,  0 },
+    { X86::MMX_PANDNirr,      X86::MMX_PANDNirm,      0 },
+    { X86::MMX_PANDirr,       X86::MMX_PANDirm,       0 },
+    { X86::MMX_PAVGBirr,      X86::MMX_PAVGBirm,      0 },
+    { X86::MMX_PAVGWirr,      X86::MMX_PAVGWirm,      0 },
+    { X86::MMX_PCMPEQBirr,    X86::MMX_PCMPEQBirm,    0 },
+    { X86::MMX_PCMPEQDirr,    X86::MMX_PCMPEQDirm,    0 },
+    { X86::MMX_PCMPEQWirr,    X86::MMX_PCMPEQWirm,    0 },
+    { X86::MMX_PCMPGTBirr,    X86::MMX_PCMPGTBirm,    0 },
+    { X86::MMX_PCMPGTDirr,    X86::MMX_PCMPGTDirm,    0 },
+    { X86::MMX_PCMPGTWirr,    X86::MMX_PCMPGTWirm,    0 },
+    { X86::MMX_PHADDSWrr64,   X86::MMX_PHADDSWrm64,   0 },
+    { X86::MMX_PHADDWrr64,    X86::MMX_PHADDWrm64,    0 },
+    { X86::MMX_PHADDrr64,     X86::MMX_PHADDrm64,     0 },
+    { X86::MMX_PHSUBDrr64,    X86::MMX_PHSUBDrm64,    0 },
+    { X86::MMX_PHSUBSWrr64,   X86::MMX_PHSUBSWrm64,   0 },
+    { X86::MMX_PHSUBWrr64,    X86::MMX_PHSUBWrm64,    0 },
+    { X86::MMX_PINSRWirri,    X86::MMX_PINSRWirmi,    0 },
+    { X86::MMX_PMADDUBSWrr64, X86::MMX_PMADDUBSWrm64, 0 },
+    { X86::MMX_PMADDWDirr,    X86::MMX_PMADDWDirm,    0 },
+    { X86::MMX_PMAXSWirr,     X86::MMX_PMAXSWirm,     0 },
+    { X86::MMX_PMAXUBirr,     X86::MMX_PMAXUBirm,     0 },
+    { X86::MMX_PMINSWirr,     X86::MMX_PMINSWirm,     0 },
+    { X86::MMX_PMINUBirr,     X86::MMX_PMINUBirm,     0 },
+    { X86::MMX_PMULHRSWrr64,  X86::MMX_PMULHRSWrm64,  0 },
+    { X86::MMX_PMULHUWirr,    X86::MMX_PMULHUWirm,    0 },
+    { X86::MMX_PMULHWirr,     X86::MMX_PMULHWirm,     0 },
+    { X86::MMX_PMULLWirr,     X86::MMX_PMULLWirm,     0 },
+    { X86::MMX_PMULUDQirr,    X86::MMX_PMULUDQirm,    0 },
+    { X86::MMX_PORirr,        X86::MMX_PORirm,        0 },
+    { X86::MMX_PSADBWirr,     X86::MMX_PSADBWirm,     0 },
+    { X86::MMX_PSHUFBrr64,    X86::MMX_PSHUFBrm64,    0 },
+    { X86::MMX_PSIGNBrr64,    X86::MMX_PSIGNBrm64,    0 },
+    { X86::MMX_PSIGNDrr64,    X86::MMX_PSIGNDrm64,    0 },
+    { X86::MMX_PSIGNWrr64,    X86::MMX_PSIGNWrm64,    0 },
+    { X86::MMX_PSLLDrr,       X86::MMX_PSLLDrm,       0 },
+    { X86::MMX_PSLLQrr,       X86::MMX_PSLLQrm,       0 },
+    { X86::MMX_PSLLWrr,       X86::MMX_PSLLWrm,       0 },
+    { X86::MMX_PSRADrr,       X86::MMX_PSRADrm,       0 },
+    { X86::MMX_PSRAWrr,       X86::MMX_PSRAWrm,       0 },
+    { X86::MMX_PSRLDrr,       X86::MMX_PSRLDrm,       0 },
+    { X86::MMX_PSRLQrr,       X86::MMX_PSRLQrm,       0 },
+    { X86::MMX_PSRLWrr,       X86::MMX_PSRLWrm,       0 },
+    { X86::MMX_PSUBBirr,      X86::MMX_PSUBBirm,      0 },
+    { X86::MMX_PSUBDirr,      X86::MMX_PSUBDirm,      0 },
+    { X86::MMX_PSUBQirr,      X86::MMX_PSUBQirm,      0 },
+    { X86::MMX_PSUBSBirr,     X86::MMX_PSUBSBirm,     0 },
+    { X86::MMX_PSUBSWirr,     X86::MMX_PSUBSWirm,     0 },
+    { X86::MMX_PSUBUSBirr,    X86::MMX_PSUBUSBirm,    0 },
+    { X86::MMX_PSUBUSWirr,    X86::MMX_PSUBUSWirm,    0 },
+    { X86::MMX_PSUBWirr,      X86::MMX_PSUBWirm,      0 },
+    { X86::MMX_PUNPCKHBWirr,  X86::MMX_PUNPCKHBWirm,  0 },
+    { X86::MMX_PUNPCKHDQirr,  X86::MMX_PUNPCKHDQirm,  0 },
+    { X86::MMX_PUNPCKHWDirr,  X86::MMX_PUNPCKHWDirm,  0 },
+    { X86::MMX_PUNPCKLBWirr,  X86::MMX_PUNPCKLBWirm,  0 },
+    { X86::MMX_PUNPCKLDQirr,  X86::MMX_PUNPCKLDQirm,  0 },
+    { X86::MMX_PUNPCKLWDirr,  X86::MMX_PUNPCKLWDirm,  0 },
+    { X86::MMX_PXORirr,       X86::MMX_PXORirm,       0 },
 
     // AVX 128-bit versions of foldable instructions
     { X86::VCVTSD2SSrr,       X86::VCVTSD2SSrm,        0 },
@@ -4489,9 +4573,7 @@ MachineInstr *X86InstrInfo::optimizeLoadInstr(MachineInstr *MI,
     return nullptr;
 
   // Check whether we can fold the def into SrcOperandId.
-  SmallVector<unsigned, 8> Ops;
-  Ops.push_back(SrcOperandId);
-  MachineInstr *FoldMI = foldMemoryOperand(MI, Ops, DefMI);
+  MachineInstr *FoldMI = foldMemoryOperand(MI, SrcOperandId, DefMI);
   if (FoldMI) {
     FoldAsLoadDefReg = 0;
     return FoldMI;
@@ -4586,7 +4668,7 @@ bool X86InstrInfo::expandPostRAPseudo(MachineBasicBlock::iterator MI) const {
 }
 
 static MachineInstr *FuseTwoAddrInst(MachineFunction &MF, unsigned Opcode,
-                                     const SmallVectorImpl<MachineOperand> &MOs,
+                                     ArrayRef<MachineOperand> MOs,
                                      MachineInstr *MI,
                                      const TargetInstrInfo &TII) {
   // Create the base instruction with the memory operand as the first part.
@@ -4613,9 +4695,8 @@ static MachineInstr *FuseTwoAddrInst(MachineFunction &MF, unsigned Opcode,
   return MIB;
 }
 
-static MachineInstr *FuseInst(MachineFunction &MF,
-                              unsigned Opcode, unsigned OpNo,
-                              const SmallVectorImpl<MachineOperand> &MOs,
+static MachineInstr *FuseInst(MachineFunction &MF, unsigned Opcode,
+                              unsigned OpNo, ArrayRef<MachineOperand> MOs,
                               MachineInstr *MI, const TargetInstrInfo &TII) {
   // Omit the implicit operands, something BuildMI can't do.
   MachineInstr *NewMI = MF.CreateMachineInstr(TII.get(Opcode),
@@ -4639,7 +4720,7 @@ static MachineInstr *FuseInst(MachineFunction &MF,
 }
 
 static MachineInstr *MakeM0Inst(const TargetInstrInfo &TII, unsigned Opcode,
-                                const SmallVectorImpl<MachineOperand> &MOs,
+                                ArrayRef<MachineOperand> MOs,
                                 MachineInstr *MI) {
   MachineFunction &MF = *MI->getParent()->getParent();
   MachineInstrBuilder MIB = BuildMI(MF, MI->getDebugLoc(), TII.get(Opcode));
@@ -4652,12 +4733,12 @@ static MachineInstr *MakeM0Inst(const TargetInstrInfo &TII, unsigned Opcode,
   return MIB.addImm(0);
 }
 
-MachineInstr*
-X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
-                                    MachineInstr *MI, unsigned OpNum,
-                                    const SmallVectorImpl<MachineOperand> &MOs,
-                                    unsigned Size, unsigned Align,
-                                    bool AllowCommute) const {
+MachineInstr *X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
+                                                  MachineInstr *MI,
+                                                  unsigned OpNum,
+                                                  ArrayRef<MachineOperand> MOs,
+                                                  unsigned Size, unsigned Align,
+                                                  bool AllowCommute) const {
   const DenseMap<unsigned,
                  std::pair<unsigned,unsigned> > *OpcodeTablePtr = nullptr;
   bool isCallRegIndirect = Subtarget.callRegIndirect();
@@ -5020,10 +5101,10 @@ breakPartialRegDependency(MachineBasicBlock::iterator MI, unsigned OpNum,
   MI->addRegisterKilled(Reg, TRI, true);
 }
 
-MachineInstr*
-X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr *MI,
-                                    const SmallVectorImpl<unsigned> &Ops,
-                                    int FrameIndex) const {
+MachineInstr *X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
+                                                  MachineInstr *MI,
+                                                  ArrayRef<unsigned> Ops,
+                                                  int FrameIndex) const {
   // Check switch flag
   if (NoFusing) return nullptr;
 
@@ -5061,10 +5142,9 @@ X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr *MI,
   } else if (Ops.size() != 1)
     return nullptr;
 
-  SmallVector<MachineOperand,4> MOs;
-  MOs.push_back(MachineOperand::CreateFI(FrameIndex));
-  return foldMemoryOperandImpl(MF, MI, Ops[0], MOs,
-                               Size, Alignment, /*AllowCommute=*/true);
+  return foldMemoryOperandImpl(MF, MI, Ops[0],
+                               MachineOperand::CreateFI(FrameIndex), Size,
+                               Alignment, /*AllowCommute=*/true);
 }
 
 static bool isPartialRegisterLoad(const MachineInstr &LoadMI,
@@ -5086,9 +5166,9 @@ static bool isPartialRegisterLoad(const MachineInstr &LoadMI,
   return false;
 }
 
-MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
+MachineInstr *X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
                                                   MachineInstr *MI,
-                                           const SmallVectorImpl<unsigned> &Ops,
+                                                  ArrayRef<unsigned> Ops,
                                                   MachineInstr *LoadMI) const {
   // If loading from a FrameIndex, fold directly from the FrameIndex.
   unsigned NumOps = LoadMI->getDesc().getNumOperands();
@@ -5211,8 +5291,8 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
       return nullptr;
 
     // Folding a normal load. Just copy the load's address operands.
-    for (unsigned i = NumOps - X86::AddrNumOperands; i != NumOps; ++i)
-      MOs.push_back(LoadMI->getOperand(i));
+    MOs.append(LoadMI->operands_begin() + NumOps - X86::AddrNumOperands,
+               LoadMI->operands_begin() + NumOps);
     break;
   }
   }
@@ -5220,9 +5300,8 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
                                /*Size=*/0, Alignment, /*AllowCommute=*/true);
 }
 
-
 bool X86InstrInfo::canFoldMemoryOperand(const MachineInstr *MI,
-                                  const SmallVectorImpl<unsigned> &Ops) const {
+                                        ArrayRef<unsigned> Ops) const {
   // Check switch flag
   if (NoFusing) return 0;
 
@@ -5475,7 +5554,7 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
   }
   if (Load)
     BeforeOps.push_back(SDValue(Load, 0));
-  std::copy(AfterOps.begin(), AfterOps.end(), std::back_inserter(BeforeOps));
+  BeforeOps.insert(BeforeOps.end(), AfterOps.begin(), AfterOps.end());
   SDNode *NewNode= DAG.getMachineNode(Opc, dl, VTs, BeforeOps);
   NewNodes.push_back(NewNode);
 

@@ -83,7 +83,7 @@ struct VectorizerParams {
 
   /// \\brief When performing memory disambiguation checks at runtime do not
   /// make more than this number of comparisons.
-  static const unsigned RuntimeMemoryCheckThreshold;
+  static unsigned RuntimeMemoryCheckThreshold;
 };
 
 /// \brief Drive the analysis of memory accesses in the loop
@@ -191,7 +191,7 @@ public:
 
   /// \brief Used to ensure that if the analysis was run with speculating the
   /// value of symbolic strides, the client queries it with the same assumption.
-  /// Only used in DEBUG build but we don't want NDEBUG-depedent ABI.
+  /// Only used in DEBUG build but we don't want NDEBUG-dependent ABI.
   unsigned NumSymbolicStrides;
 
 private:
