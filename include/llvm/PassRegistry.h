@@ -25,6 +25,7 @@
 #include "llvm/PassInfo.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/RWMutex.h"
+#include <atomic>
 #include <vector>
 
 namespace llvm {
@@ -41,6 +42,9 @@ struct PassRegistrationListener;
 class PassRegistry {
   mutable sys::SmartRWMutex<true> Lock;
 
+  /// Only if false, synchronization must use the Lock mutex.
+  std::atomic<bool> locked;
+
   /// PassInfoMap - Keep track of the PassInfo object for each registered pass.
   typedef DenseMap<const void *, const PassInfo *> MapType;
   MapType PassInfoMap;
@@ -52,13 +56,17 @@ class PassRegistry {
   std::vector<PassRegistrationListener *> Listeners;
 
 public:
-  PassRegistry() {}
+  PassRegistry() : locked(false) {}
   ~PassRegistry();
 
   /// getPassRegistry - Access the global registry object, which is
   /// automatically initialized at application launch and destroyed by
   /// llvm_shutdown.
   static PassRegistry *getPassRegistry();
+
+  /// Enables fast thread synchronization in getPassInfo().
+  /// After calling lock() no more passes may be registered.
+  void lock() { locked = true; }
 
   /// getPassInfo - Look up a pass' corresponding PassInfo, indexed by the pass'
   /// type identifier (&MyPass::ID).

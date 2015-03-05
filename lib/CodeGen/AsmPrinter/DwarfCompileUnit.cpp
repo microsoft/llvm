@@ -164,8 +164,10 @@ DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(DIGlobalVariable GV) {
         addUInt(*Loc, dwarf::DW_FORM_udata,
                 DD->getAddressPool().getIndex(Sym, /* TLS */ true));
       }
-      // 3) followed by a custom OP to make the debugger do a TLS lookup.
-      addUInt(*Loc, dwarf::DW_FORM_data1, dwarf::DW_OP_GNU_push_tls_address);
+      // 3) followed by an OP to make the debugger do a TLS lookup.
+      addUInt(*Loc, dwarf::DW_FORM_data1,
+              DD->useGNUTLSOpcode() ? dwarf::DW_OP_GNU_push_tls_address
+                                    : dwarf::DW_OP_form_tls_address);
     } else {
       DD->addArangeLabel(SymbolCU(this, Sym));
       addOpAddress(*Loc, Sym);
@@ -285,7 +287,7 @@ void DwarfCompileUnit::attachLowHighPC(DIE &D, const MCSymbol *Begin,
 DIE &DwarfCompileUnit::updateSubprogramScopeDIE(DISubprogram SP) {
   DIE *SPDie = getOrCreateSubprogramDIE(SP, includeMinimalInlineScopes());
 
-  attachLowHighPC(*SPDie, DD->getFunctionBeginSym(), DD->getFunctionEndSym());
+  attachLowHighPC(*SPDie, Asm->getFunctionBegin(), Asm->getFunctionEnd());
   if (!DD->getCurrentFunction()->getTarget().Options.DisableFramePointerElim(
           *DD->getCurrentFunction()))
     addFlag(*SPDie, dwarf::DW_AT_APPLE_omit_frame_ptr);

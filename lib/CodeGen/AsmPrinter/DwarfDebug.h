@@ -249,7 +249,6 @@ class DwarfDebug : public AsmPrinterHandler {
   MCSymbol *DwarfInfoSectionSym, *DwarfAbbrevSectionSym;
   MCSymbol *DwarfStrSectionSym, *TextSectionSym, *DwarfDebugRangeSectionSym;
   MCSymbol *DwarfDebugLocSectionSym, *DwarfLineSectionSym, *DwarfAddrSectionSym;
-  MCSymbol *FunctionBeginSym, *FunctionEndSym;
   MCSymbol *DwarfInfoDWOSectionSym, *DwarfAbbrevDWOSectionSym;
   MCSymbol *DwarfTypesDWOSectionSym;
   MCSymbol *DwarfStrDWOSectionSym;
@@ -290,6 +289,9 @@ class DwarfDebug : public AsmPrinterHandler {
   // text.
   bool UsedNonDefaultText;
 
+  // Whether to use the GNU TLS opcode (instead of the standard opcode).
+  bool UseGNUTLSOpcode;
+
   // Version of dwarf we're emitting.
   unsigned DwarfVersion;
 
@@ -318,6 +320,7 @@ class DwarfDebug : public AsmPrinterHandler {
   // True iff there are multiple CUs in this module.
   bool SingleCU;
   bool IsDarwin;
+  bool IsPS4;
 
   AddressPool AddrPool;
 
@@ -540,6 +543,10 @@ public:
     SymSize[Sym] = Size;
   }
 
+  /// \brief Returns whether to use DW_OP_GNU_push_tls_address, instead of the
+  /// standard DW_OP_form_tls_address opcode
+  bool useGNUTLSOpcode() const { return UseGNUTLSOpcode; }
+
   // Experimental DWARF5 features.
 
   /// \brief Returns whether or not to emit tables that dwarf consumers can
@@ -619,8 +626,6 @@ public:
   void addAccelType(StringRef Name, const DIE &Die, char Flags);
 
   const MachineFunction *getCurrentFunction() const { return CurFn; }
-  const MCSymbol *getFunctionBeginSym() const { return FunctionBeginSym; }
-  const MCSymbol *getFunctionEndSym() const { return FunctionEndSym; }
 
   iterator_range<ImportedEntityMap::const_iterator>
   findImportedEntitiesForScope(const MDNode *Scope) const {

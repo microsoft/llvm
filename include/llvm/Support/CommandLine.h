@@ -757,7 +757,8 @@ public:
   typedef OptionValue<DataType> OptVal;
 
 protected:
-  ~basic_parser() = default;
+  // Workaround Clang PR22793
+  ~basic_parser() {}
 };
 
 //--------------------------------------------------

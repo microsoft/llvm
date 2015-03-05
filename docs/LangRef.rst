@@ -162,7 +162,7 @@ symbol table entries. Here is an example of the "hello world" module:
     ; Definition of main function
     define i32 @main() {   ; i32()*
       ; Convert [13 x i8]* to i8  *...
-      %cast210 = getelementptr [13 x i8]* @.str, i64 0, i64 0
+      %cast210 = getelementptr [13 x i8], [13 x i8]* @.str, i64 0, i64 0
 
       ; Call puts function to write out the string to stdout.
       call i32 @puts(i8* %cast210)
@@ -1057,9 +1057,9 @@ The prefix data can be referenced as,
 
 .. code-block:: llvm
 
-    %0 = bitcast *void () @f to *i32
-    %a = getelementptr inbounds *i32 %0, i32 -1
-    %b = load i32* %a
+    %0 = bitcast void* () @f to i32*
+    %a = getelementptr inbounds i32, i32* %0, i32 -1
+    %b = load i32, i32* %a
 
 Prefix data is laid out as if it were an initializer for a global variable
 of the prefix data's type.  The function will be placed such that the
@@ -1584,7 +1584,7 @@ A pointer value is *based* on another pointer value according to the
 following rules:
 
 -  A pointer value formed from a ``getelementptr`` operation is *based*
-   on the first operand of the ``getelementptr``.
+   on the first value operand of the ``getelementptr``.
 -  The result value of a ``bitcast`` is *based* on the operand of the
    ``bitcast``.
 -  A pointer value formed by an ``inttoptr`` is *based* on all pointer
@@ -2567,18 +2567,18 @@ Here are some examples:
     entry:
       %poison = sub nuw i32 0, 1           ; Results in a poison value.
       %still_poison = and i32 %poison, 0   ; 0, but also poison.
-      %poison_yet_again = getelementptr i32* @h, i32 %still_poison
+      %poison_yet_again = getelementptr i32, i32* @h, i32 %still_poison
       store i32 0, i32* %poison_yet_again  ; memory at @h[0] is poisoned
 
       store i32 %poison, i32* @g           ; Poison value stored to memory.
-      %poison2 = load i32* @g              ; Poison value loaded back from memory.
+      %poison2 = load i32, i32* @g         ; Poison value loaded back from memory.
 
       store volatile i32 %poison, i32* @g  ; External observation; undefined behavior.
 
       %narrowaddr = bitcast i32* @g to i16*
       %wideaddr = bitcast i32* @g to i64*
-      %poison3 = load i16* %narrowaddr     ; Returns a poison value.
-      %poison4 = load i64* %wideaddr       ; Returns a poison value.
+      %poison3 = load i16, i16* %narrowaddr ; Returns a poison value.
+      %poison4 = load i64, i64* %wideaddr  ; Returns a poison value.
 
       %cmp = icmp slt i32 %poison, 0       ; Returns a poison value.
       br i1 %cmp, label %true, label %end  ; Branch to either destination.
@@ -3310,18 +3310,18 @@ For example,
     !7 = !{!3}
 
     ; These two instructions don't alias:
-    %0 = load float* %c, align 4, !alias.scope !5
+    %0 = load float, float* %c, align 4, !alias.scope !5
     store float %0, float* %arrayidx.i, align 4, !noalias !5
 
     ; These two instructions also don't alias (for domain !1, the set of scopes
     ; in the !alias.scope equals that in the !noalias list):
-    %2 = load float* %c, align 4, !alias.scope !5
+    %2 = load float, float* %c, align 4, !alias.scope !5
     store float %2, float* %arrayidx.i2, align 4, !noalias !6
 
     ; These two instructions don't alias (for domain !0, the set of scopes in
     ; the !noalias list is not a superset of, or equal to, the scopes in the
     ; !alias.scope list):
-    %2 = load float* %c, align 4, !alias.scope !6
+    %2 = load float, float* %c, align 4, !alias.scope !6
     store float %0, float* %arrayidx.i, align 4, !noalias !7
 
 '``fpmath``' Metadata
@@ -3372,8 +3372,8 @@ Examples:
 
 .. code-block:: llvm
 
-      %a = load i8* %x, align 1, !range !0 ; Can only be 0 or 1
-      %b = load i8* %y, align 1, !range !1 ; Can only be 255 (-1), 0 or 1
+      %a = load i8, i8* %x, align 1, !range !0 ; Can only be 0 or 1
+      %b = load i8, i8* %y, align 1, !range !1 ; Can only be 255 (-1), 0 or 1
       %c = call i8 @foo(),       !range !2 ; Can only be 0, 1, 3, 4 or 5
       %d = invoke i8 @bar() to label %cont
              unwind label %lpad, !range !3 ; Can only be -2, -1, 3, 4 or 5
@@ -3561,7 +3561,7 @@ metadata types that refer to the same loop identifier metadata.
 
    for.body:
      ...
-     %val0 = load i32* %arrayidx, !llvm.mem.parallel_loop_access !0
+     %val0 = load i32, i32* %arrayidx, !llvm.mem.parallel_loop_access !0
      ...
      store i32 %val0, i32* %arrayidx1, !llvm.mem.parallel_loop_access !0
      ...
@@ -3579,13 +3579,13 @@ the loop identifier metadata node directly:
 
    outer.for.body:
      ...
-     %val1 = load i32* %arrayidx3, !llvm.mem.parallel_loop_access !2
+     %val1 = load i32, i32* %arrayidx3, !llvm.mem.parallel_loop_access !2
      ...
      br label %inner.for.body
 
    inner.for.body:
      ...
-     %val0 = load i32* %arrayidx1, !llvm.mem.parallel_loop_access !0
+     %val0 = load i32, i32* %arrayidx1, !llvm.mem.parallel_loop_access !0
      ...
      store i32 %val0, i32* %arrayidx2, !llvm.mem.parallel_loop_access !0
      ...
@@ -5541,7 +5541,7 @@ Syntax:
 
 ::
 
-      <result> = load [volatile] <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !nonnull !<index>]
+      <result> = load [volatile] <ty>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !nonnull !<index>]
       <result> = load atomic [volatile] <ty>* <pointer> [singlethread] <ordering>, align <alignment>
       !<index> = !{ i32 1 }
 
@@ -5554,7 +5554,7 @@ Arguments:
 """"""""""
 
 The argument to the ``load`` instruction specifies the memory address
-from which to load. The pointer must point to a :ref:`first
+from which to load. The type specified must be a :ref:`first
 class <t_firstclass>` type. If the ``load`` is marked as ``volatile``,
 then the optimizer is not allowed to modify the number or order of
 execution of this ``load`` with other :ref:`volatile
@@ -5624,7 +5624,7 @@ Examples:
 
       %ptr = alloca i32                               ; yields i32*:ptr
       store i32 3, i32* %ptr                          ; yields void
-      %val = load i32* %ptr                           ; yields i32:val = i32 3
+      %val = load i32, i32* %ptr                      ; yields i32:val = i32 3
 
 .. _i_store:
 
@@ -5833,7 +5833,7 @@ Example:
 .. code-block:: llvm
 
     entry:
-      %orig = atomic load i32* %ptr unordered                   ; yields i32
+      %orig = atomic load i32, i32* %ptr unordered                ; yields i32
       br label %loop
 
     loop:
@@ -5930,9 +5930,9 @@ Syntax:
 
 ::
 
-      <result> = getelementptr <pty>* <ptrval>{, <ty> <idx>}*
-      <result> = getelementptr inbounds <pty>* <ptrval>{, <ty> <idx>}*
-      <result> = getelementptr <ptr vector> ptrval, <vector index type> idx
+      <result> = getelementptr <ty>, <ty>* <ptrval>{, <ty> <idx>}*
+      <result> = getelementptr inbounds <ty>, <ty>* <ptrval>{, <ty> <idx>}*
+      <result> = getelementptr <ty>, <ptr vector> <ptrval>, <vector index type> <idx>
 
 Overview:
 """""""""
@@ -5944,8 +5944,9 @@ address calculation only and does not access memory.
 Arguments:
 """"""""""
 
-The first argument is always a pointer or a vector of pointers, and
-forms the basis of the calculation. The remaining arguments are indices
+The first argument is always a type used as the basis for the calculations.
+The second argument is always a pointer or a vector of pointers, and is the
+base address to start from. The remaining arguments are indices
 that indicate which of the elements of the aggregate object are indexed.
 The interpretation of each index is dependent on the type being indexed
 into. The first index always indexes the pointer value given as the
@@ -5993,7 +5994,7 @@ The LLVM code generated by Clang is:
 
     define i32* @foo(%struct.ST* %s) nounwind uwtable readnone optsize ssp {
     entry:
-      %arrayidx = getelementptr inbounds %struct.ST* %s, i64 1, i32 2, i32 1, i64 5, i64 13
+      %arrayidx = getelementptr inbounds %struct.ST, %struct.ST* %s, i64 1, i32 2, i32 1, i64 5, i64 13
       ret i32* %arrayidx
     }
 
@@ -6018,11 +6019,11 @@ for the given testcase is equivalent to:
 .. code-block:: llvm
 
     define i32* @foo(%struct.ST* %s) {
-      %t1 = getelementptr %struct.ST* %s, i32 1                 ; yields %struct.ST*:%t1
-      %t2 = getelementptr %struct.ST* %t1, i32 0, i32 2         ; yields %struct.RT*:%t2
-      %t3 = getelementptr %struct.RT* %t2, i32 0, i32 1         ; yields [10 x [20 x i32]]*:%t3
-      %t4 = getelementptr [10 x [20 x i32]]* %t3, i32 0, i32 5  ; yields [20 x i32]*:%t4
-      %t5 = getelementptr [20 x i32]* %t4, i32 0, i32 13        ; yields i32*:%t5
+      %t1 = getelementptr %struct.ST, %struct.ST* %s, i32 1                        ; yields %struct.ST*:%t1
+      %t2 = getelementptr %struct.ST, %struct.ST* %t1, i32 0, i32 2                ; yields %struct.RT*:%t2
+      %t3 = getelementptr %struct.RT, %struct.RT* %t2, i32 0, i32 1                ; yields [10 x [20 x i32]]*:%t3
+      %t4 = getelementptr [10 x [20 x i32]], [10 x [20 x i32]]* %t3, i32 0, i32 5  ; yields [20 x i32]*:%t4
+      %t5 = getelementptr [20 x i32], [20 x i32]* %t4, i32 0, i32 13               ; yields i32*:%t5
       ret i32* %t5
     }
 
@@ -6056,20 +6057,20 @@ Example:
 .. code-block:: llvm
 
         ; yields [12 x i8]*:aptr
-        %aptr = getelementptr {i32, [12 x i8]}* %saptr, i64 0, i32 1
+        %aptr = getelementptr {i32, [12 x i8]}, {i32, [12 x i8]}* %saptr, i64 0, i32 1
         ; yields i8*:vptr
-        %vptr = getelementptr {i32, <2 x i8>}* %svptr, i64 0, i32 1, i32 1
+        %vptr = getelementptr {i32, <2 x i8>}, {i32, <2 x i8>}* %svptr, i64 0, i32 1, i32 1
         ; yields i8*:eptr
-        %eptr = getelementptr [12 x i8]* %aptr, i64 0, i32 1
+        %eptr = getelementptr [12 x i8], [12 x i8]* %aptr, i64 0, i32 1
         ; yields i32*:iptr
-        %iptr = getelementptr [10 x i32]* @arr, i16 0, i16 0
+        %iptr = getelementptr [10 x i32], [10 x i32]* @arr, i16 0, i16 0
 
 In cases where the pointer argument is a vector of pointers, each index
 must be a vector with the same number of elements. For example:
 
 .. code-block:: llvm
 
-     %A = getelementptr <4 x i8*> %ptrs, <4 x i64> %offsets,
+     %A = getelementptr i8, <4 x i8*> %ptrs, <4 x i64> %offsets,
 
 Conversion Operations
 ---------------------
@@ -9054,6 +9055,8 @@ then the result is the size in bits of the type of ``src`` if
 ``is_zero_undef == 0`` and ``undef`` otherwise. For example,
 ``llvm.cttz(2) = 1``.
 
+.. _int_overflow:
+
 Arithmetic with Overflow Intrinsics
 -----------------------------------
 
@@ -9505,7 +9508,7 @@ Examples:
 
 .. code-block:: llvm
 
-      %a = load i16* @x, align 2
+      %a = load i16, i16* @x, align 2
       %res = call float @llvm.convert.from.fp16(i16 %a)
 
 .. _dbg_intrinsics:
@@ -9546,7 +9549,7 @@ It can be created as follows:
 .. code-block:: llvm
 
       %tramp = alloca [10 x i8], align 4 ; size and alignment only correct for X86
-      %tramp1 = getelementptr [10 x i8]* %tramp, i32 0, i32 0
+      %tramp1 = getelementptr [10 x i8], [10 x i8]* %tramp, i32 0, i32 0
       call i8* @llvm.init.trampoline(i8* %tramp1, i8* bitcast (i32 (i8*, i32, i32)* @f to i8*), i8* %nval)
       %p = call i8* @llvm.adjust.trampoline(i8* %tramp1)
       %fp = bitcast i8* %p to i32 (i32, i32)*
@@ -9677,7 +9680,7 @@ The result of this operation is equivalent to a regular vector load instruction 
        %res = call <16 x float> @llvm.masked.load.v16f32 (<16 x float>* %ptr, i32 4, <16 x i1>%mask, <16 x float> %passthru)
        
        ;; The result of the two following instructions is identical aside from potential memory access exception
-       %loadlal = load <16 x float>* %ptr, align 4
+       %loadlal = load <16 x float>, <16 x float>* %ptr, align 4
        %res = select <16 x i1> %mask, <16 x float> %loadlal, <16 x float> %passthru
 
 .. _int_mstore:
@@ -9716,7 +9719,7 @@ The result of this operation is equivalent to a load-modify-store sequence. Howe
        call void @llvm.masked.store.v16f32(<16 x float> %value, <16 x float>* %ptr, i32 4,  <16 x i1> %mask)
        
        ;; The result of the following instructions is identical aside from potential data races and memory access exceptions
-       %oldval = load <16 x float>* %ptr, align 4
+       %oldval = load <16 x float>, <16 x float>* %ptr, align 4
        %res = select <16 x i1> %mask, <16 x float> %value, <16 x float> %oldval
        store <16 x float> %res, <16 x float>* %ptr, align 4
 

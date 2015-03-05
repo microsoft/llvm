@@ -217,10 +217,9 @@ namespace llvm {
   /// input dependences are unordered.
   class FullDependence : public Dependence {
   public:
-    FullDependence(Instruction *Src,
-                   Instruction *Dst,
-                   bool LoopIndependent,
+    FullDependence(Instruction *Src, Instruction *Dst, bool LoopIndependent,
                    unsigned Levels);
+    ~FullDependence() { delete[] DV; }
 
     /// isLoopIndependent - Returns true if this is a loop-independent
     /// dependence.
@@ -263,11 +262,12 @@ namespace llvm {
     /// if no subscript in the source or destination mention the induction
     /// variable associated with the loop at this level.
     bool isScalar(unsigned Level) const override;
+
   private:
     unsigned short Levels;
     bool LoopIndependent;
     bool Consistent; // Init to true, then refine.
-    std::unique_ptr<DVEntry[]> DV;
+    DVEntry *DV;
     friend class DependenceAnalysis;
   };
 
