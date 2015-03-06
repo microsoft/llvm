@@ -1068,8 +1068,7 @@ void PPCLinuxAsmPrinter::EmitFunctionEntryLabel() {
   OutStreamer.SwitchSection(Section);
   OutStreamer.EmitLabel(CurrentFnSym);
   OutStreamer.EmitValueToAlignment(8);
-  MCSymbol *Symbol1 = 
-    OutContext.GetOrCreateSymbol(".L." + Twine(CurrentFnSym->getName()));
+  MCSymbol *Symbol1 = CurrentFnSymForSize;
   // Generates a R_PPC64_ADDR64 (from FK_DATA_8) relocation for the function
   // entry point.
   OutStreamer.EmitValue(MCSymbolRefExpr::Create(Symbol1, OutContext),
@@ -1082,11 +1081,6 @@ void PPCLinuxAsmPrinter::EmitFunctionEntryLabel() {
   // Emit a null environment pointer.
   OutStreamer.EmitIntValue(0, 8 /* size */);
   OutStreamer.SwitchSection(Current.first, Current.second);
-
-  MCSymbol *RealFnSym = OutContext.GetOrCreateSymbol(
-                          ".L." + Twine(CurrentFnSym->getName()));
-  OutStreamer.EmitLabel(RealFnSym);
-  CurrentFnSymForSize = RealFnSym;
 }
 
 

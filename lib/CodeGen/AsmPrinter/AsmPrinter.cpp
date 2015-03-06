@@ -556,9 +556,7 @@ void AsmPrinter::EmitFunctionHeader() {
     OutStreamer.EmitLabel(DeadBlockSyms[i]);
   }
 
-  if (!MMI->getLandingPads().empty() || MMI->hasDebugInfo()) {
-    CurrentFnBegin = createTempSymbol("func_begin", getFunctionNumber());
-
+  if (CurrentFnBegin) {
     if (MAI->useAssignmentForEHBegin()) {
       MCSymbol *CurPos = OutContext.CreateTempSymbol();
       OutStreamer.EmitLabel(CurPos);
@@ -1123,6 +1121,14 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   // Get the function symbol.
   CurrentFnSym = getSymbol(MF.getFunction());
   CurrentFnSymForSize = CurrentFnSym;
+  CurrentFnBegin = nullptr;
+  bool NeedsLocalForSize = MAI->needsLocalForSize();
+  if (!MMI->getLandingPads().empty() || MMI->hasDebugInfo() ||
+      NeedsLocalForSize) {
+    CurrentFnBegin = createTempSymbol("func_begin", getFunctionNumber());
+    if (NeedsLocalForSize)
+      CurrentFnSymForSize = CurrentFnBegin;
+  }
 
   if (isVerbose())
     LI = &getAnalysis<MachineLoopInfo>();
