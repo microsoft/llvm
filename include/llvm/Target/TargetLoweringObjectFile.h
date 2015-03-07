@@ -29,26 +29,29 @@ namespace llvm {
   class MCSymbol;
   class MCSymbolRefExpr;
   class MCStreamer;
+  class MCValue;
   class ConstantExpr;
   class GlobalValue;
   class TargetMachine;
 
 class TargetLoweringObjectFile : public MCObjectFileInfo {
   MCContext *Ctx;
-  const DataLayout *DL;
 
   TargetLoweringObjectFile(
     const TargetLoweringObjectFile&) = delete;
   void operator=(const TargetLoweringObjectFile&) = delete;
 
 protected:
+  const DataLayout *DL;
   bool SupportIndirectSymViaGOTPCRel;
+  bool SupportGOTPCRelWithOffset;
 
 public:
   MCContext &getContext() const { return *Ctx; }
 
   TargetLoweringObjectFile() : MCObjectFileInfo(), Ctx(nullptr), DL(nullptr),
-                               SupportIndirectSymViaGOTPCRel(false) {}
+                               SupportIndirectSymViaGOTPCRel(false),
+                               SupportGOTPCRelWithOffset(true) {}
 
   virtual ~TargetLoweringObjectFile();
 
@@ -168,9 +171,18 @@ public:
     return SupportIndirectSymViaGOTPCRel;
   }
 
+  /// \brief Target GOT "PC"-relative relocation supports encoding an additional
+  /// binary expression with an offset?
+  bool supportGOTPCRelWithOffset() const {
+    return SupportGOTPCRelWithOffset;
+  }
+
   /// \brief Get the target specific PC relative GOT entry relocation
   virtual const MCExpr *getIndirectSymViaGOTPCRel(const MCSymbol *Sym,
-                                                  int64_t Offset) const {
+                                                  const MCValue &MV,
+                                                  int64_t Offset,
+                                                  MachineModuleInfo *MMI,
+                                                  MCStreamer &Streamer) const {
     return nullptr;
   }
 
