@@ -870,35 +870,16 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
 
   // MMX-sized vectors (other than x86mmx) are expected to be expanded
   // into smaller operations.
-  setOperationAction(ISD::MULHS,              MVT::v8i8,  Expand);
-  setOperationAction(ISD::MULHS,              MVT::v4i16, Expand);
-  setOperationAction(ISD::MULHS,              MVT::v2i32, Expand);
-  setOperationAction(ISD::MULHS,              MVT::v1i64, Expand);
-  setOperationAction(ISD::AND,                MVT::v8i8,  Expand);
-  setOperationAction(ISD::AND,                MVT::v4i16, Expand);
-  setOperationAction(ISD::AND,                MVT::v2i32, Expand);
-  setOperationAction(ISD::AND,                MVT::v1i64, Expand);
-  setOperationAction(ISD::OR,                 MVT::v8i8,  Expand);
-  setOperationAction(ISD::OR,                 MVT::v4i16, Expand);
-  setOperationAction(ISD::OR,                 MVT::v2i32, Expand);
-  setOperationAction(ISD::OR,                 MVT::v1i64, Expand);
-  setOperationAction(ISD::XOR,                MVT::v8i8,  Expand);
-  setOperationAction(ISD::XOR,                MVT::v4i16, Expand);
-  setOperationAction(ISD::XOR,                MVT::v2i32, Expand);
-  setOperationAction(ISD::XOR,                MVT::v1i64, Expand);
-  setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v8i8,  Expand);
-  setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v4i16, Expand);
-  setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v2i32, Expand);
-  setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v1i64, Expand);
+  for (MVT MMXTy : {MVT::v8i8, MVT::v4i16, MVT::v2i32, MVT::v1i64}) {
+    setOperationAction(ISD::MULHS,              MMXTy,      Expand);
+    setOperationAction(ISD::AND,                MMXTy,      Expand);
+    setOperationAction(ISD::OR,                 MMXTy,      Expand);
+    setOperationAction(ISD::XOR,                MMXTy,      Expand);
+    setOperationAction(ISD::SCALAR_TO_VECTOR,   MMXTy,      Expand);
+    setOperationAction(ISD::SELECT,             MMXTy,      Expand);
+    setOperationAction(ISD::BITCAST,            MMXTy,      Expand);
+  }
   setOperationAction(ISD::INSERT_VECTOR_ELT,  MVT::v1i64, Expand);
-  setOperationAction(ISD::SELECT,             MVT::v8i8,  Expand);
-  setOperationAction(ISD::SELECT,             MVT::v4i16, Expand);
-  setOperationAction(ISD::SELECT,             MVT::v2i32, Expand);
-  setOperationAction(ISD::SELECT,             MVT::v1i64, Expand);
-  setOperationAction(ISD::BITCAST,            MVT::v8i8,  Expand);
-  setOperationAction(ISD::BITCAST,            MVT::v4i16, Expand);
-  setOperationAction(ISD::BITCAST,            MVT::v2i32, Expand);
-  setOperationAction(ISD::BITCAST,            MVT::v1i64, Expand);
 
   if (!TM.Options.UseSoftFloat && Subtarget->hasSSE1()) {
     addRegisterClass(MVT::v4f32, &X86::VR128RegClass);
@@ -1064,27 +1045,13 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
   }
 
   if (!TM.Options.UseSoftFloat && Subtarget->hasSSE41()) {
-    setOperationAction(ISD::FFLOOR,             MVT::f32,   Legal);
-    setOperationAction(ISD::FCEIL,              MVT::f32,   Legal);
-    setOperationAction(ISD::FTRUNC,             MVT::f32,   Legal);
-    setOperationAction(ISD::FRINT,              MVT::f32,   Legal);
-    setOperationAction(ISD::FNEARBYINT,         MVT::f32,   Legal);
-    setOperationAction(ISD::FFLOOR,             MVT::f64,   Legal);
-    setOperationAction(ISD::FCEIL,              MVT::f64,   Legal);
-    setOperationAction(ISD::FTRUNC,             MVT::f64,   Legal);
-    setOperationAction(ISD::FRINT,              MVT::f64,   Legal);
-    setOperationAction(ISD::FNEARBYINT,         MVT::f64,   Legal);
-
-    setOperationAction(ISD::FFLOOR,             MVT::v4f32, Legal);
-    setOperationAction(ISD::FCEIL,              MVT::v4f32, Legal);
-    setOperationAction(ISD::FTRUNC,             MVT::v4f32, Legal);
-    setOperationAction(ISD::FRINT,              MVT::v4f32, Legal);
-    setOperationAction(ISD::FNEARBYINT,         MVT::v4f32, Legal);
-    setOperationAction(ISD::FFLOOR,             MVT::v2f64, Legal);
-    setOperationAction(ISD::FCEIL,              MVT::v2f64, Legal);
-    setOperationAction(ISD::FTRUNC,             MVT::v2f64, Legal);
-    setOperationAction(ISD::FRINT,              MVT::v2f64, Legal);
-    setOperationAction(ISD::FNEARBYINT,         MVT::v2f64, Legal);
+    for (MVT RoundedTy : {MVT::f32, MVT::f64, MVT::v4f32, MVT::v2f64}) {
+      setOperationAction(ISD::FFLOOR,           RoundedTy,  Legal);
+      setOperationAction(ISD::FCEIL,            RoundedTy,  Legal);
+      setOperationAction(ISD::FTRUNC,           RoundedTy,  Legal);
+      setOperationAction(ISD::FRINT,            RoundedTy,  Legal);
+      setOperationAction(ISD::FNEARBYINT,       RoundedTy,  Legal);
+    }
 
     // FIXME: Do we need to handle scalar-to-vector here?
     setOperationAction(ISD::MUL,                MVT::v4i32, Legal);
@@ -3909,21 +3876,6 @@ static bool isSequentialOrUndefInRange(ArrayRef<int> Mask,
     if (!isUndefOrEqual(Mask[i], Low))
       return false;
   return true;
-}
-
-/// CommuteVectorShuffleMask - Change values in a shuffle permute mask assuming
-/// the two vector operands have swapped position.
-static void CommuteVectorShuffleMask(SmallVectorImpl<int> &Mask,
-                                     unsigned NumElems) {
-  for (unsigned i = 0; i != NumElems; ++i) {
-    int idx = Mask[i];
-    if (idx < 0)
-      continue;
-    else if (idx < (int)NumElems)
-      Mask[i] = idx + NumElems;
-    else
-      Mask[i] = idx - NumElems;
-  }
 }
 
 /// isVEXTRACTIndex - Return true if the specified
@@ -9087,7 +9039,15 @@ static SDValue lowerV2X128VectorShuffle(SDLoc DL, MVT VT, SDValue V1,
 
   // Otherwise form a 128-bit permutation.
   // FIXME: Detect zero-vector inputs and use the VPERM2X128 to zero that half.
-  unsigned PermMask = Mask[0] / 2 | (Mask[2] / 2) << 4;
+  int MaskLO = Mask[0];
+  if (MaskLO == SM_SentinelUndef)
+    MaskLO = Mask[1] == SM_SentinelUndef ? 0 : Mask[1];
+
+  int MaskHI = Mask[2];
+  if (MaskHI == SM_SentinelUndef)
+    MaskHI = Mask[3] == SM_SentinelUndef ? 0 : Mask[3];
+
+  unsigned PermMask = MaskLO / 2 | (MaskHI / 2) << 4;
   return DAG.getNode(X86ISD::VPERM2X128, DL, VT, V1, V2,
                      DAG.getConstant(PermMask, MVT::i8));
 }
@@ -22875,7 +22835,7 @@ static bool isHorizontalBinOp(SDValue &LHS, SDValue &RHS, bool IsCommutative) {
   // If A and B occur in reverse order in RHS, then "swap" them (which means
   // rewriting the mask).
   if (A != C)
-    CommuteVectorShuffleMask(RMask, NumElts);
+    ShuffleVectorSDNode::commuteMask(RMask);
 
   // At this point LHS and RHS are equivalent to
   //   LHS = VECTOR_SHUFFLE A, B, LMask
