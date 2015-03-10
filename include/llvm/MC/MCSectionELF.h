@@ -65,16 +65,6 @@ public:
   bool ShouldOmitSectionDirective(StringRef Name, const MCAsmInfo &MAI) const;
 
   StringRef getSectionName() const { return SectionName; }
-  std::string getLabelBeginName() const override {
-    if (Group)
-      return (SectionName.str() + '_' + Group->getName() + "_begin").str();
-    return SectionName.str() + "_begin";
-  }
-  std::string getLabelEndName() const override {
-    if (Group)
-      return (SectionName.str() + '_' + Group->getName() + "_end").str();
-    return SectionName.str() + "_end";
-  }
   unsigned getType() const { return Type; }
   unsigned getFlags() const { return Flags; }
   unsigned getEntrySize() const { return EntrySize; }
@@ -84,12 +74,6 @@ public:
                             const MCExpr *Subsection) const override;
   bool UseCodeAlign() const override;
   bool isVirtualSection() const override;
-
-  /// isBaseAddressKnownZero - We know that non-allocatable sections (like
-  /// debug info) have a base of zero.
-  bool isBaseAddressKnownZero() const override {
-    return (getFlags() & ELF::SHF_ALLOC) == 0;
-  }
 
   static bool classof(const MCSection *S) {
     return S->getVariant() == SV_ELF;

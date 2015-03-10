@@ -36,11 +36,8 @@ public:
                             const MCExpr *Subsection) const override {}
 
   /// Base address of PTX sections is zero.
-  bool isBaseAddressKnownZero() const override { return true; }
   bool UseCodeAlign() const override { return false; }
   bool isVirtualSection() const override { return false; }
-  std::string getLabelBeginName() const override { return ""; }
-  std::string getLabelEndName() const override { return ""; }
 };
 
 } // end namespace llvm
