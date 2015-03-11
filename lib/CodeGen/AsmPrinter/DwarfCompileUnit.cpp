@@ -19,7 +19,7 @@ DwarfCompileUnit::DwarfCompileUnit(unsigned UID, DICompileUnit Node,
                                    AsmPrinter *A, DwarfDebug *DW,
                                    DwarfFile *DWU)
     : DwarfUnit(UID, dwarf::DW_TAG_compile_unit, Node, A, DW, DWU),
-      Skeleton(nullptr), LabelBegin(nullptr), BaseAddress(nullptr) {
+      Skeleton(nullptr), BaseAddress(nullptr) {
   insertDIE(Node, &getUnitDie());
 }
 
@@ -174,16 +174,7 @@ DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(DIGlobalVariable GV) {
     }
 
     addBlock(*VariableDIE, dwarf::DW_AT_location, Loc);
-    // Add the linkage name.
-    StringRef LinkageName = GV.getLinkageName();
-    if (!LinkageName.empty())
-      // From DWARF4: DIEs to which DW_AT_linkage_name may apply include:
-      // TAG_common_block, TAG_constant, TAG_entry_point, TAG_subprogram and
-      // TAG_variable.
-      addString(*VariableDIE,
-                DD->getDwarfVersion() >= 4 ? dwarf::DW_AT_linkage_name
-                                           : dwarf::DW_AT_MIPS_linkage_name,
-                GlobalValue::getRealLinkageName(LinkageName));
+    addLinkageName(*VariableDIE, GV.getLinkageName());
   } else if (const ConstantInt *CI =
                  dyn_cast_or_null<ConstantInt>(GV.getConstant())) {
     addConstantValue(*VariableDIE, CI, GTy);
@@ -245,7 +236,7 @@ void DwarfCompileUnit::addSectionLabel(DIE &Die, dwarf::Attribute Attribute,
     addSectionDelta(Die, Attribute, Label, Sec);
 }
 
-void DwarfCompileUnit::initStmtList(MCSymbol *DwarfLineSectionSym) {
+void DwarfCompileUnit::initStmtList() {
   // Define start line table label for each Compile Unit.
   MCSymbol *LineTableStartSym =
       Asm->OutStreamer.getDwarfLineTableSymbol(getUniqueID());
@@ -257,8 +248,9 @@ void DwarfCompileUnit::initStmtList(MCSymbol *DwarfLineSectionSym) {
   // left in the skeleton CU and so not included.
   // The line table entries are not always emitted in assembly, so it
   // is not okay to use line_table_start here.
+  const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
   addSectionLabel(UnitDie, dwarf::DW_AT_stmt_list, LineTableStartSym,
-                  DwarfLineSectionSym);
+                  TLOF.getDwarfLineSection()->getBeginSymbol());
 }
 
 void DwarfCompileUnit::applyStmtList(DIE &D) {
@@ -380,9 +372,12 @@ void DwarfCompileUnit::addSectionDelta(DIE &Die, dwarf::Attribute Attribute,
 
 void DwarfCompileUnit::addScopeRangeList(DIE &ScopeDIE,
                                          SmallVector<RangeSpan, 2> Range) {
+  const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
+
   // Emit offset in .debug_range as a relocatable label. emitDIE will handle
   // emitting it appropriately.
-  auto *RangeSectionSym = DD->getRangeSectionSym();
+  const MCSymbol *RangeSectionSym =
+      TLOF.getDwarfRangesSection()->getBeginSymbol();
 
   RangeSpanList List(
       Asm->GetTempSymbol("debug_ranges", DD->getNextRangeNumber()),
@@ -711,14 +706,14 @@ void DwarfCompileUnit::collectDeadVariables(DISubprogram SP) {
   }
 }
 
-void DwarfCompileUnit::emitHeader(const MCSymbol *ASectionSym) {
+void DwarfCompileUnit::emitHeader(bool UseOffsets) {
   // Don't bother labeling the .dwo unit, as its offset isn't used.
   if (!Skeleton) {
     LabelBegin = Asm->createTempSymbol("cu_begin", getUniqueID());
     Asm->OutStreamer.EmitLabel(LabelBegin);
   }
 
-  DwarfUnit::emitHeader(ASectionSym);
+  DwarfUnit::emitHeader(UseOffsets);
 }
 
 /// addGlobalName - Add a new global name to the compile unit.

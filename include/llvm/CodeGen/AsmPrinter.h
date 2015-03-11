@@ -16,6 +16,7 @@
 #ifndef LLVM_CODEGEN_ASMPRINTER_H
 #define LLVM_CODEGEN_ASMPRINTER_H
 
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/InlineAsm.h"
@@ -102,7 +103,7 @@ public:
   /// Map global GOT equivalent MCSymbols to GlobalVariables and keep track of
   /// its number of uses by other globals.
   typedef std::pair<const GlobalVariable *, unsigned> GOTEquivUsePair;
-  DenseMap<const MCSymbol *, GOTEquivUsePair> GlobalGOTEquivs;
+  MapVector<const MCSymbol *, GOTEquivUsePair> GlobalGOTEquivs;
 
 private:
   MCSymbol *CurrentFnBegin;
@@ -427,11 +428,7 @@ public:
   /// Emit the 4-byte offset of Label from the start of its section.  This can
   /// be done with a special directive if the target supports it (e.g. cygwin)
   /// or by emitting it as an offset from a label at the start of the section.
-  ///
-  /// SectionLabel is a temporary label emitted at the start of the section
-  /// that Label lives in.
-  void EmitSectionOffset(const MCSymbol *Label,
-                         const MCSymbol *SectionLabel) const;
+  void emitSectionOffset(const MCSymbol *Label) const;
 
   /// Get the value for DW_AT_APPLE_isa. Zero if no isa encoding specified.
   virtual unsigned getISAEncoding(const Function *) { return 0; }

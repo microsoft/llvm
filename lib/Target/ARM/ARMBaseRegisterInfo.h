@@ -124,7 +124,8 @@ public:
   getCrossCopyRegClass(const TargetRegisterClass *RC) const override;
 
   const TargetRegisterClass *
-  getLargestLegalSuperClass(const TargetRegisterClass *RC) const override;
+  getLargestLegalSuperClass(const TargetRegisterClass *RC,
+                            const MachineFunction &MF) const override;
 
   unsigned getRegPressureLimit(const TargetRegisterClass *RC,
                                MachineFunction &MF) const override;
@@ -137,8 +138,6 @@ public:
 
   void updateRegAllocHint(unsigned Reg, unsigned NewReg,
                           MachineFunction &MF) const override;
-
-  bool avoidWriteAfterWrite(const TargetRegisterClass *RC) const override;
 
   bool hasBasePointer(const MachineFunction &MF) const;
 

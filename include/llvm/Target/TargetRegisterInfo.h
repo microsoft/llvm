@@ -622,8 +622,9 @@ public:
   /// legal to use in the current sub-target and has the same spill size.
   /// The returned register class can be used to create virtual registers which
   /// means that all its registers can be copied and spilled.
-  virtual const TargetRegisterClass*
-  getLargestLegalSuperClass(const TargetRegisterClass *RC) const {
+  virtual const TargetRegisterClass *
+  getLargestLegalSuperClass(const TargetRegisterClass *RC,
+                            const MachineFunction &) const {
     /// The default implementation is very conservative and doesn't allow the
     /// register allocator to inflate register classes.
     return RC;
@@ -685,14 +686,6 @@ public:
                                      SmallVectorImpl<MCPhysReg> &Hints,
                                      const MachineFunction &MF,
                                      const VirtRegMap *VRM = nullptr) const;
-
-  /// avoidWriteAfterWrite - Return true if the register allocator should avoid
-  /// writing a register from RC in two consecutive instructions.
-  /// This can avoid pipeline stalls on certain architectures.
-  /// It does cause increased register pressure, though.
-  virtual bool avoidWriteAfterWrite(const TargetRegisterClass *RC) const {
-    return false;
-  }
 
   /// updateRegAllocHint - A callback to allow target a chance to update
   /// register allocation hints when a register is "changed" (e.g. coalesced)

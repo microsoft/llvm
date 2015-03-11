@@ -3346,9 +3346,9 @@ DependenceAnalysis::depends(Instruction *Src, Instruction *Dst,
     DEBUG(dbgs() << "    SrcPtrSCEV = " << *SrcPtrSCEV << "\n");
     DEBUG(dbgs() << "    DstPtrSCEV = " << *DstPtrSCEV << "\n");
 
-    UsefulGEP =
-      isLoopInvariant(SrcPtrSCEV, LI->getLoopFor(Src->getParent())) &&
-      isLoopInvariant(DstPtrSCEV, LI->getLoopFor(Dst->getParent()));
+    UsefulGEP = isLoopInvariant(SrcPtrSCEV, LI->getLoopFor(Src->getParent())) &&
+                isLoopInvariant(DstPtrSCEV, LI->getLoopFor(Dst->getParent())) &&
+                (SrcGEP->getNumOperands() == DstGEP->getNumOperands());
   }
   unsigned Pairs = UsefulGEP ? SrcGEP->idx_end() - SrcGEP->idx_begin() : 1;
   SmallVector<Subscript, 4> Pair(Pairs);
@@ -3651,6 +3651,8 @@ DependenceAnalysis::depends(Instruction *Src, Instruction *Dst,
       DEBUG(dbgs() << "    updating\n");
       for (int SJ = ConstrainedLevels.find_first(); SJ >= 0;
            SJ = ConstrainedLevels.find_next(SJ)) {
+        if (SJ > (int)CommonLevels)
+          break;
         updateDirection(Result.DV[SJ - 1], Constraints[SJ]);
         if (Result.DV[SJ - 1].Direction == Dependence::DVEntry::NONE)
           return nullptr;
@@ -3773,9 +3775,9 @@ const  SCEV *DependenceAnalysis::getSplitIteration(const Dependence &Dep,
       SrcGEP->getPointerOperandType() == DstGEP->getPointerOperandType()) {
     const SCEV *SrcPtrSCEV = SE->getSCEV(SrcGEP->getPointerOperand());
     const SCEV *DstPtrSCEV = SE->getSCEV(DstGEP->getPointerOperand());
-    UsefulGEP =
-      isLoopInvariant(SrcPtrSCEV, LI->getLoopFor(Src->getParent())) &&
-      isLoopInvariant(DstPtrSCEV, LI->getLoopFor(Dst->getParent()));
+    UsefulGEP = isLoopInvariant(SrcPtrSCEV, LI->getLoopFor(Src->getParent())) &&
+                isLoopInvariant(DstPtrSCEV, LI->getLoopFor(Dst->getParent())) &&
+                (SrcGEP->getNumOperands() == DstGEP->getNumOperands());
   }
   unsigned Pairs = UsefulGEP ? SrcGEP->idx_end() - SrcGEP->idx_begin() : 1;
   SmallVector<Subscript, 4> Pair(Pairs);

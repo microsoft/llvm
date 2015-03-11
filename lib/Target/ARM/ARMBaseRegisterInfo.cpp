@@ -150,9 +150,9 @@ getReservedRegs(const MachineFunction &MF) const {
   return Reserved;
 }
 
-const TargetRegisterClass*
-ARMBaseRegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC)
-                                                                         const {
+const TargetRegisterClass *
+ARMBaseRegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
+                                               const MachineFunction &) const {
   const TargetRegisterClass *Super = RC;
   TargetRegisterClass::sc_iterator I = RC->getSuperClasses();
   do {
@@ -280,29 +280,6 @@ ARMBaseRegisterInfo::updateRegAllocHint(unsigned Reg, unsigned NewReg,
     if (Hint.second == Reg)
       // Make sure the pair has not already divorced.
       MRI->setRegAllocationHint(OtherReg, Hint.first, NewReg);
-  }
-}
-
-bool
-ARMBaseRegisterInfo::avoidWriteAfterWrite(const TargetRegisterClass *RC) const {
-  // CortexA9 has a Write-after-write hazard for NEON registers.
-  if (!STI.isLikeA9())
-    return false;
-
-  switch (RC->getID()) {
-  case ARM::DPRRegClassID:
-  case ARM::DPR_8RegClassID:
-  case ARM::DPR_VFP2RegClassID:
-  case ARM::QPRRegClassID:
-  case ARM::QPR_8RegClassID:
-  case ARM::QPR_VFP2RegClassID:
-  case ARM::SPRRegClassID:
-  case ARM::SPR_8RegClassID:
-    // Avoid reusing S, D, and Q registers.
-    // Don't increase register pressure for QQ and QQQQ.
-    return true;
-  default:
-    return false;
   }
 }
 

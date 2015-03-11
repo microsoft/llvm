@@ -1483,13 +1483,17 @@ defm V_INTERP_MOV_F32 : VINTRP_m <
 // VOP2 Instructions
 //===----------------------------------------------------------------------===//
 
-defm V_CNDMASK_B32_e64 : VOP3_m_nomods <vop3<0x100>, (outs VGPR_32:$dst),
-  (ins VSrc_32:$src0, VSrc_32:$src1, SSrc_64:$src2),
-  "v_cndmask_b32_e64 $dst, $src0, $src1, $src2",
-  [(set i32:$dst, (select i1:$src2, i32:$src1, i32:$src0))],
-  "v_cndmask_b32_e64", 3
->;
+multiclass V_CNDMASK <vop2 op, string name> {
+  defm _e32 : VOP2_m <
+      op, VOP_CNDMASK.Outs, VOP_CNDMASK.Ins32, VOP_CNDMASK.Asm32, [],
+      name, name>;
 
+  defm _e64  : VOP3_m <
+      op, VOP_CNDMASK.Outs, VOP_CNDMASK.Ins64,
+      name#"_e64"#!cast<string>(VOP_CNDMASK.Asm64), [], name, 3>;
+}
+
+defm V_CNDMASK_B32 : V_CNDMASK<vop2<0x0>, "v_cndmask_b32">;
 
 let isCommutable = 1 in {
 defm V_ADD_F32 : VOP2Inst <vop2<0x3, 0x1>, "v_add_f32",
@@ -2114,7 +2118,7 @@ def : Pat <
 /* int_SI_vs_load_input */
 def : Pat<
   (SIload_input v4i32:$tlst, imm:$attr_offset, i32:$buf_idx_vgpr),
-  (BUFFER_LOAD_FORMAT_XYZW_IDXEN $tlst, $buf_idx_vgpr, 0, imm:$attr_offset, 0, 0, 0)
+  (BUFFER_LOAD_FORMAT_XYZW_IDXEN $buf_idx_vgpr, $tlst, 0, imm:$attr_offset, 0, 0, 0)
 >;
 
 /* int_SI_export */
@@ -2259,6 +2263,11 @@ def : RsqPat<V_RSQ_F64_e32, f64>;
 def : Pat <
   (i32 (add (i32 (ctpop i32:$popcnt)), i32:$val)),
   (V_BCNT_U32_B32_e64 $popcnt, $val)
+>;
+
+def : Pat <
+  (i32 (select i1:$src0, i32:$src1, i32:$src2)),
+  (V_CNDMASK_B32_e64 $src2, $src1, $src0)
 >;
 
 /********** ======================= **********/
@@ -2803,7 +2812,7 @@ def : Ext32Pat <anyext>;
 // Offset in an 32Bit VGPR
 def : Pat <
   (SIload_constant v4i32:$sbase, i32:$voff),
-  (BUFFER_LOAD_DWORD_OFFEN $sbase, $voff, 0, 0, 0, 0, 0)
+  (BUFFER_LOAD_DWORD_OFFEN $voff, $sbase, 0, 0, 0, 0, 0)
 >;
 
 // The multiplication scales from [0,1] to the unsigned integer range
@@ -2965,7 +2974,7 @@ multiclass MUBUFLoad_Pattern <MUBUF Instr_ADDR64, ValueType vt,
   def : Pat <
      (vt (constant_ld (MUBUFAddr64 v4i32:$srsrc, i64:$vaddr, i32:$soffset,
                                    i16:$offset, i1:$glc, i1:$slc, i1:$tfe))),
-     (Instr_ADDR64 $srsrc, $vaddr, $soffset, $offset, $glc, $slc, $tfe)
+     (Instr_ADDR64 $vaddr, $srsrc, $soffset, $offset, $glc, $slc, $tfe)
   >;
 }
 
@@ -2982,7 +2991,7 @@ defm : MUBUFLoad_Pattern <BUFFER_LOAD_DWORDX4_ADDR64, v4i32, constant_load>;
 class MUBUFScratchLoadPat <MUBUF Instr, ValueType vt, PatFrag ld> : Pat <
   (vt (ld (MUBUFScratch v4i32:$srsrc, i32:$vaddr,
                         i32:$soffset, u16imm:$offset))),
-  (Instr $srsrc, $vaddr, $soffset, $offset, 0, 0, 0)
+  (Instr $vaddr, $srsrc, $soffset, $offset, 0, 0, 0)
 >;
 
 def : MUBUFScratchLoadPat <BUFFER_LOAD_SBYTE_OFFEN, i32, sextloadi8_private>;
@@ -3009,7 +3018,7 @@ multiclass MUBUF_Load_Dword <ValueType vt, MUBUF offset, MUBUF offen, MUBUF idxe
     (vt (int_SI_buffer_load_dword v4i32:$rsrc, i32:$vaddr, i32:$soffset,
                                   imm:$offset, 1, 0, imm:$glc, imm:$slc,
                                   imm:$tfe)),
-    (offen $rsrc, $vaddr, $soffset, (as_i16imm $offset), (as_i1imm $glc), (as_i1imm $slc),
+    (offen $vaddr, $rsrc, $soffset, (as_i16imm $offset), (as_i1imm $glc), (as_i1imm $slc),
            (as_i1imm $tfe))
   >;
 
@@ -3017,7 +3026,7 @@ multiclass MUBUF_Load_Dword <ValueType vt, MUBUF offset, MUBUF offen, MUBUF idxe
     (vt (int_SI_buffer_load_dword v4i32:$rsrc, i32:$vaddr, i32:$soffset,
                                   imm:$offset, 0, 1, imm:$glc, imm:$slc,
                                   imm:$tfe)),
-    (idxen $rsrc, $vaddr, $soffset, (as_i16imm $offset), (as_i1imm $glc),
+    (idxen $vaddr, $rsrc, $soffset, (as_i16imm $offset), (as_i1imm $glc),
            (as_i1imm $slc), (as_i1imm $tfe))
   >;
 
@@ -3025,7 +3034,7 @@ multiclass MUBUF_Load_Dword <ValueType vt, MUBUF offset, MUBUF offen, MUBUF idxe
     (vt (int_SI_buffer_load_dword v4i32:$rsrc, v2i32:$vaddr, i32:$soffset,
                                   imm:$offset, 1, 1, imm:$glc, imm:$slc,
                                   imm:$tfe)),
-    (bothen $rsrc, $vaddr, $soffset, (as_i16imm $offset), (as_i1imm $glc), (as_i1imm $slc),
+    (bothen $vaddr, $rsrc, $soffset, (as_i16imm $offset), (as_i1imm $glc), (as_i1imm $slc),
             (as_i1imm $tfe))
   >;
 }
@@ -3040,7 +3049,7 @@ defm : MUBUF_Load_Dword <v4i32, BUFFER_LOAD_DWORDX4_OFFSET, BUFFER_LOAD_DWORDX4_
 class MUBUFScratchStorePat <MUBUF Instr, ValueType vt, PatFrag st> : Pat <
   (st vt:$value, (MUBUFScratch v4i32:$srsrc, i32:$vaddr, i32:$soffset,
                                u16imm:$offset)),
-  (Instr $value, $srsrc, $vaddr, $soffset, $offset, 0, 0, 0)
+  (Instr $value, $vaddr, $srsrc, $soffset, $offset, 0, 0, 0)
 >;
 
 def : MUBUFScratchStorePat <BUFFER_STORE_BYTE_OFFEN, i32, truncstorei8_private>;

@@ -11,6 +11,25 @@
 //
 //===----------------------------------------------------------------------===//
 
+def DuplexIClass0:  InstDuplex < 0 >;
+def DuplexIClass1:  InstDuplex < 1 >;
+def DuplexIClass2:  InstDuplex < 2 >;
+let isExtendable = 1 in {
+  def DuplexIClass3:  InstDuplex < 3 >;
+  def DuplexIClass4:  InstDuplex < 4 >;
+  def DuplexIClass5:  InstDuplex < 5 >;
+  def DuplexIClass6:  InstDuplex < 6 >;
+  def DuplexIClass7:  InstDuplex < 7 >;
+}
+def DuplexIClass8:  InstDuplex < 8 >;
+def DuplexIClass9:  InstDuplex < 9 >;
+def DuplexIClassA:  InstDuplex < 0xA >;
+def DuplexIClassB:  InstDuplex < 0xB >;
+def DuplexIClassC:  InstDuplex < 0xC >;
+def DuplexIClassD:  InstDuplex < 0xD >;
+def DuplexIClassE:  InstDuplex < 0xE >;
+def DuplexIClassF:  InstDuplex < 0xF >;
+
 def addrga: PatLeaf<(i32 AddrGA:$Addr)>;
 def addrgp: PatLeaf<(i32 AddrGP:$Addr)>;
 
@@ -295,16 +314,15 @@ let opExtendable = 1 in
 def A4_combineir : T_Combine1<0b01, (ins s8Ext:$s8, IntRegs:$Rs),
                                     "$Rdd = combine(#$s8, $Rs)">;
 
-def HexagonWrapperCombineRI_V4 :
-  SDNode<"HexagonISD::WrapperCombineRI_V4", SDTHexagonI64I32I32>;
-def HexagonWrapperCombineIR_V4 :
-  SDNode<"HexagonISD::WrapperCombineIR_V4", SDTHexagonI64I32I32>;
+// The complexity of the combines involving immediates should be greater
+// than the complexity of the combine with two registers.
+let AddedComplexity = 50 in {
+def: Pat<(HexagonCOMBINE IntRegs:$r, s8ExtPred:$i),
+         (A4_combineri IntRegs:$r, s8ExtPred:$i)>;
 
-def : Pat <(HexagonWrapperCombineRI_V4 IntRegs:$r, s8ExtPred:$i),
-           (A4_combineri IntRegs:$r, s8ExtPred:$i)>;
-
-def : Pat <(HexagonWrapperCombineIR_V4 s8ExtPred:$i, IntRegs:$r),
-           (A4_combineir s8ExtPred:$i, IntRegs:$r)>;
+def: Pat<(HexagonCOMBINE s8ExtPred:$i, IntRegs:$r),
+         (A4_combineir s8ExtPred:$i, IntRegs:$r)>;
+}
 
 // A4_combineii: Set two small immediates.
 let hasSideEffects = 0, isExtendable = 1, opExtentBits = 6, opExtendable = 2 in
@@ -349,6 +367,8 @@ multiclass Loadxm_pat<PatFrag Load, ValueType VT, PatFrag ValueMod,
                       PatLeaf ImmPred, InstHexagon MI> {
   def: Pat<(VT (Load AddrFI:$fi)),
            (VT (ValueMod (MI AddrFI:$fi, 0)))>;
+  def: Pat<(VT (Load (add AddrFI:$fi, ImmPred:$Off))),
+           (VT (ValueMod (MI AddrFI:$fi, imm:$Off)))>;
   def: Pat<(VT (Load (add IntRegs:$Rs, ImmPred:$Off))),
            (VT (ValueMod (MI IntRegs:$Rs, imm:$Off)))>;
   def: Pat<(VT (Load (i32 IntRegs:$Rs))),
@@ -1801,6 +1821,49 @@ def: LogLogNot_pat<or,  and, C4_or_andn>;
 def: LogLogNot_pat<or,  or,  C4_or_orn>;
 
 //===----------------------------------------------------------------------===//
+// PIC: Support for PIC compilations. The patterns and SD nodes defined
+// below are needed to support code generation for PIC
+//===----------------------------------------------------------------------===//
+
+def SDT_HexagonPICAdd
+  : SDTypeProfile<1, 1, [SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+def SDT_HexagonGOTAdd
+  : SDTypeProfile<1, 2, [SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+
+def SDT_HexagonGOTAddInternal   : SDTypeProfile<1, 1, [SDTCisVT<0, i32>]>;
+def SDT_HexagonGOTAddInternalJT : SDTypeProfile<1, 1, [SDTCisVT<0, i32>]>;
+def SDT_HexagonGOTAddInternalBA : SDTypeProfile<1, 1, [SDTCisVT<0, i32>]>;
+
+def Hexagonpic_add      : SDNode<"HexagonISD::PIC_ADD", SDT_HexagonPICAdd>;
+def Hexagonat_got       : SDNode<"HexagonISD::AT_GOT", SDT_HexagonGOTAdd>;
+def Hexagongat_pcrel    : SDNode<"HexagonISD::AT_PCREL",
+                                 SDT_HexagonGOTAddInternal>;
+def Hexagongat_pcrel_jt : SDNode<"HexagonISD::AT_PCREL",
+                                 SDT_HexagonGOTAddInternalJT>;
+def Hexagongat_pcrel_ba : SDNode<"HexagonISD::AT_PCREL",
+                                 SDT_HexagonGOTAddInternalBA>;
+
+// PIC: Map from a block address computation to a PC-relative add
+def: Pat<(Hexagongat_pcrel_ba tblockaddress:$src1),
+         (C4_addipc u6ExtPred:$src1)>;
+
+// PIC: Map from the computation to generate a GOT pointer to a PC-relative add
+def: Pat<(Hexagonpic_add texternalsym:$src1),
+         (C4_addipc u6ExtPred:$src1)>;
+
+// PIC: Map from a jump table address computation to a PC-relative add
+def: Pat<(Hexagongat_pcrel_jt tjumptable:$src1),
+         (C4_addipc u6ExtPred:$src1)>;
+
+// PIC: Map from a GOT-relative symbol reference to a load
+def: Pat<(Hexagonat_got (i32 IntRegs:$src1), tglobaladdr:$src2),
+         (L2_loadri_io IntRegs:$src1, s11_2ExtPred:$src2)>;
+
+// PIC: Map from a static symbol reference to a PC-relative add
+def: Pat<(Hexagongat_pcrel tglobaladdr:$src1),
+         (C4_addipc u6ExtPred:$src1)>;
+
+//===----------------------------------------------------------------------===//
 // CR -
 //===----------------------------------------------------------------------===//
 
@@ -2450,17 +2513,6 @@ def M4_mpyrr_addr: MInst_acc <(outs IntRegs:$Rx),
     let Inst{20-16} = Rs;
   }
 
-// Rd=add(##,mpyi(Rs,#U6))
-def : Pat <(add (mul (i32 IntRegs:$src2), u6ImmPred:$src3),
-                     (HexagonCONST32 tglobaladdr:$src1)),
-           (i32 (M4_mpyri_addi tglobaladdr:$src1, IntRegs:$src2,
-                               u6ImmPred:$src3))>;
-
-// Rd=add(##,mpyi(Rs,Rt))
-def : Pat <(add (mul (i32 IntRegs:$src2), (i32 IntRegs:$src3)),
-                     (HexagonCONST32 tglobaladdr:$src1)),
-           (i32 (M4_mpyrr_addi tglobaladdr:$src1, IntRegs:$src2,
-                               IntRegs:$src3))>;
 
 // Vector reduce multiply word by signed half (32x16)
 //Rdd=vrmpyweh(Rss,Rtt)[:<<1]
@@ -3222,26 +3274,17 @@ defm L4_return: LD_MISC_L4_RETURN <"dealloc_return">, PredNewRel;
 // Restore registers and dealloc return function call.
 let isCall = 1, isBarrier = 1, isReturn = 1, isTerminator = 1,
     Defs = [R29, R30, R31, PC], isPredicable = 0, isAsmParserOnly = 1 in {
-  def RESTORE_DEALLOC_RET_JMP_V4 : JInst<(outs),
-                                   (ins calltarget:$dst),
-             "jump $dst",
-             []>;
+  def RESTORE_DEALLOC_RET_JMP_V4 : T_JMP<"">;
 }
 
 // Restore registers and dealloc frame before a tail call.
 let isCall = 1, Defs = [R29, R30, R31, PC], isAsmParserOnly = 1 in {
-  def RESTORE_DEALLOC_BEFORE_TAILCALL_V4 : JInst<(outs),
-                                           (ins calltarget:$dst),
-             "call $dst",
-             []>;
+  def RESTORE_DEALLOC_BEFORE_TAILCALL_V4 : T_Call<"">, PredRel;
 }
 
 // Save registers function call.
 let isCall = 1, Uses = [R29, R31], isAsmParserOnly = 1 in {
-  def SAVE_REGISTERS_CALL_V4 : JInst<(outs),
-                               (ins calltarget:$dst),
-             "call $dst // Save_calle_saved_registers",
-             []>;
+  def SAVE_REGISTERS_CALL_V4 : T_Call<"">, PredRel;
 }
 
 //===----------------------------------------------------------------------===//
@@ -3853,6 +3896,18 @@ def: Storea_pat<SwapSt<atomic_store_16>, I32, addrgp, S2_storerhabs>;
 def: Storea_pat<SwapSt<atomic_store_32>, I32, addrgp, S2_storeriabs>;
 def: Storea_pat<SwapSt<atomic_store_64>, I64, addrgp, S2_storerdabs>;
 
+let Constraints = "@earlyclobber $dst" in
+def Insert4 : PseudoM<(outs DoubleRegs:$dst), (ins IntRegs:$a, IntRegs:$b,
+                                                   IntRegs:$c, IntRegs:$d),
+  ".error \"Should never try to emit Insert4\"",
+  [(set (i64 DoubleRegs:$dst),
+        (or (or (or (shl (i64 (zext (i32 (and (i32 IntRegs:$b), (i32 65535))))),
+                         (i32 16)),
+                    (i64 (zext (i32 (and (i32 IntRegs:$a), (i32 65535)))))),
+                (shl (i64 (anyext (i32 (and (i32 IntRegs:$c), (i32 65535))))),
+                     (i32 32))),
+            (shl (i64 (anyext (i32 IntRegs:$d))), (i32 48))))]>;
+
 //===----------------------------------------------------------------------===//
 // :raw for of boundscheck:hi:lo insns
 //===----------------------------------------------------------------------===//
@@ -3957,7 +4012,7 @@ class CJInst_tstbit_R0<string px, bit np, string tnt>
   : InstHexagon<(outs), (ins IntRegs:$Rs, brtarget:$r9_2),
   ""#px#" = tstbit($Rs, #0); if ("
     #!if(np, "!","")#""#px#".new) jump:"#tnt#" $r9_2",
-  [], "", COMPOUND, TypeCOMPOUND> {
+  [], "", COMPOUND, TypeCOMPOUND>, OpcodeHexagon {
   bits<4> Rs;
   bits<11> r9_2;
 
@@ -4003,7 +4058,7 @@ class CJInst_RR<string px, string op, bit np, string tnt>
   : InstHexagon<(outs), (ins IntRegs:$Rs, IntRegs:$Rt, brtarget:$r9_2),
   ""#px#" = cmp."#op#"($Rs, $Rt); if ("
    #!if(np, "!","")#""#px#".new) jump:"#tnt#" $r9_2",
-  [], "", COMPOUND, TypeCOMPOUND> {
+  [], "", COMPOUND, TypeCOMPOUND>, OpcodeHexagon {
   bits<4> Rs;
   bits<4> Rt;
   bits<11> r9_2;
@@ -4057,7 +4112,7 @@ class CJInst_RU5<string px, string op, bit np, string tnt>
   : InstHexagon<(outs), (ins IntRegs:$Rs, u5Imm:$U5, brtarget:$r9_2),
   ""#px#" = cmp."#op#"($Rs, #$U5); if ("
     #!if(np, "!","")#""#px#".new) jump:"#tnt#" $r9_2",
-  [], "", COMPOUND, TypeCOMPOUND> {
+  [], "", COMPOUND, TypeCOMPOUND>, OpcodeHexagon {
   bits<4> Rs;
   bits<5> U5;
   bits<11> r9_2;
@@ -4112,7 +4167,7 @@ class CJInst_Rn1<string px, string op, bit np, string tnt>
   : InstHexagon<(outs), (ins IntRegs:$Rs, brtarget:$r9_2),
   ""#px#" = cmp."#op#"($Rs,#-1); if ("
   #!if(np, "!","")#""#px#".new) jump:"#tnt#" $r9_2",
-  [], "", COMPOUND, TypeCOMPOUND> {
+  [], "", COMPOUND, TypeCOMPOUND>, OpcodeHexagon {
   bits<4> Rs;
   bits<11> r9_2;
 

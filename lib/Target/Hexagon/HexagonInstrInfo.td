@@ -1772,6 +1772,8 @@ def L2_loadalignb_io: T_loadalign_io <"memb_fifo", 0b0100, s11_0Ext>;
 multiclass Loadx_pat<PatFrag Load, ValueType VT, PatLeaf ImmPred,
                      InstHexagon MI> {
   def: Pat<(VT (Load AddrFI:$fi)), (VT (MI AddrFI:$fi, 0))>;
+  def: Pat<(VT (Load (add (i32 AddrFI:$fi), ImmPred:$Off))),
+           (VT (MI AddrFI:$fi, imm:$Off))>;
   def: Pat<(VT (Load (add (i32 IntRegs:$Rs), ImmPred:$Off))),
            (VT (MI IntRegs:$Rs, imm:$Off))>;
   def: Pat<(VT (Load (i32 IntRegs:$Rs))), (VT (MI IntRegs:$Rs, 0))>;
@@ -3544,7 +3546,8 @@ let addrMode = BaseImmOffset, InputType = "imm" in {
 }
 
 // Patterns for generating stores, where the address takes different forms:
-// - frameindex,,
+// - frameindex,
+// - frameindex + offset,
 // - base + offset,
 // - simple (base address without offset).
 // These would usually be used together (via Storex_pat defined below), but
@@ -3552,6 +3555,10 @@ let addrMode = BaseImmOffset, InputType = "imm" in {
 // AddedComplexity) to the individual patterns.
 class Storex_fi_pat<PatFrag Store, PatFrag Value, InstHexagon MI>
   : Pat<(Store Value:$Rs, AddrFI:$fi), (MI AddrFI:$fi, 0, Value:$Rs)>;
+class Storex_fi_add_pat<PatFrag Store, PatFrag Value, PatFrag ImmPred,
+                        InstHexagon MI>
+  : Pat<(Store Value:$Rs, (add (i32 AddrFI:$fi), ImmPred:$Off)),
+        (MI AddrFI:$fi, imm:$Off, Value:$Rs)>;
 class Storex_add_pat<PatFrag Store, PatFrag Value, PatFrag ImmPred,
                      InstHexagon MI>
   : Pat<(Store Value:$Rt, (add (i32 IntRegs:$Rs), ImmPred:$Off)),
@@ -3567,6 +3574,10 @@ class Storexm_fi_pat<PatFrag Store, PatFrag Value, PatFrag ValueMod,
                      InstHexagon MI>
   : Pat<(Store Value:$Rs, AddrFI:$fi),
         (MI AddrFI:$fi, 0, (ValueMod Value:$Rs))>;
+class Storexm_fi_add_pat<PatFrag Store, PatFrag Value, PatFrag ImmPred,
+                         PatFrag ValueMod, InstHexagon MI>
+  : Pat<(Store Value:$Rs, (add (i32 AddrFI:$fi), ImmPred:$Off)),
+        (MI AddrFI:$fi, imm:$Off, (ValueMod Value:$Rs))>;
 class Storexm_add_pat<PatFrag Store, PatFrag Value, PatFrag ImmPred,
                       PatFrag ValueMod, InstHexagon MI>
   : Pat<(Store Value:$Rt, (add (i32 IntRegs:$Rs), ImmPred:$Off)),
@@ -3578,14 +3589,16 @@ class Storexm_simple_pat<PatFrag Store, PatFrag Value, PatFrag ValueMod,
 
 multiclass Storex_pat<PatFrag Store, PatFrag Value, PatLeaf ImmPred,
                       InstHexagon MI> {
-  def: Storex_fi_pat  <Store, Value, MI>;
-  def: Storex_add_pat <Store, Value, ImmPred, MI>;
+  def: Storex_fi_pat     <Store, Value,          MI>;
+  def: Storex_fi_add_pat <Store, Value, ImmPred, MI>;
+  def: Storex_add_pat    <Store, Value, ImmPred, MI>;
 }
 
 multiclass Storexm_pat<PatFrag Store, PatFrag Value, PatLeaf ImmPred,
                        PatFrag ValueMod, InstHexagon MI> {
-  def: Storexm_fi_pat  <Store, Value,          ValueMod, MI>;
-  def: Storexm_add_pat <Store, Value, ImmPred, ValueMod, MI>;
+  def: Storexm_fi_pat     <Store, Value,          ValueMod, MI>;
+  def: Storexm_fi_add_pat <Store, Value, ImmPred, ValueMod, MI>;
+  def: Storexm_add_pat    <Store, Value, ImmPred, ValueMod, MI>;
 }
 
 // Regular stores in the DAG have two operands: value and address.
@@ -5129,10 +5142,13 @@ let AddedComplexity = 100 in
 def: Pat<(i32 (sext_inreg (Hexagon_ARGEXTEND (i32 IntRegs:$src1)), i16)),
          (i32 IntRegs:$src1)>;
 
-def HexagonWrapperJT: SDNode<"HexagonISD::WrapperJT", SDTIntUnaryOp>;
+def HexagonJT:     SDNode<"HexagonISD::JT", SDTIntUnaryOp>;
+def HexagonCP:     SDNode<"HexagonISD::CP", SDTIntUnaryOp>;
 
-def : Pat<(HexagonWrapperJT tjumptable:$dst),
-          (i32 (CONST32_set_jt tjumptable:$dst))>;
+def: Pat<(HexagonJT tjumptable:$dst),
+         (CONST32_set_jt tjumptable:$dst)>;
+def: Pat<(HexagonCP tconstpool :$dst),
+         (CONST32_set_jt tconstpool:$dst)>;
 
 // XTYPE/SHIFT
 //
@@ -5569,6 +5585,43 @@ let hasNewValue = 1 in {
 def S2_insertp_rp : T_S3op_insert<"insert", DoubleRegs>;
 def S2_insertp    : T_S2op_insert <0b0011, DoubleRegs, u6Imm>;
 
+
+def SDTHexagonINSERT_ri : SDTypeProfile<1, 4, [SDTCisVT<0, i32>,
+                                               SDTCisVT<1, i32>,
+                                               SDTCisVT<2, i32>,
+                                               SDTCisVT<3, i32>,
+                                               SDTCisVT<4, i32>]>;
+def SDTHexagonINSERT_rd : SDTypeProfile<1, 4, [SDTCisVT<0, i64>,
+                                               SDTCisVT<1, i64>,
+                                               SDTCisVT<2, i64>,
+                                               SDTCisVT<3, i32>,
+                                               SDTCisVT<4, i32>]>;
+def SDTHexagonINSERT_riv : SDTypeProfile<1, 3, [SDTCisVT<0, i32>,
+                                                SDTCisVT<1, i32>,
+                                                SDTCisVT<2, i32>,
+                                                SDTCisVT<3, i64>]>;
+def SDTHexagonINSERT_rdv : SDTypeProfile<1, 3, [SDTCisVT<0, i64>,
+                                                SDTCisVT<1, i64>,
+                                                SDTCisVT<2, i64>,
+                                                SDTCisVT<3, i64>]>;
+def HexagonINSERT_ri : SDNode<"HexagonISD::INSERT_ri",  SDTHexagonINSERT_ri>;
+def HexagonINSERT_rd : SDNode<"HexagonISD::INSERT_rd",  SDTHexagonINSERT_rd>;
+def HexagonINSERT_riv: SDNode<"HexagonISD::INSERT_riv", SDTHexagonINSERT_riv>;
+def HexagonINSERT_rdv: SDNode<"HexagonISD::INSERT_rdv", SDTHexagonINSERT_rdv>;
+
+def: Pat<(HexagonINSERT_ri I32:$Rs, I32:$Rt, u5ImmPred:$u1, u5ImmPred:$u2),
+         (S2_insert I32:$Rs, I32:$Rt, u5ImmPred:$u1, u5ImmPred:$u2)>;
+
+def: Pat<(HexagonINSERT_rd I64:$Rs, I64:$Rt, u6ImmPred:$u1, u6ImmPred:$u2),
+         (S2_insertp I64:$Rs, I64:$Rt, u6ImmPred:$u1, u6ImmPred:$u2)>;
+
+def: Pat<(HexagonINSERT_riv I32:$Rs, I32:$Rt, I64:$Ru),
+         (S2_insert_rp I32:$Rs, I32:$Rt, I64:$Ru)>;
+
+def: Pat<(HexagonINSERT_rdv I64:$Rs, I64:$Rt, I64:$Ru),
+         (S2_insertp_rp I64:$Rs, I64:$Rt, I64:$Ru)>;
+
+
 //===----------------------------------------------------------------------===//
 // Template class for 'extract bitfield' instructions
 //===----------------------------------------------------------------------===//
@@ -5635,6 +5688,37 @@ let hasNewValue = 1 in {
   def S2_extractu    : T_S2op_extract <"extractu", 0b1101, IntRegs, u5Imm>;
 }
 
+def SDTHexagonEXTRACTU_ri : SDTypeProfile<1, 3, [SDTCisVT<0, i32>,
+                                                 SDTCisVT<1, i32>,
+                                                 SDTCisVT<2, i32>,
+                                                 SDTCisVT<3, i32>]>;
+def SDTHexagonEXTRACTU_rd : SDTypeProfile<1, 3, [SDTCisVT<0, i64>,
+                                                 SDTCisVT<1, i64>,
+                                                 SDTCisVT<2, i32>,
+                                                 SDTCisVT<3, i32>]>;
+def SDTHexagonEXTRACTU_riv : SDTypeProfile<1, 2, [SDTCisVT<0, i32>,
+                                                  SDTCisVT<1, i32>,
+                                                  SDTCisVT<2, i64>]>;
+def SDTHexagonEXTRACTU_rdv : SDTypeProfile<1, 2, [SDTCisVT<0, i64>,
+                                                  SDTCisVT<1, i64>,
+                                                  SDTCisVT<2, i64>]>;
+def HexagonEXTRACTU_ri : SDNode<"HexagonISD::EXTRACTU_ri",  SDTHexagonEXTRACTU_ri>;
+def HexagonEXTRACTU_rd : SDNode<"HexagonISD::EXTRACTU_rd",  SDTHexagonEXTRACTU_rd>;
+def HexagonEXTRACTU_riv: SDNode<"HexagonISD::EXTRACTU_riv", SDTHexagonEXTRACTU_riv>;
+def HexagonEXTRACTU_rdv: SDNode<"HexagonISD::EXTRACTU_rdv", SDTHexagonEXTRACTU_rdv>;
+
+def: Pat<(HexagonEXTRACTU_ri I32:$src1, u5ImmPred:$src2, u5ImmPred:$src3),
+         (S2_extractu I32:$src1, u5ImmPred:$src2, u5ImmPred:$src3)>;
+
+def: Pat<(HexagonEXTRACTU_rd I64:$src1, u6ImmPred:$src2, u6ImmPred:$src3),
+         (S2_extractup I64:$src1, u6ImmPred:$src2, u6ImmPred:$src3)>;
+
+def: Pat<(HexagonEXTRACTU_riv I32:$src1, I64:$src2),
+         (S2_extractu_rp I32:$src1, I64:$src2)>;
+
+def: Pat<(HexagonEXTRACTU_rdv I64:$src1, I64:$src2),
+         (S2_extractup_rp I64:$src1, I64:$src2)>;
+
 // Change the sign of the immediate for Rd=-mpyi(Rs,#u8)
 def: Pat<(mul (i32 IntRegs:$src1), (ineg n8ImmPred:$src2)),
          (M2_mpysin IntRegs:$src1, u8ImmPred:$src2)>;
@@ -5669,6 +5753,22 @@ def S2_tableidxb : tableidxRaw<"tableidxb", 0b00>;
 def S2_tableidxh : tableidxRaw<"tableidxh", 0b01>;
 def S2_tableidxw : tableidxRaw<"tableidxw", 0b10>;
 def S2_tableidxd : tableidxRaw<"tableidxd", 0b11>;
+
+//===----------------------------------------------------------------------===//
+// Template class for 'table index' instructions which are assembler mapped
+// to their :raw format.
+//===----------------------------------------------------------------------===//
+let isPseudo = 1 in
+class tableidx_goodsyntax <string mnemonic>
+  : SInst <(outs IntRegs:$Rx),
+           (ins IntRegs:$_dst_, IntRegs:$Rs, u4Imm:$u4, u5Imm:$u5),
+           "$Rx = "#mnemonic#"($Rs, #$u4, #$u5)",
+           [], "$Rx = $_dst_" >;
+
+def S2_tableidxb_goodsyntax : tableidx_goodsyntax<"tableidxb">;
+def S2_tableidxh_goodsyntax : tableidx_goodsyntax<"tableidxh">;
+def S2_tableidxw_goodsyntax : tableidx_goodsyntax<"tableidxw">;
+def S2_tableidxd_goodsyntax : tableidx_goodsyntax<"tableidxd">;
 
 //===----------------------------------------------------------------------===//
 // V3 Instructions +
