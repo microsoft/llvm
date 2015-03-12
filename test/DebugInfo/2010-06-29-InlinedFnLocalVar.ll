@@ -1,10 +1,10 @@
 ; RUN: %llc_dwarf -O2 %s -o - | FileCheck %s
 ; Check struct X for dead variable xyz from inlined function foo.
 
-; CHECK: Lsection_info
+; CHECK: section_info
 ; CHECK:	DW_TAG_structure_type
 ; CHECK-NEXT:	info_string
- 
+
 
 @i = common global i32 0                          ; <i32*> [#uses=2]
 

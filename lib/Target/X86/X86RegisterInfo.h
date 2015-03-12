@@ -20,9 +20,7 @@
 #include "X86GenRegisterInfo.inc"
 
 namespace llvm {
-  class Type;
-  class TargetInstrInfo;
-  class X86Subtarget;
+class X86Subtarget;
 
 class X86RegisterInfo final : public X86GenRegisterInfo {
 public:
@@ -99,7 +97,8 @@ public:
   /// callee-save registers on this target.
   const MCPhysReg *
   getCalleeSavedRegs(const MachineFunction* MF) const override;
-  const uint32_t *getCallPreservedMask(CallingConv::ID) const override;
+  const uint32_t *getCallPreservedMask(const MachineFunction &MF,
+                                       CallingConv::ID) const override;
   const uint32_t *getNoPreservedMask() const;
 
   /// getReservedRegs - Returns a bitset indexed by physical register number

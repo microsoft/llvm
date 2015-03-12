@@ -22,15 +22,11 @@
 #include "PPCGenRegisterInfo.inc"
 
 namespace llvm {
-class PPCSubtarget;
-class TargetInstrInfo;
-class Type;
-
 class PPCRegisterInfo : public PPCGenRegisterInfo {
   DenseMap<unsigned, unsigned> ImmToIdxMap;
-  const PPCSubtarget &Subtarget;
+  const PPCTargetMachine &TM;
 public:
-  PPCRegisterInfo(const PPCSubtarget &SubTarget);
+  PPCRegisterInfo(const PPCTargetMachine &TM);
   
   /// getPointerRegClass - Return the register class to use to hold pointers.
   /// This is used for addressing modes.
@@ -45,9 +41,9 @@ public:
                             const MachineFunction &MF) const override;
 
   /// Code Generation virtual methods...
-  const MCPhysReg *
-  getCalleeSavedRegs(const MachineFunction* MF =nullptr) const override;
-  const uint32_t *getCallPreservedMask(CallingConv::ID CC) const override;
+  const MCPhysReg *getCalleeSavedRegs(const MachineFunction *MF) const override;
+  const uint32_t *getCallPreservedMask(const MachineFunction &MF,
+                                       CallingConv::ID CC) const override;
   const uint32_t *getNoPreservedMask() const;
 
   void adjustStackMapLiveOutMask(uint32_t *Mask) const override;

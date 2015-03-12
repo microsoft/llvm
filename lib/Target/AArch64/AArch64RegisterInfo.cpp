@@ -18,6 +18,7 @@
 #include "AArch64Subtarget.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -37,9 +38,8 @@ static cl::opt<bool>
 ReserveX18("aarch64-reserve-x18", cl::Hidden,
           cl::desc("Reserve X18, making it unavailable as GPR"));
 
-AArch64RegisterInfo::AArch64RegisterInfo(const AArch64InstrInfo *tii,
-                                         const AArch64Subtarget *sti)
-    : AArch64GenRegisterInfo(AArch64::LR), TII(tii), STI(sti) {}
+AArch64RegisterInfo::AArch64RegisterInfo(const Triple &TT)
+    : AArch64GenRegisterInfo(AArch64::LR), TT(TT) {}
 
 const MCPhysReg *
 AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
@@ -55,7 +55,8 @@ AArch64RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
 }
 
 const uint32_t *
-AArch64RegisterInfo::getCallPreservedMask(CallingConv::ID CC) const {
+AArch64RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
+                                          CallingConv::ID CC) const {
   if (CC == CallingConv::GHC)
     // This is academic becase all GHC calls are (supposed to be) tail calls
     return CSR_AArch64_NoRegs_RegMask;
@@ -66,15 +67,16 @@ AArch64RegisterInfo::getCallPreservedMask(CallingConv::ID CC) const {
 }
 
 const uint32_t *AArch64RegisterInfo::getTLSCallPreservedMask() const {
-  if (STI->isTargetDarwin())
+  if (TT.isOSDarwin())
     return CSR_AArch64_TLS_Darwin_RegMask;
 
-  assert(STI->isTargetELF() && "only expect Darwin or ELF TLS");
+  assert(TT.isOSBinFormatELF() && "only expect Darwin or ELF TLS");
   return CSR_AArch64_TLS_ELF_RegMask;
 }
 
 const uint32_t *
-AArch64RegisterInfo::getThisReturnPreservedMask(CallingConv::ID CC) const {
+AArch64RegisterInfo::getThisReturnPreservedMask(const MachineFunction &MF,
+                                                CallingConv::ID CC) const {
   // This should return a register mask that is the same as that returned by
   // getCallPreservedMask but that additionally preserves the register used for
   // the first i64 argument (which must also be the register used to return a
@@ -97,12 +99,12 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(AArch64::WSP);
   Reserved.set(AArch64::WZR);
 
-  if (TFI->hasFP(MF) || STI->isTargetDarwin()) {
+  if (TFI->hasFP(MF) || TT.isOSDarwin()) {
     Reserved.set(AArch64::FP);
     Reserved.set(AArch64::W29);
   }
 
-  if (STI->isTargetDarwin() || ReserveX18) {
+  if (TT.isOSDarwin() || ReserveX18) {
     Reserved.set(AArch64::X18); // Platform register
     Reserved.set(AArch64::W18);
   }
@@ -129,10 +131,10 @@ bool AArch64RegisterInfo::isReservedReg(const MachineFunction &MF,
     return true;
   case AArch64::X18:
   case AArch64::W18:
-    return STI->isTargetDarwin() || ReserveX18;
+    return TT.isOSDarwin() || ReserveX18;
   case AArch64::FP:
   case AArch64::W29:
-    return TFI->hasFP(MF) || STI->isTargetDarwin();
+    return TFI->hasFP(MF) || TT.isOSDarwin();
   case AArch64::W19:
   case AArch64::X19:
     return hasBasePointer(MF);
@@ -302,10 +304,11 @@ void AArch64RegisterInfo::materializeFrameBaseRegister(MachineBasicBlock *MBB,
   DebugLoc DL; // Defaults to "unknown"
   if (Ins != MBB->end())
     DL = Ins->getDebugLoc();
-
+  const MachineFunction &MF = *MBB->getParent();
+  const AArch64InstrInfo *TII =
+      MF.getSubtarget<AArch64Subtarget>().getInstrInfo();
   const MCInstrDesc &MCID = TII->get(AArch64::ADDXri);
   MachineRegisterInfo &MRI = MBB->getParent()->getRegInfo();
-  const MachineFunction &MF = *MBB->getParent();
   MRI.constrainRegClass(BaseReg, TII->getRegClass(MCID, 0, this, MF));
   unsigned Shifter = AArch64_AM::getShifterImm(AArch64_AM::LSL, 0);
 
@@ -324,6 +327,9 @@ void AArch64RegisterInfo::resolveFrameIndex(MachineInstr &MI, unsigned BaseReg,
     ++i;
     assert(i < MI.getNumOperands() && "Instr doesn't have FrameIndex operand!");
   }
+  const MachineFunction *MF = MI.getParent()->getParent();
+  const AArch64InstrInfo *TII =
+      MF->getSubtarget<AArch64Subtarget>().getInstrInfo();
   bool Done = rewriteAArch64FrameIndex(MI, i, BaseReg, Off, TII);
   assert(Done && "Unable to resolve frame index!");
   (void)Done;
@@ -337,6 +343,8 @@ void AArch64RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   MachineInstr &MI = *II;
   MachineBasicBlock &MBB = *MI.getParent();
   MachineFunction &MF = *MBB.getParent();
+  const AArch64InstrInfo *TII =
+      MF.getSubtarget<AArch64Subtarget>().getInstrInfo();
   const AArch64FrameLowering *TFI = static_cast<const AArch64FrameLowering *>(
       MF.getSubtarget().getFrameLowering());
 
@@ -389,10 +397,10 @@ unsigned AArch64RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
   case AArch64::GPR64RegClassID:
   case AArch64::GPR32commonRegClassID:
   case AArch64::GPR64commonRegClassID:
-    return 32 - 1                                      // XZR/SP
-           - (TFI->hasFP(MF) || STI->isTargetDarwin()) // FP
-           - (STI->isTargetDarwin() || ReserveX18) // X18 reserved as platform register
-           - hasBasePointer(MF);   // X19
+    return 32 - 1                                // XZR/SP
+           - (TFI->hasFP(MF) || TT.isOSDarwin()) // FP
+           - (TT.isOSDarwin() || ReserveX18) // X18 reserved as platform register
+           - hasBasePointer(MF);           // X19
   case AArch64::FPR8RegClassID:
   case AArch64::FPR16RegClassID:
   case AArch64::FPR32RegClassID:

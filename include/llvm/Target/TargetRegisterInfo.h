@@ -425,10 +425,10 @@ public:
   /// closest to the incoming stack pointer if stack grows down, and vice versa.
   ///
   virtual const MCPhysReg*
-  getCalleeSavedRegs(const MachineFunction *MF = nullptr) const = 0;
+  getCalleeSavedRegs(const MachineFunction *MF) const = 0;
 
   /// getCallPreservedMask - Return a mask of call-preserved registers for the
-  /// given calling convention on the current sub-target.  The mask should
+  /// given calling convention on the current function.  The mask should
   /// include all call-preserved aliases.  This is used by the register
   /// allocator to determine which registers can be live across a call.
   ///
@@ -445,7 +445,8 @@ public:
   /// instructions should use implicit-def operands to indicate call clobbered
   /// registers.
   ///
-  virtual const uint32_t *getCallPreservedMask(CallingConv::ID) const {
+  virtual const uint32_t *getCallPreservedMask(const MachineFunction &MF,
+                                               CallingConv::ID) const {
     // The default mask clobbers everything.  All targets should override.
     return nullptr;
   }
@@ -656,7 +657,8 @@ public:
 
   /// Get the register unit pressure limit for this dimension.
   /// This limit must be adjusted dynamically for reserved registers.
-  virtual unsigned getRegPressureSetLimit(unsigned Idx) const = 0;
+  virtual unsigned getRegPressureSetLimit(const MachineFunction &MF,
+                                          unsigned Idx) const = 0;
 
   /// Get the dimensions of register pressure impacted by this register class.
   /// Returns a -1 terminated array of pressure set IDs.

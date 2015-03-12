@@ -21,10 +21,6 @@
 #include "ARMGenRegisterInfo.inc"
 
 namespace llvm {
-  class ARMSubtarget;
-  class ARMBaseInstrInfo;
-  class Type;
-
 /// Register allocation hints.
 namespace ARMRI {
   enum {
@@ -82,27 +78,22 @@ static inline bool isCalleeSavedRegister(unsigned Reg,
 
 class ARMBaseRegisterInfo : public ARMGenRegisterInfo {
 protected:
-  const ARMSubtarget &STI;
-
-  /// FramePtr - ARM physical register used as frame ptr.
-  unsigned FramePtr;
-
   /// BasePtr - ARM physical register used as a base ptr in complex stack
   /// frames. I.e., when we need a 3rd base, not just SP and FP, due to
   /// variable size stack objects.
   unsigned BasePtr;
 
   // Can be only subclassed.
-  explicit ARMBaseRegisterInfo(const ARMSubtarget &STI);
+  explicit ARMBaseRegisterInfo();
 
   // Return the opcode that implements 'Op', or 0 if no opcode
   unsigned getOpcode(int Op) const;
 
 public:
   /// Code Generation virtual methods...
-  const MCPhysReg *
-  getCalleeSavedRegs(const MachineFunction *MF = nullptr) const override;
-  const uint32_t *getCallPreservedMask(CallingConv::ID) const override;
+  const MCPhysReg *getCalleeSavedRegs(const MachineFunction *MF) const override;
+  const uint32_t *getCallPreservedMask(const MachineFunction &MF,
+                                       CallingConv::ID) const override;
   const uint32_t *getNoPreservedMask() const;
 
   /// getThisReturnPreservedMask - Returns a call preserved mask specific to the
@@ -113,7 +104,8 @@ public:
   ///
   /// Should return NULL in the case that the calling convention does not have
   /// this property
-  const uint32_t *getThisReturnPreservedMask(CallingConv::ID) const;
+  const uint32_t *getThisReturnPreservedMask(const MachineFunction &MF,
+                                             CallingConv::ID) const;
 
   BitVector getReservedRegs(const MachineFunction &MF) const override;
 

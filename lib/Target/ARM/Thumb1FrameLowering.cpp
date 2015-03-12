@@ -94,8 +94,7 @@ void Thumb1FrameLowering::emitPrologue(MachineFunction &MF) const {
   const Thumb1InstrInfo &TII =
       *static_cast<const Thumb1InstrInfo *>(STI.getInstrInfo());
 
-  unsigned Align = STI.getFrameLowering()->getStackAlignment();
-  unsigned ArgRegsSaveSize = AFI->getArgRegsSaveSize(Align);
+  unsigned ArgRegsSaveSize = AFI->getArgRegsSaveSize();
   unsigned NumBytes = MFI->getStackSize();
   assert(NumBytes >= ArgRegsSaveSize &&
          "ArgRegsSaveSize is included in NumBytes");
@@ -333,12 +332,11 @@ void Thumb1FrameLowering::emitEpilogue(MachineFunction &MF,
   const Thumb1InstrInfo &TII =
       *static_cast<const Thumb1InstrInfo *>(STI.getInstrInfo());
 
-  unsigned Align = STI.getFrameLowering()->getStackAlignment();
-  unsigned ArgRegsSaveSize = AFI->getArgRegsSaveSize(Align);
+  unsigned ArgRegsSaveSize = AFI->getArgRegsSaveSize();
   int NumBytes = (int)MFI->getStackSize();
   assert((unsigned)NumBytes >= ArgRegsSaveSize &&
          "ArgRegsSaveSize is included in NumBytes");
-  const MCPhysReg *CSRegs = RegInfo->getCalleeSavedRegs();
+  const MCPhysReg *CSRegs = RegInfo->getCalleeSavedRegs(&MF);
   unsigned FramePtr = RegInfo->getFrameRegister(MF);
 
   if (!AFI->hasStackFrame()) {
