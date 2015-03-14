@@ -33,6 +33,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <string>
+#include <tuple>
 
 namespace llvm {
 namespace dsymutil {
@@ -55,6 +56,8 @@ using HalfOpenIntervalMap =
     IntervalMap<KeyT, ValT, IntervalMapImpl::NodeSizer<KeyT, ValT>::LeafSize,
                 IntervalMapHalfOpenInfo<KeyT>>;
 
+typedef HalfOpenIntervalMap<uint64_t, int64_t> FunctionIntervals;
+
 /// \brief Stores all information relating to a compile unit, be it in
 /// its original instance in the object file to its brand new cloned
 /// and linked DIE tree.
@@ -69,8 +72,9 @@ public:
     bool InDebugMap;    ///< Was this DIE's entity found in the map?
   };
 
-  CompileUnit(DWARFUnit &OrigUnit)
-      : OrigUnit(OrigUnit), RangeAlloc(), Ranges(RangeAlloc) {
+  CompileUnit(DWARFUnit &OrigUnit, unsigned ID)
+      : OrigUnit(OrigUnit), ID(ID), LowPc(UINT64_MAX), HighPc(0), RangeAlloc(),
+        Ranges(RangeAlloc), UnitRangeAttribute(nullptr) {
     Info.resize(OrigUnit.getNumDIEs());
   }
 
@@ -85,6 +89,8 @@ public:
 
   DWARFUnit &getOrigUnit() const { return OrigUnit; }
 
+  unsigned getUniqueID() const { return ID; }
+
   DIE *getOutputUnitDIE() const { return CUDie.get(); }
   void setOutputUnitDIE(DIE *Die) { CUDie.reset(Die); }
 
@@ -93,8 +99,16 @@ public:
 
   uint64_t getStartOffset() const { return StartOffset; }
   uint64_t getNextUnitOffset() const { return NextUnitOffset; }
-
   void setStartOffset(uint64_t DebugInfoSize) { StartOffset = DebugInfoSize; }
+
+  uint64_t getLowPc() const { return LowPc; }
+  uint64_t getHighPc() const { return HighPc; }
+
+  DIEInteger *getUnitRangesAttribute() const { return UnitRangeAttribute; }
+  const FunctionIntervals &getFunctionRanges() const { return Ranges; }
+  const std::vector<DIEInteger *> &getRangesAttributes() const {
+    return RangeAttributes;
+  }
 
   /// \brief Compute the end offset for this unit. Must be
   /// called after the CU's DIEs have been cloned.
@@ -102,10 +116,11 @@ public:
   /// debug_info section size).
   uint64_t computeNextUnitOffset();
 
-  /// \brief Keep track of a forward reference to DIE \p Die by
-  /// \p Attr. The attribute should be fixed up later to point to the
-  /// absolute offset of \p Die in the debug_info section.
-  void noteForwardReference(DIE *Die, DIEInteger *Attr);
+  /// \brief Keep track of a forward reference to DIE \p Die in \p
+  /// RefUnit by \p Attr. The attribute should be fixed up later to
+  /// point to the absolute offset of \p Die in the debug_info section.
+  void noteForwardReference(DIE *Die, const CompileUnit *RefUnit,
+                            DIEInteger *Attr);
 
   /// \brief Apply all fixups recored by noteForwardReference().
   void fixupForwardReferences();
@@ -114,27 +129,43 @@ public:
   /// relocatad by applying offset \p PCOffset.
   void addFunctionRange(uint64_t LowPC, uint64_t HighPC, int64_t PCOffset);
 
+  /// \brief Keep track of a DW_AT_range attribute that we will need to
+  /// patch up later.
+  void noteRangeAttribute(const DIE &Die, DIEInteger *Attr);
+
 private:
   DWARFUnit &OrigUnit;
+  unsigned ID;
   std::vector<DIEInfo> Info;  ///< DIE info indexed by DIE index.
   std::unique_ptr<DIE> CUDie; ///< Root of the linked DIE tree.
 
   uint64_t StartOffset;
   uint64_t NextUnitOffset;
 
+  uint64_t LowPc;
+  uint64_t HighPc;
+
   /// \brief A list of attributes to fixup with the absolute offset of
   /// a DIE in the debug_info section.
   ///
   /// The offsets for the attributes in this array couldn't be set while
-  /// cloning because for forward refences the target DIE's offset isn't
-  /// known you emit the reference attribute.
-  std::vector<std::pair<DIE *, DIEInteger *>> ForwardDIEReferences;
+  /// cloning because for cross-cu forward refences the target DIE's
+  /// offset isn't known you emit the reference attribute.
+  std::vector<std::tuple<DIE *, const CompileUnit *, DIEInteger *>>
+      ForwardDIEReferences;
 
-  HalfOpenIntervalMap<uint64_t, int64_t>::Allocator RangeAlloc;
+  FunctionIntervals::Allocator RangeAlloc;
   /// \brief The ranges in that interval map are the PC ranges for
   /// functions in this unit, associated with the PC offset to apply
   /// to the addresses to get the linked address.
-  HalfOpenIntervalMap<uint64_t, int64_t> Ranges;
+  FunctionIntervals Ranges;
+
+  /// \brief DW_AT_ranges attributes to patch after we have gathered
+  /// all the unit's function addresses.
+  /// @{
+  std::vector<DIEInteger *> RangeAttributes;
+  DIEInteger *UnitRangeAttribute;
+  /// @}
 };
 
 uint64_t CompileUnit::computeNextUnitOffset() {
@@ -147,20 +178,36 @@ uint64_t CompileUnit::computeNextUnitOffset() {
   return NextUnitOffset;
 }
 
-/// \brief Keep track of a forward reference to \p Die.
-void CompileUnit::noteForwardReference(DIE *Die, DIEInteger *Attr) {
-  ForwardDIEReferences.emplace_back(Die, Attr);
+/// \brief Keep track of a forward cross-cu reference from this unit
+/// to \p Die that lives in \p RefUnit.
+void CompileUnit::noteForwardReference(DIE *Die, const CompileUnit *RefUnit,
+                                       DIEInteger *Attr) {
+  ForwardDIEReferences.emplace_back(Die, RefUnit, Attr);
 }
 
 /// \brief Apply all fixups recorded by noteForwardReference().
 void CompileUnit::fixupForwardReferences() {
-  for (const auto &Ref : ForwardDIEReferences)
-    Ref.second->setValue(Ref.first->getOffset() + getStartOffset());
+  for (const auto &Ref : ForwardDIEReferences) {
+    DIE *RefDie;
+    const CompileUnit *RefUnit;
+    DIEInteger *Attr;
+    std::tie(RefDie, RefUnit, Attr) = Ref;
+    Attr->setValue(RefDie->getOffset() + RefUnit->getStartOffset());
+  }
 }
 
-void CompileUnit::addFunctionRange(uint64_t LowPC, uint64_t HighPC,
-                                   int64_t PCOffset) {
-  Ranges.insert(LowPC, HighPC, PCOffset);
+void CompileUnit::addFunctionRange(uint64_t FuncLowPc, uint64_t FuncHighPc,
+                                   int64_t PcOffset) {
+  Ranges.insert(FuncLowPc, FuncHighPc, PcOffset);
+  this->LowPc = std::min(LowPc, FuncLowPc + PcOffset);
+  this->HighPc = std::max(HighPc, FuncHighPc + PcOffset);
+}
+
+void CompileUnit::noteRangeAttribute(const DIE &Die, DIEInteger *Attr) {
+  if (Die.getTag() != dwarf::DW_TAG_compile_unit)
+    RangeAttributes.push_back(Attr);
+  else
+    UnitRangeAttribute = Attr;
 }
 
 /// \brief A string table that doesn't need relocations.
@@ -271,6 +318,8 @@ class DwarfStreamer {
   /// \brief the file we stream the linked Dwarf to.
   std::unique_ptr<raw_fd_ostream> OutFile;
 
+  uint32_t RangesSectionSize;
+
 public:
   /// \brief Actually create the streamer and the ouptut file.
   ///
@@ -303,6 +352,21 @@ public:
 
   /// \brief Emit the string table described by \p Pool.
   void emitStrings(const NonRelocatableStringpool &Pool);
+
+  /// \brief Emit debug_ranges for \p FuncRange by translating the
+  /// original \p Entries.
+  void emitRangesEntries(
+      int64_t UnitPcOffset, uint64_t OrigLowPc,
+      FunctionIntervals::const_iterator FuncRange,
+      const std::vector<DWARFDebugRangeList::RangeListEntry> &Entries,
+      unsigned AddressSize);
+
+  /// \brief Emit debug_aranges entries for \p Unit and if \p
+  /// DoRangesSection is true, also emit the debug_ranges entries for
+  /// the DW_TAG_compile_unit's DW_AT_ranges attribute.
+  void emitUnitRangesEntries(CompileUnit &Unit, bool DoRangesSection);
+
+  uint32_t getRangesSectionSize() const { return RangesSectionSize; }
 };
 
 bool DwarfStreamer::init(Triple TheTriple, StringRef OutputFilename) {
@@ -368,6 +432,8 @@ bool DwarfStreamer::init(Triple TheTriple, StringRef OutputFilename) {
   if (!Asm)
     return error("no asm printer for target " + TripleName, Context);
 
+  RangesSectionSize = 0;
+
   return true;
 }
 
@@ -428,6 +494,127 @@ void DwarfStreamer::emitStrings(const NonRelocatableStringpool &Pool) {
        Entry = Pool.getNextEntry(Entry))
     Asm->OutStreamer.EmitBytes(
         StringRef(Entry->getKey().data(), Entry->getKey().size() + 1));
+}
+
+/// \brief Emit the debug_range section contents for \p FuncRange by
+/// translating the original \p Entries. The debug_range section
+/// format is totally trivial, consisting just of pairs of address
+/// sized addresses describing the ranges.
+void DwarfStreamer::emitRangesEntries(
+    int64_t UnitPcOffset, uint64_t OrigLowPc,
+    FunctionIntervals::const_iterator FuncRange,
+    const std::vector<DWARFDebugRangeList::RangeListEntry> &Entries,
+    unsigned AddressSize) {
+  MS->SwitchSection(MC->getObjectFileInfo()->getDwarfRangesSection());
+
+  // Offset each range by the right amount.
+  int64_t PcOffset = FuncRange.value() + UnitPcOffset;
+  for (const auto &Range : Entries) {
+    if (Range.isBaseAddressSelectionEntry(AddressSize)) {
+      warn("unsupported base address selection operation",
+           "emitting debug_ranges");
+      break;
+    }
+    // Do not emit empty ranges.
+    if (Range.StartAddress == Range.EndAddress)
+      continue;
+
+    // All range entries should lie in the function range.
+    if (!(Range.StartAddress + OrigLowPc >= FuncRange.start() &&
+          Range.EndAddress + OrigLowPc <= FuncRange.stop()))
+      warn("inconsistent range data.", "emitting debug_ranges");
+    MS->EmitIntValue(Range.StartAddress + PcOffset, AddressSize);
+    MS->EmitIntValue(Range.EndAddress + PcOffset, AddressSize);
+    RangesSectionSize += 2 * AddressSize;
+  }
+
+  // Add the terminator entry.
+  MS->EmitIntValue(0, AddressSize);
+  MS->EmitIntValue(0, AddressSize);
+  RangesSectionSize += 2 * AddressSize;
+}
+
+/// \brief Emit the debug_aranges contribution of a unit and
+/// if \p DoDebugRanges is true the debug_range contents for a
+/// compile_unit level DW_AT_ranges attribute (Which are basically the
+/// same thing with a different base address).
+/// Just aggregate all the ranges gathered inside that unit.
+void DwarfStreamer::emitUnitRangesEntries(CompileUnit &Unit,
+                                          bool DoDebugRanges) {
+  unsigned AddressSize = Unit.getOrigUnit().getAddressByteSize();
+  // Gather the ranges in a vector, so that we can simplify them. The
+  // IntervalMap will have coalesced the non-linked ranges, but here
+  // we want to coalesce the linked addresses.
+  std::vector<std::pair<uint64_t, uint64_t>> Ranges;
+  const auto &FunctionRanges = Unit.getFunctionRanges();
+  for (auto Range = FunctionRanges.begin(), End = FunctionRanges.end();
+       Range != End; ++Range)
+    Ranges.push_back(std::make_pair(Range.start() + Range.value(),
+                                    Range.stop() + Range.value()));
+
+  // The object addresses where sorted, but again, the linked
+  // addresses might end up in a different order.
+  std::sort(Ranges.begin(), Ranges.end());
+
+  if (!Ranges.empty()) {
+    MS->SwitchSection(MC->getObjectFileInfo()->getDwarfARangesSection());
+
+    MCSymbol *BeginLabel = Asm->GetTempSymbol("Barange", Unit.getUniqueID());
+    MCSymbol *EndLabel = Asm->GetTempSymbol("Earange", Unit.getUniqueID());
+
+    unsigned HeaderSize =
+        sizeof(int32_t) + // Size of contents (w/o this field
+        sizeof(int16_t) + // DWARF ARange version number
+        sizeof(int32_t) + // Offset of CU in the .debug_info section
+        sizeof(int8_t) +  // Pointer Size (in bytes)
+        sizeof(int8_t);   // Segment Size (in bytes)
+
+    unsigned TupleSize = AddressSize * 2;
+    unsigned Padding = OffsetToAlignment(HeaderSize, TupleSize);
+
+    Asm->EmitLabelDifference(EndLabel, BeginLabel, 4); // Arange length
+    Asm->OutStreamer.EmitLabel(BeginLabel);
+    Asm->EmitInt16(dwarf::DW_ARANGES_VERSION); // Version number
+    Asm->EmitInt32(Unit.getStartOffset());     // Corresponding unit's offset
+    Asm->EmitInt8(AddressSize);                // Address size
+    Asm->EmitInt8(0);                          // Segment size
+
+    Asm->OutStreamer.EmitFill(Padding, 0x0);
+
+    for (auto Range = Ranges.begin(), End = Ranges.end(); Range != End;
+         ++Range) {
+      uint64_t RangeStart = Range->first;
+      MS->EmitIntValue(RangeStart, AddressSize);
+      while ((Range + 1) != End && Range->second == (Range + 1)->first)
+        ++Range;
+      MS->EmitIntValue(Range->second - RangeStart, AddressSize);
+    }
+
+    // Emit terminator
+    Asm->OutStreamer.EmitIntValue(0, AddressSize);
+    Asm->OutStreamer.EmitIntValue(0, AddressSize);
+    Asm->OutStreamer.EmitLabel(EndLabel);
+  }
+
+  if (!DoDebugRanges)
+    return;
+
+  MS->SwitchSection(MC->getObjectFileInfo()->getDwarfRangesSection());
+  // Offset each range by the right amount.
+  int64_t PcOffset = -Unit.getLowPc();
+  // Emit coalesced ranges.
+  for (auto Range = Ranges.begin(), End = Ranges.end(); Range != End; ++Range) {
+    MS->EmitIntValue(Range->first + PcOffset, AddressSize);
+    while (Range + 1 != End && Range->second == (Range + 1)->first)
+      ++Range;
+    MS->EmitIntValue(Range->second + PcOffset, AddressSize);
+    RangesSectionSize += 2 * AddressSize;
+  }
+
+  // Add the terminator entry.
+  MS->EmitIntValue(0, AddressSize);
+  MS->EmitIntValue(0, AddressSize);
+  RangesSectionSize += 2 * AddressSize;
 }
 
 /// \brief The core of the Dwarf linking logic.
@@ -589,7 +776,7 @@ private:
   cloneDieReferenceAttribute(DIE &Die,
                              const DWARFDebugInfoEntryMinimal &InputDIE,
                              AttributeSpec AttrSpec, unsigned AttrSize,
-                             const DWARFFormValue &Val, const DWARFUnit &U);
+                             const DWARFFormValue &Val, CompileUnit &Unit);
 
   /// \brief Helper for cloneDIE.
   unsigned cloneBlockAttribute(DIE &Die, AttributeSpec AttrSpec,
@@ -603,7 +790,7 @@ private:
   /// \brief Helper for cloneDIE.
   unsigned cloneScalarAttribute(DIE &Die,
                                 const DWARFDebugInfoEntryMinimal &InputDIE,
-                                const DWARFUnit &U, AttributeSpec AttrSpec,
+                                CompileUnit &U, AttributeSpec AttrSpec,
                                 const DWARFFormValue &Val, unsigned AttrSize);
 
   /// \brief Helper for cloneDIE.
@@ -619,6 +806,14 @@ private:
   /// This is passed to AsmPrinter::emitDwarfAbbrevs(), thus it cannot
   /// be changed to a vecot of unique_ptrs.
   std::vector<DIEAbbrev *> Abbreviations;
+
+  /// \brief Compute and emit debug_ranges section for \p Unit, and
+  /// patch the attributes referencing it.
+  void patchRangesForUnit(const CompileUnit &Unit, DWARFContext &Dwarf) const;
+
+  /// \brief Generate and emit the DW_AT_ranges attribute for a
+  /// compile_unit if it had one.
+  void generateUnitRanges(CompileUnit &Unit) const;
 
   /// \brief DIELoc objects that need to be destructed (but not freed!).
   std::vector<DIELoc *> DIELocs;
@@ -639,7 +834,7 @@ private:
   CompileUnit *getUnitForOffset(unsigned Offset);
 
   void reportWarning(const Twine &Warning, const DWARFUnit *Unit = nullptr,
-                     const DWARFDebugInfoEntryMinimal *DIE = nullptr);
+                     const DWARFDebugInfoEntryMinimal *DIE = nullptr) const;
 
   bool createStreamer(Triple TheTriple, StringRef OutputFilename);
   /// @}
@@ -692,7 +887,7 @@ const DWARFDebugInfoEntryMinimal *DwarfLinker::resolveDIEReference(
 /// \brief Report a warning to the user, optionaly including
 /// information about a specific \p DIE related to the warning.
 void DwarfLinker::reportWarning(const Twine &Warning, const DWARFUnit *Unit,
-                                const DWARFDebugInfoEntryMinimal *DIE) {
+                                const DWARFDebugInfoEntryMinimal *DIE) const {
   StringRef Context = "<debug map>";
   if (CurrentDebugObject)
     Context = CurrentDebugObject->getObjectFilename();
@@ -1160,8 +1355,8 @@ unsigned DwarfLinker::cloneStringAttribute(DIE &Die, AttributeSpec AttrSpec,
 unsigned DwarfLinker::cloneDieReferenceAttribute(
     DIE &Die, const DWARFDebugInfoEntryMinimal &InputDIE,
     AttributeSpec AttrSpec, unsigned AttrSize, const DWARFFormValue &Val,
-    const DWARFUnit &U) {
-  uint32_t Ref = *Val.getAsReference(&U);
+    CompileUnit &Unit) {
+  uint32_t Ref = *Val.getAsReference(&Unit.getOrigUnit());
   DIE *NewRefDie = nullptr;
   CompileUnit *RefUnit = nullptr;
   const DWARFDebugInfoEntryMinimal *RefDie = nullptr;
@@ -1173,7 +1368,7 @@ unsigned DwarfLinker::cloneDieReferenceAttribute(
       AttributeString = "DW_AT_???";
     reportWarning(Twine("Missing DIE for ref in attribute ") + AttributeString +
                       ". Dropping.",
-                  &U, &InputDIE);
+                  &Unit.getOrigUnit(), &InputDIE);
     return 0;
   }
 
@@ -1202,7 +1397,7 @@ unsigned DwarfLinker::cloneDieReferenceAttribute(
     } else {
       // A forward reference. Note and fixup later.
       Attr = new (DIEAlloc) DIEInteger(0xBADDEF);
-      RefUnit->noteForwardReference(NewRefDie, Attr);
+      Unit.noteForwardReference(NewRefDie, RefUnit, Attr);
     }
     Die.addValue(dwarf::Attribute(AttrSpec.Attr), dwarf::DW_FORM_ref_addr,
                  Attr);
@@ -1225,7 +1420,7 @@ unsigned DwarfLinker::cloneBlockAttribute(DIE &Die, AttributeSpec AttrSpec,
   DIELoc *Loc = nullptr;
   DIEBlock *Block = nullptr;
   // Just copy the block data over.
-  if (AttrSpec.Attr == dwarf::DW_FORM_exprloc) {
+  if (AttrSpec.Form == dwarf::DW_FORM_exprloc) {
     Loc = new (DIEAlloc) DIELoc();
     DIELocs.push_back(Loc);
   } else {
@@ -1258,16 +1453,27 @@ unsigned DwarfLinker::cloneAddressAttribute(DIE &Die, AttributeSpec AttrSpec,
                                             const DWARFFormValue &Val,
                                             const CompileUnit &Unit,
                                             AttributesInfo &Info) {
-  int64_t Addr = *Val.getAsAddress(&Unit.getOrigUnit());
+  uint64_t Addr = *Val.getAsAddress(&Unit.getOrigUnit());
   if (AttrSpec.Attr == dwarf::DW_AT_low_pc) {
     if (Die.getTag() == dwarf::DW_TAG_inlined_subroutine ||
         Die.getTag() == dwarf::DW_TAG_lexical_block)
       Addr += Info.PCOffset;
+    else if (Die.getTag() == dwarf::DW_TAG_compile_unit) {
+      Addr = Unit.getLowPc();
+      if (Addr == UINT64_MAX)
+        return 0;
+    }
   } else if (AttrSpec.Attr == dwarf::DW_AT_high_pc) {
-    // If we have a high_pc recorded for the input DIE, use
-    // it. Otherwise (when no relocations where applied) just use the
-    // one we just decoded.
-    Addr = (Info.OrigHighPc ? Info.OrigHighPc : Addr) + Info.PCOffset;
+    if (Die.getTag() == dwarf::DW_TAG_compile_unit) {
+      if (uint64_t HighPc = Unit.getHighPc())
+        Addr = HighPc;
+      else
+        return 0;
+    } else
+      // If we have a high_pc recorded for the input DIE, use
+      // it. Otherwise (when no relocations where applied) just use the
+      // one we just decoded.
+      Addr = (Info.OrigHighPc ? Info.OrigHighPc : Addr) + Info.PCOffset;
   }
 
   Die.addValue(static_cast<dwarf::Attribute>(AttrSpec.Attr),
@@ -1279,22 +1485,31 @@ unsigned DwarfLinker::cloneAddressAttribute(DIE &Die, AttributeSpec AttrSpec,
 /// \brief Clone a scalar attribute  and add it to \p Die.
 /// \returns the size of the new attribute.
 unsigned DwarfLinker::cloneScalarAttribute(
-    DIE &Die, const DWARFDebugInfoEntryMinimal &InputDIE, const DWARFUnit &U,
+    DIE &Die, const DWARFDebugInfoEntryMinimal &InputDIE, CompileUnit &Unit,
     AttributeSpec AttrSpec, const DWARFFormValue &Val, unsigned AttrSize) {
   uint64_t Value;
-  if (AttrSpec.Form == dwarf::DW_FORM_sec_offset)
+  if (AttrSpec.Attr == dwarf::DW_AT_high_pc &&
+      Die.getTag() == dwarf::DW_TAG_compile_unit) {
+    if (Unit.getLowPc() == -1ULL)
+      return 0;
+    // Dwarf >= 4 high_pc is an size, not an address.
+    Value = Unit.getHighPc() - Unit.getLowPc();
+  } else if (AttrSpec.Form == dwarf::DW_FORM_sec_offset)
     Value = *Val.getAsSectionOffset();
   else if (AttrSpec.Form == dwarf::DW_FORM_sdata)
     Value = *Val.getAsSignedConstant();
   else if (auto OptionalValue = Val.getAsUnsignedConstant())
     Value = *OptionalValue;
   else {
-    reportWarning("Unsupported scalar attribute form. Dropping attribute.", &U,
-                  &InputDIE);
+    reportWarning("Unsupported scalar attribute form. Dropping attribute.",
+                  &Unit.getOrigUnit(), &InputDIE);
     return 0;
   }
+  DIEInteger *Attr = new (DIEAlloc) DIEInteger(Value);
+  if (AttrSpec.Attr == dwarf::DW_AT_ranges)
+    Unit.noteRangeAttribute(Die, Attr);
   Die.addValue(dwarf::Attribute(AttrSpec.Attr), dwarf::Form(AttrSpec.Form),
-               new (DIEAlloc) DIEInteger(Value));
+               Attr);
   return AttrSize;
 }
 
@@ -1319,7 +1534,7 @@ unsigned DwarfLinker::cloneAttribute(DIE &Die,
   case dwarf::DW_FORM_ref4:
   case dwarf::DW_FORM_ref8:
     return cloneDieReferenceAttribute(Die, InputDIE, AttrSpec, AttrSize, Val,
-                                      U);
+                                      Unit);
   case dwarf::DW_FORM_block:
   case dwarf::DW_FORM_block1:
   case dwarf::DW_FORM_block2:
@@ -1337,7 +1552,7 @@ unsigned DwarfLinker::cloneAttribute(DIE &Die,
   case dwarf::DW_FORM_sec_offset:
   case dwarf::DW_FORM_flag:
   case dwarf::DW_FORM_flag_present:
-    return cloneScalarAttribute(Die, InputDIE, U, AttrSpec, Val, AttrSize);
+    return cloneScalarAttribute(Die, InputDIE, Unit, AttrSpec, Val, AttrSize);
   default:
     reportWarning("Unsupported attribute form in cloneAttribute. Dropping.", &U,
                   &InputDIE);
@@ -1496,6 +1711,62 @@ DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
   return Die;
 }
 
+/// \brief Patch the input object file relevant debug_ranges entries
+/// and emit them in the output file. Update the relevant attributes
+/// to point at the new entries.
+void DwarfLinker::patchRangesForUnit(const CompileUnit &Unit,
+                                     DWARFContext &OrigDwarf) const {
+  DWARFDebugRangeList RangeList;
+  const auto &FunctionRanges = Unit.getFunctionRanges();
+  unsigned AddressSize = Unit.getOrigUnit().getAddressByteSize();
+  DataExtractor RangeExtractor(OrigDwarf.getRangeSection(),
+                               OrigDwarf.isLittleEndian(), AddressSize);
+  auto InvalidRange = FunctionRanges.end(), CurrRange = InvalidRange;
+  DWARFUnit &OrigUnit = Unit.getOrigUnit();
+  const auto *OrigUnitDie = OrigUnit.getCompileUnitDIE(false);
+  uint64_t OrigLowPc = OrigUnitDie->getAttributeValueAsAddress(
+      &OrigUnit, dwarf::DW_AT_low_pc, -1ULL);
+  // Ranges addresses are based on the unit's low_pc. Compute the
+  // offset we need to apply to adapt to the the new unit's low_pc.
+  int64_t UnitPcOffset = 0;
+  if (OrigLowPc != -1ULL)
+    UnitPcOffset = int64_t(OrigLowPc) - Unit.getLowPc();
+
+  for (const auto &RangeAttribute : Unit.getRangesAttributes()) {
+    uint32_t Offset = RangeAttribute->getValue();
+    RangeAttribute->setValue(Streamer->getRangesSectionSize());
+    RangeList.extract(RangeExtractor, &Offset);
+    const auto &Entries = RangeList.getEntries();
+    const DWARFDebugRangeList::RangeListEntry &First = Entries.front();
+
+    if (CurrRange == InvalidRange || First.StartAddress < CurrRange.start() ||
+        First.StartAddress >= CurrRange.stop()) {
+      CurrRange = FunctionRanges.find(First.StartAddress + OrigLowPc);
+      if (CurrRange == InvalidRange ||
+          CurrRange.start() > First.StartAddress + OrigLowPc) {
+        reportWarning("no mapping for range.");
+        continue;
+      }
+    }
+
+    Streamer->emitRangesEntries(UnitPcOffset, OrigLowPc, CurrRange, Entries,
+                                AddressSize);
+  }
+}
+
+/// \brief Generate the debug_aranges entries for \p Unit and if the
+/// unit has a DW_AT_ranges attribute, also emit the debug_ranges
+/// contribution for this attribute.
+/// FIXME: this could actually be done right in patchRangesForUnit,
+/// but for the sake of initial bit-for-bit compatibility with legacy
+/// dsymutil, we have to do it in a delayed pass.
+void DwarfLinker::generateUnitRanges(CompileUnit &Unit) const {
+  DIEInteger *Attr = Unit.getUnitRangesAttribute();
+  if (Attr)
+    Attr->setValue(Streamer->getRangesSectionSize());
+  Streamer->emitUnitRangesEntries(Unit, Attr != nullptr);
+}
+
 bool DwarfLinker::link(const DebugMap &Map) {
 
   if (Map.begin() == Map.end()) {
@@ -1508,7 +1779,8 @@ bool DwarfLinker::link(const DebugMap &Map) {
 
   // Size of the DIEs (and headers) generated for the linked output.
   uint64_t OutputDebugInfoSize = 0;
-
+  // A unique ID that identifies each compile unit.
+  unsigned UnitID = 0;
   for (const auto &Obj : Map.objects()) {
     CurrentDebugObject = Obj.get();
 
@@ -1539,7 +1811,7 @@ bool DwarfLinker::link(const DebugMap &Map) {
         outs() << "Input compilation unit:";
         CUDie->dump(outs(), CU.get(), 0);
       }
-      Units.emplace_back(*CU);
+      Units.emplace_back(*CU, UnitID++);
       gatherDIEParents(CUDie, 0, Units.back());
     }
 
@@ -1568,11 +1840,15 @@ bool DwarfLinker::link(const DebugMap &Map) {
                                   11 /* Unit Header size */);
         CurrentUnit.setOutputUnitDIE(OutputDIE);
         OutputDebugInfoSize = CurrentUnit.computeNextUnitOffset();
+        if (!OutputDIE || Options.NoOutput)
+          continue;
+        patchRangesForUnit(CurrentUnit, DwarfContext);
       }
 
     // Emit all the compile unit's debug information.
     if (!ValidRelocs.empty() && !Options.NoOutput)
       for (auto &CurrentUnit : Units) {
+        generateUnitRanges(CurrentUnit);
         CurrentUnit.fixupForwardReferences();
         Streamer->emitCompileUnitHeader(CurrentUnit);
         if (!CurrentUnit.getOutputUnitDIE())

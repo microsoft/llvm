@@ -1223,6 +1223,14 @@ static void WriteConstantInternal(raw_ostream &Out, const Constant *CV,
       Out << ' ' << getPredicateText(CE->getPredicate());
     Out << " (";
 
+    if (const GEPOperator *GEP = dyn_cast<GEPOperator>(CE)) {
+      TypePrinter.print(
+          cast<PointerType>(GEP->getPointerOperandType()->getScalarType())
+              ->getElementType(),
+          Out);
+      Out << ", ";
+    }
+
     for (User::const_op_iterator OI=CE->op_begin(); OI != CE->op_end(); ++OI) {
       TypePrinter.print((*OI)->getType(), Out);
       Out << ' ';
@@ -2877,7 +2885,13 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
     if (AI->isUsedWithInAlloca())
       Out << "inalloca ";
     TypePrinter.print(AI->getAllocatedType(), Out);
-    if (!AI->getArraySize() || AI->isArrayAllocation()) {
+
+    // Explicitly write the array size if the code is broken, if it's an array
+    // allocation, or if the type is not canonical for scalar allocations.  The
+    // latter case prevents the type from mutating when round-tripping through
+    // assembly.
+    if (!AI->getArraySize() || AI->isArrayAllocation() ||
+        !AI->getArraySize()->getType()->isIntegerTy(32)) {
       Out << ", ";
       writeOperand(AI->getArraySize(), true);
     }
