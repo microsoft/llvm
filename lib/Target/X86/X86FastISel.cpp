@@ -1094,20 +1094,30 @@ static unsigned X86ChooseCmpOpcode(EVT VT, const X86Subtarget *Subtarget) {
   }
 }
 
-/// X86ChooseCmpImmediateOpcode - If we have a comparison with RHS as the RHS
-/// of the comparison, return an opcode that works for the compare (e.g.
-/// CMP32ri) otherwise return 0.
+/// If we have a comparison with RHS as the RHS  of the comparison, return an
+/// opcode that works for the compare (e.g. CMP32ri) otherwise return 0.
 static unsigned X86ChooseCmpImmediateOpcode(EVT VT, const ConstantInt *RHSC) {
+  int64_t Val = RHSC->getSExtValue();
   switch (VT.getSimpleVT().SimpleTy) {
   // Otherwise, we can't fold the immediate into this comparison.
-  default: return 0;
-  case MVT::i8: return X86::CMP8ri;
-  case MVT::i16: return X86::CMP16ri;
-  case MVT::i32: return X86::CMP32ri;
+  default:
+    return 0;
+  case MVT::i8:
+    return X86::CMP8ri;
+  case MVT::i16:
+    if (isInt<8>(Val))
+      return X86::CMP16ri8;
+    return X86::CMP16ri;
+  case MVT::i32:
+    if (isInt<8>(Val))
+      return X86::CMP32ri8;
+    return X86::CMP32ri;
   case MVT::i64:
+    if (isInt<8>(Val))
+      return X86::CMP64ri8;
     // 64-bit comparisons are only valid if the immediate fits in a 32-bit sext
     // field.
-    if ((int)RHSC->getSExtValue() == RHSC->getSExtValue())
+    if (isInt<32>(Val))
       return X86::CMP64ri32;
     return 0;
   }
