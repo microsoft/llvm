@@ -224,11 +224,11 @@ public:
 }
 
 // This is duplicated code. Refactor this.
-static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
-                                    MCContext &Ctx, MCAsmBackend &MAB,
-                                    raw_ostream &OS, MCCodeEmitter *Emitter,
+static MCStreamer *createMCStreamer(const Triple &T, MCContext &Ctx,
+                                    MCAsmBackend &MAB, raw_ostream &OS,
+                                    MCCodeEmitter *Emitter,
                                     const MCSubtargetInfo &STI, bool RelaxAll) {
-  if (Triple(TT).isOSDarwin()) {
+  if (T.isOSDarwin()) {
     MCStreamer *S = createMachOStreamer(Ctx, MAB, OS, Emitter, RelaxAll);
     new PPCTargetMachOStreamer(*S);
     return S;
@@ -239,16 +239,11 @@ static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
   return S;
 }
 
-static MCStreamer *
-createMCAsmStreamer(MCContext &Ctx, formatted_raw_ostream &OS,
-                    bool isVerboseAsm, bool useDwarfDirectory,
-                    MCInstPrinter *InstPrint, MCCodeEmitter *CE,
-                    MCAsmBackend *TAB, bool ShowInst) {
-
-  MCStreamer *S = llvm::createAsmStreamer(
-      Ctx, OS, isVerboseAsm, useDwarfDirectory, InstPrint, CE, TAB, ShowInst);
-  new PPCTargetAsmStreamer(*S, OS);
-  return S;
+static MCTargetStreamer *createAsmTargetStreamer(MCStreamer &S,
+                                                 formatted_raw_ostream &OS,
+                                                 MCInstPrinter *InstPrint,
+                                                 bool isVerboseAsm) {
+  return new PPCTargetAsmStreamer(S, OS);
 }
 
 static MCInstPrinter *createPPCMCInstPrinter(const Target &T,
@@ -309,9 +304,12 @@ extern "C" void LLVMInitializePowerPCTargetMC() {
   TargetRegistry::RegisterMCObjectStreamer(ThePPC64LETarget, createMCStreamer);
 
   // Register the asm streamer.
-  TargetRegistry::RegisterAsmStreamer(ThePPC32Target, createMCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(ThePPC64Target, createMCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(ThePPC64LETarget, createMCAsmStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(ThePPC32Target,
+                                            createAsmTargetStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(ThePPC64Target,
+                                            createAsmTargetStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(ThePPC64LETarget,
+                                            createAsmTargetStreamer);
 
   // Register the MCInstPrinter.
   TargetRegistry::RegisterMCInstPrinter(ThePPC32Target, createPPCMCInstPrinter);

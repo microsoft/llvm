@@ -92,7 +92,7 @@ bool DIDescriptor::Verify() const {
           DIObjCProperty(DbgNode).Verify() ||
           DITemplateTypeParameter(DbgNode).Verify() ||
           DITemplateValueParameter(DbgNode).Verify() ||
-          DIImportedEntity(DbgNode).Verify() || DIExpression(DbgNode).Verify());
+          DIImportedEntity(DbgNode).Verify());
 }
 
 static Metadata *getField(const MDNode *DbgNode, unsigned Elt) {
@@ -266,30 +266,32 @@ bool DIType::Verify() const {
   if (!isScopeRef(N->getScope()))
     return false;
 
-  // FIXME: Sink this into the various subclass verifies.
-  uint16_t Tag = getTag();
-  if (!isBasicType() && Tag != dwarf::DW_TAG_const_type &&
-      Tag != dwarf::DW_TAG_volatile_type && Tag != dwarf::DW_TAG_pointer_type &&
-      Tag != dwarf::DW_TAG_ptr_to_member_type &&
-      Tag != dwarf::DW_TAG_reference_type &&
-      Tag != dwarf::DW_TAG_rvalue_reference_type &&
-      Tag != dwarf::DW_TAG_restrict_type && Tag != dwarf::DW_TAG_array_type &&
-      Tag != dwarf::DW_TAG_enumeration_type &&
-      Tag != dwarf::DW_TAG_subroutine_type &&
-      Tag != dwarf::DW_TAG_inheritance && Tag != dwarf::DW_TAG_friend &&
-      getFilename().empty())
-    return false;
-
   // DIType is abstract, it should be a BasicType, a DerivedType or
   // a CompositeType.
   if (isBasicType())
     return DIBasicType(DbgNode).Verify();
-  else if (isCompositeType())
+
+  // FIXME: Sink this into the various subclass verifies.
+  if (getFilename().empty()) {
+    // Check whether the filename is allowed to be empty.
+    uint16_t Tag = getTag();
+    if (Tag != dwarf::DW_TAG_const_type && Tag != dwarf::DW_TAG_volatile_type &&
+        Tag != dwarf::DW_TAG_pointer_type &&
+        Tag != dwarf::DW_TAG_ptr_to_member_type &&
+        Tag != dwarf::DW_TAG_reference_type &&
+        Tag != dwarf::DW_TAG_rvalue_reference_type &&
+        Tag != dwarf::DW_TAG_restrict_type && Tag != dwarf::DW_TAG_array_type &&
+        Tag != dwarf::DW_TAG_enumeration_type &&
+        Tag != dwarf::DW_TAG_subroutine_type &&
+        Tag != dwarf::DW_TAG_inheritance && Tag != dwarf::DW_TAG_friend)
+      return false;
+  }
+
+  if (isCompositeType())
     return DICompositeType(DbgNode).Verify();
-  else if (isDerivedType())
+  if (isDerivedType())
     return DIDerivedType(DbgNode).Verify();
-  else
-    return false;
+  return false;
 }
 
 bool DIBasicType::Verify() const { return getRaw(); }
@@ -398,12 +400,6 @@ bool DIVariable::Verify() const {
       return false;
 
   return isTypeRef(N->getType());
-}
-
-bool DIExpression::Verify() const {
-  // FIXME: This should return false if it's null!
-  auto *N = getRaw();
-  return !N || N->isValid();
 }
 
 bool DILocation::Verify() const { return getRaw(); }

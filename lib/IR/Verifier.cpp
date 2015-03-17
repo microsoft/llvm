@@ -131,19 +131,19 @@ private:
   template <typename... Ts> void WriteTs() {}
 
 public:
-  // \brief A check failed, so printout out the condition and the message.
-  //
-  // This provides a nice place to put a breakpoint if you want to see why
-  // something is not correct.
+  /// \brief A check failed, so printout out the condition and the message.
+  ///
+  /// This provides a nice place to put a breakpoint if you want to see why
+  /// something is not correct.
   void CheckFailed(const Twine &Message) {
     OS << Message << '\n';
     Broken = true;
   }
 
-  // \brief A check failed (with values to print).
-  //
-  // This calls the Message-only version so that the above is easier to set a
-  // breakpoint on.
+  /// \brief A check failed (with values to print).
+  ///
+  /// This calls the Message-only version so that the above is easier to set a
+  /// breakpoint on.
   template <typename T1, typename... Ts>
   void CheckFailed(const Twine &Message, const T1 &V1, const Ts &... Vs) {
     CheckFailed(Message);
@@ -3030,10 +3030,6 @@ void Verifier::visitDbgIntrinsic(StringRef Kind, DbgIntrinsicTy &DII) {
   Assert(isa<MDExpression>(DII.getRawExpression()),
          "invalid llvm.dbg." + Kind + " intrinsic expression", &DII,
          DII.getRawExpression());
-
-  // Don't call visitMDNode(), since that will recurse through operands.
-  visitMDLocalVariable(*DII.getVariable());
-  visitMDExpression(*DII.getExpression());
 }
 
 void DebugInfoVerifier::verifyDebugInfo() {
@@ -3079,20 +3075,12 @@ void DebugInfoVerifier::processCallInst(DebugInfoFinder &Finder,
   if (Function *F = CI.getCalledFunction())
     if (Intrinsic::ID ID = (Intrinsic::ID)F->getIntrinsicID())
       switch (ID) {
-      case Intrinsic::dbg_declare: {
-        auto *DDI = cast<DbgDeclareInst>(&CI);
-        Finder.processDeclare(*M, DDI);
-        if (auto E = DDI->getExpression())
-          Assert(DIExpression(E).Verify(), "DIExpression does not Verify!", E);
+      case Intrinsic::dbg_declare:
+        Finder.processDeclare(*M, cast<DbgDeclareInst>(&CI));
         break;
-      }
-      case Intrinsic::dbg_value: {
-        auto *DVI = cast<DbgValueInst>(&CI);
-        Finder.processValue(*M, DVI);
-        if (auto E = DVI->getExpression())
-          Assert(DIExpression(E).Verify(), "DIExpression does not Verify!", E);
+      case Intrinsic::dbg_value:
+        Finder.processValue(*M, cast<DbgValueInst>(&CI));
         break;
-      }
       default:
         break;
       }
@@ -3125,8 +3113,13 @@ bool llvm::verifyModule(const Module &M, raw_ostream *OS) {
 
   // Note that this function's return value is inverted from what you would
   // expect of a function called "verify".
+  if (!V.verify(M) || Broken)
+    return true;
+
+  // Run the debug info verifier only if the regular verifier succeeds, since
+  // sometimes checks that have already failed will cause crashes here.
   DebugInfoVerifier DIV(OS ? *OS : NullStr);
-  return !V.verify(M) || !DIV.verify(M) || Broken;
+  return !DIV.verify(M);
 }
 
 namespace {

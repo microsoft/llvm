@@ -296,13 +296,11 @@ static MCCodeGenInfo *createARMMCCodeGenInfo(StringRef TT, Reloc::Model RM,
 }
 
 // This is duplicated code. Refactor this.
-static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
-                                    MCContext &Ctx, MCAsmBackend &MAB,
-                                    raw_ostream &OS, MCCodeEmitter *Emitter,
+static MCStreamer *createMCStreamer(const Triple &T, MCContext &Ctx,
+                                    MCAsmBackend &MAB, raw_ostream &OS,
+                                    MCCodeEmitter *Emitter,
                                     const MCSubtargetInfo &STI, bool RelaxAll) {
-  Triple TheTriple(TT);
-
-  switch (TheTriple.getObjectFormat()) {
+  switch (T.getObjectFormat()) {
   default: llvm_unreachable("unsupported object format");
   case Triple::MachO: {
     MCStreamer *S = createMachOStreamer(Ctx, MAB, OS, Emitter, false);
@@ -310,11 +308,11 @@ static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
     return S;
   }
   case Triple::COFF:
-    assert(TheTriple.isOSWindows() && "non-Windows ARM COFF is not supported");
+    assert(T.isOSWindows() && "non-Windows ARM COFF is not supported");
     return createARMWinCOFFStreamer(Ctx, MAB, *Emitter, OS);
   case Triple::ELF:
     return createARMELFStreamer(Ctx, MAB, OS, Emitter, false,
-                                TheTriple.getArch() == Triple::thumb);
+                                T.getArch() == Triple::thumb);
   }
 }
 
@@ -450,10 +448,14 @@ extern "C" void LLVMInitializeARMTargetMC() {
   TargetRegistry::RegisterMCObjectStreamer(TheThumbBETarget, createMCStreamer);
 
   // Register the asm streamer.
-  TargetRegistry::RegisterAsmStreamer(TheARMLETarget, createMCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(TheARMBETarget, createMCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(TheThumbLETarget, createMCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(TheThumbBETarget, createMCAsmStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(TheARMLETarget,
+                                            createARMTargetAsmStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(TheARMBETarget,
+                                            createARMTargetAsmStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(TheThumbLETarget,
+                                            createARMTargetAsmStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(TheThumbBETarget,
+                                            createARMTargetAsmStreamer);
 
   // Register the null TargetStreamer.
   TargetRegistry::RegisterNullTargetStreamer(TheARMLETarget,

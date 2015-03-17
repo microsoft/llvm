@@ -1973,7 +1973,8 @@ std::error_code BitcodeReader::ParseConstants() {
                                            bitc::CST_CODE_CE_INBOUNDS_GEP);
       if (PointeeType &&
           PointeeType != cast<GEPOperator>(V)->getSourceElementType())
-        return Error("Invalid record");
+        return Error("Explicit gep operator type does not match pointee type "
+                     "of pointer operand");
       break;
     }
     case bitc::CST_CODE_CE_SELECT: {  // CE_SELECT: [opval#, opval#, opval#]
@@ -3123,6 +3124,13 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       if (getValueTypePair(Record, OpNum, NextValueNo, BasePtr))
         return Error("Invalid record");
 
+      if (Ty &&
+          Ty !=
+              cast<SequentialType>(BasePtr->getType()->getScalarType())
+                  ->getElementType())
+        return Error(
+            "Explicit gep type does not match pointee type of pointer operand");
+
       SmallVector<Value*, 16> GEPIdx;
       while (OpNum != Record.size()) {
         Value *Op;
@@ -3132,8 +3140,7 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       }
 
       I = GetElementPtrInst::Create(Ty, BasePtr, GEPIdx);
-      if (Ty && Ty != cast<GetElementPtrInst>(I)->getSourceElementType())
-        return Error("Invalid record");
+
       InstructionList.push_back(I);
       if (InBounds)
         cast<GetElementPtrInst>(I)->setIsInBounds(true);
@@ -3642,9 +3649,9 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
         return EC;
       I = new LoadInst(Op, "", Record[OpNum+1], Align);
 
-      (void)Ty;
-      assert((!Ty || Ty == I->getType()) &&
-             "Explicit type doesn't match pointee type of the first operand");
+      if (Ty && Ty != I->getType())
+        return Error("Explicit load type does not match pointee type of "
+                     "pointer operand");
 
       InstructionList.push_back(I);
       break;

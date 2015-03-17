@@ -7176,21 +7176,52 @@ static SDValue performBitcastCombine(SDNode *N,
 static SDValue performConcatVectorsCombine(SDNode *N,
                                            TargetLowering::DAGCombinerInfo &DCI,
                                            SelectionDAG &DAG) {
+  SDLoc dl(N);
+  EVT VT = N->getValueType(0);
+  SDValue N0 = N->getOperand(0), N1 = N->getOperand(1);
+
+  // Optimize concat_vectors of truncated vectors, where the intermediate
+  // type is illegal, to avoid said illegality,  e.g.,
+  //   (v4i16 (concat_vectors (v2i16 (truncate (v2i64))),
+  //                          (v2i16 (truncate (v2i64)))))
+  // ->
+  //   (v4i16 (truncate (v4i32 (concat_vectors (v2i32 (truncate (v2i64))),
+  //                                           (v2i32 (truncate (v2i64)))))))
+  // This isn't really target-specific, but ISD::TRUNCATE legality isn't keyed
+  // on both input and result type, so we might generate worse code.
+  // On AArch64 we know it's fine for v2i64->v4i16 and v4i32->v8i8.
+  if (N->getNumOperands() == 2 &&
+      N0->getOpcode() == ISD::TRUNCATE &&
+      N1->getOpcode() == ISD::TRUNCATE) {
+    SDValue N00 = N0->getOperand(0);
+    SDValue N10 = N1->getOperand(0);
+    EVT N00VT = N00.getValueType();
+
+    if (N00VT == N10.getValueType() &&
+        (N00VT == MVT::v2i64 || N00VT == MVT::v4i32) &&
+        N00VT.getScalarSizeInBits() == 4 * VT.getScalarSizeInBits()) {
+      MVT MidVT = (N00VT == MVT::v2i64 ? MVT::v2i32 : MVT::v4i16);
+      MVT ConcatMidVT = MVT::getVectorVT(MidVT.getVectorElementType(),
+                                         MidVT.getVectorNumElements() * 2);
+      return DAG.getNode(
+          ISD::TRUNCATE, dl, VT,
+          DAG.getNode(ISD::CONCAT_VECTORS, dl, ConcatMidVT,
+                      DAG.getNode(ISD::TRUNCATE, dl, MidVT, N00),
+                      DAG.getNode(ISD::TRUNCATE, dl, MidVT, N10)));
+    }
+  }
+
   // Wait 'til after everything is legalized to try this. That way we have
   // legal vector types and such.
   if (DCI.isBeforeLegalizeOps())
     return SDValue();
 
-  SDLoc dl(N);
-  EVT VT = N->getValueType(0);
-
   // If we see a (concat_vectors (v1x64 A), (v1x64 A)) it's really a vector
   // splat. The indexed instructions are going to be expecting a DUPLANE64, so
   // canonicalise to that.
-  if (N->getOperand(0) == N->getOperand(1) && VT.getVectorNumElements() == 2) {
+  if (N0 == N1 && VT.getVectorNumElements() == 2) {
     assert(VT.getVectorElementType().getSizeInBits() == 64);
-    return DAG.getNode(AArch64ISD::DUPLANE64, dl, VT,
-                       WidenVector(N->getOperand(0), DAG),
+    return DAG.getNode(AArch64ISD::DUPLANE64, dl, VT, WidenVector(N0, DAG),
                        DAG.getConstant(0, MVT::i64));
   }
 
@@ -7203,10 +7234,9 @@ static SDValue performConcatVectorsCombine(SDNode *N,
   // becomes
   //    (bitconvert (concat_vectors (v4i16 (bitconvert LHS)), RHS))
 
-  SDValue Op1 = N->getOperand(1);
-  if (Op1->getOpcode() != ISD::BITCAST)
+  if (N1->getOpcode() != ISD::BITCAST)
     return SDValue();
-  SDValue RHS = Op1->getOperand(0);
+  SDValue RHS = N1->getOperand(0);
   MVT RHSTy = RHS.getValueType().getSimpleVT();
   // If the RHS is not a vector, this is not the pattern we're looking for.
   if (!RHSTy.isVector())
@@ -7216,10 +7246,10 @@ static SDValue performConcatVectorsCombine(SDNode *N,
 
   MVT ConcatTy = MVT::getVectorVT(RHSTy.getVectorElementType(),
                                   RHSTy.getVectorNumElements() * 2);
-  return DAG.getNode(
-      ISD::BITCAST, dl, VT,
-      DAG.getNode(ISD::CONCAT_VECTORS, dl, ConcatTy,
-                  DAG.getNode(ISD::BITCAST, dl, RHSTy, N->getOperand(0)), RHS));
+  return DAG.getNode(ISD::BITCAST, dl, VT,
+                     DAG.getNode(ISD::CONCAT_VECTORS, dl, ConcatTy,
+                                 DAG.getNode(ISD::BITCAST, dl, RHSTy, N0),
+                                 RHS));
 }
 
 static SDValue tryCombineFixedPointConvert(SDNode *N,

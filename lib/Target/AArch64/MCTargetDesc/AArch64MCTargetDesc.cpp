@@ -123,13 +123,11 @@ static MCInstPrinter *createAArch64MCInstPrinter(const Target &T,
   return nullptr;
 }
 
-static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
-                                    MCContext &Ctx, MCAsmBackend &TAB,
-                                    raw_ostream &OS, MCCodeEmitter *Emitter,
+static MCStreamer *createMCStreamer(const Triple &T, MCContext &Ctx,
+                                    MCAsmBackend &TAB, raw_ostream &OS,
+                                    MCCodeEmitter *Emitter,
                                     const MCSubtargetInfo &STI, bool RelaxAll) {
-  Triple TheTriple(TT);
-
-  if (TheTriple.isOSDarwin())
+  if (T.isOSDarwin())
     return createMachOStreamer(Ctx, TAB, OS, Emitter, RelaxAll,
                                /*LabelSections*/ true);
 
@@ -199,12 +197,12 @@ extern "C" void LLVMInitializeAArch64TargetMC() {
   TargetRegistry::RegisterMCObjectStreamer(TheARM64Target, createMCStreamer);
 
   // Register the asm streamer.
-  TargetRegistry::RegisterAsmStreamer(TheAArch64leTarget,
-                                      createAArch64MCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(TheAArch64beTarget,
-                                      createAArch64MCAsmStreamer);
-  TargetRegistry::RegisterAsmStreamer(TheARM64Target,
-                                      createAArch64MCAsmStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(TheAArch64leTarget,
+                                            createAArch64AsmTargetStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(TheAArch64beTarget,
+                                            createAArch64AsmTargetStreamer);
+  TargetRegistry::RegisterAsmTargetStreamer(TheARM64Target,
+                                            createAArch64AsmTargetStreamer);
 
   // Register the MCInstPrinter.
   TargetRegistry::RegisterMCInstPrinter(TheAArch64leTarget,
