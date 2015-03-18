@@ -15,6 +15,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/Allocator.h"
@@ -36,8 +37,6 @@ namespace llvm {
   class MCRegisterInfo;
   class MCLineSection;
   class SMLoc;
-  class StringRef;
-  class Twine;
   class MCSectionMachO;
   class MCSectionELF;
   class MCSectionCOFF;
@@ -88,8 +87,9 @@ namespace llvm {
     /// artificial symbols.
     StringMap<bool, BumpPtrAllocator&> UsedNames;
 
-    /// The next ID to dole out to an unnamed assembler temporary symbol.
-    unsigned NextUniqueID;
+    /// The next ID to dole out to an unnamed assembler temporary symbol with
+    /// a given prefix.
+    StringMap<unsigned> NextID;
 
     /// Instances of directional local labels.
     DenseMap<unsigned, MCLabel *> Instances;
@@ -172,7 +172,7 @@ namespace llvm {
     /// Do automatic reset in destructor
     bool AutoReset;
 
-    MCSymbol *CreateSymbol(StringRef Name);
+    MCSymbol *CreateSymbol(StringRef Name, bool AlwaysAddSuffix);
 
     MCSymbol *getOrCreateDirectionalLocalSymbol(unsigned LocalLabelVal,
                                                 unsigned Instance);
@@ -213,10 +213,7 @@ namespace llvm {
     /// unspecified name.
     MCSymbol *CreateTempSymbol();
 
-    MCSymbol *createTempSymbol(const Twine &Name);
-
-    /// Return a unique identifier for use in constructing symbol names.
-    unsigned getUniqueSymbolID() { return NextUniqueID++; }
+    MCSymbol *createTempSymbol(const Twine &Name, bool AlwaysAddSuffix);
 
     /// Create the definition of a directional local symbol for numbered label
     /// (used for "1:" definitions).
@@ -230,7 +227,6 @@ namespace llvm {
     /// return it.  If not, create a forward reference and return it.
     ///
     /// @param Name - The symbol name, which must be unique across all symbols.
-    MCSymbol *GetOrCreateSymbol(StringRef Name);
     MCSymbol *GetOrCreateSymbol(const Twine &Name);
 
     MCSymbol *getOrCreateSectionSymbol(const MCSectionELF &Section);
@@ -238,7 +234,6 @@ namespace llvm {
     MCSymbol *getOrCreateFrameAllocSymbol(StringRef FuncName, unsigned Idx);
 
     /// Get the symbol for \p Name, or null.
-    MCSymbol *LookupSymbol(StringRef Name) const;
     MCSymbol *LookupSymbol(const Twine &Name) const;
 
     /// getSymbols - Get a reference for the symbol table for clients that

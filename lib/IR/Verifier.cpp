@@ -78,7 +78,7 @@
 #include <cstdarg>
 using namespace llvm;
 
-static cl::opt<bool> VerifyDebugInfo("verify-debug-info", cl::init(false));
+static cl::opt<bool> VerifyDebugInfo("verify-debug-info", cl::init(true));
 
 namespace {
 struct VerifierSupport {
@@ -754,7 +754,6 @@ void Verifier::visitMDLocalVariable(const MDLocalVariable &N) {
 }
 
 void Verifier::visitMDExpression(const MDExpression &N) {
-  Assert(N.getTag() == dwarf::DW_TAG_expression, "invalid tag", &N);
   Assert(N.isValid(), "invalid expression", &N);
 }
 

@@ -188,7 +188,7 @@ static LLVM_CONSTEXPR DwarfAccelTable::Atom TypeAtoms[] = {
     DwarfAccelTable::Atom(dwarf::DW_ATOM_type_flags, dwarf::DW_FORM_data1)};
 
 DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
-    : Asm(A), MMI(Asm->MMI), PrevLabel(nullptr), GlobalRangeCount(0),
+    : Asm(A), MMI(Asm->MMI), PrevLabel(nullptr),
       InfoHolder(A, "info_string", DIEValueAllocator),
       UsedNonDefaultText(false),
       SkeletonHolder(A, "skel_string", DIEValueAllocator),
@@ -926,8 +926,7 @@ DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
     DotDebugLocEntries.resize(DotDebugLocEntries.size() + 1);
     DebugLocList &LocList = DotDebugLocEntries.back();
     LocList.CU = &TheCU;
-    LocList.Label =
-        Asm->GetTempSymbol("debug_loc", DotDebugLocEntries.size() - 1);
+    LocList.Label = Asm->createTempSymbol("debug_loc");
 
     // Build the location list for this variable.
     buildLocationList(LocList.List, Ranges);
@@ -1300,30 +1299,6 @@ void DwarfDebug::emitAbbreviations() {
   Holder.emitAbbrevs(Asm->getObjFileLowering().getDwarfAbbrevSection());
 }
 
-// Emit the last address of the section and the end of the line matrix.
-void DwarfDebug::emitEndOfLineMatrix(unsigned SectionEnd) {
-  // Define last address of section.
-  Asm->OutStreamer.AddComment("Extended Op");
-  Asm->EmitInt8(0);
-
-  Asm->OutStreamer.AddComment("Op size");
-  Asm->EmitInt8(Asm->getDataLayout().getPointerSize() + 1);
-  Asm->OutStreamer.AddComment("DW_LNE_set_address");
-  Asm->EmitInt8(dwarf::DW_LNE_set_address);
-
-  Asm->OutStreamer.AddComment("Section end label");
-
-  Asm->OutStreamer.EmitSymbolValue(
-      Asm->GetTempSymbol("section_end", SectionEnd),
-      Asm->getDataLayout().getPointerSize());
-
-  // Mark end of matrix.
-  Asm->OutStreamer.AddComment("DW_LNE_end_sequence");
-  Asm->EmitInt8(0);
-  Asm->EmitInt8(1);
-  Asm->EmitInt8(1);
-}
-
 void DwarfDebug::emitAccel(DwarfAccelTable &Accel, const MCSection *Section,
                            StringRef TableName) {
   Accel.FinalizeTable(Asm, TableName);
@@ -1439,15 +1414,14 @@ void DwarfDebug::emitDebugPubSection(
 
     if (auto *Skeleton = TheU->getSkeleton())
       TheU = Skeleton;
-    unsigned ID = TheU->getUniqueID();
 
     // Start the dwarf pubnames section.
     Asm->OutStreamer.SwitchSection(PSec);
 
     // Emit the header.
     Asm->OutStreamer.AddComment("Length of Public " + Name + " Info");
-    MCSymbol *BeginLabel = Asm->GetTempSymbol("pub" + Name + "_begin", ID);
-    MCSymbol *EndLabel = Asm->GetTempSymbol("pub" + Name + "_end", ID);
+    MCSymbol *BeginLabel = Asm->createTempSymbol("pub" + Name + "_begin");
+    MCSymbol *EndLabel = Asm->createTempSymbol("pub" + Name + "_end");
     Asm->EmitLabelDifference(EndLabel, BeginLabel, 4);
 
     Asm->OutStreamer.EmitLabel(BeginLabel);
@@ -1683,7 +1657,6 @@ void DwarfDebug::emitDebugARanges() {
   }
 
   // Add terminating symbols for each section.
-  unsigned ID = 0;
   for (const auto &I : SectionMap) {
     const MCSection *Section = I.first;
     MCSymbol *Sym = nullptr;
@@ -1693,14 +1666,13 @@ void DwarfDebug::emitDebugARanges() {
       // if we know the section name up-front. For user-created sections, the
       // resulting label may not be valid to use as a label. (section names can
       // use a greater set of characters on some systems)
-      Sym = Asm->GetTempSymbol("debug_end", ID);
+      Sym = Asm->createTempSymbol("debug_end");
       Asm->OutStreamer.SwitchSection(Section);
       Asm->OutStreamer.EmitLabel(Sym);
     }
 
     // Insert a final terminator.
     SectionMap[Section].push_back(SymbolCU(nullptr, Sym));
-    ++ID;
   }
 
   DenseMap<DwarfCompileUnit *, std::vector<ArangeSpan>> Spans;

@@ -108,6 +108,7 @@ public:
 private:
   MCSymbol *CurrentFnBegin;
   MCSymbol *CurrentFnEnd;
+  MCSymbol *CurExceptionSym;
 
   // The garbage collection metadata printer table.
   void *GCMetadataPrinters; // Really a DenseMap.
@@ -154,6 +155,7 @@ public:
 
   MCSymbol *getFunctionBegin() const { return CurrentFnBegin; }
   MCSymbol *getFunctionEnd() const { return CurrentFnEnd; }
+  MCSymbol *getCurExceptionSym();
 
   /// Return information about object file lowering.
   const TargetLoweringObjectFile &getObjFileLowering() const;
@@ -196,7 +198,6 @@ public:
   /// Emit the specified function out to the OutStreamer.
   bool runOnMachineFunction(MachineFunction &MF) override {
     SetupMachineFunction(MF);
-    EmitFunctionHeader();
     EmitFunctionBody();
     return false;
   }
@@ -208,9 +209,6 @@ public:
   /// This should be called when a new MachineFunction is being processed from
   /// runOnMachineFunction.
   void SetupMachineFunction(MachineFunction &MF);
-
-  /// This method emits the header for the current function.
-  void EmitFunctionHeader();
 
   /// This method emits the body and trailer for a function.
   void EmitFunctionBody();
@@ -333,14 +331,7 @@ public:
   // Symbol Lowering Routines.
   //===------------------------------------------------------------------===//
 public:
-  /// Return the MCSymbol corresponding to the assembler temporary label with
-  /// the specified stem and unique ID.
-  MCSymbol *GetTempSymbol(const Twine &Name, unsigned ID) const;
-
-  /// Return an assembler temporary label with the specified stem.
-  MCSymbol *GetTempSymbol(const Twine &Name) const;
-
-  MCSymbol *createTempSymbol(const Twine &Name, unsigned ID) const;
+  MCSymbol *createTempSymbol(const Twine &Name) const;
 
   /// Return the MCSymbol for a private symbol with global value name as its
   /// base, with the specified suffix.
@@ -500,7 +491,9 @@ private:
   mutable const MachineInstr *LastMI;
   mutable unsigned LastFn;
   mutable unsigned Counter;
-  mutable unsigned SetCounter;
+
+  /// This method emits the header for the current function.
+  void EmitFunctionHeader();
 
   /// Emit a blob of inline asm to the output streamer.
   void

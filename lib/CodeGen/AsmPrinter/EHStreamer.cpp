@@ -436,12 +436,7 @@ void EHStreamer::emitExceptionTable() {
     Asm->OutContext.GetOrCreateSymbol(Twine("GCC_except_table")+
                                       Twine(Asm->getFunctionNumber()));
   Asm->OutStreamer.EmitLabel(GCCETSym);
-  Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("exception",
-                                                Asm->getFunctionNumber()));
-
-  if (IsSJLJ)
-    Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("_LSDA_",
-                                                  Asm->getFunctionNumber()));
+  Asm->OutStreamer.EmitLabel(Asm->getCurExceptionSym());
 
   // Emit the LSDA header.
   Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
