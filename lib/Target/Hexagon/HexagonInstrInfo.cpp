@@ -157,15 +157,19 @@ HexagonInstrInfo::InsertBranch(MachineBasicBlock &MBB,MachineBasicBlock *TBB,
         }
         BuildMI(&MBB, DL, get(BOpc)).addMBB(TBB);
       } else {
-        BuildMI(&MBB, DL,
-                get(BccOpc)).addReg(Cond[regPos].getReg()).addMBB(TBB);
+        // If Cond[0] is a basic block, insert ENDLOOP0.
+        if (Cond[0].isMBB())
+          BuildMI(&MBB, DL, get(Hexagon::ENDLOOP0)).addMBB(Cond[0].getMBB());
+        else
+          BuildMI(&MBB, DL,
+                  get(BccOpc)).addReg(Cond[regPos].getReg()).addMBB(TBB);
       }
       return 1;
     }
 
+    // We don't handle ENDLOOP0 with a conditional branch in AnalyzeBranch.
     BuildMI(&MBB, DL, get(BccOpc)).addReg(Cond[regPos].getReg()).addMBB(TBB);
     BuildMI(&MBB, DL, get(BOpc)).addMBB(FBB);
-
     return 2;
 }
 
@@ -314,30 +318,35 @@ bool HexagonInstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
 
 
 unsigned HexagonInstrInfo::RemoveBranch(MachineBasicBlock &MBB) const {
-  int BOpc   = Hexagon::J2_jump;
-  int BccOpc = Hexagon::J2_jumpt;
-  int BccOpcNot = Hexagon::J2_jumpf;
-
   MachineBasicBlock::iterator I = MBB.end();
   if (I == MBB.begin()) return 0;
   --I;
-  if (I->getOpcode() != BOpc && I->getOpcode() != BccOpc &&
-      I->getOpcode() != BccOpcNot)
-    return 0;
-
-  // Remove the branch.
-  I->eraseFromParent();
+  unsigned Opc1 = I->getOpcode();
+  switch (Opc1) {
+    case Hexagon::J2_jump:
+    case Hexagon::J2_jumpt:
+    case Hexagon::J2_jumpf:
+    case Hexagon::ENDLOOP0:
+      I->eraseFromParent();
+      break;
+    default:
+      return 0;
+  }
 
   I = MBB.end();
 
   if (I == MBB.begin()) return 1;
   --I;
-  if (I->getOpcode() != BccOpc && I->getOpcode() != BccOpcNot)
-    return 1;
-
-  // Remove the branch.
-  I->eraseFromParent();
-  return 2;
+  unsigned Opc2 = I->getOpcode();
+  switch (Opc2) {
+    case Hexagon::J2_jumpt:
+    case Hexagon::J2_jumpf:
+    case Hexagon::ENDLOOP0:
+      I->eraseFromParent();
+      return 2;
+    default:
+      return 1;
+  }
 }
 
 
@@ -557,9 +566,27 @@ void HexagonInstrInfo::loadRegFromAddr(MachineFunction &MF, unsigned DestReg,
 }
 bool
 HexagonInstrInfo::expandPostRAPseudo(MachineBasicBlock::iterator MI) const {
+  MachineBasicBlock &MBB = *MI->getParent();
+  DebugLoc DL = MI->getDebugLoc();
   unsigned Opc = MI->getOpcode();
 
   switch (Opc) {
+    case Hexagon::TFR_PdTrue: {
+      unsigned Reg = MI->getOperand(0).getReg();
+      BuildMI(MBB, MI, DL, get(Hexagon::C2_orn), Reg)
+        .addReg(Reg, RegState::Undef)
+        .addReg(Reg, RegState::Undef);
+      MBB.erase(MI);
+      return true;
+    }
+    case Hexagon::TFR_PdFalse: {
+      unsigned Reg = MI->getOperand(0).getReg();
+      BuildMI(MBB, MI, DL, get(Hexagon::C2_andn), Reg)
+        .addReg(Reg, RegState::Undef)
+        .addReg(Reg, RegState::Undef);
+      MBB.erase(MI);
+      return true;
+    }
     case Hexagon::TCRETURNi:
       MI->setDesc(get(Hexagon::J2_jump));
       return true;
@@ -1541,7 +1568,6 @@ int HexagonInstrInfo::GetDotNewOp(const MachineInstr* MI) const {
 
   switch (MI->getOpcode()) {
   default: llvm_unreachable("Unknown .new type");
-  // store new value byte
   case Hexagon::S4_storerb_ur:
     return Hexagon::S4_storerbnew_ur;
 
@@ -1551,6 +1577,20 @@ int HexagonInstrInfo::GetDotNewOp(const MachineInstr* MI) const {
   case Hexagon::S4_storeri_ur:
     return Hexagon::S4_storerinew_ur;
 
+  case Hexagon::S2_storerb_pci:
+    return Hexagon::S2_storerb_pci;
+
+  case Hexagon::S2_storeri_pci:
+    return Hexagon::S2_storeri_pci;
+
+  case Hexagon::S2_storerh_pci:
+    return Hexagon::S2_storerh_pci;
+
+  case Hexagon::S2_storerd_pci:
+    return Hexagon::S2_storerd_pci;
+
+  case Hexagon::S2_storerf_pci:
+    return Hexagon::S2_storerf_pci;
   }
   return 0;
 }

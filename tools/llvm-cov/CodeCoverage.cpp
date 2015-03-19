@@ -29,6 +29,7 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/Signals.h"
 #include <functional>
 #include <system_error>
@@ -293,10 +294,18 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
                "greater than the given threshold"),
       cl::cat(FilteringCategory));
 
+  cl::opt<cl::boolOrDefault> UseColor(
+      "use-color", cl::desc("Emit colored output (default=autodetect)"),
+      cl::init(cl::BOU_UNSET));
+
   auto commandLineParser = [&, this](int argc, const char **argv) -> int {
     cl::ParseCommandLineOptions(argc, argv, "LLVM code coverage tool\n");
     ViewOpts.Debug = DebugDump;
     CompareFilenamesOnly = FilenameEquivalence;
+
+    ViewOpts.Colors = UseColor == cl::BOU_UNSET
+                          ? sys::Process::StandardOutHasColors()
+                          : UseColor == cl::BOU_TRUE;
 
     // Create the function filters
     if (!NameFilters.empty() || !NameRegexFilters.empty()) {
@@ -388,15 +397,10 @@ int CodeCoverageTool::show(int argc, const char **argv,
                                    cl::desc("Show function instantiations"),
                                    cl::cat(ViewCategory));
 
-  cl::opt<bool> NoColors("no-colors", cl::Optional,
-                         cl::desc("Don't show text colors"), cl::init(false),
-                         cl::cat(ViewCategory));
-
   auto Err = commandLineParser(argc, argv);
   if (Err)
     return Err;
 
-  ViewOpts.Colors = !NoColors;
   ViewOpts.ShowLineNumbers = true;
   ViewOpts.ShowLineStats = ShowLineExecutionCounts.getNumOccurrences() != 0 ||
                            !ShowRegions || ShowBestLineRegionsCounts;
@@ -462,14 +466,9 @@ int CodeCoverageTool::show(int argc, const char **argv,
 
 int CodeCoverageTool::report(int argc, const char **argv,
                              CommandLineParserType commandLineParser) {
-  cl::opt<bool> NoColors("no-colors", cl::Optional,
-                         cl::desc("Don't show text colors"), cl::init(false));
-
   auto Err = commandLineParser(argc, argv);
   if (Err)
     return Err;
-
-  ViewOpts.Colors = !NoColors;
 
   auto Coverage = load();
   if (!Coverage)
