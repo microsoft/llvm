@@ -845,23 +845,28 @@ class VOP1_Pseudo <dag outs, dag ins, list<dag> pattern, string opName> :
   field bits<9> src0;
 }
 
+class VOP1_Real_si <string opName, vop1 op, dag outs, dag ins, string asm> :
+  VOP1<op.SI, outs, ins, asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.SI>;
+
+class VOP1_Real_vi <string opName, vop1 op, dag outs, dag ins, string asm> :
+  VOP1<op.VI, outs, ins, asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.VI>;
+
 multiclass VOP1_m <vop1 op, dag outs, dag ins, string asm, list<dag> pattern,
                    string opName> {
   def "" : VOP1_Pseudo <outs, ins, pattern, opName>;
 
-  def _si : VOP1<op.SI, outs, ins, asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
-  def _vi : VOP1<op.VI, outs, ins, asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.VI>;
+  def _si : VOP1_Real_si <opName, op, outs, ins, asm>;
+
+  def _vi : VOP1_Real_vi <opName, op, outs, ins, asm>;
 }
 
 multiclass VOP1SI_m <vop1 op, dag outs, dag ins, string asm, list<dag> pattern,
                    string opName> {
   def "" : VOP1_Pseudo <outs, ins, pattern, opName>;
 
-  def _si : VOP1<op.SI, outs, ins, asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
-  // No VI instruction. This class is for SI only.
+  def _si : VOP1_Real_si <opName, op, outs, ins, asm>;
 }
 
 class VOP2_Pseudo <dag outs, dag ins, list<dag> pattern, string opName> :
@@ -872,13 +877,20 @@ class VOP2_Pseudo <dag outs, dag ins, list<dag> pattern, string opName> :
   let isCodeGenOnly = 1;
 }
 
+class VOP2_Real_si <string opName, vop2 op, dag outs, dag ins, string asm> :
+  VOP2 <op.SI, outs, ins, opName#asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.SI>;
+
+class VOP2_Real_vi <string opName, vop2 op, dag outs, dag ins, string asm> :
+  VOP2 <op.SI, outs, ins, opName#asm, []>,
+  SIMCInstr <opName#"_e32", SISubtarget.VI>;
+
 multiclass VOP2SI_m <vop2 op, dag outs, dag ins, string asm, list<dag> pattern,
                      string opName, string revOp> {
   def "" : VOP2_Pseudo <outs, ins, pattern, opName>,
            VOP2_REV<revOp#"_e32", !eq(revOp, opName)>;
 
-  def _si : VOP2 <op.SI, outs, ins, opName#asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
+  def _si : VOP2_Real_si <opName, op, outs, ins, asm>;
 }
 
 multiclass VOP2_m <vop2 op, dag outs, dag ins, string asm, list<dag> pattern,
@@ -886,10 +898,10 @@ multiclass VOP2_m <vop2 op, dag outs, dag ins, string asm, list<dag> pattern,
   def "" : VOP2_Pseudo <outs, ins, pattern, opName>,
            VOP2_REV<revOp#"_e32", !eq(revOp, opName)>;
 
-  def _si : VOP2 <op.SI, outs, ins, opName#asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.SI>;
-  def _vi : VOP2 <op.VI, outs, ins, opName#asm, []>,
-            SIMCInstr <opName#"_e32", SISubtarget.VI>;
+  def _si : VOP2_Real_si <opName, op, outs, ins, asm>;
+
+  def _vi : VOP2_Real_vi <opName, op, outs, ins, asm>;
+
 }
 
 class VOP3DisableFields <bit HasSrc1, bit HasSrc2, bit HasModifiers> {
