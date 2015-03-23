@@ -174,6 +174,7 @@ static X86_32RelType getType32(X86_64RelType T) {
   case RT64_8:
     return RT32_8;
   }
+  llvm_unreachable("unexpected relocation type!");
 }
 
 static unsigned getRelocType32(MCSymbolRefExpr::VariantKind Modifier,
