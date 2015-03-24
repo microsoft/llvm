@@ -424,6 +424,9 @@ def CC_X86_64_CLR_VirtualDispatchStub : CallingConv<[
   // The first pointer-sized argument is passed in R11
   CCIfType<[i64], CCAssignToReg<[R11]>>,
 
+  // Mingw64 and native Win64 use Win64 CC
+  CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
+
   // Otherwise, drop to normal X86-64 CC
   CCDelegateTo<CC_X86_64_C>
 ]>;
@@ -431,6 +434,9 @@ def CC_X86_64_CLR_VirtualDispatchStub : CallingConv<[
 def CC_X86_64_CLR_SecretParameter : CallingConv<[
   // The secret parameter is passed in R10
   CCIf<"hasCLRSecretParameterAttribute(ValNo, State)", CCAssignToReg<[R10]>>,
+
+  // Mingw64 and native Win64 use Win64 CC
+  CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
 
   // Otherwise, drop to normal X86-64 CC
   CCDelegateTo<CC_X86_64_C>
@@ -670,8 +676,8 @@ def CC_X86_32_CLR_SecretParameter : CallingConv<[
   // The secret parameter is passed in EAX
   CCIf<"hasCLRSecretParameterAttribute(ValNo, State)", CCAssignToReg<[EAX]>>,
 
-  // Otherwise, drop to normal X86-64 CC
-  CCDelegateTo<CC_X86_64_C>
+  // Otherwise, drop to normal X86-32 CC
+  CCDelegateTo<CC_X86_32_C>
 ]>;
 
 
