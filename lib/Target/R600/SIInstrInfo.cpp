@@ -120,12 +120,20 @@ bool SIInstrInfo::areLoadsFromSameBasePtr(SDNode *Load0, SDNode *Load1,
     if (Load0->getOperand(0) != Load1->getOperand(0))
       return false;
 
+    const ConstantSDNode *Load0Offset =
+        dyn_cast<ConstantSDNode>(Load0->getOperand(1));
+    const ConstantSDNode *Load1Offset =
+        dyn_cast<ConstantSDNode>(Load1->getOperand(1));
+
+    if (!Load0Offset || !Load1Offset)
+      return false;
+
     // Check chain.
     if (findChainOperand(Load0) != findChainOperand(Load1))
       return false;
 
-    Offset0 = cast<ConstantSDNode>(Load0->getOperand(1))->getZExtValue();
-    Offset1 = cast<ConstantSDNode>(Load1->getOperand(1))->getZExtValue();
+    Offset0 = Load0Offset->getZExtValue();
+    Offset1 = Load1Offset->getZExtValue();
     return true;
   }
 
@@ -418,7 +426,9 @@ SIInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   }
 }
 
-unsigned SIInstrInfo::commuteOpcode(unsigned Opcode) const {
+unsigned SIInstrInfo::commuteOpcode(const MachineInstr &MI) const {
+  const unsigned Opcode = MI.getOpcode();
+
   int NewOpc;
 
   // Try to map original to commuted opcode
@@ -789,7 +799,7 @@ MachineInstr *SIInstrInfo::commuteInstruction(MachineInstr *MI,
   }
 
   if (MI)
-    MI->setDesc(get(commuteOpcode(MI->getOpcode())));
+    MI->setDesc(get(commuteOpcode(*MI)));
 
   return MI;
 }

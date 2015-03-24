@@ -179,28 +179,19 @@ EmitDwarfLineTable(MCObjectStreamer *MCOS, const MCSection *Section,
   }
 
   // Emit a DW_LNE_end_sequence for the end of the section.
-  // Using the pointer Section create a temporary label at the end of the
-  // section and use that and the LastLabel to compute the address delta
-  // and use INT64_MAX as the line delta which is the signal that this is
-  // actually a DW_LNE_end_sequence.
+  // Use the section end label to compute the address delta and use INT64_MAX
+  // as the line delta which is the signal that this is actually a
+  // DW_LNE_end_sequence.
+  MCSymbol *SectionEnd = MCOS->endSection(Section);
 
-  // Switch to the section to be able to create a symbol at its end.
-  // TODO: keep track of the last subsection so that this symbol appears in the
-  // correct place.
-  MCOS->SwitchSection(Section);
+  // Switch back the dwarf line section, in case endSection had to switch the
+  // section.
+  MCContext &Ctx = MCOS->getContext();
+  MCOS->SwitchSection(Ctx.getObjectFileInfo()->getDwarfLineSection());
 
-  MCContext &context = MCOS->getContext();
-  // Create a symbol at the end of the section.
-  MCSymbol *SectionEnd = context.CreateTempSymbol();
-  // Set the value of the symbol, as we are at the end of the section.
-  MCOS->EmitLabel(SectionEnd);
-
-  // Switch back the dwarf line section.
-  MCOS->SwitchSection(context.getObjectFileInfo()->getDwarfLineSection());
-
-  const MCAsmInfo *asmInfo = MCOS->getContext().getAsmInfo();
+  const MCAsmInfo *AsmInfo = Ctx.getAsmInfo();
   MCOS->EmitDwarfAdvanceLineAddr(INT64_MAX, LastLabel, SectionEnd,
-                                 asmInfo->getPointerSize());
+                                 AsmInfo->getPointerSize());
 }
 
 //
