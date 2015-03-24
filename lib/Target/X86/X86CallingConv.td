@@ -420,6 +420,22 @@ def CC_X86_64_AnyReg : CallingConv<[
   CCCustom<"CC_X86_AnyReg_Error">
 ]>;
 
+def CC_X86_64_CLR_VirtualDispatchStub : CallingConv<[
+  // The first pointer-sized argument is passed in R11
+  CCIfType<[i64], CCAssignToReg<[R11]>>,
+
+  // Otherwise, drop to normal X86-64 CC
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
+def CC_X86_64_CLR_SecretParameter : CallingConv<[
+  // The secret parameter is passed in R10
+  CCIf<"hasCLRSecretParameterAttribute(ValNo, State)", CCAssignToReg<[R10]>>,
+
+  // Otherwise, drop to normal X86-64 CC
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
 //===----------------------------------------------------------------------===//
 // X86 C Calling Convention
 //===----------------------------------------------------------------------===//
@@ -642,6 +658,23 @@ def CC_Intel_OCL_BI : CallingConv<[
   CCDelegateTo<CC_X86_32_C>
 ]>;
 
+def CC_X86_32_CLR_VirtualDispatchStub : CallingConv<[
+  // The first pointer-sized argument is passed in EAX
+  CCIfType<[i32], CCAssignToReg<[EAX]>>,
+
+  // Otherwise, drop to normal X86-32 CC
+  CCDelegateTo<CC_X86_32_C>
+]>;
+
+def CC_X86_32_CLR_SecretParameter : CallingConv<[
+  // The secret parameter is passed in EAX
+  CCIf<"hasCLRSecretParameterAttribute(ValNo, State)", CCAssignToReg<[EAX]>>,
+
+  // Otherwise, drop to normal X86-64 CC
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
+
 //===----------------------------------------------------------------------===//
 // X86 Root Argument Calling Conventions
 //===----------------------------------------------------------------------===//
@@ -654,6 +687,10 @@ def CC_X86_32 : CallingConv<[
   CCIfCC<"CallingConv::Fast", CCDelegateTo<CC_X86_32_FastCC>>,
   CCIfCC<"CallingConv::GHC", CCDelegateTo<CC_X86_32_GHC>>,
   CCIfCC<"CallingConv::HiPE", CCDelegateTo<CC_X86_32_HiPE>>,
+  CCIfCC<"CallingConv::CLR_VirtualDispatchStub",
+         CCDelegateTo<CC_X86_32_CLR_VirtualDispatchStub>>,
+  CCIfCC<"CallingConv::CLR_SecretParameter",
+         CCDelegateTo<CC_X86_32_CLR_SecretParameter>>,
 
   // Otherwise, drop to normal X86-32 CC
   CCDelegateTo<CC_X86_32_C>
@@ -668,6 +705,10 @@ def CC_X86_64 : CallingConv<[
   CCIfCC<"CallingConv::X86_64_Win64", CCDelegateTo<CC_X86_Win64_C>>,
   CCIfCC<"CallingConv::X86_64_SysV", CCDelegateTo<CC_X86_64_C>>,
   CCIfCC<"CallingConv::X86_VectorCall", CCDelegateTo<CC_X86_Win64_VectorCall>>,
+  CCIfCC<"CallingConv::CLR_VirtualDispatchStub",
+         CCDelegateTo<CC_X86_64_CLR_VirtualDispatchStub>>,
+  CCIfCC<"CallingConv::CLR_SecretParameter",
+         CCDelegateTo<CC_X86_64_CLR_SecretParameter>>,
 
   // Mingw64 and native Win64 use Win64 CC
   CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
