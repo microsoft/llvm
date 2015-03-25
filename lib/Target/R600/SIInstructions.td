@@ -28,6 +28,8 @@ def SendMsgImm : Operand<i32> {
 
 def isGCN : Predicate<"Subtarget->getGeneration() "
                       ">= AMDGPUSubtarget::SOUTHERN_ISLANDS">;
+def isSI : Predicate<"Subtarget->getGeneration() "
+                      "== AMDGPUSubtarget::SOUTHERN_ISLANDS">;
 def isSICI : Predicate<
   "Subtarget->getGeneration() == AMDGPUSubtarget::SOUTHERN_ISLANDS ||"
   "Subtarget->getGeneration() == AMDGPUSubtarget::SEA_ISLANDS"
@@ -306,7 +308,8 @@ defm S_ASHR_I64 : SOP2_64_32 <sop2<0x23, 0x21>, "s_ashr_i64",
 >;
 } // End Defs = [SCC]
 
-defm S_BFM_B32 : SOP2_32 <sop2<0x24, 0x22>, "s_bfm_b32", []>;
+defm S_BFM_B32 : SOP2_32 <sop2<0x24, 0x22>, "s_bfm_b32",
+  [(set i32:$dst, (AMDGPUbfm i32:$src0, i32:$src1))]>;
 defm S_BFM_B64 : SOP2_64 <sop2<0x25, 0x23>, "s_bfm_b64", []>;
 defm S_MUL_I32 : SOP2_32 <sop2<0x26, 0x24>, "s_mul_i32",
   [(set i32:$dst, (mul i32:$src0, i32:$src1))]
@@ -1611,8 +1614,8 @@ defm V_MAC_LEGACY_F32 : VOP2_VI3_Inst <vop23<0x6, 0x28e>, "v_mac_legacy_f32",
 >;
 } // End isCommutable = 1
 
-defm V_BFM_B32 : VOP2_VI3_Inst <vop23<0x1e, 0x293>, "v_bfm_b32", VOP_I32_I32_I32,
-  AMDGPUbfm
+defm V_BFM_B32 : VOP2_VI3_Inst <vop23<0x1e, 0x293>, "v_bfm_b32",
+  VOP_I32_I32_I32
 >;
 defm V_BCNT_U32_B32 : VOP2_VI3_Inst <vop23<0x22, 0x28b>, "v_bcnt_u32_b32",
   VOP_I32_I32_I32
@@ -1873,6 +1876,11 @@ defm V_ASHRREV_I64 : VOP3Inst <vop3<0, 0x291>, "v_ashrrev_i64",
 // Pseudo Instructions
 //===----------------------------------------------------------------------===//
 let isCodeGenOnly = 1, isPseudo = 1 in {
+
+// For use in patterns
+def V_CNDMASK_B64_PSEUDO : VOP3Common <(outs VReg_64:$dst),
+  (ins VSrc_64:$src0, VSrc_64:$src1, SSrc_64:$src2), "", []
+>;
 
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 // 64-bit vector move instruction.  This is mainly used by the SIFoldOperands
@@ -3315,6 +3323,89 @@ def : Pat <
   (f32 (select i1:$src2, f32:$src1, f32:$src0)),
   (V_CNDMASK_B32_e64 $src0, $src1, $src2)
 >;
+
+multiclass BFMPatterns <ValueType vt, InstSI BFM, InstSI MOV> {
+  def : Pat <
+    (vt (shl (vt (add (vt (shl 1, vt:$a)), -1)), vt:$b)),
+    (BFM $a, $b)
+  >;
+
+  def : Pat <
+    (vt (add (vt (shl 1, vt:$a)), -1)),
+    (BFM $a, (MOV 0))
+  >;
+}
+
+defm : BFMPatterns <i32, S_BFM_B32, S_MOV_B32>;
+// FIXME: defm : BFMPatterns <i64, S_BFM_B64, S_MOV_B64>;
+
+def : BFEPattern <V_BFE_U32, S_MOV_B32>;
+
+//===----------------------------------------------------------------------===//
+// Fract Patterns
+//===----------------------------------------------------------------------===//
+
+let Predicates = [isSI] in {
+
+// V_FRACT is buggy on SI, so the F32 version is never used and (x-floor(x)) is
+// used instead. However, SI doesn't have V_FLOOR_F64, so the most efficient
+// way to implement it is using V_FRACT_F64.
+// The workaround for the V_FRACT bug is:
+//    fract(x) = isnan(x) ? x : min(V_FRACT(x), 0.99999999999999999)
+
+// Convert (x + (-floor(x)) to fract(x)
+def : Pat <
+  (f64 (fadd (f64 (VOP3Mods f64:$x, i32:$mods)),
+             (f64 (fneg (f64 (ffloor (f64 (VOP3Mods f64:$x, i32:$mods)))))))),
+  (V_CNDMASK_B64_PSEUDO
+      $x,
+      (V_MIN_F64
+          SRCMODS.NONE,
+          (V_FRACT_F64_e64 $mods, $x, DSTCLAMP.NONE, DSTOMOD.NONE),
+          SRCMODS.NONE,
+          (V_MOV_B64_PSEUDO 0x3fefffffffffffff),
+          DSTCLAMP.NONE, DSTOMOD.NONE),
+      (V_CMP_CLASS_F64_e64 SRCMODS.NONE, $x, 3/*NaN*/))
+>;
+
+// Convert floor(x) to (x - fract(x))
+def : Pat <
+  (f64 (ffloor (f64 (VOP3Mods f64:$x, i32:$mods)))),
+  (V_ADD_F64
+      $mods,
+      $x,
+      SRCMODS.NEG,
+      (V_CNDMASK_B64_PSEUDO
+         $x,
+         (V_MIN_F64
+             SRCMODS.NONE,
+             (V_FRACT_F64_e64 $mods, $x, DSTCLAMP.NONE, DSTOMOD.NONE),
+             SRCMODS.NONE,
+             (V_MOV_B64_PSEUDO 0x3fefffffffffffff),
+             DSTCLAMP.NONE, DSTOMOD.NONE),
+         (V_CMP_CLASS_F64_e64 SRCMODS.NONE, $x, 3/*NaN*/)),
+      DSTCLAMP.NONE, DSTOMOD.NONE)
+>;
+
+} // End Predicates = [isSI]
+
+let Predicates = [isCI] in {
+
+// Convert (x - floor(x)) to fract(x)
+def : Pat <
+  (f32 (fsub (f32 (VOP3Mods f32:$x, i32:$mods)),
+             (f32 (ffloor (f32 (VOP3Mods f32:$x, i32:$mods)))))),
+  (V_FRACT_F32_e64 $mods, $x, DSTCLAMP.NONE, DSTOMOD.NONE)
+>;
+
+// Convert (x + (-floor(x))) to fract(x)
+def : Pat <
+  (f64 (fadd (f64 (VOP3Mods f64:$x, i32:$mods)),
+             (f64 (fneg (f64 (ffloor (f64 (VOP3Mods f64:$x, i32:$mods)))))))),
+  (V_FRACT_F64_e64 $mods, $x, DSTCLAMP.NONE, DSTOMOD.NONE)
+>;
+
+} // End Predicates = [isCI]
 
 //============================================================================//
 // Miscellaneous Optimization Patterns

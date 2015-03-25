@@ -202,10 +202,10 @@ SITargetLowering::SITargetLowering(TargetMachine &TM,
   if (Subtarget->getGeneration() >= AMDGPUSubtarget::SEA_ISLANDS) {
     setOperationAction(ISD::FTRUNC, MVT::f64, Legal);
     setOperationAction(ISD::FCEIL, MVT::f64, Legal);
-    setOperationAction(ISD::FFLOOR, MVT::f64, Legal);
     setOperationAction(ISD::FRINT, MVT::f64, Legal);
   }
 
+  setOperationAction(ISD::FFLOOR, MVT::f64, Legal);
   setOperationAction(ISD::FDIV, MVT::f32, Custom);
   setOperationAction(ISD::FDIV, MVT::f64, Custom);
 
@@ -928,6 +928,12 @@ SDValue SITargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
                        Op.getOperand(1),
                        Op.getOperand(2),
                        Op.getOperand(3));
+
+  case AMDGPUIntrinsic::AMDGPU_fract:
+  case AMDGPUIntrinsic::AMDIL_fraction: // Legacy name.
+    return DAG.getNode(ISD::FSUB, DL, VT, Op.getOperand(1),
+                       DAG.getNode(ISD::FFLOOR, DL, VT, Op.getOperand(1)));
+
   default:
     return AMDGPUTargetLowering::LowerOperation(Op, DAG);
   }
