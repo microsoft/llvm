@@ -1403,17 +1403,10 @@ SDValue PPC::get_VSPLTI_elt(SDNode *N, unsigned ByteSize, SelectionDAG &DAG) {
   // immediate field for would be zero, and we prefer to use vxor for it.
   if (ValSizeInBytes < ByteSize) return SDValue();
 
-  // If the element value is larger than the splat value, cut it in half and
-  // check to see if the two halves are equal.  Continue doing this until we
-  // get to ByteSize.  This allows us to handle 0x01010101 as 0x01.
-  while (ValSizeInBytes > ByteSize) {
-    ValSizeInBytes >>= 1;
-
-    // If the top half equals the bottom half, we're still ok.
-    if (((Value >> (ValSizeInBytes*8)) & ((1 << (8*ValSizeInBytes))-1)) !=
-         (Value                        & ((1 << (8*ValSizeInBytes))-1)))
-      return SDValue();
-  }
+  // If the element value is larger than the splat value, check if it consists
+  // of a repeated bit pattern of size ByteSize.
+  if (!APInt(ValSizeInBytes * 8, Value).isSplat(ByteSize * 8))
+    return SDValue();
 
   // Properly sign extend the value.
   int MaskVal = SignExtend32(Value, ByteSize * 8);
@@ -8789,6 +8782,12 @@ PPCTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     BuildMI(*BB, MI, dl, TII->get(TargetOpcode::COPY),
             MI->getOperand(0).getReg())
       .addReg(isEQ ? PPC::CR0EQ : PPC::CR0GT);
+  } else if (MI->getOpcode() == PPC::TCHECK_RET) {
+    DebugLoc Dl = MI->getDebugLoc();
+    MachineRegisterInfo &RegInfo = F->getRegInfo();
+    unsigned CRReg = RegInfo.createVirtualRegister(&PPC::CRRCRegClass);
+    BuildMI(*BB, MI, Dl, TII->get(PPC::TCHECK), CRReg);
+    return BB;
   } else {
     llvm_unreachable("Unexpected instr type to insert");
   }
