@@ -51,6 +51,7 @@ class Fuzzer {
     bool UseCounters = false;
     bool UseFullCoverageSet  = false;
     bool UseCoveragePairs = false;
+    bool UseDFSan = false;
     int PreferSmallDuringInitialShuffle = -1;
     size_t MaxNumberOfRuns = ULONG_MAX;
     std::string OutputCorpus;
@@ -58,10 +59,12 @@ class Fuzzer {
   Fuzzer(UserCallback Callback, FuzzingOptions Options)
       : Callback(Callback), Options(Options) {
     SetDeathCallback();
+    InitializeDFSan();
   }
   void AddToCorpus(const Unit &U) { Corpus.push_back(U); }
   size_t Loop(size_t NumIterations);
   void ShuffleAndMinimize();
+  void InitializeDFSan();
   size_t CorpusSize() const { return Corpus.size(); }
   void ReadDir(const std::string &Path) {
     ReadDirToVectorOfUnits(Path.c_str(), &Corpus);
@@ -86,6 +89,8 @@ class Fuzzer {
   size_t RunOneMaximizeCoveragePairs(const Unit &U);
   void WriteToOutputCorpus(const Unit &U);
   static void WriteToCrash(const Unit &U, const char *Prefix);
+  bool MutateWithDFSan(Unit *U);
+  void PrintStats(const char *Where, size_t Cov, const char *End = "\n");
 
   void SetDeathCallback();
   static void DeathCallback();
@@ -109,6 +114,7 @@ class Fuzzer {
   FuzzingOptions Options;
   system_clock::time_point ProcessStartTime = system_clock::now();
   static system_clock::time_point UnitStartTime;
+  long TimeOfLongestUnitInSeconds = 0;
 };
 
 };  // namespace fuzzer

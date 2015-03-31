@@ -432,6 +432,9 @@ def PPCRegCRRCAsmOperand : AsmOperandClass {
 def crrc : RegisterOperand<CRRC> {
   let ParserMatchClass = PPCRegCRRCAsmOperand;
 }
+def crrc0 : RegisterOperand<CRRC0> {
+  let ParserMatchClass = PPCRegCRRCAsmOperand;
+}
 
 def PPCU1ImmAsmOperand : AsmOperandClass {
   let Name = "U1Imm"; let PredicateMethod = "isU1Imm";
@@ -449,6 +452,15 @@ def PPCU2ImmAsmOperand : AsmOperandClass {
 def u2imm   : Operand<i32> {
   let PrintMethod = "printU2ImmOperand";
   let ParserMatchClass = PPCU2ImmAsmOperand;
+}
+
+def PPCU3ImmAsmOperand : AsmOperandClass {
+  let Name = "U3Imm"; let PredicateMethod = "isU3Imm";
+  let RenderMethod = "addImmOperands";
+}
+def u3imm   : Operand<i32> {
+  let PrintMethod = "printU3ImmOperand";
+  let ParserMatchClass = PPCU3ImmAsmOperand;
 }
 
 def PPCU4ImmAsmOperand : AsmOperandClass {
@@ -2708,6 +2720,7 @@ include "PPCInstrSPE.td"
 include "PPCInstr64Bit.td"
 include "PPCInstrVSX.td"
 include "PPCInstrQPX.td"
+include "PPCInstrHTM.td"
 
 def crnot : OutPatFrag<(ops node:$in),
                        (CRNOR $in, $in)>;
@@ -3712,6 +3725,19 @@ def : InstAlias<"rotld $rA, $rS, $rB", (RLDCL g8rc:$rA, g8rc:$rS, gprc:$rB, 0)>;
 def : InstAlias<"rotld. $rA, $rS, $rB", (RLDCLo g8rc:$rA, g8rc:$rS, gprc:$rB, 0)>;
 def : InstAlias<"clrldi $rA, $rS, $n", (RLDICL g8rc:$rA, g8rc:$rS, 0, u6imm:$n)>;
 def : InstAlias<"clrldi. $rA, $rS, $n", (RLDICLo g8rc:$rA, g8rc:$rS, 0, u6imm:$n)>;
+
+def RLWINMbm : PPCAsmPseudo<"rlwinm $rA, $rS, $n, $b",
+                            (ins g8rc:$rA, g8rc:$rS, u5imm:$n, i32imm:$b)>;
+def RLWINMobm : PPCAsmPseudo<"rlwinm. $rA, $rS, $n, $b",
+                            (ins g8rc:$rA, g8rc:$rS, u5imm:$n, i32imm:$b)>;
+def RLWIMIbm : PPCAsmPseudo<"rlwimi $rA, $rS, $n, $b",
+                           (ins g8rc:$rA, g8rc:$rS, u5imm:$n, i32imm:$b)>;
+def RLWIMIobm : PPCAsmPseudo<"rlwimi. $rA, $rS, $n, $b",
+                            (ins g8rc:$rA, g8rc:$rS, u5imm:$n, i32imm:$b)>;
+def RLWNMbm : PPCAsmPseudo<"rlwnm $rA, $rS, $n, $b",
+                          (ins g8rc:$rA, g8rc:$rS, u5imm:$n, i32imm:$b)>;
+def RLWNMobm : PPCAsmPseudo<"rlwnm. $rA, $rS, $n, $b",
+                           (ins g8rc:$rA, g8rc:$rS, u5imm:$n, i32imm:$b)>;
 
 // These generic branch instruction forms are used for the assembler parser only.
 // Defs and Uses are conservative, since we don't know the BO value.

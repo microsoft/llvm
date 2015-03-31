@@ -54,7 +54,13 @@ public:
   }
 
   unsigned getATRegNum() const { return ATReg; }
-  bool setATReg(unsigned Reg);
+  bool setATReg(unsigned Reg) {
+    if (Reg > 31)
+      return false;
+
+    ATReg = Reg;
+    return true;
+  }
 
   bool isReorder() const { return Reorder; }
   void setReorder() { Reorder = true; }
@@ -2377,14 +2383,6 @@ int MipsAsmParser::matchMSA128CtrlRegisterName(StringRef Name) {
   return CC;
 }
 
-bool MipsAssemblerOptions::setATReg(unsigned Reg) {
-  if (Reg > 31)
-    return false;
-
-  ATReg = Reg;
-  return true;
-}
-
 int MipsAsmParser::getATReg(SMLoc Loc) {
   int AT = AssemblerOptions.back()->getATRegNum();
   if (AT == 0)
@@ -2573,7 +2571,7 @@ bool MipsAsmParser::parseRelocOperand(const MCExpr *&Res) {
   if (Tok.isNot(AsmToken::Identifier))
     return true;
 
-  std::string Str = Tok.getIdentifier().str();
+  std::string Str = Tok.getIdentifier();
 
   Parser.Lex(); // Eat the identifier.
   // Now make an expression from the rest of the operand.

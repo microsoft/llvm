@@ -957,7 +957,7 @@ static bool isGOTEquivalentCandidate(const GlobalVariable *GV,
   // To be a got equivalent, at least one of its users need to be a constant
   // expression used by another global variable.
   for (auto *U : GV->users())
-    NumGOTEquivUsers += getNumGlobalVariableUses(cast<Constant>(U));
+    NumGOTEquivUsers += getNumGlobalVariableUses(dyn_cast<Constant>(U));
 
   return NumGOTEquivUsers > 0;
 }
@@ -2302,7 +2302,7 @@ MCSymbol *AsmPrinter::getSymbolWithGlobalValueBase(const GlobalValue *GV,
 MCSymbol *AsmPrinter::GetExternalSymbolSymbol(StringRef Sym) const {
   SmallString<60> NameStr;
   Mang->getNameWithPrefix(NameStr, Sym);
-  return OutContext.GetOrCreateSymbol(NameStr.str());
+  return OutContext.GetOrCreateSymbol(NameStr);
 }
 
 

@@ -142,7 +142,7 @@ static bool getSymbolOffsetImpl(const MCAsmLayout &Layout,
 
   // If SD is a variable, evaluate it.
   MCValue Target;
-  if (!S.getVariableValue()->EvaluateAsValue(Target, &Layout, nullptr))
+  if (!S.getVariableValue()->EvaluateAsRelocatable(Target, &Layout, nullptr))
     report_fatal_error("unable to evaluate offset for variable '" +
                        S.getName() + "'");
 
@@ -188,7 +188,7 @@ const MCSymbol *MCAsmLayout::getBaseSymbol(const MCSymbol &Symbol) const {
 
   const MCExpr *Expr = Symbol.getVariableValue();
   MCValue Value;
-  if (!Expr->EvaluateAsValue(Value, this, nullptr))
+  if (!Expr->evaluateAsValue(Value, *this))
     llvm_unreachable("Invalid Expression");
 
   const MCSymbolRefExpr *RefB = Value.getSymB();
@@ -473,18 +473,6 @@ const MCSymbolData *MCAssembler::getAtom(const MCSymbolData *SD) const {
   return SD->getFragment()->getAtom();
 }
 
-// Try to fully compute Expr to an absolute value and if that fails produce
-// a relocatable expr.
-// FIXME: Should this be the behavior of EvaluateAsRelocatable itself?
-static bool evaluate(const MCExpr &Expr, const MCAsmLayout &Layout,
-                     const MCFixup &Fixup, MCValue &Target) {
-  if (Expr.EvaluateAsValue(Target, &Layout, &Fixup)) {
-    if (Target.isAbsolute())
-      return true;
-  }
-  return Expr.EvaluateAsRelocatable(Target, &Layout, &Fixup);
-}
-
 bool MCAssembler::evaluateFixup(const MCAsmLayout &Layout,
                                 const MCFixup &Fixup, const MCFragment *DF,
                                 MCValue &Target, uint64_t &Value) const {
@@ -494,7 +482,7 @@ bool MCAssembler::evaluateFixup(const MCAsmLayout &Layout,
   // probably merge the two into a single callback that tries to evaluate a
   // fixup and records a relocation if one is needed.
   const MCExpr *Expr = Fixup.getValue();
-  if (!evaluate(*Expr, Layout, Fixup, Target))
+  if (!Expr->EvaluateAsRelocatable(Target, &Layout, &Fixup))
     getContext().FatalError(Fixup.getLoc(), "expected relocatable expression");
 
   bool IsPCRel = Backend.getFixupKindInfo(
@@ -1034,7 +1022,10 @@ bool MCAssembler::relaxInstruction(MCAsmLayout &Layout,
 
 bool MCAssembler::relaxLEB(MCAsmLayout &Layout, MCLEBFragment &LF) {
   uint64_t OldSize = LF.getContents().size();
-  int64_t Value = LF.getValue().evaluateKnownAbsolute(Layout);
+  int64_t Value;
+  bool Abs = LF.getValue().evaluateKnownAbsolute(Value, Layout);
+  if (!Abs)
+    report_fatal_error("sleb128 and uleb128 expressions must be absolute");
   SmallString<8> &Data = LF.getContents();
   Data.clear();
   raw_svector_ostream OSE(Data);
@@ -1050,7 +1041,10 @@ bool MCAssembler::relaxDwarfLineAddr(MCAsmLayout &Layout,
                                      MCDwarfLineAddrFragment &DF) {
   MCContext &Context = Layout.getAssembler().getContext();
   uint64_t OldSize = DF.getContents().size();
-  int64_t AddrDelta = DF.getAddrDelta().evaluateKnownAbsolute(Layout);
+  int64_t AddrDelta;
+  bool Abs = DF.getAddrDelta().evaluateKnownAbsolute(AddrDelta, Layout);
+  assert(Abs && "We created a line delta with an invalid expression");
+  (void) Abs;
   int64_t LineDelta;
   LineDelta = DF.getLineDelta();
   SmallString<8> &Data = DF.getContents();
@@ -1065,7 +1059,10 @@ bool MCAssembler::relaxDwarfCallFrameFragment(MCAsmLayout &Layout,
                                               MCDwarfCallFrameFragment &DF) {
   MCContext &Context = Layout.getAssembler().getContext();
   uint64_t OldSize = DF.getContents().size();
-  int64_t AddrDelta = DF.getAddrDelta().evaluateKnownAbsolute(Layout);
+  int64_t AddrDelta;
+  bool Abs = DF.getAddrDelta().evaluateKnownAbsolute(AddrDelta, Layout);
+  assert(Abs && "We created call frame with an invalid expression");
+  (void) Abs;
   SmallString<8> &Data = DF.getContents();
   Data.clear();
   raw_svector_ostream OSE(Data);

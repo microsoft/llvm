@@ -166,6 +166,7 @@ void ARMSubtarget::initializeEnvironment() {
   HasTrustZone = false;
   HasCrypto = false;
   HasCRC = false;
+  HasV8_1a = false;
   HasZeroCycleZeroing = false;
   AllowsUnalignedMem = false;
   Thumb2DSP = false;
@@ -189,7 +190,7 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
       ARM_MC::ParseARMTriple(TargetTriple.getTriple(), CPUString);
   if (!FS.empty()) {
     if (!ArchFS.empty())
-      ArchFS = ArchFS + "," + FS.str();
+      ArchFS = (Twine(ArchFS) + "," + FS).str();
     else
       ArchFS = FS;
   }

@@ -33,6 +33,7 @@
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
+#include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
@@ -670,8 +671,8 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
 #endif
   {
     BlockNumber = FuncInfo->MBB->getNumber();
-    BlockName = MF->getName().str() + ":" +
-                FuncInfo->MBB->getBasicBlock()->getName().str();
+    BlockName =
+        (MF->getName() + ":" + FuncInfo->MBB->getBasicBlock()->getName()).str();
   }
   DEBUG(dbgs() << "Initial selection DAG: BB#" << BlockNumber
         << " '" << BlockName << "'\n"; CurDAG->dump());
@@ -987,6 +988,10 @@ void SelectionDAGISel::PrepareEHLandingPad() {
     FuncInfo->MBB = MBB;
     FuncInfo->InsertPt = MBB->end();
     return;
+  }
+  if (MF->getMMI().getPersonalityType() == EHPersonality::MSVC_CXX) {
+    WinEHFuncInfo &FuncInfo = MF->getMMI().getWinEHFuncInfo(MF->getFunction());
+    MF->getMMI().addWinEHState(MBB, FuncInfo.LandingPadStateMap[LPadInst]);
   }
 
   // Mark exception register as live in.

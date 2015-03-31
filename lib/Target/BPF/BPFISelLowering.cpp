@@ -63,8 +63,8 @@ public:
     std::string Str;
     raw_string_ostream OS(Str);
 
-    if (DLoc.isUnknown() == false) {
-      DILocation DIL(DLoc.getAsMDNode(Fn.getContext()));
+    if (DLoc) {
+      DILocation DIL(DLoc.getAsMDNode());
       StringRef Filename = DIL.getFilename();
       unsigned Line = DIL.getLineNumber();
       unsigned Column = DIL.getColumnNumber();
@@ -137,7 +137,6 @@ BPFTargetLowering::BPFTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SRL_PARTS, MVT::i64, Expand);
   setOperationAction(ISD::SRA_PARTS, MVT::i64, Expand);
 
-  setOperationAction(ISD::BSWAP, MVT::i64, Expand);
   setOperationAction(ISD::CTTZ, MVT::i64, Custom);
   setOperationAction(ISD::CTLZ, MVT::i64, Custom);
   setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i64, Custom);

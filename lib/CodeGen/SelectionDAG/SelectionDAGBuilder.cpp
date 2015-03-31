@@ -35,6 +35,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -5360,6 +5361,9 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   }
   case Intrinsic::clear_cache:
     return TLI.getClearCacheBuiltinName();
+  case Intrinsic::eh_actions:
+    setValue(&I, DAG.getUNDEF(TLI.getPointerTy()));
+    return nullptr;
   case Intrinsic::donothing:
     // ignore
     return nullptr;
@@ -5446,6 +5450,29 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::eh_begincatch:
   case Intrinsic::eh_endcatch:
     llvm_unreachable("begin/end catch intrinsics not lowered in codegen");
+  case Intrinsic::eh_parentframe: {
+    AllocaInst *Slot =
+        cast<AllocaInst>(I.getArgOperand(0)->stripPointerCasts());
+    assert(FuncInfo.StaticAllocaMap.count(Slot) &&
+           "can only use static allocas with llvm.eh.parentframe");
+    int FI = FuncInfo.StaticAllocaMap[Slot];
+    MachineFunction &MF = DAG.getMachineFunction();
+    const Function *F = MF.getFunction();
+    MachineModuleInfo &MMI = MF.getMMI();
+    MMI.getWinEHFuncInfo(F).CatchHandlerParentFrameObjIdx[F] = FI;
+    return nullptr;
+  }
+  case Intrinsic::eh_unwindhelp: {
+    AllocaInst *Slot =
+        cast<AllocaInst>(I.getArgOperand(0)->stripPointerCasts());
+    assert(FuncInfo.StaticAllocaMap.count(Slot) &&
+           "can only use static allocas with llvm.eh.unwindhelp");
+    int FI = FuncInfo.StaticAllocaMap[Slot];
+    MachineFunction &MF = DAG.getMachineFunction();
+    MachineModuleInfo &MMI = MF.getMMI();
+    MMI.getWinEHFuncInfo(MF.getFunction()).UnwindHelpFrameIdx = FI;
+    return nullptr;
+  }
   }
 }
 
@@ -5536,6 +5563,11 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
     // Skip the first return-type Attribute to get to params.
     Entry.setAttributes(&CS, i - CS.arg_begin() + 1);
     Args.push_back(Entry);
+
+    // If we have an explicit sret argument that is an Instruction, (i.e., it
+    // might point to function-local memory), we can't meaningfully tail-call.
+    if (Entry.isSRet && isa<Instruction>(V))
+      isTailCall = false;
   }
 
   // Check if target-independent constraints permit a tail call here.
@@ -7173,6 +7205,10 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
     Entry.Alignment = Align;
     CLI.getArgs().insert(CLI.getArgs().begin(), Entry);
     CLI.RetTy = Type::getVoidTy(CLI.RetTy->getContext());
+
+    // sret demotion isn't compatible with tail-calls, since the sret argument
+    // points into the callers stack frame.
+    CLI.IsTailCall = false;
   } else {
     for (unsigned I = 0, E = RetTys.size(); I != E; ++I) {
       EVT VT = RetTys[I];

@@ -283,8 +283,8 @@ struct AArch64NamedImmMapper {
   };
 
   template<int N>
-  AArch64NamedImmMapper(const Mapping (&Pairs)[N], uint32_t TooBigImm)
-    : Pairs(&Pairs[0]), NumPairs(N), TooBigImm(TooBigImm) {}
+  AArch64NamedImmMapper(const Mapping (&Mappings)[N], uint32_t TooBigImm)
+    : Mappings(&Mappings[0]), NumMappings(N), TooBigImm(TooBigImm) {}
 
   StringRef toString(uint32_t Value, bool &Valid) const;
   uint32_t fromString(StringRef Name, bool &Valid) const;
@@ -294,8 +294,8 @@ struct AArch64NamedImmMapper {
   /// N being 0 indicates no immediate syntax-form is allowed.
   bool validImm(uint32_t Value) const;
 protected:
-  const Mapping *Pairs;
-  size_t NumPairs;
+  const Mapping *Mappings;
+  size_t NumMappings;
   uint32_t TooBigImm;
 };
 
@@ -317,7 +317,7 @@ namespace AArch64AT {
   };
 
   struct ATMapper : AArch64NamedImmMapper {
-    const static Mapping ATPairs[];
+    const static Mapping ATMappings[];
 
     ATMapper();
   };
@@ -341,7 +341,7 @@ namespace AArch64DB {
   };
 
   struct DBarrierMapper : AArch64NamedImmMapper {
-    const static Mapping DBarrierPairs[];
+    const static Mapping DBarrierMappings[];
 
     DBarrierMapper();
   };
@@ -361,7 +361,7 @@ namespace  AArch64DC {
   };
 
   struct DCMapper : AArch64NamedImmMapper {
-    const static Mapping DCPairs[];
+    const static Mapping DCMappings[];
 
     DCMapper();
   };
@@ -378,7 +378,7 @@ namespace  AArch64IC {
 
 
   struct ICMapper : AArch64NamedImmMapper {
-    const static Mapping ICPairs[];
+    const static Mapping ICMappings[];
 
     ICMapper();
   };
@@ -394,7 +394,7 @@ namespace  AArch64ISB {
     SY = 0xf
   };
   struct ISBMapper : AArch64NamedImmMapper {
-    const static Mapping ISBPairs[];
+    const static Mapping ISBMappings[];
 
     ISBMapper();
   };
@@ -424,7 +424,7 @@ namespace AArch64PRFM {
   };
 
   struct PRFMMapper : AArch64NamedImmMapper {
-    const static Mapping PRFMPairs[];
+    const static Mapping PRFMMappings[];
 
     PRFMMapper();
   };
@@ -439,7 +439,7 @@ namespace AArch64PState {
   };
 
   struct PStateMapper : AArch64NamedImmMapper {
-    const static Mapping PStatePairs[];
+    const static Mapping PStateMappings[];
 
     PStateMapper();
   };
@@ -1134,26 +1134,25 @@ namespace AArch64SysReg {
   // burdening the common AArch64NamedImmMapper with abstractions only needed in
   // this one case.
   struct SysRegMapper {
-    static const AArch64NamedImmMapper::Mapping SysRegPairs[];
-    static const AArch64NamedImmMapper::Mapping CycloneSysRegPairs[];
+    static const AArch64NamedImmMapper::Mapping SysRegMappings[];
+    static const AArch64NamedImmMapper::Mapping CycloneSysRegMappings[];
 
-    const AArch64NamedImmMapper::Mapping *InstPairs;
-    size_t NumInstPairs;
-    uint64_t FeatureBits;
+    const AArch64NamedImmMapper::Mapping *InstMappings;
+    size_t NumInstMappings;
 
-    SysRegMapper(uint64_t FeatureBits) : FeatureBits(FeatureBits) { }
-    uint32_t fromString(StringRef Name, bool &Valid) const;
-    std::string toString(uint32_t Bits) const;
+    SysRegMapper() { }
+    uint32_t fromString(StringRef Name, uint64_t FeatureBits, bool &Valid) const;
+    std::string toString(uint32_t Bits, uint64_t FeatureBits) const;
   };
 
   struct MSRMapper : SysRegMapper {
-    static const AArch64NamedImmMapper::Mapping MSRPairs[];
-    MSRMapper(uint64_t FeatureBits);
+    static const AArch64NamedImmMapper::Mapping MSRMappings[];
+    MSRMapper();
   };
 
   struct MRSMapper : SysRegMapper {
-    static const AArch64NamedImmMapper::Mapping MRSPairs[];
-    MRSMapper(uint64_t FeatureBits);
+    static const AArch64NamedImmMapper::Mapping MRSMappings[];
+    MRSMapper();
   };
 
   uint32_t ParseGenericRegister(StringRef Name, bool &Valid);
@@ -1197,7 +1196,7 @@ namespace AArch64TLBI {
   };
 
   struct TLBIMapper : AArch64NamedImmMapper {
-    const static Mapping TLBIPairs[];
+    const static Mapping TLBIMappings[];
 
     TLBIMapper();
   };

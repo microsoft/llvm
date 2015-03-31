@@ -16,6 +16,7 @@
 #include "llvm/Bitcode/LLVMBitCodes.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DiagnosticPrinter.h"
@@ -218,6 +219,8 @@ class BitcodeReader : public GVMaterializer {
   /// True if any Metadata block has been materialized.
   bool IsMetadataMaterialized;
 
+  bool StripDebugInfo = false;
+
 public:
   std::error_code Error(BitcodeError E, const Twine &Message);
   std::error_code Error(BitcodeError E);
@@ -254,6 +257,8 @@ public:
 
   /// Materialize any deferred Metadata block.
   std::error_code materializeMetadata() override;
+
+  void setStripDebugInfo() override;
 
 private:
   std::vector<StructType *> IdentifiedStructTypes;
@@ -1691,14 +1696,15 @@ std::error_code BitcodeReader::ParseMetadata() {
       if (Record.size() != 5)
         return Error("Invalid record");
 
-      auto get = Record[0] ? MDLocation::getDistinct : MDLocation::get;
       unsigned Line = Record[1];
       unsigned Column = Record[2];
       MDNode *Scope = cast<MDNode>(MDValueList.getValueFwdRef(Record[3]));
       Metadata *InlinedAt =
           Record[4] ? MDValueList.getValueFwdRef(Record[4] - 1) : nullptr;
-      MDValueList.AssignValue(get(Context, Line, Column, Scope, InlinedAt),
-                              NextMDValueNo++);
+      MDValueList.AssignValue(
+          GET_OR_DISTINCT(MDLocation, Record[0],
+                          (Context, Line, Column, Scope, InlinedAt)),
+          NextMDValueNo++);
       break;
     }
     case bitc::METADATA_GENERIC_DEBUG: {
@@ -2606,6 +2612,10 @@ std::error_code BitcodeReader::materializeMetadata() {
   }
   DeferredMetadataInfo.clear();
   return std::error_code();
+}
+
+void BitcodeReader::setStripDebugInfo() {
+  StripDebugInfo = true;
 }
 
 /// RememberAndSkipFunctionBody - When we see the block for a function body,
@@ -4303,6 +4313,9 @@ std::error_code BitcodeReader::materialize(GlobalValue *GV) {
   if (std::error_code EC = ParseFunctionBody(F))
     return EC;
   F->setIsMaterializable(false);
+
+  if (StripDebugInfo)
+    stripDebugInfo(*F);
 
   // Upgrade any old intrinsic calls in the function.
   for (UpgradedIntrinsicMap::iterator I = UpgradedIntrinsics.begin(),

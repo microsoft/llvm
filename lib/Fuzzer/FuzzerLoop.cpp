@@ -44,21 +44,34 @@ void Fuzzer::AlarmCallback() {
   exit(1);
 }
 
+void Fuzzer::PrintStats(const char *Where, size_t Cov, const char *End) {
+  if (!Options.Verbosity) return;
+  size_t Seconds = secondsSinceProcessStartUp();
+  size_t ExecPerSec = (Seconds ? TotalNumberOfRuns / Seconds : 0);
+  std::cerr
+      << "#" << TotalNumberOfRuns
+      << "\t" << Where
+      << " cov " << Cov
+      << " bits " << TotalBits()
+      << " units " << Corpus.size()
+      << " exec/s " << ExecPerSec
+      << End;
+}
+
 void Fuzzer::ShuffleAndMinimize() {
+  size_t MaxCov = 0;
   bool PreferSmall =
       (Options.PreferSmallDuringInitialShuffle == 1 ||
        (Options.PreferSmallDuringInitialShuffle == -1 && rand() % 2));
   if (Options.Verbosity)
-    std::cerr << "Shuffle: Size: " << Corpus.size()
-              << " prefer small: " << PreferSmall
-              << "\n";
+    std::cerr << "PreferSmall: " << PreferSmall << "\n";
+  PrintStats("READ  ", 0);
   std::vector<Unit> NewCorpus;
   std::random_shuffle(Corpus.begin(), Corpus.end());
   if (PreferSmall)
     std::stable_sort(
         Corpus.begin(), Corpus.end(),
         [](const Unit &A, const Unit &B) { return A.size() < B.size(); });
-  size_t MaxCov = 0;
   Unit &U = CurrentUnit;
   for (const auto &C : Corpus) {
     for (size_t First = 0; First < 1; First++) {
@@ -77,18 +90,29 @@ void Fuzzer::ShuffleAndMinimize() {
     }
   }
   Corpus = NewCorpus;
-  if (Options.Verbosity)
-    std::cerr << "Shuffle done: " << Corpus.size() << " IC: " << MaxCov << "\n";
+  PrintStats("INITED", MaxCov);
 }
 
 size_t Fuzzer::RunOne(const Unit &U) {
   UnitStartTime = system_clock::now();
   TotalNumberOfRuns++;
+  size_t Res = 0;
   if (Options.UseFullCoverageSet)
-    return RunOneMaximizeFullCoverageSet(U);
-  if (Options.UseCoveragePairs)
-    return RunOneMaximizeCoveragePairs(U);
-  return RunOneMaximizeTotalCoverage(U);
+    Res = RunOneMaximizeFullCoverageSet(U);
+  else if (Options.UseCoveragePairs)
+    Res = RunOneMaximizeCoveragePairs(U);
+  else
+    Res = RunOneMaximizeTotalCoverage(U);
+  auto UnitStopTime = system_clock::now();
+  auto TimeOfUnit =
+      duration_cast<seconds>(UnitStopTime - UnitStartTime).count();
+  if (TimeOfUnit > TimeOfLongestUnitInSeconds) {
+    TimeOfLongestUnitInSeconds = TimeOfUnit;
+    std::cerr << "Longest unit: " << TimeOfLongestUnitInSeconds
+              << " s:\n";
+    Print(U, "\n");
+  }
+  return Res;
 }
 
 static uintptr_t HashOfArrayOfPCs(uintptr_t *PCs, uintptr_t NumPCs) {
@@ -151,14 +175,9 @@ size_t Fuzzer::RunOneMaximizeTotalCoverage(const Unit &U) {
     NumNewBits = __sanitizer_update_counter_bitset_and_clear_counters(
         CounterBitmap.data());
 
-  if (!(TotalNumberOfRuns & (TotalNumberOfRuns - 1)) && Options.Verbosity) {
-    size_t Seconds = secondsSinceProcessStartUp();
-    std::cerr
-        << "#" << TotalNumberOfRuns
-        << "\tcov: " << NewCoverage
-        << "\tbits: " << TotalBits()
-        << "\texec/s: " << (Seconds ? TotalNumberOfRuns / Seconds : 0) << "\n";
-  }
+  if (!(TotalNumberOfRuns & (TotalNumberOfRuns - 1)) && Options.Verbosity)
+    PrintStats("pulse ", NewCoverage);
+
   if (NewCoverage > OldCoverage || NumNewBits)
     return NewCoverage;
   return 0;
@@ -192,20 +211,17 @@ size_t Fuzzer::MutateAndTestOne(Unit *U) {
   for (int i = 0; i < Options.MutateDepth; i++) {
     if (TotalNumberOfRuns >= Options.MaxNumberOfRuns)
       return NewUnits;
+    MutateWithDFSan(U);
     Mutate(U, Options.MaxLen);
     size_t NewCoverage = RunOne(*U);
     if (NewCoverage) {
       Corpus.push_back(*U);
       NewUnits++;
+      PrintStats("NEW   ", NewCoverage, "");
       if (Options.Verbosity) {
-        std::cerr << "#" << TotalNumberOfRuns
-                  << "\tNEW: " << NewCoverage
-                  << " B: " << TotalBits()
-                  << " L: " << U->size()
-                  << " S: " << Corpus.size()
-                  << " I: " << i
-                  << "\t";
+        std::cerr << " L: " << U->size();
         if (U->size() < 30) {
+          std::cerr << " ";
           PrintASCII(*U);
           std::cerr << "\t";
           Print(*U);

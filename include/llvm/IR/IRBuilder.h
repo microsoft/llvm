@@ -123,7 +123,7 @@ public:
   /// \brief If this builder has a current debug location, set it on the
   /// specified instruction.
   void SetInstDebugLocation(Instruction *I) const {
-    if (!CurDbgLocation.isUnknown())
+    if (CurDbgLocation)
       I->setDebugLoc(CurDbgLocation);
   }
 
@@ -1046,10 +1046,13 @@ public:
     return Insert(GetElementPtrInst::CreateInBounds(nullptr, Ptr, IdxList), Name);
   }
   Value *CreateGEP(Value *Ptr, Value *Idx, const Twine &Name = "") {
+    return CreateGEP(nullptr, Ptr, Idx, Name);
+  }
+  Value *CreateGEP(Type *Ty, Value *Ptr, Value *Idx, const Twine &Name = "") {
     if (Constant *PC = dyn_cast<Constant>(Ptr))
       if (Constant *IC = dyn_cast<Constant>(Idx))
         return Insert(Folder.CreateGetElementPtr(PC, IC), Name);
-    return Insert(GetElementPtrInst::Create(nullptr, Ptr, Idx), Name);
+    return Insert(GetElementPtrInst::Create(Ty, Ptr, Idx), Name);
   }
   Value *CreateInBoundsGEP(Value *Ptr, Value *Idx, const Twine &Name = "") {
     if (Constant *PC = dyn_cast<Constant>(Ptr))
