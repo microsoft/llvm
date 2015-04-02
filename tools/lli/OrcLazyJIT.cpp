@@ -9,6 +9,7 @@
 
 #include "OrcLazyJIT.h"
 #include "llvm/ExecutionEngine/Orc/OrcTargetSupport.h"
+#include "llvm/Support/DynamicLibrary.h"
 
 using namespace llvm;
 
@@ -29,19 +30,31 @@ OrcLazyJIT::createCallbackManagerBuilder(Triple T) {
 }
 
 int llvm::runOrcLazyJIT(std::unique_ptr<Module> M, int ArgC, char* ArgV[]) {
+  // Add the program's symbols into the JIT's search space.
+  if (sys::DynamicLibrary::LoadLibraryPermanently(nullptr)) {
+    errs() << "Error loading program symbols.\n";
+    return 1;
+  }
+
+  // Grab a target machine and try to build a factory function for the
+  // target-specific Orc callback manager.
   auto TM = std::unique_ptr<TargetMachine>(EngineBuilder().selectTarget());
   auto &Context = getGlobalContext();
   auto CallbackMgrBuilder =
     OrcLazyJIT::createCallbackManagerBuilder(Triple(TM->getTargetTriple()));
 
+  // If we couldn't build the factory function then there must not be a callback
+  // manager for this target. Bail out.
   if (!CallbackMgrBuilder) {
     errs() << "No callback manager available for target '"
            << TM->getTargetTriple() << "'.\n";
     return 1;
   }
 
+  // Everything looks good. Build the JIT.
   OrcLazyJIT J(std::move(TM), Context, CallbackMgrBuilder);
 
+  // Add the module, look up main and run it.
   auto MainHandle = J.addModule(std::move(M));
   auto MainSym = J.findSymbolIn(MainHandle, "main");
 
@@ -51,8 +64,6 @@ int llvm::runOrcLazyJIT(std::unique_ptr<Module> M, int ArgC, char* ArgV[]) {
   }
 
   typedef int (*MainFnPtr)(int, char*[]);
-  auto Main = reinterpret_cast<MainFnPtr>(
-                static_cast<uintptr_t>(MainSym.getAddress()));
-
+  auto Main = OrcLazyJIT::fromTargetAddress<MainFnPtr>(MainSym.getAddress());
   return Main(ArgC, ArgV);
 }
