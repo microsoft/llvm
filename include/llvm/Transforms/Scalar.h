@@ -444,7 +444,7 @@ ModulePass *createPlaceSafepointsPass();
 // RewriteStatepointsForGC - Rewrite any gc.statepoints which do not yet have
 // explicit relocations to include explicit relocations.
 //
-FunctionPass *createRewriteStatepointsForGCPass();
+FunctionPass *createRewriteStatepointsForGCPass(bool TrackBasePointers = true);
 
 //===----------------------------------------------------------------------===//
 //

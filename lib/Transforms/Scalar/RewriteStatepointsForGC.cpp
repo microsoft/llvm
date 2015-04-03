@@ -69,13 +69,19 @@ struct RewriteStatepointsForGC : public FunctionPass {
     // else.  We could in theory preserve a lot more analyses here.
     AU.addRequired<DominatorTreeWrapperPass>();
   }
+
+  // For each GC-pointer, whether the base pointer must be explicitly
+  // tracked and reported to the runtime.
+  bool MustTrackBasePointers;
 };
 } // namespace
 
 char RewriteStatepointsForGC::ID = 0;
 
-FunctionPass *llvm::createRewriteStatepointsForGCPass() {
-  return new RewriteStatepointsForGC();
+FunctionPass *llvm::createRewriteStatepointsForGCPass(bool TrackBasePointers) {
+  RewriteStatepointsForGC *RewritePass = new RewriteStatepointsForGC();
+  RewritePass->MustTrackBasePointers = TrackBasePointers;
+  return RewritePass;
 }
 
 INITIALIZE_PASS_BEGIN(RewriteStatepointsForGC, "rewrite-statepoints-for-gc",
@@ -580,8 +586,17 @@ private:
 /// from.  For gc objects, this is simply itself.  On success, returns a value
 /// which is the base pointer.  (This is reliable and can be used for
 /// relocation.)  On failure, returns nullptr.
-static Value *findBasePointer(Value *I, DefiningValueMapTy &cache,
+static Value *findBasePointer(Value *I, Pass *P, DefiningValueMapTy &cache,
                               DenseSet<llvm::Value *> &NewInsertedDefs) {
+  RewriteStatepointsForGC *RewritePass = (RewriteStatepointsForGC *)P;
+
+  // If the runtime does not require base-pointers to be tracked
+  // explicitly, simply return the pointer as its own base.
+  // In this case, findBasePointer is an identity mapping.
+  if (!RewritePass->MustTrackBasePointers) {
+    return I;
+  }
+
   Value *def = findBaseOrBDV(I, cache);
 
   if (isKnownBaseResult(def)) {
@@ -912,10 +927,11 @@ static Value *findBasePointer(Value *I, DefiningValueMapTy &cache,
 // post condition: PointerToBase contains one (derived, base) pair for every
 // pointer in live.  Note that derived can be equal to base if the original
 // pointer was a base pointer.
-static void findBasePointers(const StatepointLiveSetTy &live,
-                             DenseMap<llvm::Value *, llvm::Value *> &PointerToBase,
-                             DominatorTree *DT, DefiningValueMapTy &DVCache,
-                             DenseSet<llvm::Value *> &NewInsertedDefs) {
+static void 
+findBasePointers(const StatepointLiveSetTy &live, Pass *P,
+                 DenseMap<llvm::Value *, llvm::Value *> &PointerToBase,
+                 DominatorTree *DT, DefiningValueMapTy &DVCache,
+                 DenseSet<llvm::Value *> &NewInsertedDefs) {
   // For the naming of values inserted to be deterministic - which makes for
   // much cleaner and more stable tests - we need to assign an order to the
   // live values.  DenseSets do not provide a deterministic order across runs.
@@ -923,7 +939,7 @@ static void findBasePointers(const StatepointLiveSetTy &live,
   Temp.insert(Temp.end(), live.begin(), live.end());
   std::sort(Temp.begin(), Temp.end(), order_by_name);
   for (Value *ptr : Temp) {
-    Value *base = findBasePointer(ptr, DVCache, NewInsertedDefs);
+    Value *base = findBasePointer(ptr, P, DVCache, NewInsertedDefs);
     assert(base && "failed to find base pointer");
     PointerToBase[ptr] = base;
     assert((!isa<Instruction>(base) || !isa<Instruction>(ptr) ||
@@ -943,12 +959,13 @@ static void findBasePointers(const StatepointLiveSetTy &live,
 
 /// Find the required based pointers (and adjust the live set) for the given
 /// parse point.
-static void findBasePointers(DominatorTree &DT, DefiningValueMapTy &DVCache,
-                             const CallSite &CS,
+static void findBasePointers(DominatorTree &DT, Pass *P, 
+                             DefiningValueMapTy &DVCache, const CallSite &CS,
                              PartiallyConstructedSafepointRecord &result) {
   DenseMap<llvm::Value *, llvm::Value *> PointerToBase;
   DenseSet<llvm::Value *> NewInsertedDefs;
-  findBasePointers(result.liveset, PointerToBase, &DT, DVCache, NewInsertedDefs);
+  findBasePointers(result.liveset, P, PointerToBase, &DT, DVCache, 
+                   NewInsertedDefs);
 
   if (PrintBasePointers) {
     // Note: Need to print these in a stable order since this is checked in
@@ -1708,7 +1725,7 @@ static bool insertParsePoints(Function &F, DominatorTree &DT, Pass *P,
     for (size_t i = 0; i < records.size(); i++) {
       struct PartiallyConstructedSafepointRecord &info = records[i];
       CallSite &CS = toUpdate[i];
-      findBasePointers(DT, DVCache, CS, info);
+      findBasePointers(DT, P, DVCache, CS, info);
     }
   } // end of cache scope
 
