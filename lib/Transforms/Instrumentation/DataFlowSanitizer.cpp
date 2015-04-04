@@ -1075,8 +1075,8 @@ Value *DFSanFunction::loadShadow(Value *Addr, uint64_t Size, uint64_t Align,
   }
   case 2: {
     IRBuilder<> IRB(Pos);
-    Value *ShadowAddr1 =
-        IRB.CreateGEP(ShadowAddr, ConstantInt::get(DFS.IntptrTy, 1));
+    Value *ShadowAddr1 = IRB.CreateGEP(DFS.ShadowTy, ShadowAddr,
+                                       ConstantInt::get(DFS.IntptrTy, 1));
     return combineShadows(IRB.CreateAlignedLoad(ShadowAddr, ShadowAlign),
                           IRB.CreateAlignedLoad(ShadowAddr1, ShadowAlign), Pos);
   }
@@ -1127,7 +1127,8 @@ Value *DFSanFunction::loadShadow(Value *Addr, uint64_t Size, uint64_t Align,
       BasicBlock *NextBB = BasicBlock::Create(*DFS.Ctx, "", F);
       DT.addNewBlock(NextBB, LastBr->getParent());
       IRBuilder<> NextIRB(NextBB);
-      WideAddr = NextIRB.CreateGEP(WideAddr, ConstantInt::get(DFS.IntptrTy, 1));
+      WideAddr = NextIRB.CreateGEP(Type::getInt64Ty(*DFS.Ctx), WideAddr,
+                                   ConstantInt::get(DFS.IntptrTy, 1));
       Value *NextWideShadow = NextIRB.CreateAlignedLoad(WideAddr, ShadowAlign);
       ShadowsEq = NextIRB.CreateICmpEQ(WideShadow, NextWideShadow);
       LastBr->setSuccessor(0, NextBB);
@@ -1213,7 +1214,8 @@ void DFSanFunction::storeShadow(Value *Addr, uint64_t Size, uint64_t Align,
     Value *ShadowVecAddr =
         IRB.CreateBitCast(ShadowAddr, PointerType::getUnqual(ShadowVecTy));
     do {
-      Value *CurShadowVecAddr = IRB.CreateConstGEP1_32(ShadowVecAddr, Offset);
+      Value *CurShadowVecAddr =
+          IRB.CreateConstGEP1_32(ShadowVecTy, ShadowVecAddr, Offset);
       IRB.CreateAlignedStore(ShadowVec, CurShadowVecAddr, ShadowAlign);
       Size -= ShadowVecSize;
       ++Offset;
@@ -1221,7 +1223,8 @@ void DFSanFunction::storeShadow(Value *Addr, uint64_t Size, uint64_t Align,
     Offset *= ShadowVecSize;
   }
   while (Size > 0) {
-    Value *CurShadowAddr = IRB.CreateConstGEP1_32(ShadowAddr, Offset);
+    Value *CurShadowAddr =
+        IRB.CreateConstGEP1_32(DFS.ShadowTy, ShadowAddr, Offset);
     IRB.CreateAlignedStore(Shadow, CurShadowAddr, ShadowAlign);
     --Size;
     ++Offset;

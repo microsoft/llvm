@@ -631,7 +631,8 @@ bool GCOVProfiler::emitProfileArcs() {
             SmallVector<Value *, 2> Idx;
             Idx.push_back(Builder.getInt64(0));
             Idx.push_back(Sel);
-            Value *Counter = Builder.CreateInBoundsGEP(Counters, Idx);
+            Value *Counter = Builder.CreateInBoundsGEP(Counters->getValueType(),
+                                                       Counters, Idx);
             Value *Count = Builder.CreateLoad(Counter);
             Count = Builder.CreateAdd(Count, Builder.getInt64(1));
             Builder.CreateStore(Count, Counter);
@@ -925,7 +926,7 @@ void GCOVProfiler::insertIndirectCounterIncrement() {
   Value *ZExtPred = Builder.CreateZExt(Pred, Builder.getInt64Ty());
   Arg = std::next(Fn->arg_begin());
   Arg->setName("counters");
-  Value *GEP = Builder.CreateGEP(Arg, ZExtPred);
+  Value *GEP = Builder.CreateGEP(Type::getInt64PtrTy(*Ctx), Arg, ZExtPred);
   Value *Counter = Builder.CreateLoad(GEP, "counter");
   Cond = Builder.CreateICmpEQ(Counter,
                               Constant::getNullValue(

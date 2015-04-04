@@ -23,6 +23,7 @@ class BasicBlock;
 class Constant;
 class Function;
 class GlobalValue;
+class IntrinsicInst;
 class LandingPadInst;
 class MCSymbol;
 class Value;
@@ -58,7 +59,8 @@ class CatchHandler : public ActionHandler {
 public:
   CatchHandler(BasicBlock *BB, Constant *Selector, BasicBlock *NextBB)
       : ActionHandler(BB, ActionType::Catch), Selector(Selector),
-        NextBB(NextBB), ExceptionObjectVar(nullptr) {}
+      NextBB(NextBB), ExceptionObjectVar(nullptr),
+      ExceptionObjectIndex(-1) {}
 
   // Method for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const ActionHandler *H) {
@@ -72,6 +74,8 @@ public:
   TinyPtrVector<BasicBlock *> &getReturnTargets() { return ReturnTargets; }
 
   void setExceptionVar(const Value *Val) { ExceptionObjectVar = Val; }
+  void setExceptionVarIndex(int Index) { ExceptionObjectIndex = Index;  }
+  int getExceptionVarIndex() const { return ExceptionObjectIndex; }
   void setReturnTargets(TinyPtrVector<BasicBlock *> &Targets) {
     ReturnTargets = Targets;
   }
@@ -79,7 +83,16 @@ public:
 private:
   Constant *Selector;
   BasicBlock *NextBB;
+  // While catch handlers are being outlined the ExceptionObjectVar field will
+  // be populated with the instruction in the parent frame that corresponds
+  // to the exception object (or nullptr if the catch does not use an
+  // exception object) and the ExceptionObjectIndex field will be -1.
+  // When the parseEHActions function is called to populate a vector of
+  // instances of this class, the ExceptionObjectVar field will be nullptr
+  // and the ExceptionObjectIndex will be the index of the exception object in
+  // the parent function's frameescape block.
   const Value *ExceptionObjectVar;
+  int ExceptionObjectIndex;
   TinyPtrVector<BasicBlock *> ReturnTargets;
 };
 
@@ -93,6 +106,10 @@ public:
   }
 };
 
+void parseEHActions(const IntrinsicInst *II,
+  SmallVectorImpl<ActionHandler *> &Actions);
+
+
 // The following structs respresent the .xdata for functions using C++
 // exceptions on Windows.
 
@@ -104,15 +121,13 @@ struct WinEHUnwindMapEntry {
 struct WinEHHandlerType {
   int Adjectives;
   GlobalVariable *TypeDescriptor;
-  int CatchObjIdx;
-  int CatchObjOffset;
+  int CatchObjRecoverIdx;
   Function *Handler;
 };
 
 struct WinEHTryBlockMapEntry {
   int TryLow;
   int TryHigh;
-  int CatchHigh;
   SmallVector<WinEHHandlerType, 1> HandlerArray;
 };
 
@@ -120,6 +135,7 @@ struct WinEHFuncInfo {
   DenseMap<const LandingPadInst *, int> LandingPadStateMap;
   DenseMap<const Function *, int> CatchHandlerParentFrameObjIdx;
   DenseMap<const Function *, int> CatchHandlerParentFrameObjOffset;
+  DenseMap<const Function *, int> CatchHandlerMaxState;
   SmallVector<WinEHUnwindMapEntry, 4> UnwindMap;
   SmallVector<WinEHTryBlockMapEntry, 4> TryBlockMap;
   SmallVector<std::pair<MCSymbol *, int>, 4> IPToStateList;

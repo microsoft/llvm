@@ -3230,13 +3230,6 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
     break;
   }
 
-  case Intrinsic::eh_unwindhelp: {
-    auto *AI = dyn_cast<AllocaInst>(CI.getArgOperand(0)->stripPointerCasts());
-    Assert(AI && AI->isStaticAlloca(),
-           "llvm.eh.unwindhelp requires a static alloca", &CI);
-    break;
-  }
-
   case Intrinsic::experimental_gc_statepoint:
     Assert(!CI.isInlineAsm(),
            "gc.statepoint support for inline assembly unimplemented", &CI);
@@ -3372,6 +3365,20 @@ void Verifier::visitDbgIntrinsic(StringRef Kind, DbgIntrinsicTy &DII) {
   Assert(isa<MDExpression>(DII.getRawExpression()),
          "invalid llvm.dbg." + Kind + " intrinsic expression", &DII,
          DII.getRawExpression());
+
+  // Ignore broken !dbg attachments; they're checked elsewhere.
+  if (MDNode *N = DII.getDebugLoc().getAsMDNode())
+    if (!isa<MDLocation>(N))
+      return;
+
+  // The inlined-at attachments for variables and !dbg attachments must agree.
+  MDLocalVariable *Var = DII.getVariable();
+  MDLocation *VarIA = Var->getInlinedAt();
+  MDLocation *Loc = DII.getDebugLoc();
+  MDLocation *LocIA = Loc ? Loc->getInlinedAt() : nullptr;
+  BasicBlock *BB = DII.getParent();
+  Assert(VarIA == LocIA, "mismatched variable and !dbg inlined-at", &DII, BB,
+         BB ? BB->getParent() : nullptr, Var, VarIA, Loc, LocIA);
 }
 
 void Verifier::visitUnresolvedTypeRef(const MDString *S, const MDNode *N) {

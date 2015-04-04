@@ -94,8 +94,6 @@ struct WinEHNumbering {
     return HandlerStack.empty() ? -1 : HandlerStack.back()->getEHState();
   }
 
-  void parseEHActions(const IntrinsicInst *II,
-                      SmallVectorImpl<ActionHandler *> &Actions);
   void createUnwindMapEntry(int ToState, ActionHandler *AH);
   void createTryBlockMapEntry(int TryLow, int TryHigh,
                               ArrayRef<CatchHandler *> Handlers);
@@ -287,32 +285,6 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   }
 }
 
-void WinEHNumbering::parseEHActions(const IntrinsicInst *II,
-                                    SmallVectorImpl<ActionHandler *> &Actions) {
-  for (unsigned I = 0, E = II->getNumArgOperands(); I != E;) {
-    uint64_t ActionKind =
-        cast<ConstantInt>(II->getArgOperand(I))->getZExtValue();
-    if (ActionKind == /*catch=*/1) {
-      auto *Selector = cast<Constant>(II->getArgOperand(I + 1));
-      Value *CatchObject = II->getArgOperand(I + 2);
-      Constant *Handler = cast<Constant>(II->getArgOperand(I + 3));
-      I += 4;
-      auto *CH = new CatchHandler(/*BB=*/nullptr, Selector, /*NextBB=*/nullptr);
-      CH->setExceptionVar(CatchObject);
-      CH->setHandlerBlockOrFunc(Handler);
-      Actions.push_back(CH);
-    } else {
-      assert(ActionKind == 0 && "expected a cleanup or a catch action!");
-      Constant *Handler = cast<Constant>(II->getArgOperand(I + 1));
-      I += 2;
-      auto *CH = new CleanupHandler(/*BB=*/nullptr);
-      CH->setHandlerBlockOrFunc(Handler);
-      Actions.push_back(CH);
-    }
-  }
-  std::reverse(Actions.begin(), Actions.end());
-}
-
 void WinEHNumbering::createUnwindMapEntry(int ToState, ActionHandler *AH) {
   WinEHUnwindMapEntry UME;
   UME.ToState = ToState;
@@ -328,11 +300,7 @@ void WinEHNumbering::createTryBlockMapEntry(int TryLow, int TryHigh,
   WinEHTryBlockMapEntry TBME;
   TBME.TryLow = TryLow;
   TBME.TryHigh = TryHigh;
-  // FIXME: This should be revisited when we want to throw inside a catch
-  // handler.
-  TBME.CatchHigh = INT_MAX;
   assert(TBME.TryLow <= TBME.TryHigh);
-  assert(TBME.CatchHigh > TBME.TryHigh);
   for (CatchHandler *CH : Handlers) {
     WinEHHandlerType HT;
     if (CH->getSelector()->isNullValue()) {
@@ -349,9 +317,7 @@ void WinEHNumbering::createTryBlockMapEntry(int TryLow, int TryHigh,
           cast<GlobalVariable>(CS->getAggregateElement(1)->stripPointerCasts());
     }
     HT.Handler = cast<Function>(CH->getHandlerBlockOrFunc());
-    // FIXME: We don't support catching objects yet!
-    HT.CatchObjIdx = INT_MAX;
-    HT.CatchObjOffset = 0;
+    HT.CatchObjRecoverIdx = CH->getExceptionVarIndex();
     TBME.HandlerArray.push_back(HT);
   }
   FuncInfo.TryBlockMap.push_back(TBME);
@@ -474,6 +440,8 @@ void WinEHNumbering::calculateStateNumbers(const Function &F) {
     ActionList.clear();
     FuncInfo.LandingPadStateMap[LPI] = currentEHNumber();
   }
+
+  FuncInfo.CatchHandlerMaxState[&F] = NextState - 1;
 }
 
 /// clear - Clear out all the function-specific state. This returns this
