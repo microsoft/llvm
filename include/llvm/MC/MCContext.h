@@ -165,12 +165,17 @@ namespace llvm {
     struct ELFSectionKey {
       std::string SectionName;
       StringRef GroupName;
-      ELFSectionKey(StringRef SectionName, StringRef GroupName)
-          : SectionName(SectionName), GroupName(GroupName) {}
+      unsigned UniqueID;
+      ELFSectionKey(StringRef SectionName, StringRef GroupName,
+                    unsigned UniqueID)
+          : SectionName(SectionName), GroupName(GroupName), UniqueID(UniqueID) {
+      }
       bool operator<(const ELFSectionKey &Other) const {
         if (SectionName != Other.SectionName)
           return SectionName < Other.SectionName;
-        return GroupName < Other.GroupName;
+        if (GroupName != Other.GroupName)
+          return GroupName < Other.GroupName;
+        return UniqueID < Other.UniqueID;
       }
     };
 
@@ -293,18 +298,41 @@ namespace llvm {
     }
 
     const MCSectionELF *getELFSection(StringRef Section, unsigned Type,
+                                      unsigned Flags) {
+      return getELFSection(Section, Type, Flags, nullptr);
+    }
+
+    const MCSectionELF *getELFSection(StringRef Section, unsigned Type,
                                       unsigned Flags,
-                                      const char *BeginSymName = nullptr);
+                                      const char *BeginSymName) {
+      return getELFSection(Section, Type, Flags, 0, "", BeginSymName);
+    }
+
+    const MCSectionELF *getELFSection(StringRef Section, unsigned Type,
+                                      unsigned Flags, unsigned EntrySize,
+                                      StringRef Group) {
+      return getELFSection(Section, Type, Flags, EntrySize, Group, nullptr);
+    }
 
     const MCSectionELF *getELFSection(StringRef Section, unsigned Type,
                                       unsigned Flags, unsigned EntrySize,
                                       StringRef Group,
-                                      const char *BeginSymName = nullptr);
+                                      const char *BeginSymName) {
+      return getELFSection(Section, Type, Flags, EntrySize, Group, ~0,
+                           BeginSymName);
+    }
 
     const MCSectionELF *getELFSection(StringRef Section, unsigned Type,
                                       unsigned Flags, unsigned EntrySize,
-                                      StringRef Group, bool Unique,
-                                      const char *BeginSymName = nullptr);
+                                      StringRef Group, unsigned UniqueID) {
+      return getELFSection(Section, Type, Flags, EntrySize, Group, UniqueID,
+                           nullptr);
+    }
+
+    const MCSectionELF *getELFSection(StringRef Section, unsigned Type,
+                                      unsigned Flags, unsigned EntrySize,
+                                      StringRef Group, unsigned UniqueID,
+                                      const char *BeginSymName);
 
     const MCSectionELF *createELFRelSection(StringRef Name, unsigned Type,
                                             unsigned Flags, unsigned EntrySize,
