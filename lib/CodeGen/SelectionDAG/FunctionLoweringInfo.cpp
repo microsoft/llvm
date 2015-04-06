@@ -88,15 +88,16 @@ struct WinEHNumbering {
   int NextState;
 
   SmallVector<ActionHandler *, 4> HandlerStack;
+  SmallPtrSet<const Function *, 4> VisitedHandlers;
 
   int currentEHNumber() const {
     return HandlerStack.empty() ? -1 : HandlerStack.back()->getEHState();
   }
 
-  void parseEHActions(const IntrinsicInst *II,
-                      SmallVectorImpl<ActionHandler *> &Actions);
   void createUnwindMapEntry(int ToState, ActionHandler *AH);
-  void proccessCallSite(ArrayRef<ActionHandler *> Actions, ImmutableCallSite CS);
+  void createTryBlockMapEntry(int TryLow, int TryHigh,
+                              ArrayRef<CatchHandler *> Handlers);
+  void processCallSite(ArrayRef<ActionHandler *> Actions, ImmutableCallSite CS);
   void calculateStateNumbers(const Function &F);
 };
 }
@@ -276,44 +277,50 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
       MBBMap[Invoke->getSuccessor(1)]->setIsLandingPad();
 
   // Calculate EH numbers for WinEH.
-  if (fn.getFnAttribute("wineh-parent").getValueAsString() == fn.getName())
-    WinEHNumbering(MMI.getWinEHFuncInfo(&fn)).calculateStateNumbers(fn);
-}
-
-void WinEHNumbering::parseEHActions(const IntrinsicInst *II,
-                                    SmallVectorImpl<ActionHandler *> &Actions) {
-  for (unsigned I = 0, E = II->getNumArgOperands(); I != E;) {
-    uint64_t ActionKind =
-        cast<ConstantInt>(II->getArgOperand(I))->getZExtValue();
-    if (ActionKind == /*catch=*/1) {
-      auto *Selector = cast<Constant>(II->getArgOperand(I + 1));
-      Value *CatchObject = II->getArgOperand(I + 2);
-      Constant *Handler = cast<Constant>(II->getArgOperand(I + 3));
-      I += 4;
-      auto *CH = new CatchHandler(/*BB=*/nullptr, Selector, /*NextBB=*/nullptr);
-      CH->setExceptionVar(CatchObject);
-      CH->setHandlerBlockOrFunc(Handler);
-      Actions.push_back(CH);
-    } else {
-      assert(ActionKind == 0 && "expected a cleanup or a catch action!");
-      Constant *Handler = cast<Constant>(II->getArgOperand(I + 1));
-      I += 2;
-      auto *CH = new CleanupHandler(/*BB=*/nullptr);
-      CH->setHandlerBlockOrFunc(Handler);
-      Actions.push_back(CH);
-    }
+  if (fn.getFnAttribute("wineh-parent").getValueAsString() == fn.getName()) {
+    WinEHNumbering Num(MMI.getWinEHFuncInfo(&fn));
+    Num.calculateStateNumbers(fn);
+    // Pop everything on the handler stack.
+    Num.processCallSite(None, ImmutableCallSite());
   }
-  std::reverse(Actions.begin(), Actions.end());
 }
 
 void WinEHNumbering::createUnwindMapEntry(int ToState, ActionHandler *AH) {
   WinEHUnwindMapEntry UME;
   UME.ToState = ToState;
-  if (auto *CH = dyn_cast<CleanupHandler>(AH))
+  if (auto *CH = dyn_cast_or_null<CleanupHandler>(AH))
     UME.Cleanup = cast<Function>(CH->getHandlerBlockOrFunc());
   else
     UME.Cleanup = nullptr;
   FuncInfo.UnwindMap.push_back(UME);
+}
+
+void WinEHNumbering::createTryBlockMapEntry(int TryLow, int TryHigh,
+                                            ArrayRef<CatchHandler *> Handlers) {
+  WinEHTryBlockMapEntry TBME;
+  TBME.TryLow = TryLow;
+  TBME.TryHigh = TryHigh;
+  assert(TBME.TryLow <= TBME.TryHigh);
+  for (CatchHandler *CH : Handlers) {
+    WinEHHandlerType HT;
+    if (CH->getSelector()->isNullValue()) {
+      HT.Adjectives = 0x40;
+      HT.TypeDescriptor = nullptr;
+    } else {
+      auto *GV = cast<GlobalVariable>(CH->getSelector()->stripPointerCasts());
+      // Selectors are always pointers to GlobalVariables with 'struct' type.
+      // The struct has two fields, adjectives and a type descriptor.
+      auto *CS = cast<ConstantStruct>(GV->getInitializer());
+      HT.Adjectives =
+          cast<ConstantInt>(CS->getAggregateElement(0U))->getZExtValue();
+      HT.TypeDescriptor =
+          cast<GlobalVariable>(CS->getAggregateElement(1)->stripPointerCasts());
+    }
+    HT.Handler = cast<Function>(CH->getHandlerBlockOrFunc());
+    HT.CatchObjRecoverIdx = CH->getExceptionVarIndex();
+    TBME.HandlerArray.push_back(HT);
+  }
+  FuncInfo.TryBlockMap.push_back(TBME);
 }
 
 static void print_name(const Value *V) {
@@ -330,10 +337,8 @@ static void print_name(const Value *V) {
 #endif
 }
 
-void WinEHNumbering::proccessCallSite(ArrayRef<ActionHandler *> Actions,
-                                      ImmutableCallSite CS) {
-  // float, int
-  // float, double, int
+void WinEHNumbering::processCallSite(ArrayRef<ActionHandler *> Actions,
+                                     ImmutableCallSite CS) {
   int FirstMismatch = 0;
   for (int E = std::min(HandlerStack.size(), Actions.size()); FirstMismatch < E;
        ++FirstMismatch) {
@@ -343,28 +348,64 @@ void WinEHNumbering::proccessCallSite(ArrayRef<ActionHandler *> Actions,
     delete Actions[FirstMismatch];
   }
 
+  bool EnteringScope = (int)Actions.size() > FirstMismatch;
+
   // Don't recurse while we are looping over the handler stack.  Instead, defer
   // the numbering of the catch handlers until we are done popping.
-  SmallVector<const Function *, 4> UnnumberedHandlers;
+  SmallVector<CatchHandler *, 4> PoppedCatches;
   for (int I = HandlerStack.size() - 1; I >= FirstMismatch; --I) {
-    if (auto *CH = dyn_cast<CatchHandler>(HandlerStack.back()))
-      if (const auto *F = dyn_cast<Function>(CH->getHandlerBlockOrFunc()))
-        UnnumberedHandlers.push_back(F);
-    // Pop the handlers off of the stack.
-    delete HandlerStack.back();
+    if (auto *CH = dyn_cast<CatchHandler>(HandlerStack.back())) {
+      PoppedCatches.push_back(CH);
+    } else {
+      // Delete cleanup handlers
+      delete HandlerStack.back();
+    }
     HandlerStack.pop_back();
   }
 
-  for (const Function *F : UnnumberedHandlers)
-    calculateStateNumbers(*F);
+  // We need to create a new state number if we are exiting a try scope and we
+  // will not push any more actions.
+  int TryHigh = NextState - 1;
+  if (!EnteringScope && !PoppedCatches.empty()) {
+    createUnwindMapEntry(currentEHNumber(), nullptr);
+    ++NextState;
+  }
 
+  int LastTryLowIdx = 0;
+  for (int I = 0, E = PoppedCatches.size(); I != E; ++I) {
+    CatchHandler *CH = PoppedCatches[I];
+    if (I + 1 == E || CH->getEHState() != PoppedCatches[I + 1]->getEHState()) {
+      int TryLow = CH->getEHState();
+      auto Handlers =
+          makeArrayRef(&PoppedCatches[LastTryLowIdx], I - LastTryLowIdx + 1);
+      createTryBlockMapEntry(TryLow, TryHigh, Handlers);
+      LastTryLowIdx = I + 1;
+    }
+  }
+
+  for (CatchHandler *CH : PoppedCatches) {
+    if (auto *F = dyn_cast<Function>(CH->getHandlerBlockOrFunc()))
+      calculateStateNumbers(*F);
+    delete CH;
+  }
+
+  bool LastActionWasCatch = false;
   for (size_t I = FirstMismatch; I != Actions.size(); ++I) {
-    createUnwindMapEntry(currentEHNumber(), Actions[I]);
-    Actions[I]->setEHState(NextState++);
-    DEBUG(dbgs() << "Creating unwind map entry for: (");
-    print_name(Actions[I]->getHandlerBlockOrFunc());
-    DEBUG(dbgs() << ", " << currentEHNumber() << ")\n");
+    // We can reuse eh states when pushing two catches for the same invoke.
+    bool CurrActionIsCatch = isa<CatchHandler>(Actions[I]);
+    // FIXME: Reenable this optimization!
+    if (CurrActionIsCatch && LastActionWasCatch && false) {
+      Actions[I]->setEHState(currentEHNumber());
+    } else {
+      createUnwindMapEntry(currentEHNumber(), Actions[I]);
+      Actions[I]->setEHState(NextState);
+      NextState++;
+      DEBUG(dbgs() << "Creating unwind map entry for: (");
+      print_name(Actions[I]->getHandlerBlockOrFunc());
+      DEBUG(dbgs() << ", " << currentEHNumber() << ")\n");
+    }
     HandlerStack.push_back(Actions[I]);
+    LastActionWasCatch = CurrActionIsCatch;
   }
 
   DEBUG(dbgs() << "In EHState " << currentEHNumber() << " for CallSite: ");
@@ -373,6 +414,10 @@ void WinEHNumbering::proccessCallSite(ArrayRef<ActionHandler *> Actions,
 }
 
 void WinEHNumbering::calculateStateNumbers(const Function &F) {
+  auto I = VisitedHandlers.insert(&F);
+  if (!I.second)
+    return; // We've already visited this handler, don't renumber it.
+
   DEBUG(dbgs() << "Calculating state numbers for: " << F.getName() << '\n');
   SmallVector<ActionHandler *, 4> ActionList;
   for (const BasicBlock &BB : F) {
@@ -380,21 +425,23 @@ void WinEHNumbering::calculateStateNumbers(const Function &F) {
       const auto *CI = dyn_cast<CallInst>(&I);
       if (!CI || CI->doesNotThrow())
         continue;
-      proccessCallSite(None, CI);
+      processCallSite(None, CI);
     }
     const auto *II = dyn_cast<InvokeInst>(BB.getTerminator());
     if (!II)
       continue;
     const LandingPadInst *LPI = II->getLandingPadInst();
-    if (auto *ActionsCall = dyn_cast<IntrinsicInst>(LPI->getNextNode())) {
-      assert(ActionsCall->getIntrinsicID() == Intrinsic::eh_actions);
-      parseEHActions(ActionsCall, ActionList);
-      proccessCallSite(ActionList, II);
-      ActionList.clear();
-      FuncInfo.LandingPadStateMap[LPI] = currentEHNumber();
-    }
+    auto *ActionsCall = dyn_cast<IntrinsicInst>(LPI->getNextNode());
+    if (!ActionsCall)
+      continue;
+    assert(ActionsCall->getIntrinsicID() == Intrinsic::eh_actions);
+    parseEHActions(ActionsCall, ActionList);
+    processCallSite(ActionList, II);
+    ActionList.clear();
+    FuncInfo.LandingPadStateMap[LPI] = currentEHNumber();
   }
-  proccessCallSite(None, ImmutableCallSite());
+
+  FuncInfo.CatchHandlerMaxState[&F] = NextState - 1;
 }
 
 /// clear - Clear out all the function-specific state. This returns this

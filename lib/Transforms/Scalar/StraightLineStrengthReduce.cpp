@@ -333,7 +333,8 @@ void StraightLineStrengthReduce::allocateCandidateAndFindBasisForMul(
 void StraightLineStrengthReduce::allocateCandidateAndFindBasisForGEP(
     const SCEV *B, ConstantInt *Idx, Value *S, uint64_t ElementSize,
     Instruction *I) {
-  // I = B + sext(Idx *nsw S) *nsw ElementSize
+  // I = B + sext(Idx *nsw S) * ElementSize
+  //   = B + (sext(Idx) * sext(S)) * ElementSize
   //   = B + (sext(Idx) * ElementSize) * sext(S)
   // Casting to IntegerType is safe because we skipped vector GEPs.
   IntegerType *IntPtrTy = cast<IntegerType>(DL->getIntPtrType(I->getType()));
@@ -367,7 +368,7 @@ void StraightLineStrengthReduce::factorArrayIndex(Value *ArrayIdx,
   // sext'ed multiplication.
   if (match(ArrayIdx, m_NSWMul(m_Value(LHS), m_ConstantInt(RHS)))) {
     // SLSR is currently unsafe if i * S may overflow.
-    // GEP = Base + sext(LHS *nsw RHS) *nsw ElementSize
+    // GEP = Base + sext(LHS *nsw RHS) * ElementSize
     allocateCandidateAndFindBasisForGEP(Base, RHS, LHS, ElementSize, GEP);
   }
 }
@@ -472,19 +473,26 @@ void StraightLineStrengthReduce::rewriteCandidateWithBasis(
   case Candidate::GEP:
     {
       Type *IntPtrTy = DL->getIntPtrType(C.Ins->getType());
+      bool InBounds = cast<GetElementPtrInst>(C.Ins)->isInBounds();
       if (BumpWithUglyGEP) {
         // C = (char *)Basis + Bump
         unsigned AS = Basis.Ins->getType()->getPointerAddressSpace();
         Type *CharTy = Type::getInt8PtrTy(Basis.Ins->getContext(), AS);
         Reduced = Builder.CreateBitCast(Basis.Ins, CharTy);
-        // We only considered inbounds GEP as candidates.
-        Reduced = Builder.CreateInBoundsGEP(Reduced, Bump);
+        if (InBounds)
+          Reduced =
+              Builder.CreateInBoundsGEP(Builder.getInt8Ty(), Reduced, Bump);
+        else
+          Reduced = Builder.CreateGEP(Builder.getInt8Ty(), Reduced, Bump);
         Reduced = Builder.CreateBitCast(Reduced, C.Ins->getType());
       } else {
         // C = gep Basis, Bump
         // Canonicalize bump to pointer size.
         Bump = Builder.CreateSExtOrTrunc(Bump, IntPtrTy);
-        Reduced = Builder.CreateInBoundsGEP(Basis.Ins, Bump);
+        if (InBounds)
+          Reduced = Builder.CreateInBoundsGEP(nullptr, Basis.Ins, Bump);
+        else
+          Reduced = Builder.CreateGEP(nullptr, Basis.Ins, Bump);
       }
     }
     break;

@@ -3204,6 +3204,8 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
     Assert(!SawFrameEscape,
            "multiple calls to llvm.frameescape in one function", &CI);
     for (Value *Arg : CI.arg_operands()) {
+      if (isa<ConstantPointerNull>(Arg))
+        continue; // Null values are allowed as placeholders.
       auto *AI = dyn_cast<AllocaInst>(Arg->stripPointerCasts());
       Assert(AI && AI->isStaticAlloca(),
              "llvm.frameescape only accepts static allocas", &CI);
@@ -3225,20 +3227,6 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
     auto &Entry = FrameEscapeInfo[Fn];
     Entry.second = unsigned(
         std::max(uint64_t(Entry.second), IdxArg->getLimitedValue(~0U) + 1));
-    break;
-  }
-
-  case Intrinsic::eh_parentframe: {
-    auto *AI = dyn_cast<AllocaInst>(CI.getArgOperand(0)->stripPointerCasts());
-    Assert(AI && AI->isStaticAlloca(),
-           "llvm.eh.parentframe requires a static alloca", &CI);
-    break;
-  }
-
-  case Intrinsic::eh_unwindhelp: {
-    auto *AI = dyn_cast<AllocaInst>(CI.getArgOperand(0)->stripPointerCasts());
-    Assert(AI && AI->isStaticAlloca(),
-           "llvm.eh.unwindhelp requires a static alloca", &CI);
     break;
   }
 
@@ -3377,6 +3365,20 @@ void Verifier::visitDbgIntrinsic(StringRef Kind, DbgIntrinsicTy &DII) {
   Assert(isa<MDExpression>(DII.getRawExpression()),
          "invalid llvm.dbg." + Kind + " intrinsic expression", &DII,
          DII.getRawExpression());
+
+  // Ignore broken !dbg attachments; they're checked elsewhere.
+  if (MDNode *N = DII.getDebugLoc().getAsMDNode())
+    if (!isa<MDLocation>(N))
+      return;
+
+  // The inlined-at attachments for variables and !dbg attachments must agree.
+  MDLocalVariable *Var = DII.getVariable();
+  MDLocation *VarIA = Var->getInlinedAt();
+  MDLocation *Loc = DII.getDebugLoc();
+  MDLocation *LocIA = Loc ? Loc->getInlinedAt() : nullptr;
+  BasicBlock *BB = DII.getParent();
+  Assert(VarIA == LocIA, "mismatched variable and !dbg inlined-at", &DII, BB,
+         BB ? BB->getParent() : nullptr, Var, VarIA, Loc, LocIA);
 }
 
 void Verifier::visitUnresolvedTypeRef(const MDString *S, const MDNode *N) {

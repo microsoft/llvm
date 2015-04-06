@@ -476,7 +476,7 @@ Value *LibCallSimplifier::optimizeStpCpy(CallInst *CI, IRBuilder<> &B) {
   Value *Dst = CI->getArgOperand(0), *Src = CI->getArgOperand(1);
   if (Dst == Src) { // stpcpy(x,x)  -> x+strlen(x)
     Value *StrLen = EmitStrLen(Src, B, DL, TLI);
-    return StrLen ? B.CreateInBoundsGEP(Dst, StrLen) : nullptr;
+    return StrLen ? B.CreateInBoundsGEP(B.getInt8Ty(), Dst, StrLen) : nullptr;
   }
 
   // See if we can get the length of the input string.
@@ -2276,7 +2276,7 @@ Value *FortifiedLibCallSimplifier::optimizeStrpCpyChk(CallInst *CI,
   // __stpcpy_chk(x,x,...)  -> x+strlen(x)
   if (Func == LibFunc::stpcpy_chk && !OnlyLowerUnknownSize && Dst == Src) {
     Value *StrLen = EmitStrLen(Src, B, DL, TLI);
-    return StrLen ? B.CreateInBoundsGEP(Dst, StrLen) : nullptr;
+    return StrLen ? B.CreateInBoundsGEP(B.getInt8Ty(), Dst, StrLen) : nullptr;
   }
 
   // If a) we don't have any length information, or b) we know this will
@@ -2284,25 +2284,25 @@ Value *FortifiedLibCallSimplifier::optimizeStrpCpyChk(CallInst *CI,
   // st[rp]cpy_chk call which may fail at runtime if the size is too long.
   // TODO: It might be nice to get a maximum length out of the possible
   // string lengths for varying.
-  if (isFortifiedCallFoldable(CI, 2, 1, true)) {
-    Value *Ret = EmitStrCpy(Dst, Src, B, TLI, Name.substr(2, 6));
-    return Ret;
-  } else if (!OnlyLowerUnknownSize) {
-    // Maybe we can stil fold __st[rp]cpy_chk to __memcpy_chk.
-    uint64_t Len = GetStringLength(Src);
-    if (Len == 0)
-      return nullptr;
+  if (isFortifiedCallFoldable(CI, 2, 1, true))
+    return EmitStrCpy(Dst, Src, B, TLI, Name.substr(2, 6));
 
-    Type *SizeTTy = DL.getIntPtrType(CI->getContext());
-    Value *LenV = ConstantInt::get(SizeTTy, Len);
-    Value *Ret = EmitMemCpyChk(Dst, Src, LenV, ObjSize, B, DL, TLI);
-    // If the function was an __stpcpy_chk, and we were able to fold it into
-    // a __memcpy_chk, we still need to return the correct end pointer.
-    if (Ret && Func == LibFunc::stpcpy_chk)
-      return B.CreateGEP(B.getInt8Ty(), Dst, ConstantInt::get(SizeTTy, Len - 1));
-    return Ret;
-  }
-  return nullptr;
+  if (OnlyLowerUnknownSize)
+    return nullptr;
+
+  // Maybe we can stil fold __st[rp]cpy_chk to __memcpy_chk.
+  uint64_t Len = GetStringLength(Src);
+  if (Len == 0)
+    return nullptr;
+
+  Type *SizeTTy = DL.getIntPtrType(CI->getContext());
+  Value *LenV = ConstantInt::get(SizeTTy, Len);
+  Value *Ret = EmitMemCpyChk(Dst, Src, LenV, ObjSize, B, DL, TLI);
+  // If the function was an __stpcpy_chk, and we were able to fold it into
+  // a __memcpy_chk, we still need to return the correct end pointer.
+  if (Ret && Func == LibFunc::stpcpy_chk)
+    return B.CreateGEP(B.getInt8Ty(), Dst, ConstantInt::get(SizeTTy, Len - 1));
+  return Ret;
 }
 
 Value *FortifiedLibCallSimplifier::optimizeStrpNCpyChk(CallInst *CI,
@@ -2322,8 +2322,18 @@ Value *FortifiedLibCallSimplifier::optimizeStrpNCpyChk(CallInst *CI,
 }
 
 Value *FortifiedLibCallSimplifier::optimizeCall(CallInst *CI) {
-  if (CI->isNoBuiltin())
-    return nullptr;
+  // FIXME: We shouldn't be changing "nobuiltin" or TLI unavailable calls here.
+  // Some clang users checked for _chk libcall availability using:
+  //   __has_builtin(__builtin___memcpy_chk)
+  // When compiling with -fno-builtin, this is always true.
+  // When passing -ffreestanding/-mkernel, which both imply -fno-builtin, we
+  // end up with fortified libcalls, which isn't acceptable in a freestanding
+  // environment which only provides their non-fortified counterparts.
+  //
+  // Until we change clang and/or teach external users to check for availability
+  // differently, disregard the "nobuiltin" attribute and TLI::has.
+  //
+  // PR23093.
 
   LibFunc::Func Func;
   Function *Callee = CI->getCalledFunction();
@@ -2332,7 +2342,7 @@ Value *FortifiedLibCallSimplifier::optimizeCall(CallInst *CI) {
   bool isCallingConvC = CI->getCallingConv() == llvm::CallingConv::C;
 
   // First, check that this is a known library functions.
-  if (!TLI->getLibFunc(FuncName, Func) || !TLI->has(Func))
+  if (!TLI->getLibFunc(FuncName, Func))
     return nullptr;
 
   // We never change the calling convention.

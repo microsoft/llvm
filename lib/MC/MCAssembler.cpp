@@ -497,14 +497,12 @@ bool MCAssembler::evaluateFixup(const MCAsmLayout &Layout,
     } else {
       const MCSymbolRefExpr *A = Target.getSymA();
       const MCSymbol &SA = A->getSymbol();
-      if (A->getKind() != MCSymbolRefExpr::VK_None ||
-          SA.AliasedSymbol().isUndefined()) {
+      if (A->getKind() != MCSymbolRefExpr::VK_None || SA.isUndefined()) {
         IsResolved = false;
       } else {
         const MCSymbolData &DataA = getSymbolData(SA);
-        IsResolved =
-          getWriter().IsSymbolRefDifferenceFullyResolvedImpl(*this, DataA,
-                                                             *DF, false, true);
+        IsResolved = getWriter().IsSymbolRefDifferenceFullyResolvedImpl(
+            *this, DataA, nullptr, *DF, false, true);
       }
     }
   } else {
@@ -514,12 +512,12 @@ bool MCAssembler::evaluateFixup(const MCAsmLayout &Layout,
   Value = Target.getConstant();
 
   if (const MCSymbolRefExpr *A = Target.getSymA()) {
-    const MCSymbol &Sym = A->getSymbol().AliasedSymbol();
+    const MCSymbol &Sym = A->getSymbol();
     if (Sym.isDefined())
       Value += Layout.getSymbolOffset(&getSymbolData(Sym));
   }
   if (const MCSymbolRefExpr *B = Target.getSymB()) {
-    const MCSymbol &Sym = B->getSymbol().AliasedSymbol();
+    const MCSymbol &Sym = B->getSymbol();
     if (Sym.isDefined())
       Value -= Layout.getSymbolOffset(&getSymbolData(Sym));
   }
