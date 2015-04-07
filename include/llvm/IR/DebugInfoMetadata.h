@@ -41,6 +41,96 @@
 
 namespace llvm {
 
+/// \brief Pointer union between a subclass of DebugNode and MDString.
+///
+/// \a MDCompositeType can be referenced via an \a MDString unique identifier.
+/// This class allows some type safety in the face of that, requiring either a
+/// node of a particular type or an \a MDString.
+template <class T> class TypedDebugNodeRef {
+  const Metadata *MD = nullptr;
+
+public:
+  TypedDebugNodeRef(std::nullptr_t) {}
+
+  /// \brief Construct from a raw pointer.
+  explicit TypedDebugNodeRef(const Metadata *MD) : MD(MD) {
+    assert((!MD || isa<MDString>(MD) || isa<T>(MD)) && "Expected valid ref");
+  }
+
+  template <class U>
+  TypedDebugNodeRef(
+      const TypedDebugNodeRef<U> &X,
+      typename std::enable_if<std::is_convertible<U *, T *>::value>::type * =
+          nullptr)
+      : MD(X) {}
+
+  operator Metadata *() const { return const_cast<Metadata *>(MD); }
+
+  bool operator==(const TypedDebugNodeRef<T> &X) const { return MD == X.MD; };
+  bool operator!=(const TypedDebugNodeRef<T> &X) const { return MD != X.MD; };
+
+  /// \brief Create a reference.
+  ///
+  /// Get a reference to \c N, using an \a MDString reference if available.
+  static TypedDebugNodeRef get(const T *N);
+
+  template <class MapTy> T *resolve(const MapTy &Map) const {
+    if (!MD)
+      return nullptr;
+
+    if (auto *Typed = dyn_cast<T>(MD))
+      return const_cast<T *>(Typed);
+
+    auto *S = cast<MDString>(MD);
+    auto I = Map.find(S);
+    assert(I != Map.end() && "Missing identifier in type map");
+    return cast<T>(I->second);
+  }
+};
+
+typedef TypedDebugNodeRef<DebugNode> DebugNodeRef;
+typedef TypedDebugNodeRef<MDScope> MDScopeRef;
+typedef TypedDebugNodeRef<MDType> MDTypeRef;
+
+class MDTypeRefArray {
+  const MDTuple *N = nullptr;
+
+public:
+  MDTypeRefArray(const MDTuple *N) : N(N) {}
+  operator MDTuple *() const { return const_cast<MDTuple *>(N); }
+  MDTuple *operator->() const { return const_cast<MDTuple *>(N); }
+  MDTuple &operator*() const { return *const_cast<MDTuple *>(N); }
+
+  // FIXME: Fix callers and remove condition on N.
+  unsigned size() const { return N ? N->getNumOperands() : 0u; }
+  MDTypeRef operator[](unsigned I) const { return MDTypeRef(N->getOperand(I)); }
+
+  class iterator : std::iterator<std::input_iterator_tag, MDTypeRef,
+                                 std::ptrdiff_t, void, MDTypeRef> {
+    MDNode::op_iterator I = nullptr;
+
+  public:
+    iterator() = default;
+    explicit iterator(MDNode::op_iterator I) : I(I) {}
+    MDTypeRef operator*() const { return MDTypeRef(*I); }
+    iterator &operator++() {
+      ++I;
+      return *this;
+    }
+    iterator operator++(int) {
+      iterator Temp(*this);
+      ++I;
+      return Temp;
+    }
+    bool operator==(const iterator &X) const { return I == X.I; }
+    bool operator!=(const iterator &X) const { return I != X.I; }
+  };
+
+  // FIXME: Fix callers and remove condition on N.
+  iterator begin() const { return N ? iterator(N->op_begin()) : iterator(); }
+  iterator end() const { return N ? iterator(N->op_end()) : iterator(); }
+};
+
 /// \brief Tagged DWARF-like metadata node.
 ///
 /// A metadata node with a DWARF tag (i.e., a constant named \c DW_TAG_*,
@@ -88,6 +178,18 @@ public:
     FlagAccessibility = FlagPrivate | FlagProtected | FlagPublic
   };
 
+  static unsigned getFlag(StringRef Flag);
+  static const char *getFlagString(unsigned Flag);
+
+  /// \brief Split up a flags bitfield.
+  ///
+  /// Split \c Flags into \c SplitFlags, a vector of its components.  Returns
+  /// any remaining (unrecognized) bits.
+  static unsigned splitFlags(unsigned Flags,
+                             SmallVectorImpl<unsigned> &SplitFlags);
+
+  DebugNodeRef getRef() const { return DebugNodeRef::get(this); }
+
   static bool classof(const Metadata *MD) {
     switch (MD->getMetadataID()) {
     default:
@@ -115,6 +217,18 @@ public:
     }
   }
 };
+
+template <class T>
+struct simplify_type<const TypedDebugNodeRef<T>> {
+  typedef Metadata *SimpleType;
+  static SimpleType getSimplifiedValue(const TypedDebugNodeRef<T> &MD) {
+    return MD;
+  }
+};
+
+template <class T>
+struct simplify_type<TypedDebugNodeRef<T>>
+    : simplify_type<const TypedDebugNodeRef<T>> {};
 
 /// \brief Generic tagged DWARF-like metadata node.
 ///
@@ -202,27 +316,30 @@ class MDSubrange : public DebugNode {
   friend class MDNode;
 
   int64_t Count;
-  int64_t Lo;
+  int64_t LowerBound;
 
-  MDSubrange(LLVMContext &C, StorageType Storage, int64_t Count, int64_t Lo)
+  MDSubrange(LLVMContext &C, StorageType Storage, int64_t Count,
+             int64_t LowerBound)
       : DebugNode(C, MDSubrangeKind, Storage, dwarf::DW_TAG_subrange_type,
                   None),
-        Count(Count), Lo(Lo) {}
+        Count(Count), LowerBound(LowerBound) {}
   ~MDSubrange() {}
 
-  static MDSubrange *getImpl(LLVMContext &Context, int64_t Count, int64_t Lo,
-                             StorageType Storage, bool ShouldCreate = true);
+  static MDSubrange *getImpl(LLVMContext &Context, int64_t Count,
+                             int64_t LowerBound, StorageType Storage,
+                             bool ShouldCreate = true);
 
   TempMDSubrange cloneImpl() const {
-    return getTemporary(getContext(), getCount(), getLo());
+    return getTemporary(getContext(), getCount(), getLowerBound());
   }
 
 public:
-  DEFINE_MDNODE_GET(MDSubrange, (int64_t Count, int64_t Lo = 0), (Count, Lo))
+  DEFINE_MDNODE_GET(MDSubrange, (int64_t Count, int64_t LowerBound = 0),
+                    (Count, LowerBound))
 
   TempMDSubrange clone() const { return cloneImpl(); }
 
-  int64_t getLo() const { return Lo; }
+  int64_t getLowerBound() const { return LowerBound; }
   int64_t getCount() const { return Count; }
 
   static bool classof(const Metadata *MD) {
@@ -304,6 +421,8 @@ public:
     return isa<MDFile>(this) ? const_cast<MDScope *>(this)
                              : static_cast<Metadata *>(getOperand(0));
   }
+
+  MDScopeRef getRef() const { return MDScopeRef::get(this); }
 
   static bool classof(const Metadata *MD) {
     switch (MD->getMetadataID()) {
@@ -402,7 +521,7 @@ public:
   uint64_t getOffsetInBits() const { return OffsetInBits; }
   unsigned getFlags() const { return Flags; }
 
-  Metadata *getScope() const { return getRawScope(); }
+  MDScopeRef getScope() const { return MDScopeRef(getRawScope()); }
   StringRef getName() const { return getStringOperand(2); }
 
 
@@ -413,6 +532,31 @@ public:
     assert(!isUniqued() && "Cannot set flags on uniqued nodes");
     Flags = NewFlags;
   }
+
+  bool isPrivate() const {
+    return (getFlags() & FlagAccessibility) == FlagPrivate;
+  }
+  bool isProtected() const {
+    return (getFlags() & FlagAccessibility) == FlagProtected;
+  }
+  bool isPublic() const {
+    return (getFlags() & FlagAccessibility) == FlagPublic;
+  }
+  bool isForwardDecl() const { return getFlags() & FlagFwdDecl; }
+  bool isAppleBlockExtension() const { return getFlags() & FlagAppleBlock; }
+  bool isBlockByrefStruct() const { return getFlags() & FlagBlockByrefStruct; }
+  bool isVirtual() const { return getFlags() & FlagVirtual; }
+  bool isArtificial() const { return getFlags() & FlagArtificial; }
+  bool isObjectPointer() const { return getFlags() & FlagObjectPointer; }
+  bool isObjcClassComplete() const {
+    return getFlags() & FlagObjcClassComplete;
+  }
+  bool isVector() const { return getFlags() & FlagVector; }
+  bool isStaticMember() const { return getFlags() & FlagStaticMember; }
+  bool isLValueReference() const { return getFlags() & FlagLValueReference; }
+  bool isRValueReference() const { return getFlags() & FlagRValueReference; }
+
+  MDTypeRef getRef() const { return MDTypeRef::get(this); }
 
   static bool classof(const Metadata *MD) {
     switch (MD->getMetadataID()) {
@@ -497,7 +641,7 @@ protected:
   ~MDDerivedTypeBase() {}
 
 public:
-  Metadata *getBaseType() const { return getRawBaseType(); }
+  MDTypeRef getBaseType() const { return MDTypeRef(getRawBaseType()); }
   Metadata *getRawBaseType() const { return getOperand(3); }
 
   static bool classof(const Metadata *MD) {
@@ -526,7 +670,7 @@ class MDDerivedType : public MDDerivedTypeBase {
 
   static MDDerivedType *getImpl(LLVMContext &Context, unsigned Tag,
                                 StringRef Name, MDFile *File, unsigned Line,
-                                Metadata *Scope, Metadata *BaseType,
+                                MDScopeRef Scope, MDTypeRef BaseType,
                                 uint64_t SizeInBits, uint64_t AlignInBits,
                                 uint64_t OffsetInBits, unsigned Flags,
                                 Metadata *ExtraData, StorageType Storage,
@@ -560,11 +704,10 @@ public:
                     (Tag, Name, File, Line, Scope, BaseType, SizeInBits,
                      AlignInBits, OffsetInBits, Flags, ExtraData))
   DEFINE_MDNODE_GET(MDDerivedType,
-                    (unsigned Tag, StringRef Name, MDFile *File,
-                     unsigned Line, Metadata *Scope, Metadata *BaseType,
-                     uint64_t SizeInBits, uint64_t AlignInBits,
-                     uint64_t OffsetInBits, unsigned Flags,
-                     Metadata *ExtraData = nullptr),
+                    (unsigned Tag, StringRef Name, MDFile *File, unsigned Line,
+                     MDScopeRef Scope, MDTypeRef BaseType, uint64_t SizeInBits,
+                     uint64_t AlignInBits, uint64_t OffsetInBits,
+                     unsigned Flags, Metadata *ExtraData = nullptr),
                     (Tag, Name, File, Line, Scope, BaseType, SizeInBits,
                      AlignInBits, OffsetInBits, Flags, ExtraData))
 
@@ -606,8 +749,8 @@ public:
   MDTuple *getElements() const {
     return cast_or_null<MDTuple>(getRawElements());
   }
-  Metadata *getVTableHolder() const { return getRawVTableHolder(); }
-  MDTuple *getTemplateParams() const {
+  MDTypeRef getVTableHolder() const { return MDTypeRef(getRawVTableHolder()); }
+  MDTemplateParameterArray getTemplateParams() const {
     return cast_or_null<MDTuple>(getRawTemplateParams());
   }
   StringRef getIdentifier() const { return getStringOperand(7); }
@@ -633,10 +776,10 @@ public:
 #endif
     replaceOperandWith(4, Elements);
   }
-  void replaceVTableHolder(Metadata *VTableHolder) {
+  void replaceVTableHolder(MDTypeRef VTableHolder) {
     replaceOperandWith(5, VTableHolder);
   }
-  void replaceTemplateParams(MDTuple *TemplateParams) {
+  void replaceTemplateParams(MDTemplateParameterArray TemplateParams) {
     replaceOperandWith(6, TemplateParams);
   }
   /// @}
@@ -666,10 +809,10 @@ class MDCompositeType : public MDCompositeTypeBase {
 
   static MDCompositeType *
   getImpl(LLVMContext &Context, unsigned Tag, StringRef Name, Metadata *File,
-          unsigned Line, Metadata *Scope, Metadata *BaseType,
+          unsigned Line, MDScopeRef Scope, MDTypeRef BaseType,
           uint64_t SizeInBits, uint64_t AlignInBits, uint64_t OffsetInBits,
-          uint64_t Flags, Metadata *Elements, unsigned RuntimeLang,
-          Metadata *VTableHolder, Metadata *TemplateParams,
+          uint64_t Flags, MDTuple *Elements, unsigned RuntimeLang,
+          MDTypeRef VTableHolder, MDTemplateParameterArray TemplateParams,
           StringRef Identifier, StorageType Storage, bool ShouldCreate = true) {
     return getImpl(Context, Tag, getCanonicalMDString(Context, Name), File,
                    Line, Scope, BaseType, SizeInBits, AlignInBits, OffsetInBits,
@@ -695,12 +838,12 @@ class MDCompositeType : public MDCompositeTypeBase {
 
 public:
   DEFINE_MDNODE_GET(MDCompositeType,
-                    (unsigned Tag, StringRef Name, Metadata *File,
-                     unsigned Line, Metadata *Scope, Metadata *BaseType,
-                     uint64_t SizeInBits, uint64_t AlignInBits,
-                     uint64_t OffsetInBits, unsigned Flags, Metadata *Elements,
-                     unsigned RuntimeLang, Metadata *VTableHolder,
-                     Metadata *TemplateParams = nullptr,
+                    (unsigned Tag, StringRef Name, MDFile *File, unsigned Line,
+                     MDScopeRef Scope, MDTypeRef BaseType, uint64_t SizeInBits,
+                     uint64_t AlignInBits, uint64_t OffsetInBits,
+                     unsigned Flags, MDTuple *Elements, unsigned RuntimeLang,
+                     MDTypeRef VTableHolder,
+                     MDTemplateParameterArray TemplateParams = nullptr,
                      StringRef Identifier = ""),
                     (Tag, Name, File, Line, Scope, BaseType, SizeInBits,
                      AlignInBits, OffsetInBits, Flags, Elements, RuntimeLang,
@@ -723,6 +866,14 @@ public:
     return MD->getMetadataID() == MDCompositeTypeKind;
   }
 };
+
+template <class T> TypedDebugNodeRef<T> TypedDebugNodeRef<T>::get(const T *N) {
+  if (N)
+    if (auto *Composite = dyn_cast<MDCompositeType>(N))
+      if (auto *S = Composite->getRawIdentifier())
+        return TypedDebugNodeRef<T>(S);
+  return TypedDebugNodeRef<T>(N);
+}
 
 /// \brief Type array for a subprogram.
 ///
@@ -753,7 +904,7 @@ public:
 
   TempMDSubroutineType clone() const { return cloneImpl(); }
 
-  MDTuple *getTypeArray() const { return getElements(); }
+  MDTypeRefArray getTypeArray() const { return getElements(); }
   Metadata *getRawTypeArray() const { return getRawElements(); }
 
   static bool classof(const Metadata *MD) {
@@ -844,19 +995,19 @@ public:
   StringRef getProducer() const { return getStringOperand(1); }
   StringRef getFlags() const { return getStringOperand(2); }
   StringRef getSplitDebugFilename() const { return getStringOperand(3); }
-  MDTuple *getEnumTypes() const {
+  MDCompositeTypeArray getEnumTypes() const {
     return cast_or_null<MDTuple>(getRawEnumTypes());
   }
-  MDTuple *getRetainedTypes() const {
+  MDTypeArray getRetainedTypes() const {
     return cast_or_null<MDTuple>(getRawRetainedTypes());
   }
-  MDTuple *getSubprograms() const {
+  MDSubprogramArray getSubprograms() const {
     return cast_or_null<MDTuple>(getRawSubprograms());
   }
-  MDTuple *getGlobalVariables() const {
+  MDGlobalVariableArray getGlobalVariables() const {
     return cast_or_null<MDTuple>(getRawGlobalVariables());
   }
-  MDTuple *getImportedEntities() const {
+  MDImportedEntityArray getImportedEntities() const {
     return cast_or_null<MDTuple>(getRawImportedEntities());
   }
 
@@ -959,7 +1110,7 @@ public:
   unsigned getLine() const { return SubclassData32; }
   unsigned getColumn() const { return SubclassData16; }
   MDLocalScope *getScope() const {
-    return cast_or_null<MDLocalScope>(getRawScope());
+    return cast<MDLocalScope>(getRawScope());
   }
   MDLocation *getInlinedAt() const {
     return cast_or_null<MDLocation>(getRawInlinedAt());
@@ -1016,14 +1167,14 @@ class MDSubprogram : public MDLocalScope {
   ~MDSubprogram() {}
 
   static MDSubprogram *
-  getImpl(LLVMContext &Context, Metadata *Scope, StringRef Name,
+  getImpl(LLVMContext &Context, MDScopeRef Scope, StringRef Name,
           StringRef LinkageName, MDFile *File, unsigned Line,
           MDSubroutineType *Type, bool IsLocalToUnit, bool IsDefinition,
-          unsigned ScopeLine, Metadata *ContainingType, unsigned Virtuality,
+          unsigned ScopeLine, MDTypeRef ContainingType, unsigned Virtuality,
           unsigned VirtualIndex, unsigned Flags, bool IsOptimized,
-          ConstantAsMetadata *Function, MDTuple *TemplateParams,
-          MDSubprogram *Declaration, MDTuple *Variables, StorageType Storage,
-          bool ShouldCreate = true) {
+          ConstantAsMetadata *Function, MDTemplateParameterArray TemplateParams,
+          MDSubprogram *Declaration, MDLocalVariableArray Variables,
+          StorageType Storage, bool ShouldCreate = true) {
     return getImpl(Context, Scope, getCanonicalMDString(Context, Name),
                    getCanonicalMDString(Context, LinkageName), File, Line, Type,
                    IsLocalToUnit, IsDefinition, ScopeLine, ContainingType,
@@ -1050,18 +1201,20 @@ class MDSubprogram : public MDLocalScope {
   }
 
 public:
-  DEFINE_MDNODE_GET(
-      MDSubprogram,
-      (Metadata * Scope, StringRef Name, StringRef LinkageName, MDFile *File,
-       unsigned Line, MDSubroutineType *Type, bool IsLocalToUnit,
-       bool IsDefinition, unsigned ScopeLine, Metadata *ContainingType,
-       unsigned Virtuality, unsigned VirtualIndex, unsigned Flags,
-       bool IsOptimized, ConstantAsMetadata *Function = nullptr,
-       MDTuple *TemplateParams = nullptr, MDSubprogram *Declaration = nullptr,
-       MDTuple *Variables = nullptr),
-      (Scope, Name, LinkageName, File, Line, Type, IsLocalToUnit, IsDefinition,
-       ScopeLine, ContainingType, Virtuality, VirtualIndex, Flags, IsOptimized,
-       Function, TemplateParams, Declaration, Variables))
+  DEFINE_MDNODE_GET(MDSubprogram,
+                    (MDScopeRef Scope, StringRef Name, StringRef LinkageName,
+                     MDFile *File, unsigned Line, MDSubroutineType *Type,
+                     bool IsLocalToUnit, bool IsDefinition, unsigned ScopeLine,
+                     MDTypeRef ContainingType, unsigned Virtuality,
+                     unsigned VirtualIndex, unsigned Flags, bool IsOptimized,
+                     ConstantAsMetadata *Function = nullptr,
+                     MDTemplateParameterArray TemplateParams = nullptr,
+                     MDSubprogram *Declaration = nullptr,
+                     MDLocalVariableArray Variables = nullptr),
+                    (Scope, Name, LinkageName, File, Line, Type, IsLocalToUnit,
+                     IsDefinition, ScopeLine, ContainingType, Virtuality,
+                     VirtualIndex, Flags, IsOptimized, Function, TemplateParams,
+                     Declaration, Variables))
   DEFINE_MDNODE_GET(
       MDSubprogram,
       (Metadata * Scope, MDString *Name, MDString *LinkageName, Metadata *File,
@@ -1086,7 +1239,36 @@ public:
   bool isDefinition() const { return IsDefinition; }
   bool isOptimized() const { return IsOptimized; }
 
-  Metadata *getScope() const { return getRawScope(); }
+  unsigned isArtificial() const { return getFlags() & FlagArtificial; }
+  bool isPrivate() const {
+    return (getFlags() & FlagAccessibility) == FlagPrivate;
+  }
+  bool isProtected() const {
+    return (getFlags() & FlagAccessibility) == FlagProtected;
+  }
+  bool isPublic() const {
+    return (getFlags() & FlagAccessibility) == FlagPublic;
+  }
+  bool isExplicit() const { return getFlags() & FlagExplicit; }
+  bool isPrototyped() const { return getFlags() & FlagPrototyped; }
+
+  /// \brief Check if this is reference-qualified.
+  ///
+  /// Return true if this subprogram is a C++11 reference-qualified non-static
+  /// member function (void foo() &).
+  unsigned isLValueReference() const {
+    return getFlags() & FlagLValueReference;
+  }
+
+  /// \brief Check if this is rvalue-reference-qualified.
+  ///
+  /// Return true if this subprogram is a C++11 rvalue-reference-qualified
+  /// non-static member function (void foo() &&).
+  unsigned isRValueReference() const {
+    return getFlags() & FlagRValueReference;
+  }
+
+  MDScopeRef getScope() const { return MDScopeRef(getRawScope()); }
 
   StringRef getName() const { return getStringOperand(2); }
   StringRef getDisplayName() const { return getStringOperand(3); }
@@ -1098,18 +1280,20 @@ public:
   MDSubroutineType *getType() const {
     return cast_or_null<MDSubroutineType>(getRawType());
   }
-  Metadata *getContainingType() const { return getRawContainingType(); }
+  MDTypeRef getContainingType() const {
+    return MDTypeRef(getRawContainingType());
+  }
 
   ConstantAsMetadata *getFunction() const {
     return cast_or_null<ConstantAsMetadata>(getRawFunction());
   }
-  MDTuple *getTemplateParams() const {
+  MDTemplateParameterArray getTemplateParams() const {
     return cast_or_null<MDTuple>(getRawTemplateParams());
   }
   MDSubprogram *getDeclaration() const {
     return cast_or_null<MDSubprogram>(getRawDeclaration());
   }
-  MDTuple *getVariables() const {
+  MDLocalVariableArray getVariables() const {
     return cast_or_null<MDTuple>(getRawVariables());
   }
 
@@ -1312,9 +1496,10 @@ protected:
 
 public:
   StringRef getName() const { return getStringOperand(0); }
-  Metadata *getType() const { return getOperand(1); }
+  MDTypeRef getType() const { return MDTypeRef(getRawType()); }
 
   MDString *getRawName() const { return getOperandAs<MDString>(0); }
+  Metadata *getRawType() const { return getOperand(1); }
 
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == MDTemplateTypeParameterKind ||
@@ -1333,7 +1518,7 @@ class MDTemplateTypeParameter : public MDTemplateParameter {
   ~MDTemplateTypeParameter() {}
 
   static MDTemplateTypeParameter *getImpl(LLVMContext &Context, StringRef Name,
-                                          Metadata *Type, StorageType Storage,
+                                          MDTypeRef Type, StorageType Storage,
                                           bool ShouldCreate = true) {
     return getImpl(Context, getCanonicalMDString(Context, Name), Type, Storage,
                    ShouldCreate);
@@ -1347,7 +1532,7 @@ class MDTemplateTypeParameter : public MDTemplateParameter {
   }
 
 public:
-  DEFINE_MDNODE_GET(MDTemplateTypeParameter, (StringRef Name, Metadata *Type),
+  DEFINE_MDNODE_GET(MDTemplateTypeParameter, (StringRef Name, MDTypeRef Type),
                     (Name, Type))
   DEFINE_MDNODE_GET(MDTemplateTypeParameter, (MDString * Name, Metadata *Type),
                     (Name, Type))
@@ -1370,7 +1555,7 @@ class MDTemplateValueParameter : public MDTemplateParameter {
   ~MDTemplateValueParameter() {}
 
   static MDTemplateValueParameter *getImpl(LLVMContext &Context, unsigned Tag,
-                                           StringRef Name, Metadata *Type,
+                                           StringRef Name, MDTypeRef Type,
                                            Metadata *Value, StorageType Storage,
                                            bool ShouldCreate = true) {
     return getImpl(Context, Tag, getCanonicalMDString(Context, Name), Type,
@@ -1388,7 +1573,7 @@ class MDTemplateValueParameter : public MDTemplateParameter {
 
 public:
   DEFINE_MDNODE_GET(MDTemplateValueParameter, (unsigned Tag, StringRef Name,
-                                               Metadata *Type, Metadata *Value),
+                                               MDTypeRef Type, Metadata *Value),
                     (Tag, Name, Type, Value))
   DEFINE_MDNODE_GET(MDTemplateValueParameter, (unsigned Tag, MDString *Name,
                                                Metadata *Type, Metadata *Value),
@@ -1420,7 +1605,7 @@ public:
   MDScope *getScope() const { return cast_or_null<MDScope>(getRawScope()); }
   StringRef getName() const { return getStringOperand(1); }
   MDFile *getFile() const { return cast_or_null<MDFile>(getRawFile()); }
-  Metadata *getType() const { return getRawType(); }
+  MDTypeRef getType() const { return MDTypeRef(getRawType()); }
 
   Metadata *getRawScope() const { return getOperand(0); }
   MDString *getRawName() const { return getOperandAs<MDString>(1); }
@@ -1453,7 +1638,7 @@ class MDGlobalVariable : public MDVariable {
 
   static MDGlobalVariable *
   getImpl(LLVMContext &Context, MDScope *Scope, StringRef Name,
-          StringRef LinkageName, MDFile *File, unsigned Line, Metadata *Type,
+          StringRef LinkageName, MDFile *File, unsigned Line, MDTypeRef Type,
           bool IsLocalToUnit, bool IsDefinition, ConstantAsMetadata *Variable,
           MDDerivedType *StaticDataMemberDeclaration, StorageType Storage,
           bool ShouldCreate = true) {
@@ -1479,7 +1664,7 @@ class MDGlobalVariable : public MDVariable {
 public:
   DEFINE_MDNODE_GET(MDGlobalVariable,
                     (MDScope * Scope, StringRef Name, StringRef LinkageName,
-                     MDFile *File, unsigned Line, Metadata *Type,
+                     MDFile *File, unsigned Line, MDTypeRef Type,
                      bool IsLocalToUnit, bool IsDefinition,
                      ConstantAsMetadata *Variable,
                      MDDerivedType *StaticDataMemberDeclaration),
@@ -1536,7 +1721,7 @@ class MDLocalVariable : public MDVariable {
 
   static MDLocalVariable *getImpl(LLVMContext &Context, unsigned Tag,
                                   MDScope *Scope, StringRef Name, MDFile *File,
-                                  unsigned Line, Metadata *Type, unsigned Arg,
+                                  unsigned Line, MDTypeRef Type, unsigned Arg,
                                   unsigned Flags, MDLocation *InlinedAt,
                                   StorageType Storage,
                                   bool ShouldCreate = true) {
@@ -1560,7 +1745,7 @@ class MDLocalVariable : public MDVariable {
 public:
   DEFINE_MDNODE_GET(MDLocalVariable,
                     (unsigned Tag, MDLocalScope *Scope, StringRef Name,
-                     MDFile *File, unsigned Line, Metadata *Type, unsigned Arg,
+                     MDFile *File, unsigned Line, MDTypeRef Type, unsigned Arg,
                      unsigned Flags, MDLocation *InlinedAt = nullptr),
                     (Tag, Scope, Name, File, Line, Type, Arg, Flags, InlinedAt))
   DEFINE_MDNODE_GET(MDLocalVariable,
@@ -1586,6 +1771,9 @@ public:
   }
 
   Metadata *getRawInlinedAt() const { return getOperand(4); }
+
+  bool isArtificial() const { return getFlags() & FlagArtificial; }
+  bool isObjectPointer() const { return getFlags() & FlagObjectPointer; }
 
   /// \brief Check that a location is valid for this variable.
   ///
@@ -1649,6 +1837,15 @@ public:
     return Elements[I];
   }
 
+  /// \brief Return whether this is a piece of an aggregate variable.
+  bool isBitPiece() const;
+
+  /// \brief Return the offset of this piece in bits.
+  uint64_t getBitPieceOffset() const;
+
+  /// \brief Return the size of this piece in bits.
+  uint64_t getBitPieceSize() const;
+
   typedef ArrayRef<uint64_t>::iterator element_iterator;
   element_iterator elements_begin() const { return getElements().begin(); }
   element_iterator elements_end() const { return getElements().end(); }
@@ -1702,6 +1899,13 @@ public:
       increment();
       return T;
     }
+
+    /// \brief Get the next iterator.
+    ///
+    /// \a std::next() doesn't work because this is technically an
+    /// input_iterator, but it's a perfectly valid operation.  This is an
+    /// accessor to provide the same functionality.
+    expr_op_iterator getNext() const { return ++expr_op_iterator(*this); }
 
     bool operator==(const expr_op_iterator &X) const {
       return getBase() == X.getBase();
@@ -1819,7 +2023,7 @@ class MDImportedEntity : public DebugNode {
   ~MDImportedEntity() {}
 
   static MDImportedEntity *getImpl(LLVMContext &Context, unsigned Tag,
-                                   MDScope *Scope, Metadata *Entity,
+                                   MDScope *Scope, DebugNodeRef Entity,
                                    unsigned Line, StringRef Name,
                                    StorageType Storage,
                                    bool ShouldCreate = true) {
@@ -1839,7 +2043,7 @@ class MDImportedEntity : public DebugNode {
 
 public:
   DEFINE_MDNODE_GET(MDImportedEntity,
-                    (unsigned Tag, MDScope *Scope, Metadata *Entity,
+                    (unsigned Tag, MDScope *Scope, DebugNodeRef Entity,
                      unsigned Line, StringRef Name = ""),
                     (Tag, Scope, Entity, Line, Name))
   DEFINE_MDNODE_GET(MDImportedEntity,
@@ -1851,7 +2055,7 @@ public:
 
   unsigned getLine() const { return Line; }
   MDScope *getScope() const { return cast_or_null<MDScope>(getRawScope()); }
-  Metadata *getEntity() const { return getRawEntity(); }
+  DebugNodeRef getEntity() const { return DebugNodeRef(getRawEntity()); }
   StringRef getName() const { return getStringOperand(2); }
 
   Metadata *getRawScope() const { return getOperand(0); }
