@@ -112,13 +112,7 @@ class ELFObjectWriter : public MCObjectWriter {
                               const MCAsmLayout &Layout,
                               const MCSectionELF &Section);
 
-    /*static bool isFixupKindX86RIPRel(unsigned Kind) {
-      return Kind == X86::reloc_riprel_4byte ||
-        Kind == X86::reloc_riprel_4byte_movq_load;
-    }*/
-
-    /// ELFSymbolData - Helper struct for containing some precomputed
-    /// information on symbols.
+    /// Helper struct for containing some precomputed information on symbols.
     struct ELFSymbolData {
       MCSymbolData *SymbolData;
       uint64_t StringIndex;
@@ -218,7 +212,7 @@ class ELFObjectWriter : public MCObjectWriter {
     }
 
     void WriteHeader(const MCAssembler &Asm,
-                     uint64_t SectionDataSize,
+                     uint64_t SectionHeaderOffset,
                      unsigned NumberOfSections);
 
     void WriteSymbol(SymbolTableWriter &Writer, ELFSymbolData &MSD,
@@ -253,11 +247,9 @@ class ELFObjectWriter : public MCObjectWriter {
     /// \param Asm - The assembler.
     /// \param SectionIndexMap - Maps a section to its index.
     /// \param RevGroupMap - Maps a signature symbol to the group section.
-    /// \param NumRegularSections - Number of non-relocation sections.
     void computeSymbolTable(MCAssembler &Asm, const MCAsmLayout &Layout,
                             const SectionIndexMapTy &SectionIndexMap,
-                            const RevGroupMapTy &RevGroupMap,
-                            unsigned NumRegularSections);
+                            const RevGroupMapTy &RevGroupMap);
 
     void computeIndexMap(MCAssembler &Asm, SectionIndexMapTy &SectionIndexMap);
 
@@ -430,7 +422,7 @@ ELFObjectWriter::~ELFObjectWriter()
 
 // Emit the ELF header.
 void ELFObjectWriter::WriteHeader(const MCAssembler &Asm,
-                                  uint64_t SectionDataSize,
+                                  uint64_t SectionHeaderOffset,
                                   unsigned NumberOfSections) {
   // ELF Header
   // ----------
@@ -464,8 +456,7 @@ void ELFObjectWriter::WriteHeader(const MCAssembler &Asm,
   Write32(ELF::EV_CURRENT);         // e_version
   WriteWord(0);                    // e_entry, no entry point in .o file
   WriteWord(0);                    // e_phoff, no program header for .o
-  WriteWord(SectionDataSize + (is64Bit() ? sizeof(ELF::Elf64_Ehdr) :
-            sizeof(ELF::Elf32_Ehdr)));  // e_shoff = sec hdr table off in bytes
+  WriteWord(SectionHeaderOffset);  // e_shoff = sec hdr table off in bytes
 
   // e_flags = whatever the target wants
   Write32(Asm.getELFHeaderEFlags());
@@ -990,11 +981,10 @@ void ELFObjectWriter::computeIndexMap(MCAssembler &Asm,
   }
 }
 
-void
-ELFObjectWriter::computeSymbolTable(MCAssembler &Asm, const MCAsmLayout &Layout,
-                                    const SectionIndexMapTy &SectionIndexMap,
-                                    const RevGroupMapTy &RevGroupMap,
-                                    unsigned NumRegularSections) {
+void ELFObjectWriter::computeSymbolTable(
+    MCAssembler &Asm, const MCAsmLayout &Layout,
+    const SectionIndexMapTy &SectionIndexMap,
+    const RevGroupMapTy &RevGroupMap) {
   // FIXME: Is this the correct place to do this?
   // FIXME: Why is an undefined reference to _GLOBAL_OFFSET_TABLE_ needed?
   if (NeedsGOT) {
@@ -1682,21 +1672,14 @@ void ELFObjectWriter::WriteObject(MCAssembler &Asm,
   RevGroupMapTy RevGroupMap;
   SectionIndexMapTy SectionIndexMap;
 
-  unsigned NumUserSections = Asm.size();
-
   CompressDebugSections(Asm, const_cast<MCAsmLayout &>(Layout));
-
-  const unsigned NumUserAndRelocSections = Asm.size();
   createIndexedSections(Asm, const_cast<MCAsmLayout &>(Layout), GroupMap,
                         RevGroupMap, SectionIndexMap);
-  const unsigned AllSections = Asm.size();
-  const unsigned NumIndexedSections = AllSections - NumUserAndRelocSections;
 
-  unsigned NumRegularSections = NumUserSections + NumIndexedSections;
+  unsigned NumRegularSections = Asm.size();
 
   // Compute symbol table information.
-  computeSymbolTable(Asm, Layout, SectionIndexMap, RevGroupMap,
-                     NumRegularSections);
+  computeSymbolTable(Asm, Layout, SectionIndexMap, RevGroupMap);
 
   WriteRelocations(Asm, const_cast<MCAsmLayout &>(Layout));
 
@@ -1728,7 +1711,7 @@ void ELFObjectWriter::WriteObject(MCAssembler &Asm,
 
   FileOff = RoundUpToAlignment(FileOff, NaturalAlignment);
 
-  const unsigned SectionHeaderOffset = FileOff - HeaderSize;
+  const unsigned SectionHeaderOffset = FileOff;
 
   uint64_t SectionHeaderEntrySize = is64Bit() ?
     sizeof(ELF::Elf64_Shdr) : sizeof(ELF::Elf32_Shdr);
