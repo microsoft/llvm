@@ -393,11 +393,36 @@ static bool usesTheStack(const MachineFunction &MF) {
   return false;
 }
 
+void X86FrameLowering::emitStackProbeInline(MachineFunction &MF,
+                                            MachineBasicBlock &MBB,
+                                            MachineBasicBlock::iterator MBBI,
+                                            DebugLoc DL, bool InProlog) {
+  const X86Subtarget &STI = MF.getSubtarget<X86Subtarget>();
+  assert(!InProlog && "special care needed for probes in prologs");
+  assert(STI.is64Bit() && "different expansion needed for 32 bit");
+  assert(STI.isTargetWindowsCoreCLR() && "custom expansion expects CoreCLR");
+  const TargetInstrInfo &TII = *STI.getInstrInfo();
+
+  // EAX/RAX contains the number of bytes of desired stack adjustment. 
+  // The handling here assumes this value has already been updated so as to
+  // maintain stack alignment.
+  //
+  // We need to exit with RSP/ESP modified by this amount and execute suitable
+  // page touches to notify the OS that we're growing the stack responsibly.
+  //
+  // For now we just do the stack adjustment part. The probing is left
+  // as future work. 
+  BuildMI(MBB, MBBI, DL, TII.get(X86::SUB64rr), X86::RSP)
+    .addReg(X86::RSP)
+    .addReg(X86::RAX);
+}
+
 void X86FrameLowering::emitStackProbeCall(MachineFunction &MF,
                                           MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator MBBI,
                                           DebugLoc DL) {
   const X86Subtarget &STI = MF.getSubtarget<X86Subtarget>();
+  assert(!STI.isTargetWindowsCoreCLR() && "CoreCLR has no __chkstk to call");
   const TargetInstrInfo &TII = *STI.getInstrInfo();
   bool Is64Bit = STI.is64Bit();
   bool IsLargeCodeModel = MF.getTarget().getCodeModel() == CodeModel::Large;

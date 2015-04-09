@@ -29,6 +29,13 @@ public:
   static void emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MBBI, DebugLoc DL);
 
+  /// Emit an inline sequence to probe the stack. This is required for all
+  /// large stack allocations on Windows. The caller is required to materialize
+  /// the number of bytes to probe in RAX/EAX.
+  static void emitStackProbeInline(MachineFunction &MF, MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MBBI, 
+                                   DebugLoc DL, bool IsProlog);
+
   void emitCalleeSavedFrameMoves(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MBBI,
                                  DebugLoc DL) const;

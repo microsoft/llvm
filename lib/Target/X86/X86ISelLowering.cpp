@@ -18706,7 +18706,11 @@ X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
 
   assert(!Subtarget->isTargetMachO());
 
-  X86FrameLowering::emitStackProbeCall(*BB->getParent(), *BB, MI, DL);
+  if (Subtarget->isTargetWindowsCoreCLR()) {
+    X86FrameLowering::emitStackProbeInline(*BB->getParent(), *BB, MI, DL, false);
+  } else {
+    X86FrameLowering::emitStackProbeCall(*BB->getParent(), *BB, MI, DL);
+  }
 
   MI->eraseFromParent();   // The pseudo instruction is gone now.
   return BB;
