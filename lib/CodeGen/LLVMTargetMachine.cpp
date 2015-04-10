@@ -181,10 +181,11 @@ bool LLVMTargetMachine::addPassesToEmitFile(
 
     MCAsmBackend *MAB = getTarget().createMCAsmBackend(MRI, getTargetTriple(),
                                                        TargetCPU);
+    auto FOut = llvm::make_unique<formatted_raw_ostream>(Out);
     MCStreamer *S = getTarget().createAsmStreamer(
-        *Context, cast<formatted_raw_ostream>(Out),
-        Options.MCOptions.AsmVerbose, Options.MCOptions.MCUseDwarfDirectory,
-        InstPrinter, MCE, MAB, Options.MCOptions.ShowMCInst);
+        *Context, std::move(FOut), Options.MCOptions.AsmVerbose,
+        Options.MCOptions.MCUseDwarfDirectory, InstPrinter, MCE, MAB,
+        Options.MCOptions.ShowMCInst);
     AsmStreamer.reset(S);
     break;
   }

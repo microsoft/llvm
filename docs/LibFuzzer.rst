@@ -245,6 +245,31 @@ The fuzzer itself will still be mutating a string of bytes
 but before passing this input to the target library it will replace every byte ``b`` with the ``b``-th token.
 If there are less than ``b`` tokens, a space will be added instead.
 
+AFL compatibility
+-----------------
+LibFuzzer can be used in parallel with AFL_ on the same test corpus.
+Both fuzzers expect the test corpus to reside in a directory, one file per input.
+You can run both fuzzers on the same corpus in parallel::
+
+  ./afl-fuzz -i testcase_dir -o findings_dir /path/to/program -r @@
+  ./llvm-fuzz testcase_dir findings_dir  # Will write new tests to testcase_dir
+
+Periodically restart both fuzzers so that they can use each other's findings.
+
+How good is my fuzzer?
+----------------------
+
+Once you implement your target function ``TestOneInput`` and fuzz it to death,
+you will want to know whether the function or the corpus can be improved further.
+One easy to use metric is, of course, code coverage.
+You can get the coverage for your corpus like this::
+
+  ASAN_OPTIONS=coverage_pcs=1 ./fuzzer CORPUS_DIR -runs=0
+
+This will run all the tests in the CORPUS_DIR but will not generate any new tests
+and dump covered PCs to disk before exiting.
+Then you can subtract the set of covered PCs from the set of all instrumented PCs in the binary,
+see SanitizerCoverage_ for details.
 
 Fuzzing components of LLVM
 ==========================
