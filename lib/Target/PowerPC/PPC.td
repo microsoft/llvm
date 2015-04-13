@@ -122,6 +122,10 @@ def FeatureP8Crypto : SubtargetFeature<"crypto", "HasP8Crypto", "true",
 def FeatureP8Vector  : SubtargetFeature<"power8-vector", "HasP8Vector", "true",
                                         "Enable POWER8 vector instructions",
                                         [FeatureVSX, FeatureP8Altivec]>;
+def FeatureDirectMove :
+  SubtargetFeature<"direct-move", "HasDirectMove", "true",
+                   "Enable Power8 direct move instructions",
+                   [FeatureVSX]>;
 def FeaturePartwordAtomic : SubtargetFeature<"partword-atomics",
                                              "HasPartwordAtomics", "true",
                                              "Enable l[bh]arx and st[bh]cx.">;
@@ -159,12 +163,12 @@ def ProcessorFeatures {
        FeatureRecipPrec, FeatureSTFIWX, FeatureLFIWAX,
        FeatureFPRND, FeatureFPCVT, FeatureISEL,
        FeaturePOPCNTD, FeatureCMPB, FeatureLDBRX,
-       Feature64Bit /*, Feature64BitRegs */, FeaturePartwordAtomic,
+       Feature64Bit /*, Feature64BitRegs */,
        FeatureBPERMD, FeatureExtDiv,
        DeprecatedMFTB, DeprecatedDST];
   list<SubtargetFeature> Power8SpecificFeatures =
       [DirectivePwr8, FeatureP8Altivec, FeatureP8Vector, FeatureP8Crypto,
-       FeatureHTM, FeatureICBT];
+       FeatureHTM, FeatureDirectMove, FeatureICBT, FeaturePartwordAtomic];
   list<SubtargetFeature> Power8FeatureList =
       !listconcat(Power7FeatureList, Power8SpecificFeatures);
 }

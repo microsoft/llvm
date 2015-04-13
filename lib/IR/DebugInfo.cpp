@@ -33,25 +33,6 @@
 using namespace llvm;
 using namespace llvm::dwarf;
 
-//===----------------------------------------------------------------------===//
-// DIDescriptor
-//===----------------------------------------------------------------------===//
-
-static Metadata *getField(const MDNode *DbgNode, unsigned Elt) {
-  if (!DbgNode || Elt >= DbgNode->getNumOperands())
-    return nullptr;
-  return DbgNode->getOperand(Elt);
-}
-
-static MDNode *getNodeField(const MDNode *DbgNode, unsigned Elt) {
-  return dyn_cast_or_null<MDNode>(getField(DbgNode, Elt));
-}
-
-DIDescriptor DIDescriptor::getDescriptorField(unsigned Elt) const {
-  MDNode *Field = getNodeField(DbgNode, Elt);
-  return DIDescriptor(Field);
-}
-
 /// \brief Return the size reported by the variable's type.
 unsigned DIVariable::getSizeInBits(const DITypeIdentifierMap &Map) {
   DIType Ty = getType().resolve(Map);
@@ -69,33 +50,6 @@ unsigned DIVariable::getSizeInBits(const DITypeIdentifierMap &Map) {
 // Simple Descriptor Constructors and other Methods
 //===----------------------------------------------------------------------===//
 
-void DIDescriptor::replaceAllUsesWith(LLVMContext &, DIDescriptor D) {
-  assert(DbgNode && "Trying to replace an unverified type!");
-  assert(DbgNode->isTemporary() && "Expected temporary node");
-  TempMDNode Temp(get());
-
-  // Since we use a TrackingVH for the node, its easy for clients to manufacture
-  // legitimate situations where they want to replaceAllUsesWith() on something
-  // which, due to uniquing, has merged with the source. We shield clients from
-  // this detail by allowing a value to be replaced with replaceAllUsesWith()
-  // itself.
-  if (Temp.get() == D.get()) {
-    DbgNode = MDNode::replaceWithUniqued(std::move(Temp));
-    return;
-  }
-
-  Temp->replaceAllUsesWith(D.get());
-  DbgNode = D.get();
-}
-
-void DIDescriptor::replaceAllUsesWith(MDNode *D) {
-  assert(DbgNode && "Trying to replace an unverified type!");
-  assert(DbgNode != D && "This replacement should always happen");
-  assert(DbgNode->isTemporary() && "Expected temporary node");
-  TempMDNode Node(get());
-  Node->replaceAllUsesWith(D);
-}
-
 DIScopeRef DIScope::getRef() const { return MDScopeRef::get(get()); }
 
 bool DIVariable::isInlinedFnArgument(const Function *CurFn) {
@@ -106,13 +60,6 @@ bool DIVariable::isInlinedFnArgument(const Function *CurFn) {
   // This variable is not inlined function argument if its scope
   // does not describe current function.
   return !SP.describes(CurFn);
-}
-
-Function *DISubprogram::getFunction() const {
-  if (auto *N = get())
-    if (auto *C = dyn_cast_or_null<ConstantAsMetadata>(N->getFunction()))
-      return dyn_cast<Function>(C->getValue());
-  return nullptr;
 }
 
 bool DISubprogram::describes(const Function *F) {
@@ -129,51 +76,6 @@ bool DISubprogram::describes(const Function *F) {
 
 GlobalVariable *DIGlobalVariable::getGlobal() const {
   return dyn_cast_or_null<GlobalVariable>(getConstant());
-}
-
-DIScopeRef DIScope::getContext() const {
-  if (DIType T = dyn_cast<MDType>(*this))
-    return T.getContext();
-
-  if (DISubprogram SP = dyn_cast<MDSubprogram>(*this))
-    return MDScopeRef(SP.getContext());
-
-  if (DILexicalBlock LB = dyn_cast<MDLexicalBlockBase>(*this))
-    return MDScopeRef(LB.getContext());
-
-  if (DINameSpace NS = dyn_cast<MDNamespace>(*this))
-    return MDScopeRef(NS.getContext());
-
-  assert((isa<MDFile>(*this) || isa<MDCompileUnit>(*this)) &&
-         "Unhandled type of scope.");
-  return MDScopeRef();
-}
-
-StringRef DIScope::getName() const {
-  if (DIType T = dyn_cast<MDType>(*this))
-    return T.getName();
-  if (DISubprogram SP = dyn_cast<MDSubprogram>(*this))
-    return SP.getName();
-  if (DINameSpace NS = dyn_cast<MDNamespace>(*this))
-    return NS.getName();
-  assert((isa<MDLexicalBlockBase>(*this) || isa<MDFile>(*this) ||
-          isa<MDCompileUnit>(*this)) &&
-         "Unhandled type of scope.");
-  return StringRef();
-}
-
-StringRef DIScope::getFilename() const {
-  if (auto *N = get())
-    if (auto *F = N->getFile())
-      return F->getFilename();
-  return "";
-}
-
-StringRef DIScope::getDirectory() const {
-  if (auto *N = get())
-    if (auto *F = N->getFile())
-      return F->getDirectory();
-  return "";
 }
 
 void DICompileUnit::replaceSubprograms(DIArray Subprograms) {

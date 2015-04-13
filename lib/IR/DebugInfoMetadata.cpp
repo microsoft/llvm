@@ -108,6 +108,36 @@ unsigned DebugNode::splitFlags(unsigned Flags,
   return Flags;
 }
 
+MDScopeRef MDScope::getScope() const {
+  if (auto *T = dyn_cast<MDType>(this))
+    return T->getScope();
+
+  if (auto *SP = dyn_cast<MDSubprogram>(this))
+    return SP->getScope();
+
+  if (auto *LB = dyn_cast<MDLexicalBlockBase>(this))
+    return MDScopeRef(LB->getScope());
+
+  if (auto *NS = dyn_cast<MDNamespace>(this))
+    return MDScopeRef(NS->getScope());
+
+  assert((isa<MDFile>(this) || isa<MDCompileUnit>(this)) &&
+         "Unhandled type of scope.");
+  return nullptr;
+}
+
+StringRef MDScope::getName() const {
+  if (auto *T = dyn_cast<MDType>(this))
+    return T->getName();
+  if (auto *SP = dyn_cast<MDSubprogram>(this))
+    return SP->getName();
+  if (auto *NS = dyn_cast<MDNamespace>(this))
+    return NS->getName();
+  assert((isa<MDLexicalBlockBase>(this) || isa<MDFile>(this) ||
+          isa<MDCompileUnit>(this)) &&
+         "Unhandled type of scope.");
+  return "";
+}
 
 static StringRef getString(const MDString *S) {
   if (S)
@@ -311,6 +341,11 @@ MDSubprogram *MDSubprogram::getImpl(
                        (Line, ScopeLine, Virtuality, VirtualIndex, Flags,
                         IsLocalToUnit, IsDefinition, IsOptimized),
                        Ops);
+}
+
+Function *MDSubprogram::getFunction() const {
+  // FIXME: Should this be looking through bitcasts?
+  return dyn_cast_or_null<Function>(getFunctionConstant());
 }
 
 void MDSubprogram::replaceFunction(Function *F) {
