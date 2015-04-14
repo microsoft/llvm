@@ -93,11 +93,11 @@ void DIBuilder::finalize() {
   TempSubprograms->replaceAllUsesWith(SPs.get());
   for (unsigned i = 0, e = SPs.size(); i != e; ++i) {
     DISubprogram SP = cast<MDSubprogram>(SPs[i]);
-    if (MDNode *Temp = SP.getVariables().get()) {
+    if (MDTuple *Temp = SP.getVariables().get()) {
       const auto &PV = PreservedVariables.lookup(SP);
       SmallVector<Metadata *, 4> Variables(PV.begin(), PV.end());
       DIArray AV = getOrCreateArray(Variables);
-      Temp->replaceAllUsesWith(AV.get());
+      TempMDTuple(Temp)->replaceAllUsesWith(AV.get());
     }
   }
 
@@ -143,18 +143,19 @@ DICompileUnit DIBuilder::createCompileUnit(unsigned Lang, StringRef Filename,
 
   // TODO: Once we make MDCompileUnit distinct, stop using temporaries here
   // (just start with operands assigned to nullptr).
-  TempEnumTypes = MDTuple::getTemporary(VMContext, None).release();
-  TempRetainTypes = MDTuple::getTemporary(VMContext, None).release();
-  TempSubprograms = MDTuple::getTemporary(VMContext, None).release();
-  TempGVs = MDTuple::getTemporary(VMContext, None).release();
-  TempImportedModules = MDTuple::getTemporary(VMContext, None).release();
+  TempEnumTypes = MDTuple::getTemporary(VMContext, None);
+  TempRetainTypes = MDTuple::getTemporary(VMContext, None);
+  TempSubprograms = MDTuple::getTemporary(VMContext, None);
+  TempGVs = MDTuple::getTemporary(VMContext, None);
+  TempImportedModules = MDTuple::getTemporary(VMContext, None);
 
   // TODO: Switch to getDistinct().  We never want to merge compile units based
   // on contents.
   MDCompileUnit *CUNode = MDCompileUnit::get(
       VMContext, Lang, MDFile::get(VMContext, Filename, Directory), Producer,
-      isOptimized, Flags, RunTimeVer, SplitName, Kind, TempEnumTypes,
-      TempRetainTypes, TempSubprograms, TempGVs, TempImportedModules);
+      isOptimized, Flags, RunTimeVer, SplitName, Kind, TempEnumTypes.get(),
+      TempRetainTypes.get(), TempSubprograms.get(), TempGVs.get(),
+      TempImportedModules.get());
 
   // Create a named metadata so that it is easier to find cu in a module.
   // Note that we only generate this when the caller wants to actually
@@ -593,8 +594,8 @@ DIGlobalVariable DIBuilder::createGlobalVariable(
 
   auto *N = MDGlobalVariable::get(
       VMContext, cast_or_null<MDScope>(Context.get()), Name, LinkageName, F,
-      LineNumber, MDTypeRef::get(Ty), isLocalToUnit, true,
-      getConstantOrNull(Val), cast_or_null<MDDerivedType>(Decl));
+      LineNumber, MDTypeRef::get(Ty), isLocalToUnit, true, Val,
+      cast_or_null<MDDerivedType>(Decl));
   AllGVs.push_back(N);
   return N;
 }
@@ -607,7 +608,7 @@ DIGlobalVariable DIBuilder::createTempGlobalVariableFwdDecl(
 
   return MDGlobalVariable::getTemporary(
              VMContext, cast_or_null<MDScope>(Context.get()), Name, LinkageName,
-             F, LineNumber, MDTypeRef::get(Ty), isLocalToUnit, false, getConstantOrNull(Val),
+             F, LineNumber, MDTypeRef::get(Ty), isLocalToUnit, false, Val,
              cast_or_null<MDDerivedType>(Decl)).release();
 }
 
@@ -680,7 +681,7 @@ DISubprogram DIBuilder::createFunction(DIDescriptor Context, StringRef Name,
       VMContext, MDScopeRef::get(DIScope(getNonCompileUnitScope(Context))),
       Name, LinkageName, File.get(), LineNo,
       cast_or_null<MDSubroutineType>(Ty.get()), isLocalToUnit, isDefinition,
-      ScopeLine, nullptr, 0, 0, Flags, isOptimized, getConstantOrNull(Fn),
+      ScopeLine, nullptr, 0, 0, Flags, isOptimized, Fn,
       cast_or_null<MDTuple>(TParams), cast_or_null<MDSubprogram>(Decl),
       MDTuple::getTemporary(VMContext, None).release());
 
@@ -703,10 +704,9 @@ DIBuilder::createTempFunctionFwdDecl(DIDescriptor Context, StringRef Name,
              MDScopeRef::get(DIScope(getNonCompileUnitScope(Context))), Name,
              LinkageName, File.get(), LineNo,
              cast_or_null<MDSubroutineType>(Ty.get()), isLocalToUnit,
-             isDefinition, ScopeLine, nullptr, 0, 0, Flags, isOptimized,
-             getConstantOrNull(Fn), cast_or_null<MDTuple>(TParams),
-             cast_or_null<MDSubprogram>(Decl), nullptr)
-      .release();
+             isDefinition, ScopeLine, nullptr, 0, 0, Flags, isOptimized, Fn,
+             cast_or_null<MDTuple>(TParams), cast_or_null<MDSubprogram>(Decl),
+             nullptr).release();
 }
 
 DISubprogram DIBuilder::createMethod(DIDescriptor Context, StringRef Name,
@@ -727,8 +727,7 @@ DISubprogram DIBuilder::createMethod(DIDescriptor Context, StringRef Name,
       VMContext, MDScopeRef::get(cast<MDScope>(Context)), Name, LinkageName,
       F.get(), LineNo, cast_or_null<MDSubroutineType>(Ty.get()), isLocalToUnit,
       isDefinition, LineNo, MDTypeRef::get(VTableHolder), VK, VIndex, Flags,
-      isOptimized, getConstantOrNull(Fn), cast_or_null<MDTuple>(TParam),
-      nullptr, nullptr);
+      isOptimized, Fn, cast_or_null<MDTuple>(TParam), nullptr, nullptr);
 
   if (isDefinition)
     AllSubprograms.push_back(SP);

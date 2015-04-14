@@ -958,11 +958,7 @@ void Verifier::visitMDSubprogram(const MDSubprogram &N) {
   Assert(!hasConflictingReferenceFlags(N.getFlags()), "invalid reference flags",
          &N);
 
-  if (!N.getFunction())
-    return;
-
-  // FIXME: Should this be looking through bitcasts?
-  auto *F = dyn_cast<Function>(N.getFunction()->getValue());
+  auto *F = N.getFunction();
   if (!F)
     return;
 
