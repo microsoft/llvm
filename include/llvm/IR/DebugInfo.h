@@ -83,10 +83,7 @@ public:
   MDNode *get() const { return const_cast<MDNode *>(DbgNode); }
   operator MDNode *() const { return get(); }
   MDNode *operator->() const { return get(); }
-  MDNode &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDNode &operator*() const { return *get(); }
 
   // An explicit operator bool so that we can do testing of DI values
   // easily.
@@ -151,10 +148,7 @@ public:
   }
   operator MDSubrange *() const { return get(); }
   MDSubrange *operator->() const { return get(); }
-  MDSubrange &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDSubrange &operator*() const { return *get(); }
 
   int64_t getLo() const { return get()->getLowerBound(); }
   int64_t getCount() const { return get()->getCount(); }
@@ -174,10 +168,7 @@ public:
   }
   operator MDEnumerator *() const { return get(); }
   MDEnumerator *operator->() const { return get(); }
-  MDEnumerator &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDEnumerator &operator*() const { return *get(); }
 
   StringRef getName() const { return get()->getName(); }
   int64_t getEnumValue() const { return get()->getValue(); }
@@ -204,10 +195,7 @@ public:
   MDScope *get() const { return cast_or_null<MDScope>(DIDescriptor::get()); }
   operator MDScope *() const { return get(); }
   MDScope *operator->() const { return get(); }
-  MDScope &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDScope &operator*() const { return *get(); }
 
   inline DIScopeRef getContext() const;
   StringRef getName() const { return get()->getName(); }
@@ -261,10 +249,7 @@ public:
   MDType *get() const { return cast_or_null<MDType>(DIDescriptor::get()); }
   operator MDType *() const { return get(); }
   MDType *operator->() const { return get(); }
-  MDType &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDType &operator*() const { return *get(); }
 
   DIScopeRef getContext() const { return get()->getScope(); }
   StringRef getName() const { return get()->getName(); }
@@ -305,10 +290,7 @@ public:
   }
   operator MDBasicType *() const { return get(); }
   MDBasicType *operator->() const { return get(); }
-  MDBasicType &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDBasicType &operator*() const { return *get(); }
 
   unsigned getEncoding() const { return get()->getEncoding(); }
 };
@@ -327,34 +309,21 @@ public:
   }
   operator MDDerivedTypeBase *() const { return get(); }
   MDDerivedTypeBase *operator->() const { return get(); }
-  MDDerivedTypeBase &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDDerivedTypeBase &operator*() const { return *get(); }
 
   DITypeRef getTypeDerivedFrom() const { return get()->getBaseType(); }
 
   /// \brief Return property node, if this ivar is associated with one.
-  MDNode *getObjCProperty() const {
-    if (auto *N = dyn_cast<MDDerivedType>(get()))
-      return dyn_cast_or_null<MDNode>(N->getExtraData());
-    return nullptr;
+  MDObjCProperty *getObjCProperty() const {
+    return cast<MDDerivedType>(get())->getObjCProperty();
   }
 
   DITypeRef getClassType() const {
-    assert(getTag() == dwarf::DW_TAG_ptr_to_member_type);
-    if (auto *N = dyn_cast<MDDerivedType>(get()))
-      return MDTypeRef(N->getExtraData());
-    return MDTypeRef();
+    return cast<MDDerivedType>(get())->getClassType();
   }
 
   Constant *getConstant() const {
-    assert((getTag() == dwarf::DW_TAG_member) && isStaticMember());
-    if (auto *N = dyn_cast<MDDerivedType>(get()))
-      if (auto *C = dyn_cast_or_null<ConstantAsMetadata>(N->getExtraData()))
-        return C->getValue();
-
-    return nullptr;
+    return cast<MDDerivedType>(get())->getConstant();
   }
 };
 
@@ -379,15 +348,9 @@ public:
   }
   operator MDCompositeTypeBase *() const { return get(); }
   MDCompositeTypeBase *operator->() const { return get(); }
-  MDCompositeTypeBase &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDCompositeTypeBase &operator*() const { return *get(); }
 
-  DIArray getElements() const {
-    assert(!isa<MDSubroutineType>(*this) && "no elements for DISubroutineType");
-    return DIArray(get()->getElements());
-  }
+  DIArray getElements() const { return get()->getElements(); }
 
   unsigned getRunTimeLang() const { return get()->getRuntimeLang(); }
   DITypeRef getContainingType() const { return get()->getVTableHolder(); }
@@ -406,10 +369,7 @@ public:
   }
   operator MDSubroutineType *() const { return get(); }
   MDSubroutineType *operator->() const { return get(); }
-  MDSubroutineType &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDSubroutineType &operator*() const { return *get(); }
 
   MDTypeRefArray getTypeArray() const { return get()->getTypeArray(); }
 };
@@ -423,10 +383,7 @@ public:
   MDFile *get() const { return cast_or_null<MDFile>(DIDescriptor::get()); }
   operator MDFile *() const { return get(); }
   MDFile *operator->() const { return get(); }
-  MDFile &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDFile &operator*() const { return *get(); }
 
   /// \brief Retrieve the MDNode for the directory/file pair.
   MDNode *getFileNode() const { return get(); }
@@ -443,10 +400,7 @@ public:
   }
   operator MDCompileUnit *() const { return get(); }
   MDCompileUnit *operator->() const { return get(); }
-  MDCompileUnit &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
+  MDCompileUnit &operator*() const { return *get(); }
 
   dwarf::SourceLanguage getLanguage() const {
     return static_cast<dwarf::SourceLanguage>(get()->getSourceLanguage());
@@ -456,20 +410,18 @@ public:
   StringRef getFlags() const { return get()->getFlags(); }
   unsigned getRunTimeVersion() const { return get()->getRuntimeVersion(); }
 
-  DIArray getEnumTypes() const { return DIArray(get()->getEnumTypes()); }
-  DIArray getRetainedTypes() const {
-    return DIArray(get()->getRetainedTypes());
-  }
-  DIArray getSubprograms() const { return DIArray(get()->getSubprograms()); }
-  DIArray getGlobalVariables() const {
-    return DIArray(get()->getGlobalVariables());
-  }
-  DIArray getImportedEntities() const {
-    return DIArray(get()->getImportedEntities());
-  }
+  DIArray getEnumTypes() const { return get()->getEnumTypes(); }
+  DIArray getRetainedTypes() const { return get()->getRetainedTypes(); }
+  DIArray getSubprograms() const { return get()->getSubprograms(); }
+  DIArray getGlobalVariables() const { return get()->getGlobalVariables(); }
+  DIArray getImportedEntities() const { return get()->getImportedEntities(); }
 
-  void replaceSubprograms(DIArray Subprograms);
-  void replaceGlobalVariables(DIArray GlobalVariables);
+  void replaceSubprograms(MDSubprogramArray Subprograms) const {
+    get()->replaceSubprograms(Subprograms);
+  }
+  void replaceGlobalVariables(MDGlobalVariableArray GlobalVariables) const {
+    get()->replaceGlobalVariables(GlobalVariables);
+  }
 
   StringRef getSplitDebugFilename() const {
     return get()->getSplitDebugFilename();
@@ -477,418 +429,154 @@ public:
   unsigned getEmissionKind() const { return get()->getEmissionKind(); }
 };
 
-/// \brief This is a wrapper for a subprogram (e.g. a function).
-class DISubprogram : public DIScope {
+class DISubprogram {
+  MDSubprogram *N;
+
 public:
-  DISubprogram() = default;
-  DISubprogram(const MDSubprogram *N) : DIScope(N) {}
+  DISubprogram(const MDSubprogram *N = nullptr)
+      : N(const_cast<MDSubprogram *>(N)) {}
 
-  MDSubprogram *get() const {
-    return cast_or_null<MDSubprogram>(DIDescriptor::get());
-  }
-  operator MDSubprogram *() const { return get(); }
-  MDSubprogram *operator->() const { return get(); }
-  MDSubprogram &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  StringRef getName() const { return get()->getName(); }
-  StringRef getDisplayName() const { return get()->getDisplayName(); }
-  StringRef getLinkageName() const { return get()->getLinkageName(); }
-  unsigned getLineNumber() const { return get()->getLine(); }
-
-  /// \brief Check if this is local (like 'static' in C).
-  unsigned isLocalToUnit() const { return get()->isLocalToUnit(); }
-  unsigned isDefinition() const { return get()->isDefinition(); }
-
-  unsigned getVirtuality() const { return get()->getVirtuality(); }
-  unsigned getVirtualIndex() const { return get()->getVirtualIndex(); }
-
-  unsigned getFlags() const { return get()->getFlags(); }
-
-  unsigned isOptimized() const { return get()->isOptimized(); }
-
-  /// \brief Get the beginning of the scope of the function (not the name).
-  unsigned getScopeLineNumber() const { return get()->getScopeLine(); }
-
-  DIScopeRef getContext() const { return get()->getScope(); }
-  DISubroutineType getType() const {
-    return DISubroutineType(get()->getType());
-  }
-
-  DITypeRef getContainingType() const { return get()->getContainingType(); }
-
-  /// \brief Check if this provides debugging information for the function F.
-  bool describes(const Function *F);
-
-  Function *getFunction() const { return get()->getFunction(); }
-
-  void replaceFunction(Function *F) {
-    if (auto *N = get())
-      N->replaceFunction(F);
-  }
-  DIArray getTemplateParams() const {
-    return DIArray(get()->getTemplateParams());
-  }
-  DISubprogram getFunctionDeclaration() const {
-    return DISubprogram(get()->getDeclaration());
-  }
-  DIArray getVariables() const { return DIArray(get()->getVariables()); }
-
-  unsigned isArtificial() const { return get()->isArtificial(); }
-  bool isPrivate() const { return get()->isPrivate(); }
-  bool isProtected() const { return get()->isProtected(); }
-  bool isPublic() const { return get()->isPublic(); }
-  bool isExplicit() const { return get()->isExplicit(); }
-  bool isPrototyped() const { return get()->isPrototyped(); }
-  unsigned isLValueReference() const { return get()->isLValueReference(); }
-  unsigned isRValueReference() const { return get()->isRValueReference(); }
+  operator DIDescriptor() const { return N; }
+  operator MDSubprogram *() const { return N; }
+  MDSubprogram *operator->() const { return N; }
+  MDSubprogram &operator*() const { return *N; }
 };
 
-/// \brief This is a wrapper for a lexical block.
-class DILexicalBlock : public DIScope {
+class DILexicalBlock {
+  MDLexicalBlockBase *N;
+
 public:
-  DILexicalBlock() = default;
-  DILexicalBlock(const MDLexicalBlockBase *N) : DIScope(N) {}
+  DILexicalBlock(const MDLexicalBlockBase *N = nullptr)
+      : N(const_cast<MDLexicalBlockBase *>(N)) {}
 
-  MDLexicalBlockBase *get() const {
-    return cast_or_null<MDLexicalBlockBase>(DIDescriptor::get());
-  }
-  operator MDLexicalBlockBase *() const { return get(); }
-  MDLexicalBlockBase *operator->() const { return get(); }
-  MDLexicalBlockBase &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  DIScope getContext() const { return DIScope(get()->getScope()); }
-  unsigned getLineNumber() const {
-    if (auto *N = dyn_cast<MDLexicalBlock>(get()))
-      return N->getLine();
-    return 0;
-  }
-  unsigned getColumnNumber() const {
-    if (auto *N = dyn_cast<MDLexicalBlock>(get()))
-      return N->getColumn();
-    return 0;
-  }
+  operator DIDescriptor() const { return N; }
+  operator MDLexicalBlockBase *() const { return N; }
+  MDLexicalBlockBase *operator->() const { return N; }
+  MDLexicalBlockBase &operator*() const { return *N; }
 };
 
-/// \brief This is a wrapper for a lexical block with a filename change.
-class DILexicalBlockFile : public DIScope {
+class DILexicalBlockFile {
+  MDLexicalBlockFile *N;
+
 public:
-  DILexicalBlockFile() = default;
-  DILexicalBlockFile(const MDLexicalBlockFile *N) : DIScope(N) {}
+  DILexicalBlockFile(const MDLexicalBlockFile *N = nullptr)
+      : N(const_cast<MDLexicalBlockFile *>(N)) {}
 
-  MDLexicalBlockFile *get() const {
-    return cast_or_null<MDLexicalBlockFile>(DIDescriptor::get());
-  }
-  operator MDLexicalBlockFile *() const { return get(); }
-  MDLexicalBlockFile *operator->() const { return get(); }
-  MDLexicalBlockFile &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  DIScope getContext() const { return get()->getScope(); }
-  unsigned getDiscriminator() const { return get()->getDiscriminator(); }
+  operator DIDescriptor() const { return N; }
+  operator MDLexicalBlockFile *() const { return N; }
+  MDLexicalBlockFile *operator->() const { return N; }
+  MDLexicalBlockFile &operator*() const { return *N; }
 };
 
-/// \brief A wrapper for a C++ style name space.
-class DINameSpace : public DIScope {
+class DINameSpace {
+  MDNamespace *N;
+
 public:
-  DINameSpace() = default;
-  DINameSpace(const MDNamespace *N) : DIScope(N) {}
+  DINameSpace(const MDNamespace *N = nullptr)
+      : N(const_cast<MDNamespace *>(N)) {}
 
-  MDNamespace *get() const {
-    return cast_or_null<MDNamespace>(DIDescriptor::get());
-  }
-  operator MDNamespace *() const { return get(); }
-  MDNamespace *operator->() const { return get(); }
-  MDNamespace &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  StringRef getName() const { return get()->getName(); }
-  unsigned getLineNumber() const { return get()->getLine(); }
-  DIScope getContext() const { return DIScope(get()->getScope()); }
+  operator DIDescriptor() const { return N; }
+  operator DIScope() const { return N; }
+  operator MDNamespace *() const { return N; }
+  MDNamespace *operator->() const { return N; }
+  MDNamespace &operator*() const { return *N; }
 };
 
-/// \brief This is a wrapper for template type parameter.
-class DITemplateTypeParameter : public DIDescriptor {
+class DITemplateTypeParameter {
+  MDTemplateTypeParameter *N;
+
 public:
-  DITemplateTypeParameter() = default;
-  DITemplateTypeParameter(const MDTemplateTypeParameter *N) : DIDescriptor(N) {}
+  DITemplateTypeParameter(const MDTemplateTypeParameter *N = nullptr)
+      : N(const_cast<MDTemplateTypeParameter *>(N)) {}
 
-  MDTemplateTypeParameter *get() const {
-    return cast_or_null<MDTemplateTypeParameter>(DIDescriptor::get());
-  }
-  operator MDTemplateTypeParameter *() const { return get(); }
-  MDTemplateTypeParameter *operator->() const { return get(); }
-  MDTemplateTypeParameter &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  StringRef getName() const { return get()->getName(); }
-  DITypeRef getType() const { return get()->getType(); }
+  operator MDTemplateTypeParameter *() const { return N; }
+  MDTemplateTypeParameter *operator->() const { return N; }
+  MDTemplateTypeParameter &operator*() const { return *N; }
 };
 
-/// \brief This is a wrapper for template value parameter.
-class DITemplateValueParameter : public DIDescriptor {
+class DITemplateValueParameter {
+  MDTemplateValueParameter *N;
+
 public:
-  DITemplateValueParameter() = default;
-  DITemplateValueParameter(const MDTemplateValueParameter *N)
-      : DIDescriptor(N) {}
+  DITemplateValueParameter(const MDTemplateValueParameter *N = nullptr)
+      : N(const_cast<MDTemplateValueParameter *>(N)) {}
 
-  MDTemplateValueParameter *get() const {
-    return cast_or_null<MDTemplateValueParameter>(DIDescriptor::get());
-  }
-  operator MDTemplateValueParameter *() const { return get(); }
-  MDTemplateValueParameter *operator->() const { return get(); }
-  MDTemplateValueParameter &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  StringRef getName() const { return get()->getName(); }
-  DITypeRef getType() const { return get()->getType(); }
-  Metadata *getValue() const { return get()->getValue(); }
+  operator MDTemplateValueParameter *() const { return N; }
+  MDTemplateValueParameter *operator->() const { return N; }
+  MDTemplateValueParameter &operator*() const { return *N; }
 };
 
-/// \brief This is a wrapper for a global variable.
-class DIGlobalVariable : public DIDescriptor {
-  DIFile getFile() const { return DIFile(get()->getFile()); }
+class DIGlobalVariable {
+  MDGlobalVariable *N;
 
 public:
-  DIGlobalVariable() = default;
-  DIGlobalVariable(const MDGlobalVariable *N) : DIDescriptor(N) {}
+  DIGlobalVariable(const MDGlobalVariable *N = nullptr)
+      : N(const_cast<MDGlobalVariable *>(N)) {}
 
-  MDGlobalVariable *get() const {
-    return cast_or_null<MDGlobalVariable>(DIDescriptor::get());
-  }
-  operator MDGlobalVariable *() const { return get(); }
-  MDGlobalVariable *operator->() const { return get(); }
-  MDGlobalVariable &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  StringRef getName() const { return get()->getName(); }
-  StringRef getDisplayName() const { return get()->getDisplayName(); }
-  StringRef getLinkageName() const { return get()->getLinkageName(); }
-  unsigned getLineNumber() const { return get()->getLine(); }
-  unsigned isLocalToUnit() const { return get()->isLocalToUnit(); }
-  unsigned isDefinition() const { return get()->isDefinition(); }
-
-  DIScope getContext() const { return DIScope(get()->getScope()); }
-  StringRef getFilename() const { return get()->getFilename(); }
-  StringRef getDirectory() const { return get()->getDirectory(); }
-  DITypeRef getType() const { return get()->getType(); }
-
-  GlobalVariable *getGlobal() const;
-  Constant *getConstant() const { return get()->getVariable(); }
-  DIDerivedType getStaticDataMemberDeclaration() const {
-    return DIDerivedType(get()->getStaticDataMemberDeclaration());
-  }
+  operator DIDescriptor() const { return N; }
+  operator MDGlobalVariable *() const { return N; }
+  MDGlobalVariable *operator->() const { return N; }
+  MDGlobalVariable &operator*() const { return *N; }
 };
 
-/// \brief This is a wrapper for a variable (e.g. parameter, local, global etc).
-class DIVariable : public DIDescriptor {
-  unsigned getFlags() const { return get()->getFlags(); }
+class DIVariable {
+  MDLocalVariable *N;
 
 public:
-  DIVariable() = default;
-  DIVariable(const MDLocalVariable *N) : DIDescriptor(N) {}
+  DIVariable(const MDLocalVariable *N = nullptr)
+      : N(const_cast<MDLocalVariable *>(N)) {}
 
-  MDLocalVariable *get() const {
-    return cast_or_null<MDLocalVariable>(DIDescriptor::get());
-  }
-  operator MDLocalVariable *() const { return get(); }
-  MDLocalVariable *operator->() const { return get(); }
-  MDLocalVariable &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  StringRef getName() const { return get()->getName(); }
-  unsigned getLineNumber() const { return get()->getLine(); }
-  unsigned getArgNumber() const { return get()->getArg(); }
-
-  DIScope getContext() const { return DIScope(get()->getScope()); }
-  DIFile getFile() const { return DIFile(get()->getFile()); }
-  DITypeRef getType() const { return get()->getType(); }
-
-  bool isArtificial() const { return get()->isArtificial(); }
-  bool isObjectPointer() const { return get()->isObjectPointer(); }
-
-  /// \brief If this variable is inlined then return inline location.
-  MDNode *getInlinedAt() const { return DIDescriptor(get()->getInlinedAt()); }
-
-  /// \brief Check if this is a "__block" variable (Apple Blocks).
-  bool isBlockByrefVariable(const DITypeIdentifierMap &Map) const {
-    return (getType().resolve(Map)).isBlockByrefStruct();
-  }
-
-  /// \brief Check if this is an inlined function argument.
-  bool isInlinedFnArgument(const Function *CurFn);
-
-  /// \brief Return the size reported by the variable's type.
-  unsigned getSizeInBits(const DITypeIdentifierMap &Map);
-
-  void printExtendedName(raw_ostream &OS) const;
+  operator MDLocalVariable *() const { return N; }
+  MDLocalVariable *operator->() const { return N; }
+  MDLocalVariable &operator*() const { return *N; }
 };
 
-/// \brief A complex location expression in postfix notation.
-///
-/// This is (almost) a DWARF expression that modifies the location of a
-/// variable or (or the location of a single piece of a variable).
-///
-/// FIXME: Instead of DW_OP_plus taking an argument, this should use DW_OP_const
-/// and have DW_OP_plus consume the topmost elements on the stack.
-class DIExpression : public DIDescriptor {
+class DIExpression {
+  MDExpression *N;
+
 public:
-  DIExpression() = default;
-  DIExpression(const MDExpression *N) : DIDescriptor(N) {}
+  DIExpression(const MDExpression *N = nullptr)
+      : N(const_cast<MDExpression *>(N)) {}
 
-  MDExpression *get() const {
-    return cast_or_null<MDExpression>(DIDescriptor::get());
-  }
-  operator MDExpression *() const { return get(); }
-  MDExpression *operator->() const { return get(); }
-  MDExpression &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  unsigned getNumElements() const { return get()->getNumElements(); }
-  uint64_t getElement(unsigned I) const { return get()->getElement(I); }
-  bool isBitPiece() const { return get()->isBitPiece(); }
-  uint64_t getBitPieceOffset() const { return get()->getBitPieceOffset(); }
-  uint64_t getBitPieceSize() const { return get()->getBitPieceSize(); }
+  operator MDExpression *() const { return N; }
+  MDExpression *operator->() const { return N; }
+  MDExpression &operator*() const { return *N; }
 };
 
-/// \brief This object holds location information.
-///
-/// This object is not associated with any DWARF tag.
-class DILocation : public DIDescriptor {
+class DILocation {
+  MDLocation *N;
+
 public:
-  DILocation() = default;
-  DILocation(const MDLocation *N) : DIDescriptor(N) {}
+  DILocation(const MDLocation *N = nullptr) : N(const_cast<MDLocation *>(N)) {}
 
-  MDLocation *get() const {
-    return cast_or_null<MDLocation>(DIDescriptor::get());
-  }
-  operator MDLocation *() const { return get(); }
-  MDLocation *operator->() const { return get(); }
-  MDLocation &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  unsigned getLineNumber() const { return get()->getLine(); }
-  unsigned getColumnNumber() const { return get()->getColumn(); }
-  DIScope getScope() const { return DIScope(get()->getScope()); }
-  DILocation getOrigLocation() const {
-    return DILocation(get()->getInlinedAt());
-  }
-  StringRef getFilename() const { return get()->getFilename(); }
-  StringRef getDirectory() const { return get()->getDirectory(); }
-
-  /// \brief Get the DWAF discriminator.
-  ///
-  /// DWARF discriminators are used to distinguish identical file locations for
-  /// instructions that are on different basic blocks. If two instructions are
-  /// inside the same lexical block and are in different basic blocks, we
-  /// create a new lexical block with identical location as the original but
-  /// with a different discriminator value
-  /// (lib/Transforms/Util/AddDiscriminators.cpp for details).
-  unsigned getDiscriminator() const {
-    // Since discriminators are associated with lexical blocks, make
-    // sure this location is a lexical block before retrieving its
-    // value.
-    if (auto *F = dyn_cast<MDLexicalBlockFile>(get()->getScope()))
-      return F->getDiscriminator();
-    return 0;
-  }
-
-  /// \brief Generate a new discriminator value for this location.
-  unsigned computeNewDiscriminator(LLVMContext &Ctx);
-
-  /// \brief Return a copy of this location with a different scope.
-  DILocation copyWithNewScope(LLVMContext &Ctx, DILexicalBlockFile NewScope);
+  operator MDLocation *() const { return N; }
+  MDLocation *operator->() const { return N; }
+  MDLocation &operator*() const { return *N; }
 };
 
-class DIObjCProperty : public DIDescriptor {
+class DIObjCProperty {
+  MDObjCProperty *N;
+
 public:
-  DIObjCProperty() = default;
-  DIObjCProperty(const MDObjCProperty *N) : DIDescriptor(N) {}
+  DIObjCProperty(const MDObjCProperty *N = nullptr)
+      : N(const_cast<MDObjCProperty *>(N)) {}
 
-  MDObjCProperty *get() const {
-    return cast_or_null<MDObjCProperty>(DIDescriptor::get());
-  }
-  operator MDObjCProperty *() const { return get(); }
-  MDObjCProperty *operator->() const { return get(); }
-  MDObjCProperty &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  StringRef getObjCPropertyName() const { return get()->getName(); }
-  DIFile getFile() const { return DIFile(get()->getFile()); }
-  unsigned getLineNumber() const { return get()->getLine(); }
-
-  StringRef getObjCPropertyGetterName() const { return get()->getGetterName(); }
-  StringRef getObjCPropertySetterName() const { return get()->getSetterName(); }
-  unsigned getAttributes() const { return get()->getAttributes(); }
-  bool isReadOnlyObjCProperty() const {
-    return (getAttributes() & dwarf::DW_APPLE_PROPERTY_readonly) != 0;
-  }
-  bool isReadWriteObjCProperty() const {
-    return (getAttributes() & dwarf::DW_APPLE_PROPERTY_readwrite) != 0;
-  }
-  bool isAssignObjCProperty() const {
-    return (getAttributes() & dwarf::DW_APPLE_PROPERTY_assign) != 0;
-  }
-  bool isRetainObjCProperty() const {
-    return (getAttributes() & dwarf::DW_APPLE_PROPERTY_retain) != 0;
-  }
-  bool isCopyObjCProperty() const {
-    return (getAttributes() & dwarf::DW_APPLE_PROPERTY_copy) != 0;
-  }
-  bool isNonAtomicObjCProperty() const {
-    return (getAttributes() & dwarf::DW_APPLE_PROPERTY_nonatomic) != 0;
-  }
-
-  /// \brief Get the type.
-  ///
-  /// \note Objective-C doesn't have an ODR, so there is no benefit in storing
-  /// the type as a DITypeRef here.
-  DIType getType() const { return DIType(get()->getType()); }
+  operator MDObjCProperty *() const { return N; }
+  MDObjCProperty *operator->() const { return N; }
+  MDObjCProperty &operator*() const { return *N; }
 };
 
-/// \brief An imported module (C++ using directive or similar).
-class DIImportedEntity : public DIDescriptor {
+class DIImportedEntity {
+  MDImportedEntity *N;
+
 public:
-  DIImportedEntity() = default;
-  DIImportedEntity(const MDImportedEntity *N) : DIDescriptor(N) {}
+  DIImportedEntity(const MDImportedEntity *N = nullptr)
+      : N(const_cast<MDImportedEntity *>(N)) {}
 
-  MDImportedEntity *get() const {
-    return cast_or_null<MDImportedEntity>(DIDescriptor::get());
-  }
-  operator MDImportedEntity *() const { return get(); }
-  MDImportedEntity *operator->() const { return get(); }
-  MDImportedEntity &operator*() const {
-    assert(get() && "Expected valid pointer");
-    return *get();
-  }
-
-  DIScope getContext() const { return DIScope(get()->getScope()); }
-  DIDescriptorRef getEntity() const { return get()->getEntity(); }
-  unsigned getLineNumber() const { return get()->getLine(); }
-  StringRef getName() const { return get()->getName(); }
+  operator DIDescriptor() const { return N; }
+  operator MDImportedEntity *() const { return N; }
+  MDImportedEntity *operator->() const { return N; }
+  MDImportedEntity &operator*() const { return *N; }
 };
 
 #define SIMPLIFY_DESCRIPTOR(DESC)                                              \

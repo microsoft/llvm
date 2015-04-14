@@ -33,72 +33,7 @@
 using namespace llvm;
 using namespace llvm::dwarf;
 
-/// \brief Return the size reported by the variable's type.
-unsigned DIVariable::getSizeInBits(const DITypeIdentifierMap &Map) {
-  DIType Ty = getType().resolve(Map);
-  // Follow derived types until we reach a type that
-  // reports back a size.
-  while (isa<MDDerivedType>(Ty) && !Ty.getSizeInBits()) {
-    DIDerivedType DT = cast<MDDerivedType>(Ty);
-    Ty = DT.getTypeDerivedFrom().resolve(Map);
-  }
-  assert(Ty.getSizeInBits() && "type with size 0");
-  return Ty.getSizeInBits();
-}
-
-//===----------------------------------------------------------------------===//
-// Simple Descriptor Constructors and other Methods
-//===----------------------------------------------------------------------===//
-
 DIScopeRef DIScope::getRef() const { return MDScopeRef::get(get()); }
-
-bool DIVariable::isInlinedFnArgument(const Function *CurFn) {
-  assert(CurFn && "Invalid function");
-  DISubprogram SP = dyn_cast<MDSubprogram>(getContext());
-  if (!SP)
-    return false;
-  // This variable is not inlined function argument if its scope
-  // does not describe current function.
-  return !SP.describes(CurFn);
-}
-
-bool DISubprogram::describes(const Function *F) {
-  assert(F && "Invalid function");
-  if (F == getFunction())
-    return true;
-  StringRef Name = getLinkageName();
-  if (Name.empty())
-    Name = getName();
-  if (F->getName() == Name)
-    return true;
-  return false;
-}
-
-GlobalVariable *DIGlobalVariable::getGlobal() const {
-  return dyn_cast_or_null<GlobalVariable>(getConstant());
-}
-
-void DICompileUnit::replaceSubprograms(DIArray Subprograms) {
-  get()->replaceSubprograms(MDSubprogramArray(Subprograms));
-}
-
-void DICompileUnit::replaceGlobalVariables(DIArray GlobalVariables) {
-  get()->replaceGlobalVariables(MDGlobalVariableArray(GlobalVariables));
-}
-
-DILocation DILocation::copyWithNewScope(LLVMContext &Ctx,
-                                        DILexicalBlockFile NewScope) {
-  assert(NewScope && "Expected valid scope");
-
-  const auto *Old = cast<MDLocation>(DbgNode);
-  return DILocation(MDLocation::get(Ctx, Old->getLine(), Old->getColumn(),
-                                    NewScope, Old->getInlinedAt()));
-}
-
-unsigned DILocation::computeNewDiscriminator(LLVMContext &Ctx) {
-  std::pair<const char *, unsigned> Key(getFilename().data(), getLineNumber());
-  return ++Ctx.pImpl->DiscriminatorTable[Key];
-}
 
 DIVariable llvm::createInlinedVariable(MDNode *DV, MDNode *InlinedScope,
                                        LLVMContext &VMContext) {
@@ -127,7 +62,7 @@ DISubprogram llvm::getDISubprogram(const Function *F) {
     DebugLoc DLoc = Inst->getDebugLoc();
     const MDNode *Scope = DLoc.getInlinedAtScope();
     DISubprogram Subprogram = getDISubprogram(Scope);
-    return Subprogram.describes(F) ? Subprogram : DISubprogram();
+    return Subprogram->describes(F) ? Subprogram : DISubprogram();
   }
 
   return DISubprogram();
@@ -205,8 +140,8 @@ void DebugInfoFinder::processModule(const Module &M) {
       addCompileUnit(CU);
       for (DIGlobalVariable DIG : CU->getGlobalVariables()) {
         if (addGlobalVariable(DIG)) {
-          processScope(DIG.getContext());
-          processType(DIG.getType().resolve(TypeIdentifierMap));
+          processScope(DIG->getScope());
+          processType(DIG->getType().resolve(TypeIdentifierMap));
         }
       }
       for (auto *SP : CU->getSubprograms())
@@ -216,7 +151,7 @@ void DebugInfoFinder::processModule(const Module &M) {
       for (auto *RT : CU->getRetainedTypes())
         processType(RT);
       for (DIImportedEntity Import : CU->getImportedEntities()) {
-        DIDescriptor Entity = Import.getEntity().resolve(TypeIdentifierMap);
+        auto *Entity = Import->getEntity().resolve(TypeIdentifierMap);
         if (auto *T = dyn_cast<MDType>(Entity))
           processType(T);
         else if (auto *SP = dyn_cast<MDSubprogram>(Entity))
@@ -232,8 +167,8 @@ void DebugInfoFinder::processLocation(const Module &M, DILocation Loc) {
   if (!Loc)
     return;
   InitializeTypeMap(M);
-  processScope(Loc.getScope());
-  processLocation(M, Loc.getOrigLocation());
+  processScope(Loc->getScope());
+  processLocation(M, Loc->getInlinedAt());
 }
 
 void DebugInfoFinder::processType(DIType DT) {
@@ -275,25 +210,23 @@ void DebugInfoFinder::processScope(DIScope Scope) {
   }
   if (!addScope(Scope))
     return;
-  if (DILexicalBlock LB = dyn_cast<MDLexicalBlockBase>(Scope)) {
-    processScope(LB.getContext());
-  } else if (DINameSpace NS = dyn_cast<MDNamespace>(Scope)) {
-    processScope(NS.getContext());
+  if (auto *LB = dyn_cast<MDLexicalBlockBase>(Scope)) {
+    processScope(LB->getScope());
+  } else if (auto *NS = dyn_cast<MDNamespace>(Scope)) {
+    processScope(NS->getScope());
   }
 }
 
 void DebugInfoFinder::processSubprogram(DISubprogram SP) {
   if (!addSubprogram(SP))
     return;
-  processScope(SP.getContext().resolve(TypeIdentifierMap));
-  processType(SP.getType());
-  for (auto *Element : SP.getTemplateParams()) {
-    if (DITemplateTypeParameter TType =
-            dyn_cast<MDTemplateTypeParameter>(Element)) {
-      processType(TType.getType().resolve(TypeIdentifierMap));
-    } else if (DITemplateValueParameter TVal =
-                   dyn_cast<MDTemplateValueParameter>(Element)) {
-      processType(TVal.getType().resolve(TypeIdentifierMap));
+  processScope(SP->getScope().resolve(TypeIdentifierMap));
+  processType(SP->getType());
+  for (auto *Element : SP->getTemplateParams()) {
+    if (auto *TType = dyn_cast<MDTemplateTypeParameter>(Element)) {
+      processType(TType->getType().resolve(TypeIdentifierMap));
+    } else if (auto *TVal = dyn_cast<MDTemplateValueParameter>(Element)) {
+      processType(TVal->getType().resolve(TypeIdentifierMap));
     }
   }
 }
@@ -311,8 +244,8 @@ void DebugInfoFinder::processDeclare(const Module &M,
 
   if (!NodesSeen.insert(DV).second)
     return;
-  processScope(DV.getContext());
-  processType(DV.getType().resolve(TypeIdentifierMap));
+  processScope(DV->getScope());
+  processType(DV->getType().resolve(TypeIdentifierMap));
 }
 
 void DebugInfoFinder::processValue(const Module &M, const DbgValueInst *DVI) {
@@ -327,8 +260,8 @@ void DebugInfoFinder::processValue(const Module &M, const DbgValueInst *DVI) {
 
   if (!NodesSeen.insert(DV).second)
     return;
-  processScope(DV.getContext());
-  processType(DV.getType().resolve(TypeIdentifierMap));
+  processScope(DV->getScope());
+  processType(DV->getType().resolve(TypeIdentifierMap));
 }
 
 bool DebugInfoFinder::addType(DIType DT) {
@@ -400,41 +333,6 @@ void DIDescriptor::print(raw_ostream &OS) const {
   if (!get())
     return;
   get()->print(OS);
-}
-
-static void printDebugLoc(DebugLoc DL, raw_ostream &CommentOS,
-                          const LLVMContext &Ctx) {
-  if (!DL)
-    return;
-
-  DIScope Scope = cast<MDScope>(DL.getScope());
-  // Omit the directory, because it's likely to be long and uninteresting.
-  CommentOS << Scope.getFilename();
-  CommentOS << ':' << DL.getLine();
-  if (DL.getCol() != 0)
-    CommentOS << ':' << DL.getCol();
-
-  DebugLoc InlinedAtDL = DL.getInlinedAt();
-  if (!InlinedAtDL)
-    return;
-
-  CommentOS << " @[ ";
-  printDebugLoc(InlinedAtDL, CommentOS, Ctx);
-  CommentOS << " ]";
-}
-
-void DIVariable::printExtendedName(raw_ostream &OS) const {
-  const LLVMContext &Ctx = DbgNode->getContext();
-  StringRef Res = getName();
-  if (!Res.empty())
-    OS << Res << "," << getLineNumber();
-  if (auto *InlinedAt = get()->getInlinedAt()) {
-    if (DebugLoc InlinedAtDL = InlinedAt) {
-      OS << " @[";
-      printDebugLoc(InlinedAtDL, OS, Ctx);
-      OS << "]";
-    }
-  }
 }
 
 template <>
@@ -524,7 +422,7 @@ llvm::makeSubprogramMap(const Module &M) {
   for (MDNode *N : CU_Nodes->operands()) {
     DICompileUnit CUNode = cast<MDCompileUnit>(N);
     for (DISubprogram SP : CUNode->getSubprograms()) {
-      if (Function *F = SP.getFunction())
+      if (Function *F = SP->getFunction())
         R.insert(std::make_pair(F, SP));
     }
   }

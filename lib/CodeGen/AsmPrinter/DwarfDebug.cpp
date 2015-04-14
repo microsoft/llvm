@@ -135,14 +135,16 @@ template <typename T> T DbgVariable::resolve(DIRef<T> Ref) const {
 
 bool DbgVariable::isBlockByrefVariable() const {
   assert(Var && "Invalid complex DbgVariable!");
-  return Var.isBlockByrefVariable(DD->getTypeIdentifierMap());
+  return Var->getType()
+      .resolve(DD->getTypeIdentifierMap())
+      ->isBlockByrefStruct();
 }
 
 DIType DbgVariable::getType() const {
-  DIType Ty = Var.getType().resolve(DD->getTypeIdentifierMap());
+  DIType Ty = Var->getType().resolve(DD->getTypeIdentifierMap());
   // FIXME: isBlockByrefVariable should be reformulated in terms of complex
   // addresses instead.
-  if (Var.isBlockByrefVariable(DD->getTypeIdentifierMap())) {
+  if (Ty->isBlockByrefStruct()) {
     /* Byref variables, in Blocks, are declared by the programmer as
        "SomeType VarName;", but the compiler creates a
        __Block_byref_x_VarName struct, and gives the variable VarName
@@ -275,25 +277,25 @@ static StringRef getObjCMethodName(StringRef In) {
 // that do not have a DW_AT_name or DW_AT_linkage_name field - this
 // is only slightly different than the lookup of non-standard ObjC names.
 void DwarfDebug::addSubprogramNames(DISubprogram SP, DIE &Die) {
-  if (!SP.isDefinition())
+  if (!SP->isDefinition())
     return;
-  addAccelName(SP.getName(), Die);
+  addAccelName(SP->getName(), Die);
 
   // If the linkage name is different than the name, go ahead and output
   // that as well into the name table.
-  if (SP.getLinkageName() != "" && SP.getName() != SP.getLinkageName())
-    addAccelName(SP.getLinkageName(), Die);
+  if (SP->getLinkageName() != "" && SP->getName() != SP->getLinkageName())
+    addAccelName(SP->getLinkageName(), Die);
 
   // If this is an Objective-C selector name add it to the ObjC accelerator
   // too.
-  if (isObjCClass(SP.getName())) {
+  if (isObjCClass(SP->getName())) {
     StringRef Class, Category;
-    getObjCClassCategory(SP.getName(), Class, Category);
+    getObjCClassCategory(SP->getName(), Class, Category);
     addAccelObjC(Class, Die);
     if (Category != "")
       addAccelObjC(Category, Die);
     // Also add the base method name to the name table.
-    addAccelName(getObjCMethodName(SP.getName()), Die);
+    addAccelName(getObjCMethodName(SP->getName()), Die);
   }
 }
 
@@ -420,7 +422,7 @@ DwarfCompileUnit &DwarfDebug::constructDwarfCompileUnit(DICompileUnit DIUnit) {
 void DwarfDebug::constructAndAddImportedEntityDIE(DwarfCompileUnit &TheCU,
                                                   const MDNode *N) {
   DIImportedEntity Module = cast<MDImportedEntity>(N);
-  if (DIE *D = TheCU.getOrCreateContextDIE(Module.getContext()))
+  if (DIE *D = TheCU.getOrCreateContextDIE(Module->getScope()))
     D->addChild(TheCU.constructImportedEntityDIE(Module));
 }
 
@@ -759,12 +761,12 @@ static DebugLocEntry::Value getDebugLocValue(const MachineInstr *MI) {
 
 /// Determine whether two variable pieces overlap.
 static bool piecesOverlap(DIExpression P1, DIExpression P2) {
-  if (!P1.isBitPiece() || !P2.isBitPiece())
+  if (!P1->isBitPiece() || !P2->isBitPiece())
     return true;
-  unsigned l1 = P1.getBitPieceOffset();
-  unsigned l2 = P2.getBitPieceOffset();
-  unsigned r1 = l1 + P1.getBitPieceSize();
-  unsigned r2 = l2 + P2.getBitPieceSize();
+  unsigned l1 = P1->getBitPieceOffset();
+  unsigned l2 = P2->getBitPieceOffset();
+  unsigned r1 = l1 + P1->getBitPieceSize();
+  unsigned r2 = l2 + P2->getBitPieceSize();
   // True where [l1,r1[ and [r1,r2[ overlap.
   return (l1 < r2) && (l2 < r1);
 }
@@ -836,7 +838,7 @@ DwarfDebug::buildLocationList(SmallVectorImpl<DebugLocEntry> &DebugLoc,
     bool couldMerge = false;
 
     // If this is a piece, it may belong to the current DebugLocEntry.
-    if (DIExpr.isBitPiece()) {
+    if (DIExpr->isBitPiece()) {
       // Add this value to the list of open ranges.
       OpenRanges.push_back(Value);
 
@@ -892,10 +894,10 @@ DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
       continue;
 
     LexicalScope *Scope = nullptr;
-    if (MDLocation *IA = DV.get()->getInlinedAt())
-      Scope = LScopes.findInlinedScope(DV.get()->getScope(), IA);
+    if (MDLocation *IA = DV->getInlinedAt())
+      Scope = LScopes.findInlinedScope(DV->getScope(), IA);
     else
-      Scope = LScopes.findLexicalScope(DV.get()->getScope());
+      Scope = LScopes.findLexicalScope(DV->getScope());
     // If variable scope is not found then skip this variable.
     if (!Scope)
       continue;
@@ -931,7 +933,7 @@ DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
   for (DIVariable DV : SP->getVariables()) {
     if (!Processed.insert(DV).second)
       continue;
-    if (LexicalScope *Scope = LScopes.findLexicalScope(DV.get()->getScope())) {
+    if (LexicalScope *Scope = LScopes.findLexicalScope(DV->getScope())) {
       ensureAbstractVariableIsCreatedIfScoped(DV, Scope->getScopeNode());
       DIExpression NoExpr;
       ConcreteVariables.push_back(make_unique<DbgVariable>(DV, NoExpr, this));
@@ -1126,10 +1128,10 @@ void DwarfDebug::beginFunction(const MachineFunction *MF) {
     // The first mention of a function argument gets the CurrentFnBegin
     // label, so arguments are visible when breaking at function entry.
     DIVariable DIVar = Ranges.front().first->getDebugVariable();
-    if (DIVar.getTag() == dwarf::DW_TAG_arg_variable &&
-        getDISubprogram(DIVar.getContext()).describes(MF->getFunction())) {
+    if (DIVar->getTag() == dwarf::DW_TAG_arg_variable &&
+        getDISubprogram(DIVar->getScope())->describes(MF->getFunction())) {
       LabelsBeforeInsn[Ranges.front().first] = Asm->getFunctionBegin();
-      if (Ranges.front().first->getDebugExpression().isBitPiece()) {
+      if (Ranges.front().first->getDebugExpression()->isBitPiece()) {
         // Mark all non-overlapping initial pieces.
         for (auto I = Ranges.begin(); I != Ranges.end(); ++I) {
           DIExpression Piece = I->first->getDebugExpression();
@@ -1218,7 +1220,7 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
     for (DIVariable DV : SP->getVariables()) {
       if (!ProcessedVars.insert(DV).second)
         continue;
-      ensureAbstractVariableIsCreated(DV, DV.getContext());
+      ensureAbstractVariableIsCreated(DV, DV->getScope());
       assert(LScopes.getAbstractScopesList().size() == NumAbstractScopes
              && "ensureAbstractVariableIsCreated inserted abstract scopes");
     }
@@ -1253,8 +1255,8 @@ void DwarfDebug::recordSourceLine(unsigned Line, unsigned Col, const MDNode *S,
   if (DIScope Scope = cast_or_null<MDScope>(S)) {
     Fn = Scope.getFilename();
     Dir = Scope.getDirectory();
-    if (DILexicalBlockFile LBF = dyn_cast<MDLexicalBlockFile>(Scope))
-      Discriminator = LBF.getDiscriminator();
+    if (auto *LBF = dyn_cast<MDLexicalBlockFile>(Scope))
+      Discriminator = LBF->getDiscriminator();
 
     unsigned CUID = Asm->OutStreamer.getContext().getDwarfCompileUnitID();
     Src = static_cast<DwarfCompileUnit &>(*InfoHolder.getUnits()[CUID])
@@ -1478,7 +1480,7 @@ static void emitDebugLocValue(const AsmPrinter &AP,
                                     Streamer);
   // Regular entry.
   if (Value.isInt()) {
-    MDType *T = DV.getType().resolve(TypeIdentifierMap);
+    MDType *T = DV->getType().resolve(TypeIdentifierMap);
     auto *B = dyn_cast<MDBasicType>(T);
     if (B && (B->getEncoding() == dwarf::DW_ATE_signed ||
               B->getEncoding() == dwarf::DW_ATE_signed_char))
@@ -1488,7 +1490,7 @@ static void emitDebugLocValue(const AsmPrinter &AP,
   } else if (Value.isLocation()) {
     MachineLocation Loc = Value.getLoc();
     DIExpression Expr = Value.getExpression();
-    if (!Expr || (Expr.getNumElements() == 0))
+    if (!Expr || !Expr->getNumElements())
       // Regular entry.
       AP.EmitDwarfRegOp(Streamer, Loc);
     else {
@@ -1523,8 +1525,8 @@ void DebugLocEntry::finalize(const AsmPrinter &AP,
     unsigned Offset = 0;
     for (auto Piece : Values) {
       DIExpression Expr = Piece.getExpression();
-      unsigned PieceOffset = Expr.getBitPieceOffset();
-      unsigned PieceSize = Expr.getBitPieceSize();
+      unsigned PieceOffset = Expr->getBitPieceOffset();
+      unsigned PieceSize = Expr->getBitPieceSize();
       assert(Offset <= PieceOffset && "overlapping or duplicate pieces");
       if (Offset < PieceOffset) {
         // The DWARF spec seriously mandates pieces with no locations for gaps.
@@ -1535,15 +1537,7 @@ void DebugLocEntry::finalize(const AsmPrinter &AP,
         Offset += PieceOffset-Offset;
       }
       Offset += PieceSize;
-   
-#ifndef NDEBUG
-      DIVariable Var = Piece.getVariable();
-      unsigned VarSize = Var.getSizeInBits(TypeIdentifierMap);
-      assert(PieceSize+PieceOffset <= VarSize
-             && "piece is larger than or outside of variable");
-      assert(PieceSize != VarSize
-             && "piece covers entire variable");
-#endif
+
       emitDebugLocValue(AP, TypeIdentifierMap, Streamer, Piece, PieceOffset);
     }
   } else {

@@ -746,6 +746,23 @@ public:
   Metadata *getExtraData() const { return getRawExtraData(); }
   Metadata *getRawExtraData() const { return getOperand(4); }
 
+  /// \brief Get casted version of extra data.
+  /// @{
+  MDTypeRef getClassType() const {
+    assert(getTag() == dwarf::DW_TAG_ptr_to_member_type);
+    return MDTypeRef(getExtraData());
+  }
+  MDObjCProperty *getObjCProperty() const {
+    return dyn_cast_or_null<MDObjCProperty>(getExtraData());
+  }
+  Constant *getConstant() const {
+    assert(getTag() == dwarf::DW_TAG_member && isStaticMember());
+    if (auto *C = cast_or_null<ConstantAsMetadata>(getExtraData()))
+      return C->getValue();
+    return nullptr;
+  }
+  /// @}
+
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == MDDerivedTypeKind;
   }
@@ -769,7 +786,13 @@ protected:
   ~MDCompositeTypeBase() = default;
 
 public:
+  /// \brief Get the elements of the composite type.
+  ///
+  /// \note Calling this is only valid for \a MDCompositeType.  This assertion
+  /// can be removed once \a MDSubroutineType has been separated from
+  /// "composite types".
   DebugNodeArray getElements() const {
+    assert(!isa<MDSubroutineType>(this) && "no elements for DISubroutineType");
     return cast_or_null<MDTuple>(getRawElements());
   }
   MDTypeRef getVTableHolder() const { return MDTypeRef(getRawVTableHolder()); }
@@ -1186,6 +1209,21 @@ public:
     return getFilename() != RHS.getFilename() || getLine() != RHS.getLine();
   }
 
+  /// \brief Get the DWARF discriminator.
+  ///
+  /// DWARF discriminators distinguish identical file locations between
+  /// instructions that are on different basic blocks.
+  inline unsigned getDiscriminator() const;
+
+  /// \brief Compute new discriminator in the given context.
+  ///
+  /// This modifies the \a LLVMContext that \c this is in to increment the next
+  /// discriminator for \c this's line/filename combination.
+  ///
+  /// FIXME: Delete this.  See comments in implementation and at the only call
+  /// site in \a AddDiscriminators::runOnFunction().
+  unsigned computeNewDiscriminator() const;
+
   Metadata *getRawScope() const { return getOperand(0); }
   Metadata *getRawInlinedAt() const {
     if (getNumOperands() == 2)
@@ -1386,6 +1424,11 @@ public:
   void replaceFunction(std::nullptr_t) { replaceOperandWith(7, nullptr); }
   /// @}
 
+  /// \brief Check if this subprogram decribes the given function.
+  ///
+  /// FIXME: Should this be looking through bitcasts?
+  bool describes(const Function *F) const;
+
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == MDSubprogramKind;
   }
@@ -1403,6 +1446,13 @@ public:
 
   Metadata *getRawScope() const { return getOperand(1); }
 
+  /// \brief Forwarding accessors to LexicalBlock.
+  ///
+  /// TODO: Remove these and update code to use \a MDLexicalBlock directly.
+  /// @{
+  inline unsigned getLine() const;
+  inline unsigned getColumn() const;
+  /// @}
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == MDLexicalBlockKind ||
            MD->getMetadataID() == MDLexicalBlockFileKind;
@@ -1458,6 +1508,18 @@ public:
   }
 };
 
+unsigned MDLexicalBlockBase::getLine() const {
+  if (auto *N = dyn_cast<MDLexicalBlock>(this))
+    return N->getLine();
+  return 0;
+}
+
+unsigned MDLexicalBlockBase::getColumn() const {
+  if (auto *N = dyn_cast<MDLexicalBlock>(this))
+    return N->getColumn();
+  return 0;
+}
+
 class MDLexicalBlockFile : public MDLexicalBlockBase {
   friend class LLVMContextImpl;
   friend class MDNode;
@@ -1499,12 +1561,22 @@ public:
 
   TempMDLexicalBlockFile clone() const { return cloneImpl(); }
 
+  // TODO: Remove these once they're gone from MDLexicalBlockBase.
+  unsigned getLine() const = delete;
+  unsigned getColumn() const = delete;
+
   unsigned getDiscriminator() const { return Discriminator; }
 
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == MDLexicalBlockFileKind;
   }
 };
+
+unsigned MDLocation::getDiscriminator() const {
+  if (auto *F = dyn_cast<MDLexicalBlockFile>(getScope()))
+    return F->getDiscriminator();
+  return 0;
+}
 
 class MDNamespace : public MDScope {
   friend class LLVMContextImpl;
@@ -1885,6 +1957,12 @@ public:
 
 /// \brief DWARF expression.
 ///
+/// This is (almost) a DWARF expression that modifies the location of a
+/// variable or (or the location of a single piece of a variable).
+///
+/// FIXME: Instead of DW_OP_plus taking an argument, this should use DW_OP_const
+/// and have DW_OP_plus consume the topmost elements on the stack.
+///
 /// TODO: Co-allocate the expression elements.
 /// TODO: Separate from MDNode, or otherwise drop Distinct and Temporary
 /// storage types.
@@ -2081,6 +2159,11 @@ public:
   MDFile *getFile() const { return cast_or_null<MDFile>(getRawFile()); }
   StringRef getGetterName() const { return getStringOperand(2); }
   StringRef getSetterName() const { return getStringOperand(3); }
+
+  /// \brief Get the type.
+  ///
+  /// \note Objective-C doesn't have an ODR, so there is no benefit in storing
+  /// the type as a DITypeRef here.
   MDType *getType() const { return cast_or_null<MDType>(getRawType()); }
 
   StringRef getFilename() const {
@@ -2105,6 +2188,7 @@ public:
   }
 };
 
+/// \brief An imported module (C++ using directive or similar).
 class MDImportedEntity : public DebugNode {
   friend class LLVMContextImpl;
   friend class MDNode;
