@@ -82,19 +82,19 @@ void ModuleDebugInfoPrinter::print(raw_ostream &O, const Module *M) const {
     O << '\n';
   }
 
-  for (DISubprogram S : Finder.subprograms()) {
-    O << "Subprogram: " << S.getName();
-    printFile(O, S.getFilename(), S.getDirectory(), S.getLineNumber());
-    if (!S.getLinkageName().empty())
-      O << " ('" << S.getLinkageName() << "')";
+  for (MDSubprogram *S : Finder.subprograms()) {
+    O << "Subprogram: " << S->getName();
+    printFile(O, S->getFilename(), S->getDirectory(), S->getLine());
+    if (!S->getLinkageName().empty())
+      O << " ('" << S->getLinkageName() << "')";
     O << '\n';
   }
 
   for (DIGlobalVariable GV : Finder.global_variables()) {
-    O << "Global variable: " << GV.getName();
-    printFile(O, GV.getFilename(), GV.getDirectory(), GV.getLineNumber());
-    if (!GV.getLinkageName().empty())
-      O << " ('" << GV.getLinkageName() << "')";
+    O << "Global variable: " << GV->getName();
+    printFile(O, GV->getFilename(), GV->getDirectory(), GV->getLine());
+    if (!GV->getLinkageName().empty())
+      O << " ('" << GV->getLinkageName() << "')";
     O << '\n';
   }
 
