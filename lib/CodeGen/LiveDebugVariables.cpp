@@ -362,9 +362,9 @@ static void printDebugLoc(DebugLoc DL, raw_ostream &CommentOS,
   if (!DL)
     return;
 
-  DIScope Scope = cast<MDScope>(DL.getScope());
+  auto *Scope = cast<MDScope>(DL.getScope());
   // Omit the directory, because it's likely to be long and uninteresting.
-  CommentOS << Scope.getFilename();
+  CommentOS << Scope->getFilename();
   CommentOS << ':' << DL.getLine();
   if (DL.getCol() != 0)
     CommentOS << ':' << DL.getCol();
@@ -378,12 +378,13 @@ static void printDebugLoc(DebugLoc DL, raw_ostream &CommentOS,
   CommentOS << " ]";
 }
 
-static void printExtendedName(raw_ostream &OS, const MDLocalVariable *V) {
+static void printExtendedName(raw_ostream &OS, const MDLocalVariable *V,
+                              const MDLocation *DL) {
   const LLVMContext &Ctx = V->getContext();
   StringRef Res = V->getName();
   if (!Res.empty())
     OS << Res << "," << V->getLine();
-  if (auto *InlinedAt = V->getInlinedAt()) {
+  if (auto *InlinedAt = DL->getInlinedAt()) {
     if (DebugLoc InlinedAtDL = InlinedAt) {
       OS << " @[";
       printDebugLoc(InlinedAtDL, OS, Ctx);
@@ -395,7 +396,7 @@ static void printExtendedName(raw_ostream &OS, const MDLocalVariable *V) {
 void UserValue::print(raw_ostream &OS, const TargetRegisterInfo *TRI) {
   DIVariable DV = cast<MDLocalVariable>(Variable);
   OS << "!\"";
-  printExtendedName(OS, DV);
+  printExtendedName(OS, DV, dl);
 
   OS << "\"\t";
   if (offset)

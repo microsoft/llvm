@@ -11526,10 +11526,15 @@ static SDValue combineConcatVectorOfScalars(SDNode *N, SelectionDAG &DAG) {
     else
       return SDValue();
 
-    if (Ops.back().getValueType().isFloatingPoint())
+    // Note whether we encounter an integer or floating point scalar.
+    // If it's neither, bail out, it could be something weird like x86mmx.
+    EVT LastOpVT = Ops.back().getValueType();
+    if (LastOpVT.isFloatingPoint())
       AnyFP = true;
-    else
+    else if (LastOpVT.isInteger())
       AnyInteger = true;
+    else
+      return SDValue();
   }
 
   // If any of the operands is a floating point scalar bitcast to a vector,
@@ -11540,11 +11545,12 @@ static SDValue combineConcatVectorOfScalars(SDNode *N, SelectionDAG &DAG) {
     ScalarUndef = DAG.getNode(ISD::UNDEF, DL, SVT);
     if (AnyInteger) {
       for (SDValue &Op : Ops) {
-        if (Op.getValueType() != SVT) {
+        if (Op.getValueType() == SVT)
+          continue;
+        if (Op.getOpcode() == ISD::UNDEF)
+          Op = ScalarUndef;
+        else
           Op = DAG.getNode(ISD::BITCAST, DL, SVT, Op);
-          if (Op.getOpcode() == ISD::UNDEF)
-            Op = ScalarUndef;
-        }
       }
     }
   }

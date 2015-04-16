@@ -72,13 +72,13 @@ void ModuleDebugInfoPrinter::print(raw_ostream &O, const Module *M) const {
   // Printing the nodes directly isn't particularly helpful (since they
   // reference other nodes that won't be printed, particularly for the
   // filenames), so just print a few useful things.
-  for (DICompileUnit CU : Finder.compile_units()) {
+  for (MDCompileUnit *CU : Finder.compile_units()) {
     O << "Compile unit: ";
-    if (const char *Lang = LanguageString(CU.getLanguage()))
+    if (const char *Lang = dwarf::LanguageString(CU->getSourceLanguage()))
       O << Lang;
     else
-      O << "unknown-language(" << CU.getLanguage() << ")";
-    printFile(O, CU.getFilename(), CU.getDirectory());
+      O << "unknown-language(" << CU->getSourceLanguage() << ")";
+    printFile(O, CU->getFilename(), CU->getDirectory());
     O << '\n';
   }
 
@@ -98,27 +98,27 @@ void ModuleDebugInfoPrinter::print(raw_ostream &O, const Module *M) const {
     O << '\n';
   }
 
-  for (DIType T : Finder.types()) {
+  for (const MDType *T : Finder.types()) {
     O << "Type:";
-    if (!T.getName().empty())
-      O << ' ' << T.getName();
-    printFile(O, T.getFilename(), T.getDirectory(), T.getLineNumber());
-    if (DIBasicType BT = dyn_cast<MDBasicType>(T)) {
+    if (!T->getName().empty())
+      O << ' ' << T->getName();
+    printFile(O, T->getFilename(), T->getDirectory(), T->getLine());
+    if (auto *BT = dyn_cast<MDBasicType>(T)) {
       O << " ";
       if (const char *Encoding =
-              dwarf::AttributeEncodingString(BT.getEncoding()))
+              dwarf::AttributeEncodingString(BT->getEncoding()))
         O << Encoding;
       else
-        O << "unknown-encoding(" << BT.getEncoding() << ')';
+        O << "unknown-encoding(" << BT->getEncoding() << ')';
     } else {
       O << ' ';
-      if (const char *Tag = dwarf::TagString(T.getTag()))
+      if (const char *Tag = dwarf::TagString(T->getTag()))
         O << Tag;
       else
-        O << "unknown-tag(" << T.getTag() << ")";
+        O << "unknown-tag(" << T->getTag() << ")";
     }
-    if (DICompositeType CT = dyn_cast<MDCompositeType>(T)) {
-      if (auto *S = CT.getIdentifier())
+    if (auto *CT = dyn_cast<MDCompositeType>(T)) {
+      if (auto *S = CT->getRawIdentifier())
         O << " (identifier: '" << S->getString() << "')";
     }
     O << '\n';

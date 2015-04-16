@@ -594,7 +594,7 @@ public:
   }
 };
 
-/// \brief Basic type.
+/// \brief Basic type, like 'int' or 'float'.
 ///
 /// TODO: Split out DW_TAG_unspecified_type.
 /// TODO: Drop unused accessors.
@@ -1877,38 +1877,32 @@ class MDLocalVariable : public MDVariable {
   static MDLocalVariable *getImpl(LLVMContext &Context, unsigned Tag,
                                   MDScope *Scope, StringRef Name, MDFile *File,
                                   unsigned Line, MDTypeRef Type, unsigned Arg,
-                                  unsigned Flags, MDLocation *InlinedAt,
-                                  StorageType Storage,
+                                  unsigned Flags, StorageType Storage,
                                   bool ShouldCreate = true) {
     return getImpl(Context, Tag, Scope, getCanonicalMDString(Context, Name),
-                   File, Line, Type, Arg, Flags, InlinedAt, Storage,
-                   ShouldCreate);
+                   File, Line, Type, Arg, Flags, Storage, ShouldCreate);
   }
-  static MDLocalVariable *getImpl(LLVMContext &Context, unsigned Tag,
-                                  Metadata *Scope, MDString *Name,
-                                  Metadata *File, unsigned Line, Metadata *Type,
-                                  unsigned Arg, unsigned Flags,
-                                  Metadata *InlinedAt, StorageType Storage,
-                                  bool ShouldCreate = true);
+  static MDLocalVariable *
+  getImpl(LLVMContext &Context, unsigned Tag, Metadata *Scope, MDString *Name,
+          Metadata *File, unsigned Line, Metadata *Type, unsigned Arg,
+          unsigned Flags, StorageType Storage, bool ShouldCreate = true);
 
   TempMDLocalVariable cloneImpl() const {
     return getTemporary(getContext(), getTag(), getScope(), getName(),
-                        getFile(), getLine(), getType(), getArg(), getFlags(),
-                        getInlinedAt());
+                        getFile(), getLine(), getType(), getArg(), getFlags());
   }
 
 public:
   DEFINE_MDNODE_GET(MDLocalVariable,
                     (unsigned Tag, MDLocalScope *Scope, StringRef Name,
                      MDFile *File, unsigned Line, MDTypeRef Type, unsigned Arg,
-                     unsigned Flags, MDLocation *InlinedAt = nullptr),
-                    (Tag, Scope, Name, File, Line, Type, Arg, Flags, InlinedAt))
+                     unsigned Flags),
+                    (Tag, Scope, Name, File, Line, Type, Arg, Flags))
   DEFINE_MDNODE_GET(MDLocalVariable,
                     (unsigned Tag, Metadata *Scope, MDString *Name,
                      Metadata *File, unsigned Line, Metadata *Type,
-                     unsigned Arg, unsigned Flags,
-                     Metadata *InlinedAt = nullptr),
-                    (Tag, Scope, Name, File, Line, Type, Arg, Flags, InlinedAt))
+                     unsigned Arg, unsigned Flags),
+                    (Tag, Scope, Name, File, Line, Type, Arg, Flags))
 
   TempMDLocalVariable clone() const { return cloneImpl(); }
 
@@ -1921,34 +1915,18 @@ public:
 
   unsigned getArg() const { return Arg; }
   unsigned getFlags() const { return Flags; }
-  MDLocation *getInlinedAt() const {
-    return cast_or_null<MDLocation>(getRawInlinedAt());
-  }
-
-  Metadata *getRawInlinedAt() const { return getOperand(4); }
 
   bool isArtificial() const { return getFlags() & FlagArtificial; }
   bool isObjectPointer() const { return getFlags() & FlagObjectPointer; }
 
   /// \brief Check that a location is valid for this variable.
   ///
-  /// Check that \c DL has the same inlined-at location as this variable,
-  /// making them valid for the same \a DbgInfoIntrinsic.
+  /// Check that \c DL exists, is in the same subprogram, and has the same
+  /// inlined-at location as \c this.  (Otherwise, it's not a valid attachemnt
+  /// to a \a DbgInfoIntrinsic.)
   bool isValidLocationForIntrinsic(const MDLocation *DL) const {
-    return getInlinedAt() == (DL ? DL->getInlinedAt() : nullptr);
+    return DL && getScope()->getSubprogram() == DL->getScope()->getSubprogram();
   }
-
-  /// \brief Get an inlined version of this variable.
-  ///
-  /// Returns a version of this with \a getAlinedAt() set to \c InlinedAt.
-  MDLocalVariable *withInline(MDLocation *InlinedAt) const {
-    if (InlinedAt == getInlinedAt())
-      return const_cast<MDLocalVariable *>(this);
-    auto Temp = clone();
-    Temp->replaceOperandWith(4, InlinedAt);
-    return replaceWithUniqued(std::move(Temp));
-  }
-  MDLocalVariable *withoutInline() const { return withInline(nullptr); }
 
   static bool classof(const Metadata *MD) {
     return MD->getMetadataID() == MDLocalVariableKind;

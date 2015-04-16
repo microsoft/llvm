@@ -108,8 +108,13 @@ void Win64Exception::endFunction(const MachineFunction *MF) {
   if (!shouldEmitPersonality && !shouldEmitMoves)
     return;
 
-  // Map all labels and get rid of any dead landing pads.
-  MMI->TidyLandingPads();
+  EHPersonality Per = MMI->getPersonalityType();
+
+  // Get rid of any dead landing pads if we're not using a Windows EH scheme. In
+  // Windows EH schemes, the landing pad is not actually reachable. It only
+  // exists so that we can emit the right table data.
+  if (!isMSVCEHPersonality(Per))
+    MMI->TidyLandingPads();
 
   if (shouldEmitPersonality) {
     Asm->OutStreamer.PushSection();
@@ -119,7 +124,6 @@ void Win64Exception::endFunction(const MachineFunction *MF) {
 
     // Emit the tables appropriate to the personality function in use. If we
     // don't recognize the personality, assume it uses an Itanium-style LSDA.
-    EHPersonality Per = MMI->getPersonalityType();
     if (Per == EHPersonality::MSVC_Win64SEH)
       emitCSpecificHandlerTable();
     else if (Per == EHPersonality::MSVC_CXX)
@@ -468,7 +472,7 @@ void Win64Exception::emitCXXFrameHandler3Table(const MachineFunction *MF) {
         if (HT.CatchObjRecoverIdx >= 0) {
           MCSymbol *FrameAllocOffset =
               Asm->OutContext.getOrCreateFrameAllocSymbol(
-                  GlobalValue::getRealLinkageName(F->getName()),
+                  GlobalValue::getRealLinkageName(ParentF->getName()),
                   HT.CatchObjRecoverIdx);
           FrameAllocOffsetRef = MCSymbolRefExpr::Create(
               FrameAllocOffset, MCSymbolRefExpr::VK_None, Asm->OutContext);

@@ -255,8 +255,10 @@ protected:
     DIExpression E = DBuilder.createExpression();
     DIVariable Variable = DBuilder.createLocalVariable(
       dwarf::DW_TAG_auto_variable, Subprogram, "x", File, 5, IntType, true);
-    DBuilder.insertDeclare(Alloca, Variable, E, Store);
-    DBuilder.insertDbgValueIntrinsic(AllocaContent, 0, Variable, E, Terminator);
+    auto *DL = MDLocation::get(Subprogram->getContext(), 5, 0, Subprogram);
+    DBuilder.insertDeclare(Alloca, Variable, E, DL, Store);
+    DBuilder.insertDbgValueIntrinsic(AllocaContent, 0, Variable, E, DL,
+                                     Terminator);
     // Finalize the debug info
     DBuilder.finalize();
 
@@ -320,8 +322,8 @@ TEST_F(CloneFunc, SubprogramInRightCU) {
   DICompileUnit CU1 = cast<MDCompileUnit>(*Iter);
   Iter++;
   DICompileUnit CU2 = cast<MDCompileUnit>(*Iter);
-  EXPECT_TRUE(CU1.getSubprograms().size() == 0 ||
-              CU2.getSubprograms().size() == 0);
+  EXPECT_TRUE(CU1->getSubprograms().size() == 0 ||
+              CU2->getSubprograms().size() == 0);
 }
 
 // Test that instructions in the old function still belong to it in the

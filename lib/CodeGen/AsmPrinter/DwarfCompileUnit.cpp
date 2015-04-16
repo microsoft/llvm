@@ -114,9 +114,9 @@ DIE *DwarfCompileUnit::getOrCreateGlobalVariableDIE(DIGlobalVariable GV) {
   DIE *VariableDIE = &createAndAddDIE(GV->getTag(), *ContextDIE, GV);
   DIScope DeclContext;
 
-  if (DIDerivedType SDMDecl = GV->getStaticDataMemberDeclaration()) {
-    DeclContext = resolve(SDMDecl.getContext());
-    assert(SDMDecl.isStaticMember() && "Expected static member decl");
+  if (auto *SDMDecl = GV->getStaticDataMemberDeclaration()) {
+    DeclContext = resolve(SDMDecl->getScope());
+    assert(SDMDecl->isStaticMember() && "Expected static member decl");
     assert(GV->isDefinition());
     // We need the declaration DIE that is in the static member's class.
     DIE *VariableSpecDIE = getOrCreateStaticMemberDIE(SDMDecl);
@@ -689,7 +689,7 @@ void DwarfCompileUnit::collectDeadVariables(DISubprogram SP) {
     SPDIE = getDIE(SP);
   assert(SPDIE);
   for (DIVariable DV : Variables) {
-    DbgVariable NewVar(DV, DIExpression(), DD);
+    DbgVariable NewVar(DV, nullptr, DIExpression(), DD);
     auto VariableDie = constructVariableDIE(NewVar);
     applyVariableAttributes(NewVar, *VariableDie);
     SPDIE->addChild(std::move(VariableDie));
@@ -720,7 +720,7 @@ void DwarfCompileUnit::addGlobalType(DIType Ty, const DIE &Die,
                                      DIScope Context) {
   if (includeMinimalInlineScopes())
     return;
-  std::string FullName = getParentContextString(Context) + Ty.getName().str();
+  std::string FullName = getParentContextString(Context) + Ty->getName().str();
   GlobalTypes[FullName] = &Die;
 }
 
@@ -819,7 +819,7 @@ bool DwarfCompileUnit::isDwoUnit() const {
 }
 
 bool DwarfCompileUnit::includeMinimalInlineScopes() const {
-  return getCUNode().getEmissionKind() == DIBuilder::LineTablesOnly ||
+  return getCUNode()->getEmissionKind() == DIBuilder::LineTablesOnly ||
          (DD->useSplitDwarf() && !Skeleton);
 }
 } // end llvm namespace
