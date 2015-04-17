@@ -1,4 +1,4 @@
-; RUN: opt -S -winehprepare -sehprepare < %s | FileCheck %s
+; RUN: opt -S -winehprepare < %s | FileCheck %s
 
 target datalayout = "e-m:w-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
@@ -51,7 +51,7 @@ __try.cont:                                       ; preds = %__except, %invoke.c
 ; CHECK-LABEL: define void @seh_catch_all()
 ; CHECK: landingpad
 ; CHECK-NEXT: catch i8* null
-; CHECK-NEXT: call i8* (...)* @llvm.eh.actions(i32 1, i8* null, i32 -1, i8* blockaddress(@seh_catch_all, %catch.all))
+; CHECK-NEXT: call i8* (...) @llvm.eh.actions(i32 1, i8* null, i32 -1, i8* blockaddress(@seh_catch_all, %catch.all))
 ; CHECK-NEXT: indirectbr
 ;
 ; CHECK: catch.all:

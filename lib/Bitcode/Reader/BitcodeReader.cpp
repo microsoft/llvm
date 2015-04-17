@@ -299,9 +299,9 @@ private:
       // have.
       ResVal = getFnValueByID(ValNo, nullptr);
       return ResVal == nullptr;
-    } else if (Slot == Record.size()) {
-      return true;
     }
+    if (Slot == Record.size())
+      return true;
 
     unsigned TypeNo = (unsigned)Record[Slot++];
     ResVal = getFnValueByID(ValNo, getTypeByID(TypeNo));
@@ -1098,6 +1098,8 @@ static Attribute::AttrKind GetAttrFromCode(uint64_t Code) {
     return Attribute::NonNull;
   case bitc::ATTR_KIND_DEREFERENCEABLE:
     return Attribute::Dereferenceable;
+  case bitc::ATTR_KIND_DEREFERENCEABLE_OR_NULL:
+    return Attribute::DereferenceableOrNull;
   case bitc::ATTR_KIND_NO_RED_ZONE:
     return Attribute::NoRedZone;
   case bitc::ATTR_KIND_NO_RETURN:
@@ -1214,6 +1216,8 @@ std::error_code BitcodeReader::ParseAttributeGroupBlock() {
             B.addStackAlignmentAttr(Record[++i]);
           else if (Kind == Attribute::Dereferenceable)
             B.addDereferenceableAttr(Record[++i]);
+          else if (Kind == Attribute::DereferenceableOrNull)
+            B.addDereferenceableOrNullAttr(Record[++i]);
         } else {                     // String attribute
           assert((Record[i] == 3 || Record[i] == 4) &&
                  "Invalid attribute group entry");
@@ -4164,19 +4168,32 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       if (Record.size() < 3)
         return Error("Invalid record");
 
-      AttributeSet PAL = getAttributes(Record[0]);
-      unsigned CCInfo = Record[1];
+      unsigned OpNum = 0;
+      AttributeSet PAL = getAttributes(Record[OpNum++]);
+      unsigned CCInfo = Record[OpNum++];
 
-      unsigned OpNum = 2;
+      FunctionType *FTy = nullptr;
+      if (CCInfo >> 15 & 1 &&
+          !(FTy = dyn_cast<FunctionType>(getTypeByID(Record[OpNum++]))))
+        return Error("Explicit call type is not a function type");
+
       Value *Callee;
       if (getValueTypePair(Record, OpNum, NextValueNo, Callee))
         return Error("Invalid record");
 
       PointerType *OpTy = dyn_cast<PointerType>(Callee->getType());
-      FunctionType *FTy = nullptr;
-      if (OpTy) FTy = dyn_cast<FunctionType>(OpTy->getElementType());
-      if (!FTy || Record.size() < FTy->getNumParams()+OpNum)
-        return Error("Invalid record");
+      if (!OpTy)
+        return Error("Callee is not a pointer type");
+      FunctionType *PFTy = dyn_cast<FunctionType>(OpTy->getElementType());
+      if (!PFTy)
+        return Error("Callee is not of pointer to function type");
+      if (!FTy)
+        FTy = PFTy;
+      if (PFTy != FTy)
+        return Error("Explicit call type does not match pointee type of "
+                     "callee operand");
+      if (Record.size() < FTy->getNumParams() + OpNum)
+        return Error("Insufficient operands to call");
 
       SmallVector<Value*, 16> Args;
       // Read the fixed params.

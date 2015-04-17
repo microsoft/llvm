@@ -1337,6 +1337,11 @@ public:
 
   ~CallInst() override;
 
+  FunctionType *getFunctionType() const {
+    return cast<FunctionType>(
+        cast<PointerType>(getCalledValue()->getType())->getElementType());
+  }
+
   // Note that 'musttail' implies 'tail'.
   enum TailCallKind { TCK_None = 0, TCK_Tail = 1, TCK_MustTail = 2 };
   TailCallKind getTailCallKind() const {
@@ -1411,6 +1416,10 @@ public:
 
   /// \brief adds the dereferenceable attribute to the list of attributes.
   void addDereferenceableAttr(unsigned i, uint64_t Bytes);
+
+  /// \brief adds the dereferenceable_or_null attribute to the list of
+  /// attributes.
+  void addDereferenceableOrNullAttr(unsigned i, uint64_t Bytes);
 
   /// \brief Determine whether this call has the given attribute.
   bool hasFnAttr(Attribute::AttrKind A) const {
@@ -3103,6 +3112,10 @@ public:
 
   /// \brief adds the dereferenceable attribute to the list of attributes.
   void addDereferenceableAttr(unsigned i, uint64_t Bytes);
+
+  /// \brief adds the dereferenceable_or_null attribute to the list of
+  /// attributes.
+  void addDereferenceableOrNullAttr(unsigned i, uint64_t Bytes);
 
   /// \brief Determine whether this call has the given attribute.
   bool hasFnAttr(Attribute::AttrKind A) const {
