@@ -25,8 +25,10 @@ bool llvm::isStatepoint(const ImmutableCallSite &CS) {
     return false;
   }
 
-  const Function *F = CS.getCalledFunction();
-  return (F && F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint);
+  if (const Function *F = CS.getCalledFunction())
+    return (F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
+            F->getIntrinsicID() == Intrinsic::experimental_gc_transition);
+  return false;
 }
 bool llvm::isStatepoint(const Value *inst) {
   if (isa<InvokeInst>(inst) || isa<CallInst>(inst)) {
