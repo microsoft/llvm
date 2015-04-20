@@ -14,6 +14,7 @@
 #include "DwarfDebug.h"
 #include "ByteStreamer.h"
 #include "DIEHash.h"
+#include "DebugLocEntry.h"
 #include "DwarfCompileUnit.h"
 #include "DwarfExpression.h"
 #include "DwarfUnit.h"
@@ -733,8 +734,7 @@ void DwarfDebug::collectVariableInfoFromMMITable(
 
 // Get .debug_loc entry for the instruction range starting at MI.
 static DebugLocEntry::Value getDebugLocValue(const MachineInstr *MI) {
-  const MDNode *Expr = MI->getDebugExpression();
-  const MDNode *Var = MI->getDebugVariable();
+  const MDExpression *Expr = MI->getDebugExpression();
 
   assert(MI->getNumOperands() == 4);
   if (MI->getOperand(0).isReg()) {
@@ -745,14 +745,14 @@ static DebugLocEntry::Value getDebugLocValue(const MachineInstr *MI) {
       MLoc.set(MI->getOperand(0).getReg());
     else
       MLoc.set(MI->getOperand(0).getReg(), MI->getOperand(1).getImm());
-    return DebugLocEntry::Value(Var, Expr, MLoc);
+    return DebugLocEntry::Value(Expr, MLoc);
   }
   if (MI->getOperand(0).isImm())
-    return DebugLocEntry::Value(Var, Expr, MI->getOperand(0).getImm());
+    return DebugLocEntry::Value(Expr, MI->getOperand(0).getImm());
   if (MI->getOperand(0).isFPImm())
-    return DebugLocEntry::Value(Var, Expr, MI->getOperand(0).getFPImm());
+    return DebugLocEntry::Value(Expr, MI->getOperand(0).getFPImm());
   if (MI->getOperand(0).isCImm())
-    return DebugLocEntry::Value(Var, Expr, MI->getOperand(0).getCImm());
+    return DebugLocEntry::Value(Expr, MI->getOperand(0).getCImm());
 
   llvm_unreachable("Unexpected 4-operand DBG_VALUE instruction!");
 }
@@ -865,7 +865,6 @@ DwarfDebug::buildLocationList(SmallVectorImpl<DebugLocEntry> &DebugLoc,
     DEBUG({
       dbgs() << CurEntry->getValues().size() << " Values:\n";
       for (auto Value : CurEntry->getValues()) {
-        Value.getVariable()->dump();
         Value.getExpression()->dump();
       }
       dbgs() << "-----\n";
@@ -912,18 +911,22 @@ void DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
       continue;
 
     // Handle multiple DBG_VALUE instructions describing one variable.
-    RegVar->setDotDebugLocOffset(DotDebugLocEntries.size());
-
-    DotDebugLocEntries.resize(DotDebugLocEntries.size() + 1);
-    DebugLocList &LocList = DotDebugLocEntries.back();
-    LocList.CU = &TheCU;
-    LocList.Label = Asm->createTempSymbol("debug_loc");
+    RegVar->setDebugLocListIndex(
+        DebugLocs.startList(&TheCU, Asm->createTempSymbol("debug_loc")));
 
     // Build the location list for this variable.
-    buildLocationList(LocList.List, Ranges);
+    SmallVector<DebugLocEntry, 8> Entries;
+    buildLocationList(Entries, Ranges);
+
+    // If the variable has an MDBasicType, extract it.  Basic types cannot have
+    // unique identifiers, so don't bother resolving the type with the
+    // identifier map.
+    const MDBasicType *BT = dyn_cast<MDBasicType>(
+        static_cast<const Metadata *>(IV.first->getType()));
+
     // Finalize the entry by lowering it into a DWARF bytestream.
-    for (auto &Entry : LocList.List)
-      Entry.finalize(*Asm, TypeIdentifierMap);
+    for (auto &Entry : Entries)
+      Entry.finalize(*Asm, DebugLocs, BT);
   }
 
   // Collect info for variables that were optimized out.
@@ -1460,30 +1463,26 @@ void DwarfDebug::emitDebugStr() {
   Holder.emitStrings(Asm->getObjFileLowering().getDwarfStrSection());
 }
 
-
 void DwarfDebug::emitDebugLocEntry(ByteStreamer &Streamer,
-                                   const DebugLocEntry &Entry) {
-  auto Comment = Entry.getComments().begin();
-  auto End = Entry.getComments().end();
-  for (uint8_t Byte : Entry.getDWARFBytes())
+                                   const DebugLocStream::Entry &Entry) {
+  auto &&Comments = DebugLocs.getComments(Entry);
+  auto Comment = Comments.begin();
+  auto End = Comments.end();
+  for (uint8_t Byte : DebugLocs.getBytes(Entry))
     Streamer.EmitInt8(Byte, Comment != End ? *(Comment++) : "");
 }
 
-static void emitDebugLocValue(const AsmPrinter &AP,
-                              const DITypeIdentifierMap &TypeIdentifierMap,
+static void emitDebugLocValue(const AsmPrinter &AP, const MDBasicType *BT,
                               ByteStreamer &Streamer,
                               const DebugLocEntry::Value &Value,
                               unsigned PieceOffsetInBits) {
-  DIVariable DV = Value.getVariable();
   DebugLocDwarfExpression DwarfExpr(*AP.MF->getSubtarget().getRegisterInfo(),
                                     AP.getDwarfDebug()->getDwarfVersion(),
                                     Streamer);
   // Regular entry.
   if (Value.isInt()) {
-    MDType *T = DV->getType().resolve(TypeIdentifierMap);
-    auto *B = dyn_cast<MDBasicType>(T);
-    if (B && (B->getEncoding() == dwarf::DW_ATE_signed ||
-              B->getEncoding() == dwarf::DW_ATE_signed_char))
+    if (BT && (BT->getEncoding() == dwarf::DW_ATE_signed ||
+               BT->getEncoding() == dwarf::DW_ATE_signed_char))
       DwarfExpr.AddSignedConstant(Value.getInt());
     else
       DwarfExpr.AddUnsignedConstant(Value.getInt());
@@ -1509,11 +1508,11 @@ static void emitDebugLocValue(const AsmPrinter &AP,
   // FIXME: ^
 }
 
-
-void DebugLocEntry::finalize(const AsmPrinter &AP,
-                             const DITypeIdentifierMap &TypeIdentifierMap) {
-  BufferByteStreamer Streamer(DWARFBytes, Comments);
-  const DebugLocEntry::Value Value = Values[0];
+void DebugLocEntry::finalize(const AsmPrinter &AP, DebugLocStream &Locs,
+                             const MDBasicType *BT) {
+  Locs.startEntry(Begin, End);
+  BufferByteStreamer Streamer = Locs.getStreamer();
+  const DebugLocEntry::Value &Value = Values[0];
   if (Value.isBitPiece()) {
     // Emit all pieces that belong to the same variable and range.
     assert(std::all_of(Values.begin(), Values.end(), [](DebugLocEntry::Value P) {
@@ -1538,16 +1537,15 @@ void DebugLocEntry::finalize(const AsmPrinter &AP,
       }
       Offset += PieceSize;
 
-      emitDebugLocValue(AP, TypeIdentifierMap, Streamer, Piece, PieceOffset);
+      emitDebugLocValue(AP, BT, Streamer, Piece, PieceOffset);
     }
   } else {
     assert(Values.size() == 1 && "only pieces may have >1 value");
-    emitDebugLocValue(AP, TypeIdentifierMap, Streamer, Value, 0);
+    emitDebugLocValue(AP, BT, Streamer, Value, 0);
   }
 }
 
-
-void DwarfDebug::emitDebugLocEntryLocation(const DebugLocEntry &Entry) {
+void DwarfDebug::emitDebugLocEntryLocation(const DebugLocStream::Entry &Entry) {
   Asm->OutStreamer.AddComment("Loc expr size");
   MCSymbol *begin = Asm->OutStreamer.getContext().CreateTempSymbol();
   MCSymbol *end = Asm->OutStreamer.getContext().CreateTempSymbol();
@@ -1566,19 +1564,19 @@ void DwarfDebug::emitDebugLoc() {
   Asm->OutStreamer.SwitchSection(
       Asm->getObjFileLowering().getDwarfLocSection());
   unsigned char Size = Asm->getDataLayout().getPointerSize();
-  for (const auto &DebugLoc : DotDebugLocEntries) {
-    Asm->OutStreamer.EmitLabel(DebugLoc.Label);
-    const DwarfCompileUnit *CU = DebugLoc.CU;
-    for (const auto &Entry : DebugLoc.List) {
+  for (const auto &List : DebugLocs.getLists()) {
+    Asm->OutStreamer.EmitLabel(List.Label);
+    const DwarfCompileUnit *CU = List.CU;
+    for (const auto &Entry : DebugLocs.getEntries(List)) {
       // Set up the range. This range is relative to the entry point of the
       // compile unit. This is a hard coded 0 for low_pc when we're emitting
       // ranges, or the DW_AT_low_pc on the compile unit otherwise.
       if (auto *Base = CU->getBaseAddress()) {
-        Asm->EmitLabelDifference(Entry.getBeginSym(), Base, Size);
-        Asm->EmitLabelDifference(Entry.getEndSym(), Base, Size);
+        Asm->EmitLabelDifference(Entry.BeginSym, Base, Size);
+        Asm->EmitLabelDifference(Entry.EndSym, Base, Size);
       } else {
-        Asm->OutStreamer.EmitSymbolValue(Entry.getBeginSym(), Size);
-        Asm->OutStreamer.EmitSymbolValue(Entry.getEndSym(), Size);
+        Asm->OutStreamer.EmitSymbolValue(Entry.BeginSym, Size);
+        Asm->OutStreamer.EmitSymbolValue(Entry.EndSym, Size);
       }
 
       emitDebugLocEntryLocation(Entry);
@@ -1591,17 +1589,17 @@ void DwarfDebug::emitDebugLoc() {
 void DwarfDebug::emitDebugLocDWO() {
   Asm->OutStreamer.SwitchSection(
       Asm->getObjFileLowering().getDwarfLocDWOSection());
-  for (const auto &DebugLoc : DotDebugLocEntries) {
-    Asm->OutStreamer.EmitLabel(DebugLoc.Label);
-    for (const auto &Entry : DebugLoc.List) {
+  for (const auto &List : DebugLocs.getLists()) {
+    Asm->OutStreamer.EmitLabel(List.Label);
+    for (const auto &Entry : DebugLocs.getEntries(List)) {
       // Just always use start_length for now - at least that's one address
       // rather than two. We could get fancier and try to, say, reuse an
       // address we know we've emitted elsewhere (the start of the function?
       // The start of the CU or CU subrange that encloses this range?)
       Asm->EmitInt8(dwarf::DW_LLE_start_length_entry);
-      unsigned idx = AddrPool.getIndex(Entry.getBeginSym());
+      unsigned idx = AddrPool.getIndex(Entry.BeginSym);
       Asm->EmitULEB128(idx);
-      Asm->EmitLabelDifference(Entry.getEndSym(), Entry.getBeginSym(), 4);
+      Asm->EmitLabelDifference(Entry.EndSym, Entry.BeginSym, 4);
 
       emitDebugLocEntryLocation(Entry);
     }

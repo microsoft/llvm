@@ -275,7 +275,6 @@ class ELFObjectWriter : public MCObjectWriter {
     bool
     IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
                                            const MCSymbolData &DataA,
-                                           const MCSymbolData *DataB,
                                            const MCFragment &FB,
                                            bool InSet,
                                            bool IsPCRel) const override;
@@ -412,10 +411,7 @@ void ELFObjectWriter::WriteHeader(const MCAssembler &Asm,
   // emitWord method behaves differently for ELF32 and ELF64, writing
   // 4 bytes in the former and 8 in the latter.
 
-  Write8(0x7f); // e_ident[EI_MAG0]
-  Write8('E');  // e_ident[EI_MAG1]
-  Write8('L');  // e_ident[EI_MAG2]
-  Write8('F');  // e_ident[EI_MAG3]
+  WriteBytes(ELF::ElfMagic); // e_ident[EI_MAG0] to e_ident[EI_MAG3]
 
   Write8(is64Bit() ? ELF::ELFCLASS64 : ELF::ELFCLASS32); // e_ident[EI_CLASS]
 
@@ -768,8 +764,24 @@ static const MCSymbol *getWeakRef(const MCSymbolRefExpr &Ref) {
   return nullptr;
 }
 
+// True if the assembler knows nothing about the final value of the symbol.
+// This doesn't cover the comdat issues, since in those cases the assembler
+// can at least know that all symbols in the section will move together.
 static bool isWeak(const MCSymbolData &D) {
-  return D.getFlags() & ELF_STB_Weak || MCELF::GetType(D) == ELF::STT_GNU_IFUNC;
+  if (MCELF::GetType(D) == ELF::STT_GNU_IFUNC)
+    return true;
+
+  switch (MCELF::GetBinding(D)) {
+  default:
+    llvm_unreachable("Unknown binding");
+  case ELF::STB_LOCAL:
+    return false;
+  case ELF::STB_GLOBAL:
+    return false;
+  case ELF::STB_WEAK:
+  case ELF::STB_GNU_UNIQUE:
+    return true;
+  }
 }
 
 void ELFObjectWriter::RecordRelocation(MCAssembler &Asm,
@@ -943,6 +955,8 @@ void ELFObjectWriter::computeIndexMap(MCAssembler &Asm,
     SectionIndexMap[&Section] = Index++;
   }
 
+  std::vector<const MCSectionELF *> RelSections;
+
   for (MCAssembler::iterator it = Asm.begin(),
          ie = Asm.end(); it != ie; ++it) {
     const MCSectionData &SD = *it;
@@ -956,9 +970,14 @@ void ELFObjectWriter::computeIndexMap(MCAssembler &Asm,
     if (MCSectionData *RelSD = createRelocationSection(Asm, SD)) {
       const MCSectionELF *RelSection =
           static_cast<const MCSectionELF *>(&RelSD->getSection());
-      SectionIndexMap[RelSection] = Index++;
+      RelSections.push_back(RelSection);
     }
   }
+
+  // Put relocation sections close together. The linker reads them
+  // first, so this improves cache locality.
+  for (const MCSectionELF * Sec: RelSections)
+    SectionIndexMap[Sec] = Index++;
 }
 
 void ELFObjectWriter::computeSymbolTable(
@@ -1649,17 +1668,37 @@ void ELFObjectWriter::WriteObject(MCAssembler &Asm,
 }
 
 bool ELFObjectWriter::IsSymbolRefDifferenceFullyResolvedImpl(
-    const MCAssembler &Asm, const MCSymbolData &DataA,
-    const MCSymbolData *DataB, const MCFragment &FB, bool InSet,
-    bool IsPCRel) const {
-  if (!InSet && (::isWeak(DataA) || (DataB && ::isWeak(*DataB))))
-    return false;
-  return MCObjectWriter::IsSymbolRefDifferenceFullyResolvedImpl(
-      Asm, DataA, DataB, FB, InSet, IsPCRel);
+    const MCAssembler &Asm, const MCSymbolData &DataA, const MCFragment &FB,
+    bool InSet, bool IsPCRel) const {
+  if (IsPCRel) {
+    assert(!InSet);
+    if (::isWeak(DataA))
+      return false;
+  }
+  return MCObjectWriter::IsSymbolRefDifferenceFullyResolvedImpl(Asm, DataA, FB,
+                                                                InSet, IsPCRel);
 }
 
 bool ELFObjectWriter::isWeak(const MCSymbolData &SD) const {
-  return ::isWeak(SD);
+  if (::isWeak(SD))
+    return true;
+
+  const MCSymbol &Sym = SD.getSymbol();
+  if (!Sym.isInSection())
+    return false;
+
+  const auto &Sec = cast<MCSectionELF>(Sym.getSection());
+  if (!Sec.getGroup())
+    return false;
+
+  // It is invalid to replace a reference to a global in a comdat
+  // with a reference to a local since out of comdat references
+  // to a local are forbidden.
+  // We could try to return false for more cases, like the reference
+  // being in the same comdat or Sym being an alias to another global,
+  // but it is not clear if it is worth the effort.
+  return true;
+
 }
 
 MCObjectWriter *llvm::createELFObjectWriter(MCELFObjectTargetWriter *MOTW,

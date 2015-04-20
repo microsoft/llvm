@@ -123,6 +123,8 @@ public:
                    bool IsLittleEndian)
       : MCObjectWriter(OS, IsLittleEndian), TargetObjectWriter(MOTW) {}
 
+  const MCSymbol &findAliasedSymbol(const MCSymbol &Sym) const;
+
   /// @name Lifetime management Methods
   /// @{
 
@@ -262,7 +264,6 @@ public:
 
   bool IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
                                               const MCSymbolData &DataA,
-                                              const MCSymbolData *DataB,
                                               const MCFragment &FB,
                                               bool InSet,
                                               bool IsPCRel) const override;

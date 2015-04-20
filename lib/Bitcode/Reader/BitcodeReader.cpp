@@ -2935,10 +2935,9 @@ std::error_code BitcodeReader::ParseModule(bool Resume,
       Type *Ty = getTypeByID(Record[0]);
       if (!Ty)
         return Error("Invalid record");
-      if (!Ty->isPointerTy())
-        return Error("Invalid type for value");
-      FunctionType *FTy =
-        dyn_cast<FunctionType>(cast<PointerType>(Ty)->getElementType());
+      if (auto *PTy = dyn_cast<PointerType>(Ty))
+        Ty = PTy->getElementType();
+      auto *FTy = dyn_cast<FunctionType>(Ty);
       if (!FTy)
         return Error("Invalid type for value");
 
@@ -4003,15 +4002,16 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       Type *Ty = nullptr;
       if (OpNum + 3 == Record.size())
         Ty = getTypeByID(Record[OpNum++]);
+      if (!Ty)
+        Ty = cast<PointerType>(Op->getType())->getElementType();
+      else if (Ty != cast<PointerType>(Op->getType())->getElementType())
+        return Error("Explicit load type does not match pointee type of "
+                     "pointer operand");
 
       unsigned Align;
       if (std::error_code EC = parseAlignmentValue(Record[OpNum], Align))
         return EC;
-      I = new LoadInst(Op, "", Record[OpNum+1], Align);
-
-      if (Ty && Ty != I->getType())
-        return Error("Explicit load type does not match pointee type of "
-                     "pointer operand");
+      I = new LoadInst(Ty, Op, "", Record[OpNum + 1], Align);
 
       InstructionList.push_back(I);
       break;

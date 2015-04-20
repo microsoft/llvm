@@ -176,7 +176,11 @@ public:
            Instruction *InsertBefore = nullptr);
   LoadInst(Value *Ptr, const Twine &NameStr, bool isVolatile,
            BasicBlock *InsertAtEnd);
-  LoadInst(Value *Ptr, const Twine &NameStr, bool isVolatile,
+  LoadInst(Value *Ptr, const Twine &NameStr, bool isVolatile, unsigned Align,
+           Instruction *InsertBefore = nullptr)
+      : LoadInst(cast<PointerType>(Ptr->getType())->getElementType(), Ptr,
+                 NameStr, isVolatile, Align, InsertBefore) {}
+  LoadInst(Type *Ty, Value *Ptr, const Twine &NameStr, bool isVolatile,
            unsigned Align, Instruction *InsertBefore = nullptr);
   LoadInst(Value *Ptr, const Twine &NameStr, bool isVolatile,
            unsigned Align, BasicBlock *InsertAtEnd);
@@ -872,7 +876,9 @@ public:
         ->getElementType();
   }
 
-  Type *getResultElementType() const { return getType()->getElementType(); }
+  Type *getResultElementType() const {
+    return cast<PointerType>(getType()->getScalarType())->getElementType();
+  }
 
   /// \brief Returns the address space of this instruction's pointer type.
   unsigned getAddressSpace() const {
@@ -920,12 +926,14 @@ public:
   /// GetGEPReturnType - Returns the pointer type returned by the GEP
   /// instruction, which may be a vector of pointers.
   static Type *getGEPReturnType(Value *Ptr, ArrayRef<Value *> IdxList) {
-    Type *PtrTy =
-        PointerType::get(checkGEPType(getIndexedType(
-                             cast<PointerType>(Ptr->getType()->getScalarType())
-                                 ->getElementType(),
-                             IdxList)),
-                         Ptr->getType()->getPointerAddressSpace());
+    return getGEPReturnType(
+        cast<PointerType>(Ptr->getType()->getScalarType())->getElementType(),
+        Ptr, IdxList);
+  }
+  static Type *getGEPReturnType(Type *ElTy, Value *Ptr,
+                                ArrayRef<Value *> IdxList) {
+    Type *PtrTy = PointerType::get(checkGEPType(getIndexedType(ElTy, IdxList)),
+                                   Ptr->getType()->getPointerAddressSpace());
     // Vector GEP
     if (Ptr->getType()->isVectorTy()) {
       unsigned NumElem = cast<VectorType>(Ptr->getType())->getNumElements();
@@ -989,7 +997,9 @@ GetElementPtrInst::GetElementPtrInst(Type *PointeeType, Value *Ptr,
                                      ArrayRef<Value *> IdxList, unsigned Values,
                                      const Twine &NameStr,
                                      Instruction *InsertBefore)
-    : Instruction(getGEPReturnType(Ptr, IdxList), GetElementPtr,
+    : Instruction(PointeeType ? getGEPReturnType(PointeeType, Ptr, IdxList)
+                              : getGEPReturnType(Ptr, IdxList),
+                  GetElementPtr,
                   OperandTraits<GetElementPtrInst>::op_end(this) - Values,
                   Values, InsertBefore) {
   init(Ptr, IdxList, NameStr);
