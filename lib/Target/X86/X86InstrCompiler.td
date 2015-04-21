@@ -56,6 +56,19 @@ def : Pat<(X86callseq_start timm:$amt1),
           (ADJCALLSTACKDOWN32 i32imm:$amt1, 0)>, Requires<[NotLP64]>;
 
 
+let usesCustomInserter = 1, Defs = [EFLAGS] in {
+def GC_TRANSITION_RA : I<0, Pseudo, (outs), (ins i8mem:$dst),
+                         "#GC_TRANSITION_RA",
+                         []>;
+}
+
+let usesCustomInserter = 1, Defs = [EFLAGS], Uses = [EFLAGS] in {
+def GC_TRANSITION_PAUSE : I<0, Pseudo, (outs), (ins i32imm:$fp, variable_ops),
+                            "#GC_TRANSITION_PAUSE",
+                            []>;
+}
+
+
 // ADJCALLSTACKDOWN/UP implicitly use/def RSP because they may be expanded into
 // a stack adjustment and the codegen must know that they may modify the stack
 // pointer before prolog-epilog rewriting occurs.

@@ -513,10 +513,6 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
 
   setOperationAction(ISD::DYNAMIC_STACKALLOC, getPointerTy(), Custom);
 
-  // GC_TRANSITION_START and GC_TRANSITION_END need custom lowering.
-  setOperationAction(ISD::GC_TRANSITION_START, MVT::Other, Custom);
-  setOperationAction(ISD::GC_TRANSITION_END, MVT::Other, Custom);
-
   if (!TM.Options.UseSoftFloat && X86ScalarSSEf64) {
     // f32 and f64 use SSE.
     // Set up the FP register classes.
@@ -17195,38 +17191,6 @@ static SDValue LowerFSINCOS(SDValue Op, const X86Subtarget *Subtarget,
   return DAG.getNode(ISD::MERGE_VALUES, dl, Tys, SinVal, CosVal);
 }
 
-SDValue X86TargetLowering::LowerGC_TRANSITION_START(SDValue Op,
-                                                    SelectionDAG &DAG) const {
-  // Replace with a NOOP for now.
-  SmallVector<SDValue, 2> Ops;
-
-  Ops.push_back(Op.getOperand(0));
-  if (Op->getGluedNode())
-	Ops.push_back(Op->getOperand(Op->getNumOperands() - 1));
-
-  SDLoc OpDL(Op);
-  SDVTList VTs = DAG.getVTList(MVT::Other, MVT::Glue);
-  SDValue NOOP(DAG.getMachineNode(X86::NOOP, SDLoc(Op), VTs, Ops), 0);
-
-  return NOOP;
-}
-
-SDValue X86TargetLowering::LowerGC_TRANSITION_END(SDValue Op,
-                                                  SelectionDAG &DAG) const {
-  // Replace with a NOOP for now.
-  SmallVector<SDValue, 2> Ops;
-
-  Ops.push_back(Op.getOperand(0));
-  if (Op->getGluedNode())
-	Ops.push_back(Op->getOperand(Op->getNumOperands() - 1));
-
-  SDLoc OpDL(Op);
-  SDVTList VTs = DAG.getVTList(MVT::Other, MVT::Glue);
-  SDValue NOOP(DAG.getMachineNode(X86::NOOP, SDLoc(Op), VTs, Ops), 0);
-
-  return NOOP;
-}
-
 /// LowerOperation - Provide custom lowering hooks for some operations.
 ///
 SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
@@ -17314,9 +17278,6 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::ADD:                return LowerADD(Op, DAG);
   case ISD::SUB:                return LowerSUB(Op, DAG);
   case ISD::FSINCOS:            return LowerFSINCOS(Op, Subtarget, DAG);
-  case ISD::GC_TRANSITION_START:
-                                return LowerGC_TRANSITION_START(Op, DAG);
-  case ISD::GC_TRANSITION_END:  return LowerGC_TRANSITION_END(Op, DAG);
   }
 }
 
@@ -18071,6 +18032,201 @@ static MachineBasicBlock *EmitMonitor(MachineInstr *MI, MachineBasicBlock *BB,
 
   MI->eraseFromParent(); // The pseudo is gone now.
   return BB;
+}
+
+MachineBasicBlock *
+X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
+                                      MachineBasicBlock *MBB) const {
+  // Emit GC_TRANSITION_RA instruction on X86-64.
+
+  const bool Is64Bit = Subtarget->is64Bit();
+  assert(Is64Bit && "GC_TRANSITION_RA only supports x86-64");
+
+  DebugLoc DL = MI->getDebugLoc();
+  MachineFunction *MF = MBB->getParent();
+  const TargetInstrInfo *TII = Subtarget->getInstrInfo();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+
+  MVT PVT = getPointerTy();
+  assert((PVT == MVT::i64 || PVT == MVT::i32) &&
+         "Invalid Pointer Size!");
+
+  const BasicBlock *BB = MBB->getBasicBlock();
+  MachineFunction::iterator It = MBB;
+  ++It;
+
+  // Operands to this pseudo-instruction:
+  //
+  // 0-4) return address buffer
+
+  MachineOperand &Base = MI->getOperand(0);
+  MachineOperand &Scale = MI->getOperand(1);
+  MachineOperand &Index = MI->getOperand(2);
+  MachineOperand &Disp = MI->getOperand(3);
+  MachineOperand &Segment = MI->getOperand(4);
+
+  MachineInstr::mmo_iterator MMOBegin = MI->memoperands_begin();
+  MachineInstr::mmo_iterator MMOEnd = MI->memoperands_end();
+
+  MachineBasicBlock *ThisMBB = MBB;
+  MachineBasicBlock *SinkMBB = MF->CreateMachineBasicBlock(BB);
+  MF->insert(It, SinkMBB);
+
+  // Dig through to the statepoint node
+  MachineInstr *CallMI = nullptr;
+  for (CallMI = MI->getNextNode();
+       CallMI->getOpcode() != TargetOpcode::STATEPOINT;
+       CallMI = CallMI->getNextNode())
+    assert(CallMI != nullptr);
+
+  MachineInstrBuilder MIB;
+
+  // Transfer the remainder of BB and its successor edges to SinkMBB.
+  SinkMBB->splice(SinkMBB->begin(), MBB,
+                  std::next(MachineBasicBlock::iterator(CallMI)), MBB->end());
+  SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
+
+  SinkMBB->setHasAddressTaken();
+  // This line is needed to set the hasAddressTaken flag on the BasicBlock
+  // object.
+  BlockAddress::get(const_cast<BasicBlock *>(SinkMBB->getBasicBlock()));
+
+  // ThisMBB:
+  unsigned PtrStoreOpc = 0;
+  unsigned LabelReg = 0;
+
+  // Prepare and store IP
+  PtrStoreOpc = (PVT == MVT::i64) ? X86::MOV64mr : X86::MOV32mr;
+  const TargetRegisterClass *PtrRC = getRegClassFor(PVT);
+  LabelReg = MRI.createVirtualRegister(PtrRC);
+  if (Subtarget->is64Bit()) {
+    MIB = BuildMI(*ThisMBB, MI, DL, TII->get(X86::LEA64r), LabelReg)
+            .addReg(X86::RIP)
+            .addImm(0)
+            .addReg(0)
+            .addMBB(SinkMBB)
+            .addReg(0);
+  } else {
+    const X86InstrInfo *XII = static_cast<const X86InstrInfo*>(TII);
+    MIB = BuildMI(*ThisMBB, MI, DL, TII->get(X86::LEA32r), LabelReg)
+            .addReg(XII->getGlobalBaseReg(MF))
+            .addImm(0)
+            .addReg(0)
+            .addMBB(SinkMBB, Subtarget->ClassifyBlockAddressReference())
+            .addReg(0);
+  }
+
+  MIB = BuildMI(*ThisMBB, MI, DL, TII->get(PtrStoreOpc))
+    .addOperand(Base)
+    .addOperand(Scale)
+    .addOperand(Index)
+    .addDisp(Disp, 0)
+    .addOperand(Segment)
+    .addReg(LabelReg);
+
+  MIB.setMemRefs(MMOBegin, MMOEnd);
+
+  // Mark register defs from the call instruction as live into the
+  // new block.
+  for (const MachineOperand &MO : CallMI->operands())
+    if (MO.isReg() && MO.isDef())
+      SinkMBB->addLiveIn(MO.getReg());
+
+  // Call
+  ThisMBB->push_back(CallMI->removeFromParent());
+  ThisMBB->addSuccessor(SinkMBB);
+
+  MI->eraseFromParent();
+
+  return SinkMBB;
+}
+
+MachineBasicBlock *
+X86TargetLowering::EmitGCTransitionPause(MachineInstr *MI,
+                                         MachineBasicBlock *MBB) const {
+  // Emit GC_TRANSITION_PAUSE instruction on X86-64.
+
+  const bool Is64Bit = Subtarget->is64Bit();
+  assert(Is64Bit && "GC_TRANSITION_PAUSE only supports x86-64");
+
+  DebugLoc DL = MI->getDebugLoc();
+  MachineFunction *MF = MBB->getParent();
+  const TargetInstrInfo *TII = Subtarget->getInstrInfo();
+
+  MVT PVT = getPointerTy();
+  assert((PVT == MVT::i64 || PVT == MVT::i32) &&
+         "Invalid Pointer Size!");
+
+  const BasicBlock *BB = MBB->getBasicBlock();
+  MachineFunction::iterator It = MBB;
+  ++It;
+
+  // Operands to this pseudo-instruction:
+  //
+  // 0) Condition (unused)
+  // 1) Pause helper address
+
+  MachineOperand &PauseHelper = MI->getOperand(1);
+
+  MachineInstr::mmo_iterator MMOBegin = MI->memoperands_begin();
+  MachineInstr::mmo_iterator MMOEnd = MI->memoperands_end();
+
+  MachineBasicBlock *ThisMBB = MBB;
+  MachineBasicBlock *GCMBB = MF->CreateMachineBasicBlock(BB);
+  MachineBasicBlock *SinkMBB = MF->CreateMachineBasicBlock(BB);
+  MF->insert(It, GCMBB);
+  MF->insert(It, SinkMBB);
+
+  MachineInstrBuilder MIB;
+
+  // Transfer the remainder of BB and its successor edges to SinkMBB.
+  SinkMBB->splice(SinkMBB->begin(), MBB,
+                  std::next(MachineBasicBlock::iterator(MI)), MBB->end());
+  SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
+
+  // Build conditional branch
+  MIB = BuildMI(*ThisMBB, MI, DL, TII->get(X86::JE_1)).addMBB(SinkMBB);
+
+  // Create machine instruction/node for PINVOKE_PAUSE
+  unsigned CallOpcode;
+  switch (PauseHelper.getType()) {
+  case MachineOperand::MO_GlobalAddress:
+  case MachineOperand::MO_ExternalSymbol:
+  case MachineOperand::MO_Immediate:
+    CallOpcode = X86::CALL64pcrel32;
+    // Currently, we only support relative addressing for the pause helper.
+    // Otherwise, we'll need a scratch register to hold the target
+    // address.  You'll fail asserts during load & relocation if this
+    // symbol is to far away. (TODO: support non-relative addressing)
+    break;
+  case MachineOperand::MO_Register:
+    CallOpcode = X86::CALL64r;
+    break;
+  default:
+    llvm_unreachable("Unsupported operand type in pause helper call target");
+    break;
+  }
+
+  MIB = BuildMI(*GCMBB, GCMBB->begin(), DL, TII->get(CallOpcode))
+          .addOperand(PauseHelper);
+
+  MIB.setMemRefs(MMOBegin, MMOEnd);
+
+  // Propagate liveness
+  for (auto I = ThisMBB->livein_begin(),
+            E = ThisMBB->livein_end(); I != E; ++I) {
+    GCMBB->addLiveIn(*I);
+    SinkMBB->addLiveIn(*I);
+  }
+
+  ThisMBB->addSuccessor(GCMBB);
+  ThisMBB->addSuccessor(SinkMBB);
+  GCMBB->addSuccessor(SinkMBB);
+
+  MI->eraseFromParent();
+
+  return SinkMBB;
+
 }
 
 MachineBasicBlock *
@@ -19302,6 +19458,12 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 
   case X86::VAARG_64:
     return EmitVAARG64WithCustomInserter(MI, BB);
+
+  case X86::GC_TRANSITION_RA:
+    return EmitGCTransitionRA(MI, BB);
+
+  case X86::GC_TRANSITION_PAUSE:
+    return EmitGCTransitionPause(MI, BB);
 
   case X86::EH_SjLj_SetJmp32:
   case X86::EH_SjLj_SetJmp64:

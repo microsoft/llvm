@@ -414,6 +414,12 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       MCOp = MCOperand::CreateImm(MO.getImm());
       break;
     case MachineOperand::MO_MachineBasicBlock:
+      if (MO.getMBB()->hasAddressTaken())
+        MCOp = LowerSymbolOperand(MO, AsmPrinter.GetBlockAddressSymbol(
+                MO.getMBB()->getBasicBlock()));
+      else
+        MCOp = LowerSymbolOperand(MO, GetSymbolFromOperand(MO));
+      break;
     case MachineOperand::MO_GlobalAddress:
     case MachineOperand::MO_ExternalSymbol:
       MCOp = LowerSymbolOperand(MO, GetSymbolFromOperand(MO));

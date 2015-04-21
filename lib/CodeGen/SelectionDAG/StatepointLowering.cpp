@@ -611,7 +611,8 @@ void SelectionDAGBuilder::LowerStatepoint(
               E = ISP.gc_transition_args_end();
          I != E; ++I) {
       Ops.push_back(getValue(*I));
-      Ops.push_back(DAG.getSrcValue(*I));
+      if ((*I)->getType()->isPointerTy())
+        Ops.push_back(DAG.getSrcValue(*I));
     }
 
     // Add glue if necessary
@@ -689,7 +690,8 @@ void SelectionDAGBuilder::LowerStatepoint(
               E = ISP.gc_transition_args_end();
          I != E; ++I) {
       Ops.push_back(getValue(*I));
-      Ops.push_back(DAG.getSrcValue(*I));
+      if ((*I)->getType()->isPointerTy())
+        Ops.push_back(DAG.getSrcValue(*I));
     }
 
     // Add glue
@@ -698,7 +700,7 @@ void SelectionDAGBuilder::LowerStatepoint(
     SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
 
     SDValue GCTransitionStart =
-        DAG.getNode(ISD::GC_TRANSITION_START, getCurSDLoc(), NodeTys, Ops);
+        DAG.getNode(ISD::GC_TRANSITION_END, getCurSDLoc(), NodeTys, Ops);
 
     SinkNode = GCTransitionStart.getNode();
   }
