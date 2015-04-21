@@ -141,7 +141,7 @@ bool DbgVariable::isBlockByrefVariable() const {
       ->isBlockByrefStruct();
 }
 
-DIType DbgVariable::getType() const {
+const MDType *DbgVariable::getType() const {
   MDType *Ty = Var->getType().resolve(DD->getTypeIdentifierMap());
   // FIXME: isBlockByrefVariable should be reformulated in terms of complex
   // addresses instead.
@@ -174,13 +174,13 @@ DIType DbgVariable::getType() const {
     uint16_t tag = Ty->getTag();
 
     if (tag == dwarf::DW_TAG_pointer_type)
-      subType = resolve(DITypeRef(cast<MDDerivedType>(Ty)->getBaseType()));
+      subType = resolve(cast<MDDerivedType>(Ty)->getBaseType());
 
     auto Elements = cast<MDCompositeTypeBase>(subType)->getElements();
     for (unsigned i = 0, N = Elements.size(); i < N; ++i) {
       auto *DT = cast<MDDerivedTypeBase>(Elements[i]);
       if (getName() == DT->getName())
-        return resolve(DITypeRef(DT->getBaseType()));
+        return resolve(DT->getBaseType());
     }
   }
   return Ty;
@@ -277,7 +277,7 @@ static StringRef getObjCMethodName(StringRef In) {
 // TODO: Determine whether or not we should add names for programs
 // that do not have a DW_AT_name or DW_AT_linkage_name field - this
 // is only slightly different than the lookup of non-standard ObjC names.
-void DwarfDebug::addSubprogramNames(DISubprogram SP, DIE &Die) {
+void DwarfDebug::addSubprogramNames(const MDSubprogram *SP, DIE &Die) {
   if (!SP->isDefinition())
     return;
   addAccelName(SP->getName(), Die);
@@ -363,7 +363,8 @@ void DwarfDebug::addGnuPubAttributes(DwarfUnit &U, DIE &D) const {
 
 // Create new DwarfCompileUnit for the given metadata node with tag
 // DW_TAG_compile_unit.
-DwarfCompileUnit &DwarfDebug::constructDwarfCompileUnit(DICompileUnit DIUnit) {
+DwarfCompileUnit &
+DwarfDebug::constructDwarfCompileUnit(const MDCompileUnit *DIUnit) {
   StringRef FN = DIUnit->getFilename();
   CompilationDir = DIUnit->getDirectory();
 
@@ -446,7 +447,7 @@ void DwarfDebug::beginModule() {
   SingleCU = CU_Nodes->getNumOperands() == 1;
 
   for (MDNode *N : CU_Nodes->operands()) {
-    DICompileUnit CUNode = cast<MDCompileUnit>(N);
+    auto *CUNode = cast<MDCompileUnit>(N);
     DwarfCompileUnit &CU = constructDwarfCompileUnit(CUNode);
     for (auto *IE : CUNode->getImportedEntities())
       ScopesWithImportedEntities.push_back(std::make_pair(IE->getScope(), IE));
@@ -459,17 +460,15 @@ void DwarfDebug::beginModule() {
       CU.getOrCreateGlobalVariableDIE(GV);
     for (auto *SP : CUNode->getSubprograms())
       SPMap.insert(std::make_pair(SP, &CU));
-    for (DIType Ty : CUNode->getEnumTypes()) {
+    for (auto *Ty : CUNode->getEnumTypes()) {
       // The enum types array by design contains pointers to
       // MDNodes rather than DIRefs. Unique them here.
-      DIType UniqueTy = cast<MDType>(resolve(Ty->getRef()));
-      CU.getOrCreateTypeDIE(UniqueTy);
+      CU.getOrCreateTypeDIE(cast<MDType>(resolve(Ty->getRef())));
     }
-    for (DIType Ty : CUNode->getRetainedTypes()) {
+    for (auto *Ty : CUNode->getRetainedTypes()) {
       // The retained types array by design contains pointers to
       // MDNodes rather than DIRefs. Unique them here.
-      DIType UniqueTy = cast<MDType>(resolve(Ty->getRef()));
-      CU.getOrCreateTypeDIE(UniqueTy);
+      CU.getOrCreateTypeDIE(cast<MDType>(resolve(Ty->getRef())));
     }
     // Emit imported_modules last so that the relevant context is already
     // available.
@@ -514,7 +513,7 @@ void DwarfDebug::collectDeadVariables() {
 
   if (NamedMDNode *CU_Nodes = M->getNamedMetadata("llvm.dbg.cu")) {
     for (MDNode *N : CU_Nodes->operands()) {
-      DICompileUnit TheCU = cast<MDCompileUnit>(N);
+      auto *TheCU = cast<MDCompileUnit>(N);
       // Construct subprogram DIE and add variables DIEs.
       DwarfCompileUnit *SPCU =
           static_cast<DwarfCompileUnit *>(CUMap.lookup(TheCU));
@@ -874,7 +873,8 @@ DwarfDebug::buildLocationList(SmallVectorImpl<DebugLocEntry> &DebugLoc,
 
 
 // Find variables for each lexical scope.
-void DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
+void DwarfDebug::collectVariableInfo(DwarfCompileUnit &TheCU,
+                                     const MDSubprogram *SP,
                                      DenseSet<InlinedVariable> &Processed) {
   // Grab the variable info that was squirreled away in the MMI side-table.
   collectVariableInfoFromMMITable(Processed);
@@ -1187,7 +1187,7 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
   Asm->OutStreamer.getContext().setDwarfCompileUnitID(0);
 
   LexicalScope *FnScope = LScopes.getCurrentFunctionScope();
-  DISubprogram SP = cast<MDSubprogram>(FnScope->getScopeNode());
+  auto *SP = cast<MDSubprogram>(FnScope->getScopeNode());
   DwarfCompileUnit &TheCU = *SPMap.lookup(SP);
 
   DenseSet<InlinedVariable> ProcessedVars;
@@ -1217,7 +1217,7 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
 #endif
   // Construct abstract scopes.
   for (LexicalScope *AScope : LScopes.getAbstractScopesList()) {
-    DISubprogram SP = cast<MDSubprogram>(AScope->getScopeNode());
+    auto *SP = cast<MDSubprogram>(AScope->getScopeNode());
     // Collect info for variables that were optimized out.
     for (DIVariable DV : SP->getVariables()) {
       if (!ProcessedVars.insert(InlinedVariable(DV, nullptr)).second)
@@ -1904,7 +1904,7 @@ static uint64_t makeTypeSignature(StringRef Identifier) {
 
 void DwarfDebug::addDwarfTypeUnitType(DwarfCompileUnit &CU,
                                       StringRef Identifier, DIE &RefDie,
-                                      DICompositeType CTy) {
+                                      const MDCompositeType *CTy) {
   // Fast path if we're building some type units and one has already used the
   // address pool we know we're going to throw away all this work anyway, so
   // don't bother building dependent types.
@@ -1963,7 +1963,7 @@ void DwarfDebug::addDwarfTypeUnitType(DwarfCompileUnit &CU,
       // This is inefficient because all the dependent types will be rebuilt
       // from scratch, including building them in type units, discovering that
       // they depend on addresses, throwing them out and rebuilding them.
-      CU.constructTypeDIE(RefDie, CTy);
+      CU.constructTypeDIE(RefDie, cast<MDCompositeType>(CTy));
       return;
     }
 

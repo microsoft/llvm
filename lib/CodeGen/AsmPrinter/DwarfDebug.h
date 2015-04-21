@@ -165,7 +165,7 @@ public:
     return Expr.back()->getNumElements() > 0;
   }
   bool isBlockByrefVariable() const;
-  DIType getType() const;
+  const MDType *getType() const;
 
 private:
   /// resolve - Look in the DwarfDebug map for the MDNode that
@@ -268,7 +268,8 @@ class DwarfDebug : public AsmPrinterHandler {
   // them.
   DenseMap<const MDNode *, const DwarfTypeUnit *> DwarfTypeUnits;
 
-  SmallVector<std::pair<std::unique_ptr<DwarfTypeUnit>, DICompositeType>, 1>
+  SmallVector<
+      std::pair<std::unique_ptr<DwarfTypeUnit>, const MDCompositeType *>, 1>
       TypeUnitsUnderConstruction;
 
   // Whether to emit the pubnames/pubtypes sections.
@@ -450,7 +451,7 @@ class DwarfDebug : public AsmPrinterHandler {
 
   /// \brief Create new DwarfCompileUnit for the given metadata node with tag
   /// DW_TAG_compile_unit.
-  DwarfCompileUnit &constructDwarfCompileUnit(DICompileUnit DIUnit);
+  DwarfCompileUnit &constructDwarfCompileUnit(const MDCompileUnit *DIUnit);
 
   /// \brief Construct imported_module or imported_declaration DIE.
   void constructAndAddImportedEntityDIE(DwarfCompileUnit &TheCU,
@@ -467,7 +468,7 @@ class DwarfDebug : public AsmPrinterHandler {
   void identifyScopeMarkers();
 
   /// \brief Populate LexicalScope entries with variables' info.
-  void collectVariableInfo(DwarfCompileUnit &TheCU, DISubprogram SP,
+  void collectVariableInfo(DwarfCompileUnit &TheCU, const MDSubprogram *SP,
                            DenseSet<InlinedVariable> &ProcessedVars);
 
   /// \brief Build the location list for all DBG_VALUEs in the
@@ -519,7 +520,7 @@ public:
   /// \brief Add a DIE to the set of types that we're going to pull into
   /// type units.
   void addDwarfTypeUnitType(DwarfCompileUnit &CU, StringRef Identifier,
-                            DIE &Die, DICompositeType CTy);
+                            DIE &Die, const MDCompositeType *CTy);
 
   /// \brief Add a label so that arange data can be generated for it.
   void addArangeLabel(SymbolCU SCU) { ArangeLabels.push_back(SCU); }
@@ -580,7 +581,7 @@ public:
   /// or another context nested inside a subprogram.
   bool isSubprogramContext(const MDNode *Context);
 
-  void addSubprogramNames(DISubprogram SP, DIE &Die);
+  void addSubprogramNames(const MDSubprogram *SP, DIE &Die);
 
   AddressPool &getAddressPool() { return AddrPool; }
 
