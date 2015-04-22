@@ -1488,8 +1488,10 @@ bool Verifier::VerifyAttributeCount(AttributeSet Attrs, unsigned Params) {
 /// \brief Verify that statepoint intrinsic is well formed.
 void Verifier::VerifyStatepoint(ImmutableCallSite CS) {
   assert(CS.getCalledFunction() &&
-         CS.getCalledFunction()->getIntrinsicID() ==
-           Intrinsic::experimental_gc_statepoint);
+         (CS.getCalledFunction()->getIntrinsicID() ==
+           Intrinsic::experimental_gc_statepoint ||
+          CS.getCalledFunction()->getIntrinsicID() ==
+           Intrinsic::experimental_gc_transition));
 
   const Instruction &CI = *CS.getInstruction();
 
@@ -2324,7 +2326,8 @@ void Verifier::visitInvokeInst(InvokeInst &II) {
     // TODO: Ideally we should use visitIntrinsicFunction here. But it uses
     //       CallInst as an input parameter. It not woth updating this whole
     //       function only to support statepoint verification.
-    if (F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint)
+    if (F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
+        F->getIntrinsicID() == Intrinsic::experimental_gc_transition)
       VerifyStatepoint(ImmutableCallSite(&II));
 
   visitTerminatorInst(II);
@@ -2821,7 +2824,8 @@ void Verifier::visitInstruction(Instruction &I) {
               F->getIntrinsicID() == Intrinsic::donothing ||
               F->getIntrinsicID() == Intrinsic::experimental_patchpoint_void ||
               F->getIntrinsicID() == Intrinsic::experimental_patchpoint_i64 ||
-              F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint,
+              F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
+              F->getIntrinsicID() == Intrinsic::experimental_gc_transition,
           "Cannot invoke an intrinsinc other than"
           " donothing or patchpoint",
           &I);
@@ -3238,6 +3242,7 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
   }
 
   case Intrinsic::experimental_gc_statepoint:
+  case Intrinsic::experimental_gc_transition:
     Assert(!CI.isInlineAsm(),
            "gc.statepoint support for inline assembly unimplemented", &CI);
     Assert(CI.getParent()->getParent()->hasGC(),
@@ -3256,8 +3261,10 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
     const Function *StatepointFn =
       StatepointCS.getInstruction() ? StatepointCS.getCalledFunction() : nullptr;
     Assert(StatepointFn && StatepointFn->isDeclaration() &&
-               StatepointFn->getIntrinsicID() ==
-                   Intrinsic::experimental_gc_statepoint,
+               (StatepointFn->getIntrinsicID() ==
+                   Intrinsic::experimental_gc_statepoint ||
+                StatepointFn->getIntrinsicID() ==
+                   Intrinsic::experimental_gc_transition),
            "gc.result operand #1 must be from a statepoint", &CI,
            CI.getArgOperand(0));
 

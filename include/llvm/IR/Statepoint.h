@@ -52,7 +52,7 @@ class StatepointBase {
   void *operator new(size_t, unsigned) = delete;
   void *operator new(size_t s) = delete;
 
- protected:
+protected:
   explicit StatepointBase(InstructionTy *I) : StatepointCS(I) {
     assert(isStatepoint(I));
   }
@@ -60,26 +60,32 @@ class StatepointBase {
     assert(isStatepoint(CS));
   }
 
- public:
+public:
   typedef typename CallSiteTy::arg_iterator arg_iterator;
 
-  /// Return the underlying CallSite.
-  CallSiteTy getCallSite() {
-    return StatepointCS;
+  bool isGCTransition() {
+    return StatepointCS.getCalledFunction()->getIntrinsicID() ==
+           Intrinsic::experimental_gc_transition;
   }
 
+  /// Return the underlying CallSite.
+  CallSiteTy getCallSite() { return StatepointCS; }
+
   /// Return the value actually being called or invoked.
-  ValueTy *actualCallee() {
-    return StatepointCS.getArgument(0);
-  }
+  ValueTy *actualCallee() { return StatepointCS.getArgument(0); }
   /// Number of arguments to be passed to the actual callee.
   int numCallArgs() {
     return cast<ConstantInt>(StatepointCS.getArgument(1))->getZExtValue();
   }
-  /// Number of additional arguments excluding those intended
-  /// for garbage collection.
+  /// Number of GC transition args.
+  int numTotalGCTransitionArgs() {
+    if (!isGCTransition())
+      return 0;
+    return cast<ConstantInt>(*gc_transition_args_begin())->getZExtValue();
+  }
+  /// Number of vm state args.
   int numTotalVMSArgs() {
-    return cast<ConstantInt>(StatepointCS.getArgument(3 + numCallArgs()))->getZExtValue();
+    return cast<ConstantInt>(*vm_state_begin())->getZExtValue();
   }
 
   typename CallSiteTy::arg_iterator call_args_begin() {
@@ -99,11 +105,33 @@ class StatepointBase {
     return iterator_range<arg_iterator>(call_args_begin(), call_args_end());
   }
 
+  typename CallSiteTy::arg_iterator gc_transition_args_begin() {
+    int Offset = call_args_end() - StatepointCS.arg_begin();
+    assert(Offset <= (int)StatepointCS.arg_size());
+    return StatepointCS.arg_begin() + Offset;
+  }
+  typename CallSiteTy::arg_iterator gc_transition_args_end() {
+    if (!isGCTransition())
+      return gc_transition_args_begin();
+
+    int Offset = (gc_transition_args_begin() + 1 + numTotalGCTransitionArgs()) -
+                 StatepointCS.arg_begin();
+    assert(Offset <= (int)StatepointCS.arg_size());
+    return StatepointCS.arg_begin() + Offset;
+  }
+
+  /// range adapter for GC transition arguments
+  iterator_range<arg_iterator> gc_transition_args() {
+    return iterator_range<arg_iterator>(gc_transition_args_begin(),
+                                        gc_transition_args_end());
+  }
+
   typename CallSiteTy::arg_iterator vm_state_begin() {
-    return call_args_end();
+    return gc_transition_args_end();
   }
   typename CallSiteTy::arg_iterator vm_state_end() {
-    int Offset = 3 + numCallArgs() + 1 + numTotalVMSArgs();
+    int Offset = (gc_transition_args_end() + 1 + numTotalVMSArgs()) -
+                 StatepointCS.arg_begin();
     assert(Offset <= (int)StatepointCS.arg_size());
     return StatepointCS.arg_begin() + Offset;
   }
@@ -119,9 +147,7 @@ class StatepointBase {
     return vm_state_begin() + 6;
   }
 
-  typename CallSiteTy::arg_iterator gc_args_begin() {
-    return vm_state_end();
-  }
+  typename CallSiteTy::arg_iterator gc_args_begin() { return vm_state_end(); }
   typename CallSiteTy::arg_iterator gc_args_end() {
     return StatepointCS.arg_end();
   }
@@ -148,6 +174,8 @@ class StatepointBase {
     // The internal asserts in the iterator accessors do the rest.
     (void)call_args_begin();
     (void)call_args_end();
+    (void)gc_transition_args_begin();
+    (void)gc_transition_args_end();
     (void)vm_state_begin();
     (void)vm_state_end();
     (void)gc_args_begin();
@@ -159,8 +187,7 @@ class StatepointBase {
 /// A specialization of it's base class for read only access
 /// to a gc.statepoint.
 class ImmutableStatepoint
-    : public StatepointBase<const Instruction, const Value,
-                            ImmutableCallSite> {
+    : public StatepointBase<const Instruction, const Value, ImmutableCallSite> {
   typedef StatepointBase<const Instruction, const Value, ImmutableCallSite>
       Base;
 
@@ -185,30 +212,23 @@ public:
 class GCRelocateOperands {
   ImmutableCallSite RelocateCS;
 
- public:
-  GCRelocateOperands(const User* U) : RelocateCS(U) {
-    assert(isGCRelocate(U));
-  }
+public:
+  GCRelocateOperands(const User *U) : RelocateCS(U) { assert(isGCRelocate(U)); }
   GCRelocateOperands(const Instruction *inst) : RelocateCS(inst) {
     assert(isGCRelocate(inst));
   }
-  GCRelocateOperands(CallSite CS) : RelocateCS(CS) {
-    assert(isGCRelocate(CS));
-  }
+  GCRelocateOperands(CallSite CS) : RelocateCS(CS) { assert(isGCRelocate(CS)); }
 
   /// Return true if this relocate is tied to the invoke statepoint.
   /// This includes relocates which are on the unwinding path.
   bool isTiedToInvoke() const {
     const Value *Token = RelocateCS.getArgument(0);
 
-    return isa<ExtractValueInst>(Token) ||
-      isa<InvokeInst>(Token);
+    return isa<ExtractValueInst>(Token) || isa<InvokeInst>(Token);
   }
 
   /// Get enclosed relocate intrinsic
-  ImmutableCallSite getUnderlyingCallSite() {
-    return RelocateCS;
-  }
+  ImmutableCallSite getUnderlyingCallSite() { return RelocateCS; }
 
   /// The statepoint with which this gc.relocate is associated.
   const Instruction *statepoint() {
@@ -222,10 +242,11 @@ class GCRelocateOperands {
 
     // This relocate is on exceptional path of an invoke statepoint
     const BasicBlock *invokeBB =
-      cast<Instruction>(token)->getParent()->getUniquePredecessor();
+        cast<Instruction>(token)->getParent()->getUniquePredecessor();
 
     assert(invokeBB && "safepoints should have unique landingpads");
-    assert(invokeBB->getTerminator() && "safepoint block should be well formed");
+    assert(invokeBB->getTerminator() &&
+           "safepoint block should be well formed");
     assert(isStatepoint(invokeBB->getTerminator()));
 
     return invokeBB->getTerminator();
@@ -253,8 +274,8 @@ class GCRelocateOperands {
 
 template <typename InstructionTy, typename ValueTy, typename CallSiteTy>
 std::vector<GCRelocateOperands>
-  StatepointBase<InstructionTy, ValueTy, CallSiteTy>::
-    getRelocates(ImmutableStatepoint &IS) {
+StatepointBase<InstructionTy, ValueTy, CallSiteTy>::getRelocates(
+    ImmutableStatepoint &IS) {
 
   std::vector<GCRelocateOperands> res;
 
@@ -275,7 +296,7 @@ std::vector<GCRelocateOperands>
 
   // We need to scan thorough exceptional relocations if it is invoke statepoint
   LandingPadInst *LandingPad =
-    cast<InvokeInst>(StatepointCS.getInstruction())->getLandingPadInst();
+      cast<InvokeInst>(StatepointCS.getInstruction())->getLandingPadInst();
 
   // Search for extract value from landingpad instruction to which
   // gc relocates will be attached
@@ -293,6 +314,5 @@ std::vector<GCRelocateOperands>
   }
   return res;
 }
-
 }
 #endif

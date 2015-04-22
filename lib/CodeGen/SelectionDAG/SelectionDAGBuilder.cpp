@@ -2011,6 +2011,7 @@ void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
       visitPatchpoint(&I, LandingPad);
       break;
     case Intrinsic::experimental_gc_statepoint:
+    case Intrinsic::experimental_gc_transition:
       LowerStatepoint(ImmutableStatepoint(&I), LandingPad);
       break;
     }
@@ -5380,7 +5381,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     visitPatchpoint(&I);
     return nullptr;
   }
-  case Intrinsic::experimental_gc_statepoint: {
+  case Intrinsic::experimental_gc_statepoint:
+  case Intrinsic::experimental_gc_transition: {
     visitStatepoint(I);
     return nullptr;
   }
@@ -5453,6 +5455,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
 
     return nullptr;
   }
+
   case Intrinsic::eh_begincatch:
   case Intrinsic::eh_endcatch:
     llvm_unreachable("begin/end catch intrinsics not lowered in codegen");

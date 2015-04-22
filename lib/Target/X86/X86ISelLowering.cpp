@@ -513,6 +513,10 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
 
   setOperationAction(ISD::DYNAMIC_STACKALLOC, getPointerTy(), Custom);
 
+  // GC_TRANSITION_START and GC_TRANSITION_END need custom lowering.
+  setOperationAction(ISD::GC_TRANSITION_START, MVT::Other, Custom);
+  setOperationAction(ISD::GC_TRANSITION_END, MVT::Other, Custom);
+
   if (!TM.Options.UseSoftFloat && X86ScalarSSEf64) {
     // f32 and f64 use SSE.
     // Set up the FP register classes.
@@ -17191,6 +17195,38 @@ static SDValue LowerFSINCOS(SDValue Op, const X86Subtarget *Subtarget,
   return DAG.getNode(ISD::MERGE_VALUES, dl, Tys, SinVal, CosVal);
 }
 
+SDValue X86TargetLowering::LowerGC_TRANSITION_START(SDValue Op,
+                                                    SelectionDAG &DAG) const {
+  // Replace with a NOOP for now.
+  SmallVector<SDValue, 2> Ops;
+
+  Ops.push_back(Op.getOperand(0));
+  if (Op->getGluedNode())
+	Ops.push_back(Op->getOperand(Op->getNumOperands() - 1));
+
+  SDLoc OpDL(Op);
+  SDVTList VTs = DAG.getVTList(MVT::Other, MVT::Glue);
+  SDValue NOOP(DAG.getMachineNode(X86::NOOP, SDLoc(Op), VTs, Ops), 0);
+
+  return NOOP;
+}
+
+SDValue X86TargetLowering::LowerGC_TRANSITION_END(SDValue Op,
+                                                  SelectionDAG &DAG) const {
+  // Replace with a NOOP for now.
+  SmallVector<SDValue, 2> Ops;
+
+  Ops.push_back(Op.getOperand(0));
+  if (Op->getGluedNode())
+	Ops.push_back(Op->getOperand(Op->getNumOperands() - 1));
+
+  SDLoc OpDL(Op);
+  SDVTList VTs = DAG.getVTList(MVT::Other, MVT::Glue);
+  SDValue NOOP(DAG.getMachineNode(X86::NOOP, SDLoc(Op), VTs, Ops), 0);
+
+  return NOOP;
+}
+
 /// LowerOperation - Provide custom lowering hooks for some operations.
 ///
 SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
@@ -17278,6 +17314,9 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::ADD:                return LowerADD(Op, DAG);
   case ISD::SUB:                return LowerSUB(Op, DAG);
   case ISD::FSINCOS:            return LowerFSINCOS(Op, Subtarget, DAG);
+  case ISD::GC_TRANSITION_START:
+                                return LowerGC_TRANSITION_START(Op, DAG);
+  case ISD::GC_TRANSITION_END:  return LowerGC_TRANSITION_END(Op, DAG);
   }
 }
 

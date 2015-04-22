@@ -374,6 +374,7 @@ static Value *findBaseDefiningValue(Value *I) {
       // fall through to general call handling
       break;
     case Intrinsic::experimental_gc_statepoint:
+    case Intrinsic::experimental_gc_transition:
     case Intrinsic::experimental_gc_result_float:
     case Intrinsic::experimental_gc_result_int:
       llvm_unreachable("these don't produce pointers");
