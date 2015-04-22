@@ -4048,13 +4048,17 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       InstructionList.push_back(I);
       break;
     }
-    case bitc::FUNC_CODE_INST_STORE: { // STORE2:[ptrty, ptr, val, align, vol]
+    case bitc::FUNC_CODE_INST_STORE:
+    case bitc::FUNC_CODE_INST_STORE_OLD: { // STORE2:[ptrty, ptr, val, align, vol]
       unsigned OpNum = 0;
       Value *Val, *Ptr;
       if (getValueTypePair(Record, OpNum, NextValueNo, Ptr) ||
-          popValue(Record, OpNum, NextValueNo,
-                    cast<PointerType>(Ptr->getType())->getElementType(), Val) ||
-          OpNum+2 != Record.size())
+          (BitCode == bitc::FUNC_CODE_INST_STORE
+               ? getValueTypePair(Record, OpNum, NextValueNo, Val)
+               : popValue(Record, OpNum, NextValueNo,
+                          cast<PointerType>(Ptr->getType())->getElementType(),
+                          Val)) ||
+          OpNum + 2 != Record.size())
         return Error("Invalid record");
       unsigned Align;
       if (std::error_code EC = parseAlignmentValue(Record[OpNum], Align))
@@ -4063,14 +4067,18 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       InstructionList.push_back(I);
       break;
     }
-    case bitc::FUNC_CODE_INST_STOREATOMIC: {
+    case bitc::FUNC_CODE_INST_STOREATOMIC:
+    case bitc::FUNC_CODE_INST_STOREATOMIC_OLD: {
       // STOREATOMIC: [ptrty, ptr, val, align, vol, ordering, synchscope]
       unsigned OpNum = 0;
       Value *Val, *Ptr;
       if (getValueTypePair(Record, OpNum, NextValueNo, Ptr) ||
-          popValue(Record, OpNum, NextValueNo,
-                    cast<PointerType>(Ptr->getType())->getElementType(), Val) ||
-          OpNum+4 != Record.size())
+          (BitCode == bitc::FUNC_CODE_INST_STOREATOMIC
+               ? getValueTypePair(Record, OpNum, NextValueNo, Val)
+               : popValue(Record, OpNum, NextValueNo,
+                          cast<PointerType>(Ptr->getType())->getElementType(),
+                          Val)) ||
+          OpNum + 4 != Record.size())
         return Error("Invalid record");
 
       AtomicOrdering Ordering = GetDecodedOrdering(Record[OpNum+2]);
@@ -4184,12 +4192,11 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       PointerType *OpTy = dyn_cast<PointerType>(Callee->getType());
       if (!OpTy)
         return Error("Callee is not a pointer type");
-      FunctionType *PFTy = dyn_cast<FunctionType>(OpTy->getElementType());
-      if (!PFTy)
-        return Error("Callee is not of pointer to function type");
-      if (!FTy)
-        FTy = PFTy;
-      if (PFTy != FTy)
+      if (!FTy) {
+        FTy = dyn_cast<FunctionType>(OpTy->getElementType());
+        if (!FTy)
+          return Error("Callee is not of pointer to function type");
+      } else if (OpTy->getElementType() != FTy)
         return Error("Explicit call type does not match pointee type of "
                      "callee operand");
       if (Record.size() < FTy->getNumParams() + OpNum)
@@ -4220,7 +4227,7 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
         }
       }
 
-      I = CallInst::Create(Callee, Args);
+      I = CallInst::Create(FTy, Callee, Args);
       InstructionList.push_back(I);
       cast<CallInst>(I)->setCallingConv(
           static_cast<CallingConv::ID>((~(1U << 14) & CCInfo) >> 1));

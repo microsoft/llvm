@@ -4463,8 +4463,7 @@ bool SelectionDAGBuilder::EmitFuncArgumentDbgValue(
   // Ignore inlined function arguments here.
   //
   // FIXME: Should we be checking DL->inlinedAt() to determine this?
-  DIVariable DV(Variable);
-  if (!DV->getScope()->getSubprogram()->describes(MF.getFunction()))
+  if (!Variable->getScope()->getSubprogram()->describes(MF.getFunction()))
     return false;
 
   Optional<MachineOperand> Op;
@@ -4650,8 +4649,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     MDLocalVariable *Variable = DI.getVariable();
     MDExpression *Expression = DI.getExpression();
     const Value *Address = DI.getAddress();
-    DIVariable DIVar = Variable;
-    if (!Address || !DIVar) {
+    assert(Variable && "Missing variable");
+    if (!Address) {
       DEBUG(dbgs() << "Dropping debug info for " << DI << "\n");
       return nullptr;
     }
@@ -4672,9 +4671,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
       if (const BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
         Address = BCI->getOperand(0);
       // Parameters are handled specially.
-      bool isParameter =
-        (DIVariable(Variable)->getTag() == dwarf::DW_TAG_arg_variable ||
-         isa<Argument>(Address));
+      bool isParameter = Variable->getTag() == dwarf::DW_TAG_arg_variable ||
+                         isa<Argument>(Address);
 
       const AllocaInst *AI = dyn_cast<AllocaInst>(Address);
 
@@ -4728,9 +4726,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   }
   case Intrinsic::dbg_value: {
     const DbgValueInst &DI = cast<DbgValueInst>(I);
-    DIVariable DIVar = DI.getVariable();
-    if (!DIVar)
-      return nullptr;
+    assert(DI.getVariable() && "Missing variable");
 
     MDLocalVariable *Variable = DI.getVariable();
     MDExpression *Expression = DI.getExpression();
@@ -7005,7 +7001,16 @@ void SelectionDAGBuilder::visitPatchpoint(ImmutableCallSite CS,
   CallingConv::ID CC = CS.getCallingConv();
   bool IsAnyRegCC = CC == CallingConv::AnyReg;
   bool HasDef = !CS->getType()->isVoidTy();
-  SDValue Callee = getValue(CS->getOperand(2)); // <target>
+  SDValue Callee = getValue(CS->getOperand(PatchPointOpers::TargetPos));
+
+  // Handle immediate and symbolic callees.
+  if (auto* ConstCallee = dyn_cast<ConstantSDNode>(Callee))
+    Callee = DAG.getIntPtrConstant(ConstCallee->getZExtValue(),
+                                   /*isTarget=*/true);
+  else if (auto* SymbolicCallee = dyn_cast<GlobalAddressSDNode>(Callee))
+    Callee =  DAG.getTargetGlobalAddress(SymbolicCallee->getGlobal(),
+                                         SDLoc(SymbolicCallee),
+                                         SymbolicCallee->getValueType(0));
 
   // Get the real number of arguments participating in the call <numArgs>
   SDValue NArgVal = getValue(CS.getArgument(PatchPointOpers::NArgPos));
@@ -7045,11 +7050,8 @@ void SelectionDAGBuilder::visitPatchpoint(ImmutableCallSite CS,
   Ops.push_back(DAG.getTargetConstant(
                   cast<ConstantSDNode>(NBytesVal)->getZExtValue(), MVT::i32));
 
-  // Assume that the Callee is a constant address.
-  // FIXME: handle function symbols in the future.
-  Ops.push_back(
-    DAG.getIntPtrConstant(cast<ConstantSDNode>(Callee)->getZExtValue(),
-                          /*isTarget=*/true));
+  // Add the callee.
+  Ops.push_back(Callee);
 
   // Adjust <numArgs> to account for any arguments that have been passed on the
   // stack instead.

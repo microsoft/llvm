@@ -246,12 +246,12 @@ public:
   /// \brief Add location information to specified debug information entry.
   void addSourceLine(DIE &Die, unsigned Line, StringRef File,
                      StringRef Directory);
-  void addSourceLine(DIE &Die, DIVariable V);
-  void addSourceLine(DIE &Die, DIGlobalVariable G);
+  void addSourceLine(DIE &Die, const MDLocalVariable *V);
+  void addSourceLine(DIE &Die, const MDGlobalVariable *G);
   void addSourceLine(DIE &Die, const MDSubprogram *SP);
   void addSourceLine(DIE &Die, const MDType *Ty);
   void addSourceLine(DIE &Die, const MDNamespace *NS);
-  void addSourceLine(DIE &Die, DIObjCProperty Ty);
+  void addSourceLine(DIE &Die, const MDObjCProperty *Ty);
 
   /// \brief Add constant value entry in variable DIE.
   void addConstantValue(DIE &Die, const MachineOperand &MO, const MDType *Ty);
@@ -268,7 +268,7 @@ public:
   void addLinkageName(DIE &Die, StringRef LinkageName);
 
   /// \brief Add template parameters in buffer.
-  void addTemplateParams(DIE &Buffer, DIArray TParams);
+  void addTemplateParams(DIE &Buffer, DebugNodeArray TParams);
 
   /// \brief Add register operand.
   /// \returns false if the register does not exist, e.g., because it was never
@@ -316,7 +316,7 @@ public:
   void constructContainingTypeDIEs();
 
   /// \brief Construct function argument DIEs.
-  void constructSubprogramArguments(DIE &Buffer, DITypeArray Args);
+  void constructSubprogramArguments(DIE &Buffer, MDTypeRefArray Args);
 
   /// Create a DIE with the given Tag, add the DIE to its parent, and
   /// call insertDIE if MD is not null.
@@ -355,14 +355,14 @@ private:
   void constructTypeDIE(DIE &Buffer, const MDBasicType *BTy);
   void constructTypeDIE(DIE &Buffer, const MDDerivedType *DTy);
   void constructTypeDIE(DIE &Buffer, const MDSubroutineType *DTy);
-  void constructSubrangeDIE(DIE &Buffer, DISubrange SR, DIE *IndexTy);
+  void constructSubrangeDIE(DIE &Buffer, const MDSubrange *SR, DIE *IndexTy);
   void constructArrayTypeDIE(DIE &Buffer, const MDCompositeType *CTy);
   void constructEnumTypeDIE(DIE &Buffer, const MDCompositeType *CTy);
   void constructMemberDIE(DIE &Buffer, const MDDerivedType *DT);
   void constructTemplateTypeParameterDIE(DIE &Buffer,
-                                         DITemplateTypeParameter TP);
+                                         const MDTemplateTypeParameter *TP);
   void constructTemplateValueParameterDIE(DIE &Buffer,
-                                          DITemplateValueParameter TVP);
+                                          const MDTemplateValueParameter *TVP);
 
   /// \brief Return the default lower bound for an array.
   ///

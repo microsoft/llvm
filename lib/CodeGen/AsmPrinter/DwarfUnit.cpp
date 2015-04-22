@@ -354,14 +354,14 @@ void DwarfUnit::addSourceLine(DIE &Die, unsigned Line, StringRef File,
   addUInt(Die, dwarf::DW_AT_decl_line, None, Line);
 }
 
-void DwarfUnit::addSourceLine(DIE &Die, DIVariable V) {
+void DwarfUnit::addSourceLine(DIE &Die, const MDLocalVariable *V) {
   assert(V);
 
   addSourceLine(Die, V->getLine(), V->getScope()->getFilename(),
                 V->getScope()->getDirectory());
 }
 
-void DwarfUnit::addSourceLine(DIE &Die, DIGlobalVariable G) {
+void DwarfUnit::addSourceLine(DIE &Die, const MDGlobalVariable *G) {
   assert(G);
 
   addSourceLine(Die, G->getLine(), G->getFilename(), G->getDirectory());
@@ -379,7 +379,7 @@ void DwarfUnit::addSourceLine(DIE &Die, const MDType *Ty) {
   addSourceLine(Die, Ty->getLine(), Ty->getFilename(), Ty->getDirectory());
 }
 
-void DwarfUnit::addSourceLine(DIE &Die, DIObjCProperty Ty) {
+void DwarfUnit::addSourceLine(DIE &Die, const MDObjCProperty *Ty) {
   assert(Ty);
 
   addSourceLine(Die, Ty->getLine(), Ty->getFilename(), Ty->getDirectory());
@@ -474,7 +474,7 @@ void DwarfUnit::addBlockByrefAddress(const DbgVariable &DV, DIE &Die,
 
   // Find the __forwarding field and the variable field in the __Block_byref
   // struct.
-  DIArray Fields = cast<MDCompositeTypeBase>(TmpTy)->getElements();
+  DebugNodeArray Fields = cast<MDCompositeTypeBase>(TmpTy)->getElements();
   const MDDerivedType *varField = nullptr;
   const MDDerivedType *forwardingField = nullptr;
 
@@ -695,7 +695,7 @@ void DwarfUnit::addLinkageName(DIE &Die, StringRef LinkageName) {
               GlobalValue::getRealLinkageName(LinkageName));
 }
 
-void DwarfUnit::addTemplateParams(DIE &Buffer, DIArray TParams) {
+void DwarfUnit::addTemplateParams(DIE &Buffer, DebugNodeArray TParams) {
   // Add template parameters.
   for (const auto *Element : TParams) {
     if (auto *TTP = dyn_cast<MDTemplateTypeParameter>(Element))
@@ -900,7 +900,7 @@ void DwarfUnit::constructTypeDIE(DIE &Buffer, const MDDerivedType *DTy) {
     addSourceLine(Buffer, DTy);
 }
 
-void DwarfUnit::constructSubprogramArguments(DIE &Buffer, DITypeArray Args) {
+void DwarfUnit::constructSubprogramArguments(DIE &Buffer, MDTypeRefArray Args) {
   for (unsigned i = 1, N = Args.size(); i < N; ++i) {
     const MDType *Ty = resolve(Args[i]);
     if (!Ty) {
@@ -961,7 +961,7 @@ void DwarfUnit::constructTypeDIE(DIE &Buffer, const MDCompositeType *CTy) {
   case dwarf::DW_TAG_union_type:
   case dwarf::DW_TAG_class_type: {
     // Add elements to structure type.
-    DIArray Elements = CTy->getElements();
+    DebugNodeArray Elements = CTy->getElements();
     for (const auto *Element : Elements) {
       if (!Element)
         continue;
@@ -976,7 +976,7 @@ void DwarfUnit::constructTypeDIE(DIE &Buffer, const MDCompositeType *CTy) {
         } else {
           constructMemberDIE(Buffer, DDTy);
         }
-      } else if (DIObjCProperty Property = dyn_cast<MDObjCProperty>(Element)) {
+      } else if (auto *Property = dyn_cast<MDObjCProperty>(Element)) {
         DIE &ElemDie = createAndAddDIE(Property->getTag(), Buffer);
         StringRef PropertyName = Property->getName();
         addString(ElemDie, dwarf::DW_AT_APPLE_property_name, PropertyName);
@@ -1057,8 +1057,8 @@ void DwarfUnit::constructTypeDIE(DIE &Buffer, const MDCompositeType *CTy) {
   }
 }
 
-void DwarfUnit::constructTemplateTypeParameterDIE(DIE &Buffer,
-                                                  DITemplateTypeParameter TP) {
+void DwarfUnit::constructTemplateTypeParameterDIE(
+    DIE &Buffer, const MDTemplateTypeParameter *TP) {
   DIE &ParamDIE =
       createAndAddDIE(dwarf::DW_TAG_template_type_parameter, Buffer);
   // Add the type if it exists, it could be void and therefore no type.
@@ -1068,9 +1068,8 @@ void DwarfUnit::constructTemplateTypeParameterDIE(DIE &Buffer,
     addString(ParamDIE, dwarf::DW_AT_name, TP->getName());
 }
 
-void
-DwarfUnit::constructTemplateValueParameterDIE(DIE &Buffer,
-                                              DITemplateValueParameter VP) {
+void DwarfUnit::constructTemplateValueParameterDIE(
+    DIE &Buffer, const MDTemplateValueParameter *VP) {
   DIE &ParamDIE = createAndAddDIE(VP->getTag(), Buffer);
 
   // Add the type if there is one, template template and template parameter
@@ -1270,7 +1269,8 @@ void DwarfUnit::applySubprogramAttributes(const MDSubprogram *SP, DIE &SPDie,
     addFlag(SPDie, dwarf::DW_AT_explicit);
 }
 
-void DwarfUnit::constructSubrangeDIE(DIE &Buffer, DISubrange SR, DIE *IndexTy) {
+void DwarfUnit::constructSubrangeDIE(DIE &Buffer, const MDSubrange *SR,
+                                     DIE *IndexTy) {
   DIE &DW_Subrange = createAndAddDIE(dwarf::DW_TAG_subrange_type, Buffer);
   addDIEEntry(DW_Subrange, dwarf::DW_AT_type, *IndexTy);
 
@@ -1316,7 +1316,7 @@ void DwarfUnit::constructArrayTypeDIE(DIE &Buffer, const MDCompositeType *CTy) {
   DIE *IdxTy = getIndexTyDie();
 
   // Add subranges to array type.
-  DIArray Elements = CTy->getElements();
+  DebugNodeArray Elements = CTy->getElements();
   for (unsigned i = 0, N = Elements.size(); i < N; ++i) {
     // FIXME: Should this really be such a loose cast?
     if (auto *Element = dyn_cast_or_null<DebugNode>(Elements[i]))
@@ -1326,7 +1326,7 @@ void DwarfUnit::constructArrayTypeDIE(DIE &Buffer, const MDCompositeType *CTy) {
 }
 
 void DwarfUnit::constructEnumTypeDIE(DIE &Buffer, const MDCompositeType *CTy) {
-  DIArray Elements = CTy->getElements();
+  DebugNodeArray Elements = CTy->getElements();
 
   // Add enumerators to enumeration type.
   for (unsigned i = 0, N = Elements.size(); i < N; ++i) {

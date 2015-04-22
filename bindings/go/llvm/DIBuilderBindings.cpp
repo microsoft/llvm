@@ -88,10 +88,9 @@ LLVMMetadataRef LLVMDIBuilderCreateLocalVariable(
     const char *Name, LLVMMetadataRef File, unsigned Line, LLVMMetadataRef Ty,
     int AlwaysPreserve, unsigned Flags, unsigned ArgNo) {
   DIBuilder *D = unwrap(Dref);
-  DIVariable V = D->createLocalVariable(
+  return wrap(D->createLocalVariable(
       Tag, unwrap<MDScope>(Scope), Name, unwrap<MDFile>(File), Line,
-      unwrap<MDType>(Ty), AlwaysPreserve, Flags, ArgNo);
-  return wrap(V);
+      unwrap<MDType>(Ty), AlwaysPreserve, Flags, ArgNo));
 }
 
 LLVMMetadataRef LLVMDIBuilderCreateBasicType(LLVMDIBuilderRef Dref,
@@ -119,7 +118,7 @@ LLVMDIBuilderCreateSubroutineType(LLVMDIBuilderRef Dref, LLVMMetadataRef File,
   DIBuilder *D = unwrap(Dref);
   return wrap(
       D->createSubroutineType(File ? unwrap<MDFile>(File) : nullptr,
-                              DITypeArray(unwrap<MDTuple>(ParameterTypes))));
+                              MDTypeRefArray(unwrap<MDTuple>(ParameterTypes))));
 }
 
 LLVMMetadataRef LLVMDIBuilderCreateStructType(
@@ -132,7 +131,7 @@ LLVMMetadataRef LLVMDIBuilderCreateStructType(
       unwrap<MDScope>(Scope), Name, File ? unwrap<MDFile>(File) : nullptr, Line,
       SizeInBits, AlignInBits, Flags,
       DerivedFrom ? unwrap<MDType>(DerivedFrom) : nullptr,
-      ElementTypes ? DIArray(unwrap<MDTuple>(ElementTypes)) : nullptr));
+      ElementTypes ? DebugNodeArray(unwrap<MDTuple>(ElementTypes)) : nullptr));
 }
 
 LLVMMetadataRef LLVMDIBuilderCreateReplaceableCompositeType(
@@ -166,7 +165,7 @@ LLVMMetadataRef LLVMDIBuilderCreateArrayType(LLVMDIBuilderRef Dref,
   DIBuilder *D = unwrap(Dref);
   return wrap(D->createArrayType(SizeInBits, AlignInBits,
                                  unwrap<MDType>(ElementType),
-                                 DIArray(unwrap<MDTuple>(Subscripts))));
+                                 DebugNodeArray(unwrap<MDTuple>(Subscripts))));
 }
 
 LLVMMetadataRef LLVMDIBuilderCreateTypedef(LLVMDIBuilderRef Dref,
@@ -182,8 +181,7 @@ LLVMMetadataRef LLVMDIBuilderCreateTypedef(LLVMDIBuilderRef Dref,
 LLVMMetadataRef LLVMDIBuilderGetOrCreateSubrange(LLVMDIBuilderRef Dref,
                                                  int64_t Lo, int64_t Count) {
   DIBuilder *D = unwrap(Dref);
-  DISubrange S = D->getOrCreateSubrange(Lo, Count);
-  return wrap(S);
+  return wrap(D->getOrCreateSubrange(Lo, Count));
 }
 
 LLVMMetadataRef LLVMDIBuilderGetOrCreateArray(LLVMDIBuilderRef Dref,
@@ -192,7 +190,7 @@ LLVMMetadataRef LLVMDIBuilderGetOrCreateArray(LLVMDIBuilderRef Dref,
   DIBuilder *D = unwrap(Dref);
   Metadata **DataValue = unwrap(Data);
   ArrayRef<Metadata *> Elements(DataValue, Length);
-  DIArray A = D->getOrCreateArray(Elements);
+  DebugNodeArray A = D->getOrCreateArray(Elements);
   return wrap(A.get());
 }
 
@@ -202,15 +200,14 @@ LLVMMetadataRef LLVMDIBuilderGetOrCreateTypeArray(LLVMDIBuilderRef Dref,
   DIBuilder *D = unwrap(Dref);
   Metadata **DataValue = unwrap(Data);
   ArrayRef<Metadata *> Elements(DataValue, Length);
-  DITypeArray A = D->getOrCreateTypeArray(Elements);
+  MDTypeRefArray A = D->getOrCreateTypeArray(Elements);
   return wrap(A.get());
 }
 
 LLVMMetadataRef LLVMDIBuilderCreateExpression(LLVMDIBuilderRef Dref,
                                               int64_t *Addr, size_t Length) {
   DIBuilder *D = unwrap(Dref);
-  DIExpression Expr = D->createExpression(ArrayRef<int64_t>(Addr, Length));
-  return wrap(Expr);
+  return wrap(D->createExpression(ArrayRef<int64_t>(Addr, Length)));
 }
 
 LLVMValueRef LLVMDIBuilderInsertDeclareAtEnd(LLVMDIBuilderRef Dref,

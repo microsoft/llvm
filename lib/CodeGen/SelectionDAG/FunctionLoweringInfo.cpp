@@ -202,8 +202,9 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
       // during the initial isel pass through the IR so that it is done
       // in a predictable order.
       if (const DbgDeclareInst *DI = dyn_cast<DbgDeclareInst>(I)) {
-        DIVariable DIVar = DI->getVariable();
-        if (MMI.hasDebugInfo() && DIVar && DI->getDebugLoc()) {
+        assert(DI->getVariable() && "Missing variable");
+        assert(DI->getDebugLoc() && "Missing location");
+        if (MMI.hasDebugInfo()) {
           // Don't handle byval struct arguments or VLAs, for example.
           // Non-byval arguments are handled here (they refer to the stack
           // temporary alloca at this point).
@@ -270,12 +271,21 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   }
 
   // Mark landing pad blocks.
-  for (BB = Fn->begin(); BB != EB; ++BB)
+  const LandingPadInst *LP = nullptr;
+  for (BB = Fn->begin(); BB != EB; ++BB) {
     if (const auto *Invoke = dyn_cast<InvokeInst>(BB->getTerminator()))
       MBBMap[Invoke->getSuccessor(1)]->setIsLandingPad();
+    if (BB->isLandingPad())
+      LP = BB->getLandingPadInst();
+  }
 
-  // Calculate EH numbers for WinEH.
-  if (fn.hasFnAttribute("wineh-parent")) {
+  // Calculate EH numbers for MSVC C++ EH and save SEH handlers if necessary.
+  EHPersonality Personality = EHPersonality::Unknown;
+  if (LP)
+    Personality = classifyEHPersonality(LP->getPersonalityFn());
+  if (Personality == EHPersonality::MSVC_Win64SEH) {
+    addSEHHandlersForLPads();
+  } else if (Personality == EHPersonality::MSVC_CXX) {
     const Function *WinEHParentFn = MMI.getWinEHParent(&fn);
     WinEHFuncInfo &FI = MMI.getWinEHFuncInfo(WinEHParentFn);
     if (FI.LandingPadStateMap.empty()) {
@@ -284,6 +294,47 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
       // Pop everything on the handler stack.
       Num.processCallSite(None, ImmutableCallSite());
     }
+  }
+}
+
+void FunctionLoweringInfo::addSEHHandlersForLPads() {
+  MachineModuleInfo &MMI = MF->getMMI();
+
+  // Iterate over all landing pads with llvm.eh.actions calls.
+  for (const BasicBlock &BB : *Fn) {
+    const LandingPadInst *LP = BB.getLandingPadInst();
+    if (!LP)
+      continue;
+    const IntrinsicInst *ActionsCall =
+        dyn_cast<IntrinsicInst>(LP->getNextNode());
+    if (!ActionsCall ||
+        ActionsCall->getIntrinsicID() != Intrinsic::eh_actions)
+      continue;
+
+    // Parse the llvm.eh.actions call we found.
+    MachineBasicBlock *LPadMBB = MBBMap[LP->getParent()];
+    SmallVector<ActionHandler *, 4> Actions;
+    parseEHActions(ActionsCall, Actions);
+
+    // Iterate EH actions from most to least precedence, which means
+    // iterating in reverse.
+    for (auto I = Actions.rbegin(), E = Actions.rend(); I != E; ++I) {
+      ActionHandler *Action = *I;
+      if (auto *CH = dyn_cast<CatchHandler>(Action)) {
+        const auto *Filter =
+            dyn_cast<Function>(CH->getSelector()->stripPointerCasts());
+        assert((Filter || CH->getSelector()->isNullValue()) &&
+               "expected function or catch-all");
+        const auto *RecoverBA =
+            cast<BlockAddress>(CH->getHandlerBlockOrFunc());
+        MMI.addSEHCatchHandler(LPadMBB, Filter, RecoverBA);
+      } else {
+        assert(isa<CleanupHandler>(Action));
+        const auto *Fini = cast<Function>(Action->getHandlerBlockOrFunc());
+        MMI.addSEHCleanupHandler(LPadMBB, Fini);
+      }
+    }
+    DeleteContainerPointers(Actions);
   }
 }
 

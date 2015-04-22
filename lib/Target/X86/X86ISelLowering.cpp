@@ -1373,7 +1373,11 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
       setOperationAction(ISD::CTLZ,             MVT::v8i64, Legal);
       setOperationAction(ISD::CTLZ,             MVT::v16i32, Legal);
     }
-
+    if (Subtarget->hasDQI()) {
+      setOperationAction(ISD::MUL,             MVT::v2i64, Legal);
+      setOperationAction(ISD::MUL,             MVT::v4i64, Legal);
+      setOperationAction(ISD::MUL,             MVT::v8i64, Legal);
+    }
     // Custom lower several nodes.
     for (MVT VT : MVT::vector_valuetypes()) {
       unsigned EltSize = VT.getVectorElementType().getSizeInBits();
@@ -5206,7 +5210,7 @@ X86TargetLowering::LowerBUILD_VECTORvXi1(SDValue Op, SelectionDAG &DAG) const {
 /// \brief Return true if \p N implements a horizontal binop and return the
 /// operands for the horizontal binop into V0 and V1.
 ///
-/// This is a helper function of PerformBUILD_VECTORCombine.
+/// This is a helper function of LowerToHorizontalOp().
 /// This function checks that the build_vector \p N in input implements a
 /// horizontal operation. Parameter \p Opcode defines the kind of horizontal
 /// operation to match.
@@ -5303,7 +5307,7 @@ static bool isHorizontalBinOp(const BuildVectorSDNode *N, unsigned Opcode,
 /// \brief Emit a sequence of two 128-bit horizontal add/sub followed by
 /// a concat_vector.
 ///
-/// This is a helper function of PerformBUILD_VECTORCombine.
+/// This is a helper function of LowerToHorizontalOp().
 /// This function expects two 256-bit vectors called V0 and V1.
 /// At first, each vector is split into two separate 128-bit vectors.
 /// Then, the resulting 128-bit vectors are used to implement two
@@ -5369,12 +5373,16 @@ static SDValue ExpandHorizontalBinOp(const SDValue &V0, const SDValue &V1,
   return DAG.getNode(ISD::CONCAT_VECTORS, DL, VT, LO, HI);
 }
 
-/// \brief Try to fold a build_vector that performs an 'addsub' into the
-/// sequence of 'vadd + vsub + blendi'.
-static SDValue matchAddSub(const BuildVectorSDNode *BV, SelectionDAG &DAG,
-                           const X86Subtarget *Subtarget) {
-  SDLoc DL(BV);
+/// Try to fold a build_vector that performs an 'addsub' to an X86ISD::ADDSUB
+/// node.
+static SDValue LowerToAddSub(const BuildVectorSDNode *BV,
+                             const X86Subtarget *Subtarget, SelectionDAG &DAG) {
   EVT VT = BV->getValueType(0);
+  if ((!Subtarget->hasSSE3() || (VT != MVT::v4f32 && VT != MVT::v2f64)) &&
+      (!Subtarget->hasAVX() || (VT != MVT::v8f32 && VT != MVT::v4f64)))
+    return SDValue();
+
+  SDLoc DL(BV);
   unsigned NumElts = VT.getVectorNumElements();
   SDValue InVec0 = DAG.getUNDEF(VT);
   SDValue InVec1 = DAG.getUNDEF(VT);
@@ -5468,23 +5476,12 @@ static SDValue matchAddSub(const BuildVectorSDNode *BV, SelectionDAG &DAG,
   return SDValue();
 }
 
-static SDValue PerformBUILD_VECTORCombine(SDNode *N, SelectionDAG &DAG,
-                                          const X86Subtarget *Subtarget) {
-  SDLoc DL(N);
-  EVT VT = N->getValueType(0);
+/// Lower BUILD_VECTOR to a horizontal add/sub operation if possible.
+static SDValue LowerToHorizontalOp(const BuildVectorSDNode *BV,
+                                   const X86Subtarget *Subtarget,
+                                   SelectionDAG &DAG) {
+  EVT VT = BV->getValueType(0);
   unsigned NumElts = VT.getVectorNumElements();
-  BuildVectorSDNode *BV = cast<BuildVectorSDNode>(N);
-  SDValue InVec0, InVec1;
-
-  // Try to match an ADDSUB.
-  if ((Subtarget->hasSSE3() && (VT == MVT::v4f32 || VT == MVT::v2f64)) ||
-      (Subtarget->hasAVX() && (VT == MVT::v8f32 || VT == MVT::v4f64))) {
-    SDValue Value = matchAddSub(BV, DAG, Subtarget);
-    if (Value.getNode())
-      return Value;
-  }
-
-  // Try to match horizontal ADD/SUB.
   unsigned NumUndefsLO = 0;
   unsigned NumUndefsHI = 0;
   unsigned Half = NumElts/2;
@@ -5503,6 +5500,8 @@ static SDValue PerformBUILD_VECTORCombine(SDNode *N, SelectionDAG &DAG,
   if (NumUndefsLO + NumUndefsHI + 1 >= NumElts)
     return SDValue();
 
+  SDLoc DL(BV);
+  SDValue InVec0, InVec1;
   if ((VT == MVT::v4f32 || VT == MVT::v2f64) && Subtarget->hasSSE3()) {
     // Try to match an SSE3 float HADD/HSUB.
     if (isHorizontalBinOp(BV, ISD::FADD, DAG, 0, NumElts, InVec0, InVec1))
@@ -5647,6 +5646,11 @@ X86TargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const {
       return getOnesVector(VT, Subtarget->hasInt256(), DAG, dl);
   }
 
+  BuildVectorSDNode *BV = cast<BuildVectorSDNode>(Op.getNode());
+  if (SDValue AddSub = LowerToAddSub(BV, Subtarget, DAG))
+    return AddSub;
+  if (SDValue HorizontalOp = LowerToHorizontalOp(BV, Subtarget, DAG))
+    return HorizontalOp;
   if (SDValue Broadcast = LowerVectorBroadcast(Op, Subtarget, DAG))
     return Broadcast;
 
@@ -22948,6 +22952,27 @@ static SDValue PerformSTORECombine(SDNode *N, SelectionDAG &DAG,
                                 MinAlign(St->getAlignment(), 4));
     return DAG.getNode(ISD::TokenFactor, StDL, MVT::Other, LoSt, HiSt);
   }
+
+  // This is similar to the above case, but here we handle a scalar 64-bit
+  // integer store that is extracted from a vector on a 32-bit target.
+  // If we have SSE2, then we can treat it like a floating-point double
+  // to get past legalization. The execution dependencies fixup pass will
+  // choose the optimal machine instruction for the store if this really is
+  // an integer or v2f32 rather than an f64.
+  if (VT == MVT::i64 && F64IsLegal && !Subtarget->is64Bit() &&
+      St->getOperand(1).getOpcode() == ISD::EXTRACT_VECTOR_ELT) {
+    SDValue OldExtract = St->getOperand(1);
+    SDValue ExtOp0 = OldExtract.getOperand(0);
+    unsigned VecSize = ExtOp0.getValueSizeInBits();
+    MVT VecVT = MVT::getVectorVT(MVT::f64, VecSize / 64);
+    SDValue BitCast = DAG.getNode(ISD::BITCAST, dl, VecVT, ExtOp0);
+    SDValue NewExtract = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, MVT::f64,
+                                     BitCast, OldExtract.getOperand(1));
+    return DAG.getStore(St->getChain(), dl, NewExtract, St->getBasePtr(),
+                        St->getPointerInfo(), St->isVolatile(),
+                        St->isNonTemporal(), St->getAlignment());
+  }
+
   return SDValue();
 }
 
@@ -23927,7 +23952,6 @@ SDValue X86TargetLowering::PerformDAGCombine(SDNode *N,
     break;
   }
   case X86ISD::BLENDI:    return PerformBLENDICombine(N, DAG);
-  case ISD::BUILD_VECTOR: return PerformBUILD_VECTORCombine(N, DAG, Subtarget);
   }
 
   return SDValue();
