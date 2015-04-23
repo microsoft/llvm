@@ -18,6 +18,7 @@
 #include "X86FrameLowering.h"
 #include "X86InstrBuilder.h"
 #include "X86MachineFunctionInfo.h"
+#include "X86RegisterInfo.h"
 #include "X86TargetMachine.h"
 #include "X86TargetObjectFile.h"
 #include "llvm/ADT/SmallBitVector.h"
@@ -18045,6 +18046,8 @@ X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
   DebugLoc DL = MI->getDebugLoc();
   MachineFunction *MF = MBB->getParent();
   const TargetInstrInfo *TII = Subtarget->getInstrInfo();
+  const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
+  const X86RegisterInfo *X86RI = static_cast<const X86RegisterInfo *>(TRI);
   MachineRegisterInfo &MRI = MF->getRegInfo();
 
   MVT PVT = getPointerTy();
@@ -18127,10 +18130,22 @@ X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
   MIB.setMemRefs(MMOBegin, MMOEnd);
 
   // Mark register defs from the call instruction as live into the
-  // new block.
-  for (const MachineOperand &MO : CallMI->operands())
-    if (MO.isReg() && MO.isDef())
-      SinkMBB->addLiveIn(MO.getReg());
+  // new block and find the position of the register mask.
+  MachineInstr::mop_iterator RegMaskIt = CallMI->operands_end();
+  for (MachineInstr::mop_iterator I = CallMI->operands_begin(),
+       E = CallMI->operands_end(); I != E; ++I) {
+    if (I->isReg() && I->isDef())
+      SinkMBB->addLiveIn(I->getReg());
+    else if (I->isRegMask()) {
+      assert(RegMaskIt == CallMI->operands_end());
+      RegMaskIt = I;
+    }
+  }
+
+  // Change the register mask on the call to set all callee-saved GPRs as
+  // clobbered.
+  const uint32_t *RegMask = X86RI->getCallPreservedMaskWithoutGPRs(RegMaskIt->getRegMask());
+  *RegMaskIt = MachineOperand::CreateRegMask(RegMask);
 
   // Call
   ThisMBB->push_back(CallMI->removeFromParent());

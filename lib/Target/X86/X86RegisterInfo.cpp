@@ -336,6 +336,19 @@ X86RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   return CSR_32_RegMask;
 }
 
+const uint32_t *
+X86RegisterInfo::getCallPreservedMaskWithoutGPRs(const uint32_t *Mask) const {
+  if (Mask == CSR_32_RegMask)
+    return CSR_32_NoGPRs_RegMask;
+  else if (Mask == CSR_64_RegMask)
+    return CSR_64_NoGPRs_RegMask;
+  else if (Mask == CSR_Win64_RegMask)
+    return CSR_Win64_NoGPRs_RegMask;
+
+  // Be intentionally conservative.
+  return CSR_NoRegs_RegMask;
+}
+
 const uint32_t*
 X86RegisterInfo::getNoPreservedMask() const {
   return CSR_NoRegs_RegMask;
