@@ -1113,3 +1113,27 @@ define float @sitofp_zext(i16 %a) {
   %sitofp = sitofp i32 %zext to float
   ret float %sitofp
 }
+
+define i1 @PR23309(i32 %A, i32 %B) {
+; CHECK-LABEL: @PR23309(
+; CHECK-NEXT: %[[sub:.*]] = sub i32 %A, %B
+; CHECK-NEXT: %[[and:.*]] = and i32 %[[sub]], 1
+; CHECK-NEXT: %[[cmp:.*]] = icmp ne i32 %[[and]], 0
+; CHECK-NEXT: ret i1 %[[cmp]]
+  %add = add i32 %A, -4
+  %sub = sub nsw i32 %add, %B
+  %trunc = trunc i32 %sub to i1
+  ret i1 %trunc
+}
+
+define i1 @PR23309v2(i32 %A, i32 %B) {
+; CHECK-LABEL: @PR23309v2(
+; CHECK-NEXT: %[[sub:.*]] = add i32 %A, %B
+; CHECK-NEXT: %[[and:.*]] = and i32 %[[sub]], 1
+; CHECK-NEXT: %[[cmp:.*]] = icmp ne i32 %[[and]], 0
+; CHECK-NEXT: ret i1 %[[cmp]]
+  %add = add i32 %A, -4
+  %sub = add nuw i32 %add, %B
+  %trunc = trunc i32 %sub to i1
+  ret i1 %trunc
+}

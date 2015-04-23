@@ -7164,7 +7164,7 @@ SDValue DAGCombiner::visitFADDForFMACombine(SDNode *N) {
                                      N0));
     }
 
-    if (LookThroughFPExt) {
+    if (UnsafeFPMath && LookThroughFPExt) {
       // fold (fadd (fma x, y, (fpext (fmul u, v))), z)
       //   -> (fma x, y, (fma (fpext u), (fpext v), z))
       auto FoldFAddFMAFPExtFMul = [&] (
@@ -7415,7 +7415,7 @@ SDValue DAGCombiner::visitFSUBForFMACombine(SDNode *N) {
                                      N21, N0));
     }
 
-    if (LookThroughFPExt) {
+    if (UnsafeFPMath && LookThroughFPExt) {
       // fold (fsub (fma x, y, (fpext (fmul u, v))), z)
       //   -> (fma x, y (fma (fpext u), (fpext v), (fneg z)))
       if (N0.getOpcode() == PreferredFusedOpcode) {
@@ -12799,6 +12799,9 @@ bool DAGCombiner::SimplifySelectOps(SDNode *TheSelect, SDValue LHS,
     if (LHS.getOperand(0) != RHS.getOperand(0) ||
         // Do not let this transformation reduce the number of volatile loads.
         LLD->isVolatile() || RLD->isVolatile() ||
+        // FIXME: If either is a pre/post inc/dec load,
+        // we'd need to split out the address adjustment.
+        LLD->isIndexed() || RLD->isIndexed() ||
         // If this is an EXTLOAD, the VT's must match.
         LLD->getMemoryVT() != RLD->getMemoryVT() ||
         // If this is an EXTLOAD, the kind of extension must match.

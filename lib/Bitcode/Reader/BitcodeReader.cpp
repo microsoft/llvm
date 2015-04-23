@@ -607,27 +607,42 @@ static int GetDecodedCastOpcode(unsigned Val) {
   case bitc::CAST_ADDRSPACECAST: return Instruction::AddrSpaceCast;
   }
 }
+
 static int GetDecodedBinaryOpcode(unsigned Val, Type *Ty) {
+  bool IsFP = Ty->isFPOrFPVectorTy();
+  // BinOps are only valid for int/fp or vector of int/fp types
+  if (!IsFP && !Ty->isIntOrIntVectorTy())
+    return -1;
+
   switch (Val) {
-  default: return -1;
+  default:
+    return -1;
   case bitc::BINOP_ADD:
-    return Ty->isFPOrFPVectorTy() ? Instruction::FAdd : Instruction::Add;
+    return IsFP ? Instruction::FAdd : Instruction::Add;
   case bitc::BINOP_SUB:
-    return Ty->isFPOrFPVectorTy() ? Instruction::FSub : Instruction::Sub;
+    return IsFP ? Instruction::FSub : Instruction::Sub;
   case bitc::BINOP_MUL:
-    return Ty->isFPOrFPVectorTy() ? Instruction::FMul : Instruction::Mul;
-  case bitc::BINOP_UDIV: return Instruction::UDiv;
+    return IsFP ? Instruction::FMul : Instruction::Mul;
+  case bitc::BINOP_UDIV:
+    return IsFP ? -1 : Instruction::UDiv;
   case bitc::BINOP_SDIV:
-    return Ty->isFPOrFPVectorTy() ? Instruction::FDiv : Instruction::SDiv;
-  case bitc::BINOP_UREM: return Instruction::URem;
+    return IsFP ? Instruction::FDiv : Instruction::SDiv;
+  case bitc::BINOP_UREM:
+    return IsFP ? -1 : Instruction::URem;
   case bitc::BINOP_SREM:
-    return Ty->isFPOrFPVectorTy() ? Instruction::FRem : Instruction::SRem;
-  case bitc::BINOP_SHL:  return Instruction::Shl;
-  case bitc::BINOP_LSHR: return Instruction::LShr;
-  case bitc::BINOP_ASHR: return Instruction::AShr;
-  case bitc::BINOP_AND:  return Instruction::And;
-  case bitc::BINOP_OR:   return Instruction::Or;
-  case bitc::BINOP_XOR:  return Instruction::Xor;
+    return IsFP ? Instruction::FRem : Instruction::SRem;
+  case bitc::BINOP_SHL:
+    return IsFP ? -1 : Instruction::Shl;
+  case bitc::BINOP_LSHR:
+    return IsFP ? -1 : Instruction::LShr;
+  case bitc::BINOP_ASHR:
+    return IsFP ? -1 : Instruction::AShr;
+  case bitc::BINOP_AND:
+    return IsFP ? -1 : Instruction::And;
+  case bitc::BINOP_OR:
+    return IsFP ? -1 : Instruction::Or;
+  case bitc::BINOP_XOR:
+    return IsFP ? -1 : Instruction::Xor;
   }
 }
 
@@ -4192,11 +4207,12 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       PointerType *OpTy = dyn_cast<PointerType>(Callee->getType());
       if (!OpTy)
         return Error("Callee is not a pointer type");
-      if (!FTy) {
-        FTy = dyn_cast<FunctionType>(OpTy->getElementType());
-        if (!FTy)
-          return Error("Callee is not of pointer to function type");
-      } else if (OpTy->getElementType() != FTy)
+      FunctionType *PFTy = dyn_cast<FunctionType>(OpTy->getElementType());
+      if (!PFTy)
+        return Error("Callee is not of pointer to function type");
+      if (!FTy)
+        FTy = PFTy;
+      if (PFTy != FTy)
         return Error("Explicit call type does not match pointee type of "
                      "callee operand");
       if (Record.size() < FTy->getNumParams() + OpNum)
@@ -4227,7 +4243,7 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
         }
       }
 
-      I = CallInst::Create(FTy, Callee, Args);
+      I = CallInst::Create(Callee, Args);
       InstructionList.push_back(I);
       cast<CallInst>(I)->setCallingConv(
           static_cast<CallingConv::ID>((~(1U << 14) & CCInfo) >> 1));

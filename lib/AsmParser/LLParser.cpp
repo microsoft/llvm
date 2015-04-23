@@ -2849,8 +2849,7 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
       }
 
       SmallPtrSet<const Type*, 4> Visited;
-      if (!Indices.empty() &&
-          !BasePointerType->getElementType()->isSized(&Visited))
+      if (!Indices.empty() && !Ty->isSized(&Visited))
         return Error(ID.Loc, "base element of getelementptr must be sized");
 
       if (!GetElementPtrInst::getIndexedType(Ty, Indices))
@@ -5224,7 +5223,7 @@ bool LLParser::ParseCall(Instruction *&Inst, PerFunctionState &PFS,
   // Finish off the Attribute and check them
   AttributeSet PAL = AttributeSet::get(Context, Attrs);
 
-  CallInst *CI = CallInst::Create(Ty, Callee, Args);
+  CallInst *CI = CallInst::Create(Callee, Args);
   CI->setTailCallKind(TCK);
   CI->setCallingConv(CC);
   CI->setAttributes(PAL);
