@@ -681,10 +681,6 @@ bool WinEHPrepare::prepareExceptionHandlers(
       Invoke->setUnwindDest(NewLPadBB);
     }
 
-    // If anyone is still using the old landingpad value, just give them undef
-    // instead. The eh pointer and selector values are not real.
-    LPad->replaceAllUsesWith(UndefValue::get(LPad->getType()));
-
     // Replace the mapping of any nested landing pad that previously mapped
     // to this landing pad with a referenced to the cloned version.
     for (auto &LPadPair : NestedLPtoOriginalLP) {
@@ -694,11 +690,24 @@ bool WinEHPrepare::prepareExceptionHandlers(
       }
     }
 
-    // Replace uses of the old lpad in phis with this block and delete the old
-    // block.
-    LPadBB->replaceSuccessorsPhiUsesWith(NewLPadBB);
-    LPadBB->getTerminator()->eraseFromParent();
-    new UnreachableInst(LPadBB->getContext(), LPadBB);
+    // Replace all extracted values with undef and ultimately replace the
+    // landingpad with undef.
+    // FIXME: This doesn't handle SEH GetExceptionCode(). For now, we just give
+    // out undef until we figure out the codegen support.
+    SmallVector<Instruction *, 4> Extracts;
+    for (User *U : LPad->users()) {
+      auto *E = dyn_cast<ExtractValueInst>(U);
+      if (!E)
+        continue;
+      assert(E->getNumIndices() == 1 &&
+             "Unexpected operation: extracting both landing pad values");
+      Extracts.push_back(E);
+    }
+    for (Instruction *E : Extracts) {
+      E->replaceAllUsesWith(UndefValue::get(E->getType()));
+      E->eraseFromParent();
+    }
+    LPad->replaceAllUsesWith(UndefValue::get(LPad->getType()));
 
     // Add a call to describe the actions for this landing pad.
     std::vector<Value *> ActionArgs;
@@ -1022,6 +1031,7 @@ static BasicBlock *createStubLandingPad(Function *Handler,
 void WinEHPrepare::addStubInvokeToHandlerIfNeeded(Function *Handler,
                                                   Value *PersonalityFn) {
   ReturnInst *Ret = nullptr;
+  UnreachableInst *Unreached = nullptr;
   for (BasicBlock &BB : *Handler) {
     TerminatorInst *Terminator = BB.getTerminator();
     // If we find an invoke, there is nothing to be done.
@@ -1029,18 +1039,24 @@ void WinEHPrepare::addStubInvokeToHandlerIfNeeded(Function *Handler,
     if (II)
       return;
     // If we've already recorded a return instruction, keep looking for invokes.
-    if (Ret)
-      continue;
-    // If we haven't recorded a return instruction yet, try this terminator.
-    Ret = dyn_cast<ReturnInst>(Terminator);
+    if (!Ret)
+      Ret = dyn_cast<ReturnInst>(Terminator);
+    // If we haven't recorded an unreachable instruction, try this terminator.
+    if (!Unreached)
+      Unreached = dyn_cast<UnreachableInst>(Terminator);
   }
 
   // If we got this far, the handler contains no invokes.  We should have seen
-  // at least one return.  We'll insert an invoke of llvm.donothing ahead of
-  // that return.
-  assert(Ret);
-  BasicBlock *OldRetBB = Ret->getParent();
-  BasicBlock *NewRetBB = SplitBlock(OldRetBB, Ret);
+  // at least one return or unreachable instruction.  We'll insert an invoke of
+  // llvm.donothing ahead of that instruction.
+  assert(Ret || Unreached);
+  TerminatorInst *Term;
+  if (Ret)
+    Term = Ret;
+  else
+    Term = Unreached;
+  BasicBlock *OldRetBB = Term->getParent();
+  BasicBlock *NewRetBB = SplitBlock(OldRetBB, Term);
   // SplitBlock adds an unconditional branch instruction at the end of the
   // parent block.  We want to replace that with an invoke call, so we can
   // erase it now.
@@ -1634,6 +1650,12 @@ void WinEHPrepare::mapLandingPadBlocks(LandingPadInst *LPad,
 
   while (HandlersFound != NumClauses) {
     BasicBlock *NextBB = nullptr;
+
+    // Skip over filter clauses.
+    if (LPad->isFilter(HandlersFound)) {
+      ++HandlersFound;
+      continue;
+    }
 
     // See if the clause we're looking for is a catch-all.
     // If so, the catch begins immediately.

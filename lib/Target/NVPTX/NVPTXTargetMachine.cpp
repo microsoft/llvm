@@ -168,15 +168,19 @@ void NVPTXPassConfig::addIRPasses() {
   // them unused. We could remove dead code in an ad-hoc manner, but that
   // requires manual work and might be error-prone.
   addPass(createDeadCodeEliminationPass());
-  addPass(createStraightLineStrengthReducePass());
   addPass(createSeparateConstOffsetFromGEPPass());
-  // The SeparateConstOffsetFromGEP pass creates variadic bases that can be used
-  // by multiple GEPs. Run GVN or EarlyCSE to really reuse them. GVN generates
-  // significantly better code than EarlyCSE for some of our benchmarks.
+  // ReassociateGEPs exposes more opportunites for SLSR. See
+  // the example in reassociate-geps-and-slsr.ll.
+  addPass(createStraightLineStrengthReducePass());
+  // SeparateConstOffsetFromGEP and SLSR creates common expressions which GVN or
+  // EarlyCSE can reuse. GVN generates significantly better code than EarlyCSE
+  // for some of our benchmarks.
   if (getOptLevel() == CodeGenOpt::Aggressive)
     addPass(createGVNPass());
   else
     addPass(createEarlyCSEPass());
+  // Run NaryReassociate after EarlyCSE/GVN to be more effective.
+  addPass(createNaryReassociatePass());
 }
 
 bool NVPTXPassConfig::addInstSelector() {
