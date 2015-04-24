@@ -15501,6 +15501,8 @@ unsigned X86TargetLowering::getRegisterByName(const char* RegName,
   unsigned Reg = StringSwitch<unsigned>(RegName)
                        .Case("esp", X86::ESP)
                        .Case("rsp", X86::RSP)
+                       .Case("ebp", X86::EBP)
+                       .Case("rbp", X86::RBP)
                        .Default(0);
   if (Reg)
     return Reg;
