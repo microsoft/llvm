@@ -1671,11 +1671,20 @@ void Verifier::visitFunction(const Function &F) {
              "Function takes metadata but isn't an intrinsic", I, &F);
   }
 
+  // Get the function metadata attachments.
+  SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
+  F.getAllMetadata(MDs);
+  assert(F.hasMetadata() != MDs.empty() && "Bit out-of-sync");
+
   if (F.isMaterializable()) {
     // Function has a body somewhere we can't see.
+    Assert(MDs.empty(), "unmaterialized function cannot have metadata", &F,
+           MDs.empty() ? nullptr : MDs.front().second);
   } else if (F.isDeclaration()) {
     Assert(F.hasExternalLinkage() || F.hasExternalWeakLinkage(),
            "invalid linkage type for function declaration", &F);
+    Assert(MDs.empty(), "function without a body cannot have metadata", &F,
+           MDs.empty() ? nullptr : MDs.front().second);
   } else {
     // Verify that this function (which has a body) is not named "llvm.*".  It
     // is not legal to define intrinsics.
@@ -1691,6 +1700,10 @@ void Verifier::visitFunction(const Function &F) {
       Assert(!BlockAddress::lookup(Entry)->isConstantUsed(),
              "blockaddress may not be used with the entry block!", Entry);
     }
+
+    // Visit metadata attachments.
+    for (const auto &I : MDs)
+      visitMDNode(*I.second);
   }
 
   // If this function is actually an intrinsic, verify that it is only used in
@@ -2245,12 +2258,8 @@ void Verifier::verifyMustTailCall(CallInst &CI) {
   //   parameters or return types may differ in pointee type, but not
   //   address space.
   Function *F = CI.getParent()->getParent();
-  auto GetFnTy = [](Value *V) {
-    return cast<FunctionType>(
-        cast<PointerType>(V->getType())->getElementType());
-  };
-  FunctionType *CallerTy = GetFnTy(F);
-  FunctionType *CalleeTy = GetFnTy(CI.getCalledValue());
+  FunctionType *CallerTy = F->getFunctionType();
+  FunctionType *CalleeTy = CI.getFunctionType();
   Assert(CallerTy->getNumParams() == CalleeTy->getNumParams(),
          "cannot guarantee tail call due to mismatched parameter counts", &CI);
   Assert(CallerTy->isVarArg() == CalleeTy->isVarArg(),
@@ -2603,7 +2612,7 @@ void Verifier::visitAllocaInst(AllocaInst &AI) {
   Assert(PTy->getAddressSpace() == 0,
          "Allocation instruction pointer not in the generic address space!",
          &AI);
-  Assert(PTy->getElementType()->isSized(&Visited),
+  Assert(AI.getAllocatedType()->isSized(&Visited),
          "Cannot allocate unsized type", &AI);
   Assert(AI.getArraySize()->getType()->isIntegerTy(),
          "Alloca array size must have integer type", &AI);

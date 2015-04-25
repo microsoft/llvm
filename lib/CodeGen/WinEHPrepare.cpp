@@ -71,7 +71,7 @@ class WinEHPrepare : public FunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid.
   WinEHPrepare(const TargetMachine *TM = nullptr)
-      : FunctionPass(ID), DT(nullptr) {}
+      : FunctionPass(ID), DT(nullptr), SEHExceptionCodeSlot(nullptr) {}
 
   bool runOnFunction(Function &Fn) override;
 
@@ -133,6 +133,8 @@ private:
   // outlined into a handler.  This is done after all handlers have been
   // outlined but before the outlined code is pruned from the parent function.
   DenseMap<const BasicBlock *, BasicBlock *> LPadTargetBlocks;
+
+  AllocaInst *SEHExceptionCodeSlot;
 };
 
 class WinEHFrameVariableMaterializer : public ValueMaterializer {
@@ -628,6 +630,13 @@ bool WinEHPrepare::prepareExceptionHandlers(
   Type *Int32Type = Type::getInt32Ty(Context);
   Function *ActionIntrin = Intrinsic::getDeclaration(M, Intrinsic::eh_actions);
 
+  if (isAsynchronousEHPersonality(Personality)) {
+    // FIXME: Switch the ehptr type to i32 and then switch this.
+    SEHExceptionCodeSlot =
+        new AllocaInst(Int8PtrType, nullptr, "seh_exception_code",
+                       F.getEntryBlock().getFirstInsertionPt());
+  }
+
   for (LandingPadInst *LPad : LPads) {
     // Look for evidence that this landingpad has already been processed.
     bool LPadHasActionList = false;
@@ -670,44 +679,57 @@ bool WinEHPrepare::prepareExceptionHandlers(
       outlineHandler(Action, &F, LPad, StartBB, FrameVarInfo);
     }
 
-    // Replace the landing pad with a new llvm.eh.action based landing pad.
-    BasicBlock *NewLPadBB = BasicBlock::Create(Context, "lpad", &F, LPadBB);
-    assert(!isa<PHINode>(LPadBB->begin()));
-    auto *NewLPad = cast<LandingPadInst>(LPad->clone());
-    NewLPadBB->getInstList().push_back(NewLPad);
-    while (!pred_empty(LPadBB)) {
-      auto *pred = *pred_begin(LPadBB);
-      InvokeInst *Invoke = cast<InvokeInst>(pred->getTerminator());
-      Invoke->setUnwindDest(NewLPadBB);
-    }
-
-    // Replace the mapping of any nested landing pad that previously mapped
-    // to this landing pad with a referenced to the cloned version.
-    for (auto &LPadPair : NestedLPtoOriginalLP) {
-      const LandingPadInst *OriginalLPad = LPadPair.second;
-      if (OriginalLPad == LPad) {
-        LPadPair.second = NewLPad;
-      }
-    }
+    // Split the block after the landingpad instruction so that it is just a
+    // call to llvm.eh.actions followed by indirectbr.
+    assert(!isa<PHINode>(LPadBB->begin()) && "lpad phi not removed");
+    LPadBB->splitBasicBlock(LPad->getNextNode(),
+                            LPadBB->getName() + ".prepsplit");
+    // Erase the branch inserted by the split so we can insert indirectbr.
+    LPadBB->getTerminator()->eraseFromParent();
 
     // Replace all extracted values with undef and ultimately replace the
     // landingpad with undef.
-    // FIXME: This doesn't handle SEH GetExceptionCode(). For now, we just give
-    // out undef until we figure out the codegen support.
-    SmallVector<Instruction *, 4> Extracts;
+    SmallVector<Instruction *, 4> SEHCodeUses;
+    SmallVector<Instruction *, 4> EHUndefs;
     for (User *U : LPad->users()) {
       auto *E = dyn_cast<ExtractValueInst>(U);
       if (!E)
         continue;
       assert(E->getNumIndices() == 1 &&
              "Unexpected operation: extracting both landing pad values");
-      Extracts.push_back(E);
+      unsigned Idx = *E->idx_begin();
+      assert((Idx == 0 || Idx == 1) && "unexpected index");
+      if (Idx == 0 && isAsynchronousEHPersonality(Personality))
+        SEHCodeUses.push_back(E);
+      else
+        EHUndefs.push_back(E);
     }
-    for (Instruction *E : Extracts) {
+    for (Instruction *E : EHUndefs) {
       E->replaceAllUsesWith(UndefValue::get(E->getType()));
       E->eraseFromParent();
     }
     LPad->replaceAllUsesWith(UndefValue::get(LPad->getType()));
+
+    // Rewrite uses of the exception pointer to loads of an alloca.
+    for (Instruction *E : SEHCodeUses) {
+      SmallVector<Use *, 4> Uses;
+      for (Use &U : E->uses())
+        Uses.push_back(&U);
+      for (Use *U : Uses) {
+        auto *I = cast<Instruction>(U->getUser());
+        if (isa<ResumeInst>(I))
+          continue;
+        LoadInst *LI;
+        if (auto *Phi = dyn_cast<PHINode>(I))
+          LI = new LoadInst(SEHExceptionCodeSlot, "sehcode", false,
+                            Phi->getIncomingBlock(*U));
+        else
+          LI = new LoadInst(SEHExceptionCodeSlot, "sehcode", false, I);
+        U->set(LI);
+      }
+      E->replaceAllUsesWith(UndefValue::get(E->getType()));
+      E->eraseFromParent();
+    }
 
     // Add a call to describe the actions for this landing pad.
     std::vector<Value *> ActionArgs;
@@ -733,7 +755,7 @@ bool WinEHPrepare::prepareExceptionHandlers(
       ActionArgs.push_back(Action->getHandlerBlockOrFunc());
     }
     CallInst *Recover =
-        CallInst::Create(ActionIntrin, ActionArgs, "recover", NewLPadBB);
+        CallInst::Create(ActionIntrin, ActionArgs, "recover", LPadBB);
 
     // Add an indirect branch listing possible successors of the catch handlers.
     SetVector<BasicBlock *> ReturnTargets;
@@ -744,7 +766,7 @@ bool WinEHPrepare::prepareExceptionHandlers(
       }
     }
     IndirectBrInst *Branch =
-        IndirectBrInst::Create(Recover, ReturnTargets.size(), NewLPadBB);
+        IndirectBrInst::Create(Recover, ReturnTargets.size(), LPadBB);
     for (BasicBlock *Target : ReturnTargets)
       Branch->addDestination(Target);
   } // End for each landingpad
@@ -831,6 +853,13 @@ bool WinEHPrepare::prepareExceptionHandlers(
   // block.
   Builder.SetInsertPoint(&F.getEntryBlock().back());
   Builder.CreateCall(FrameEscapeFn, AllocasToEscape);
+
+  if (SEHExceptionCodeSlot) {
+    if (SEHExceptionCodeSlot->hasNUses(0))
+      SEHExceptionCodeSlot->eraseFromParent();
+    else
+      PromoteMemToReg(SEHExceptionCodeSlot, *DT);
+  }
 
   // Clean up the handler action maps we created for this function
   DeleteContainerSeconds(CatchHandlerMap);
@@ -1150,10 +1179,19 @@ bool WinEHPrepare::outlineHandler(ActionHandler *Action, Function *SrcFn,
                             /*ModuleLevelChanges=*/false, Returns, "",
                             &OutlinedFunctionInfo, Director.get());
 
-  // Move all the instructions in the first cloned block into our entry block.
-  BasicBlock *FirstClonedBB = std::next(Function::iterator(Entry));
-  Entry->getInstList().splice(Entry->end(), FirstClonedBB->getInstList());
-  FirstClonedBB->eraseFromParent();
+  // Move all the instructions in the cloned "entry" block into our entry block.
+  // Depending on how the parent function was laid out, the block that will
+  // correspond to the outlined entry block may not be the first block in the
+  // list.  We can recognize it, however, as the cloned block which has no
+  // predecessors.  Any other block wouldn't have been cloned if it didn't
+  // have a predecessor which was also cloned.
+  Function::iterator  ClonedIt = std::next(Function::iterator(Entry));
+  while (!pred_empty(ClonedIt))
+    ++ClonedIt;
+  BasicBlock *ClonedEntryBB = ClonedIt;
+  assert(ClonedEntryBB);
+  Entry->getInstList().splice(Entry->end(), ClonedEntryBB->getInstList());
+  ClonedEntryBB->eraseFromParent();
 
   // Make sure we can identify the handler's personality later.
   addStubInvokeToHandlerIfNeeded(Handler, LPad->getPersonalityFn());
@@ -1222,6 +1260,12 @@ void WinEHPrepare::processSEHCatchHandler(CatchHandler *CatchAction,
     HandlerBB =
         StartBB->splitBasicBlock(StartBB->getFirstInsertionPt(), "catch.all");
   }
+  IRBuilder<> Builder(HandlerBB->getFirstInsertionPt());
+  Function *EHCodeFn = Intrinsic::getDeclaration(
+      StartBB->getParent()->getParent(), Intrinsic::eh_exceptioncode);
+  Value *Code = Builder.CreateCall(EHCodeFn, "sehcode");
+  Code = Builder.CreateIntToPtr(Code, SEHExceptionCodeSlot->getAllocatedType());
+  Builder.CreateStore(Code, SEHExceptionCodeSlot);
   CatchAction->setHandlerBlockOrFunc(BlockAddress::get(HandlerBB));
   TinyPtrVector<BasicBlock *> Targets(HandlerBB);
   CatchAction->setReturnTargets(Targets);

@@ -360,13 +360,14 @@ bool LLParser::ParseDeclare() {
 }
 
 /// toplevelentity
-///   ::= 'define' FunctionHeader '{' ...
+///   ::= 'define' FunctionHeader (!dbg !56)* '{' ...
 bool LLParser::ParseDefine() {
   assert(Lex.getKind() == lltok::kw_define);
   Lex.Lex();
 
   Function *F;
   return ParseFunctionHeader(F, true) ||
+         ParseOptionalFunctionMetadata(*F) ||
          ParseFunctionBody(*F);
 }
 
@@ -1490,28 +1491,50 @@ bool LLParser::ParseOptionalCallingConv(unsigned &CC) {
   return false;
 }
 
+/// ParseMetadataAttachment
+///   ::= !dbg !42
+bool LLParser::ParseMetadataAttachment(unsigned &Kind, MDNode *&MD) {
+  assert(Lex.getKind() == lltok::MetadataVar && "Expected metadata attachment");
+
+  std::string Name = Lex.getStrVal();
+  Kind = M->getMDKindID(Name);
+  Lex.Lex();
+
+  return ParseMDNode(MD);
+}
+
 /// ParseInstructionMetadata
 ///   ::= !dbg !42 (',' !dbg !57)*
-bool LLParser::ParseInstructionMetadata(Instruction *Inst,
-                                        PerFunctionState *PFS) {
+bool LLParser::ParseInstructionMetadata(Instruction &Inst) {
   do {
     if (Lex.getKind() != lltok::MetadataVar)
       return TokError("expected metadata after comma");
 
-    std::string Name = Lex.getStrVal();
-    unsigned MDK = M->getMDKindID(Name);
-    Lex.Lex();
-
+    unsigned MDK;
     MDNode *N;
-    if (ParseMDNode(N))
+    if (ParseMetadataAttachment(MDK, N))
       return true;
 
-    Inst->setMetadata(MDK, N);
+    Inst.setMetadata(MDK, N);
     if (MDK == LLVMContext::MD_tbaa)
-      InstsWithTBAATag.push_back(Inst);
+      InstsWithTBAATag.push_back(&Inst);
 
     // If this is the end of the list, we're done.
   } while (EatIfPresent(lltok::comma));
+  return false;
+}
+
+/// ParseOptionalFunctionMetadata
+///   ::= (!dbg !57)*
+bool LLParser::ParseOptionalFunctionMetadata(Function &F) {
+  while (Lex.getKind() == lltok::MetadataVar) {
+    unsigned MDK;
+    MDNode *N;
+    if (ParseMetadataAttachment(MDK, N))
+      return true;
+
+    F.setMetadata(MDK, N);
+  }
   return false;
 }
 
@@ -4387,7 +4410,7 @@ bool LLParser::ParseBasicBlock(PerFunctionState &PFS) {
       // With a normal result, we check to see if the instruction is followed by
       // a comma and metadata.
       if (EatIfPresent(lltok::comma))
-        if (ParseInstructionMetadata(Inst, &PFS))
+        if (ParseInstructionMetadata(*Inst))
           return true;
       break;
     case InstExtraComma:
@@ -4395,7 +4418,7 @@ bool LLParser::ParseBasicBlock(PerFunctionState &PFS) {
 
       // If the instruction parser ate an extra comma at the end of it, it
       // *must* be followed by metadata.
-      if (ParseInstructionMetadata(Inst, &PFS))
+      if (ParseInstructionMetadata(*Inst))
         return true;
       break;
     }
@@ -4741,10 +4764,8 @@ bool LLParser::ParseInvoke(Instruction *&Inst, PerFunctionState &PFS) {
   // If RetType is a non-function pointer type, then this is the short syntax
   // for the call, which means that RetType is just the return type.  Infer the
   // rest of the function argument types from the arguments that are present.
-  PointerType *PFTy = nullptr;
-  FunctionType *Ty = nullptr;
-  if (!(PFTy = dyn_cast<PointerType>(RetType)) ||
-      !(Ty = dyn_cast<FunctionType>(PFTy->getElementType()))) {
+  FunctionType *Ty = dyn_cast<FunctionType>(RetType);
+  if (!Ty) {
     // Pull out the types of all of the arguments...
     std::vector<Type*> ParamTypes;
     for (unsigned i = 0, e = ArgList.size(); i != e; ++i)
@@ -4754,12 +4775,12 @@ bool LLParser::ParseInvoke(Instruction *&Inst, PerFunctionState &PFS) {
       return Error(RetTypeLoc, "Invalid result type for LLVM function");
 
     Ty = FunctionType::get(RetType, ParamTypes, false);
-    PFTy = PointerType::getUnqual(Ty);
   }
 
   // Look up the callee.
   Value *Callee;
-  if (ConvertValIDToValue(PFTy, CalleeID, Callee, &PFS)) return true;
+  if (ConvertValIDToValue(PointerType::getUnqual(Ty), CalleeID, Callee, &PFS))
+    return true;
 
   // Set up the Attribute for the function.
   SmallVector<AttributeSet, 8> Attrs;

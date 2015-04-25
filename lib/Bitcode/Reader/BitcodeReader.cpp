@@ -370,7 +370,7 @@ private:
   std::error_code GlobalCleanup();
   std::error_code ResolveGlobalAndAliasInits();
   std::error_code ParseMetadata();
-  std::error_code ParseMetadataAttachment();
+  std::error_code ParseMetadataAttachment(Function &F);
   ErrorOr<std::string> parseModuleTriple();
   std::error_code ParseUseLists();
   std::error_code InitStream();
@@ -3215,7 +3215,7 @@ ErrorOr<std::string> BitcodeReader::parseTriple() {
 }
 
 /// ParseMetadataAttachment - Parse metadata attachments.
-std::error_code BitcodeReader::ParseMetadataAttachment() {
+std::error_code BitcodeReader::ParseMetadataAttachment(Function &F) {
   if (Stream.EnterSubBlock(bitc::METADATA_ATTACHMENT_ID))
     return Error("Invalid record");
 
@@ -3241,8 +3241,21 @@ std::error_code BitcodeReader::ParseMetadataAttachment() {
       break;
     case bitc::METADATA_ATTACHMENT: {
       unsigned RecordLength = Record.size();
-      if (Record.empty() || (RecordLength - 1) % 2 == 1)
+      if (Record.empty())
         return Error("Invalid record");
+      if (RecordLength % 2 == 0) {
+        // A function attachment.
+        for (unsigned I = 0; I != RecordLength; I += 2) {
+          auto K = MDKindMap.find(Record[I]);
+          if (K == MDKindMap.end())
+            return Error("Invalid ID");
+          Metadata *MD = MDValueList.getValueFwdRef(Record[I + 1]);
+          F.setMetadata(K->second, cast<MDNode>(MD));
+        }
+        continue;
+      }
+
+      // An instruction attachment.
       Instruction *Inst = InstructionList[Record[0]];
       for (unsigned i = 1; i != RecordLength; i = i+2) {
         unsigned Kind = Record[i];
@@ -3319,7 +3332,7 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
           return EC;
         break;
       case bitc::METADATA_ATTACHMENT_ID:
-        if (std::error_code EC = ParseMetadataAttachment())
+        if (std::error_code EC = ParseMetadataAttachment(*F))
           return EC;
         break;
       case bitc::METADATA_BLOCK_ID:
@@ -3646,6 +3659,8 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       if (getValueTypePair(Record, OpNum, NextValueNo, Vec) ||
           getValueTypePair(Record, OpNum, NextValueNo, Idx))
         return Error("Invalid record");
+      if (!Vec->getType()->isVectorTy())
+        return Error("Invalid type for value");
       I = ExtractElementInst::Create(Vec, Idx);
       InstructionList.push_back(I);
       break;
@@ -3654,8 +3669,11 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
     case bitc::FUNC_CODE_INST_INSERTELT: { // INSERTELT: [ty, opval,opval,opval]
       unsigned OpNum = 0;
       Value *Vec, *Elt, *Idx;
-      if (getValueTypePair(Record, OpNum, NextValueNo, Vec) ||
-          popValue(Record, OpNum, NextValueNo,
+      if (getValueTypePair(Record, OpNum, NextValueNo, Vec))
+        return Error("Invalid record");
+      if (!Vec->getType()->isVectorTy())
+        return Error("Invalid type for value");
+      if (popValue(Record, OpNum, NextValueNo,
                    cast<VectorType>(Vec->getType())->getElementType(), Elt) ||
           getValueTypePair(Record, OpNum, NextValueNo, Idx))
         return Error("Invalid record");
@@ -3673,6 +3691,8 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
 
       if (getValueTypePair(Record, OpNum, NextValueNo, Mask))
         return Error("Invalid record");
+      if (!Vec1->getType()->isVectorTy() || !Vec2->getType()->isVectorTy())
+        return Error("Invalid type for value");
       I = new ShuffleVectorInst(Vec1, Vec2, Mask);
       InstructionList.push_back(I);
       break;
@@ -3856,24 +3876,33 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       // INVOKE: [attrs, cc, normBB, unwindBB, fnty, op0,op1,op2, ...]
       if (Record.size() < 4)
         return Error("Invalid record");
-      AttributeSet PAL = getAttributes(Record[0]);
-      unsigned CCInfo = Record[1];
-      BasicBlock *NormalBB = getBasicBlock(Record[2]);
-      BasicBlock *UnwindBB = getBasicBlock(Record[3]);
+      unsigned OpNum = 0;
+      AttributeSet PAL = getAttributes(Record[OpNum++]);
+      unsigned CCInfo = Record[OpNum++];
+      BasicBlock *NormalBB = getBasicBlock(Record[OpNum++]);
+      BasicBlock *UnwindBB = getBasicBlock(Record[OpNum++]);
 
-      unsigned OpNum = 4;
+      FunctionType *FTy = nullptr;
+      if (CCInfo >> 13 & 1 &&
+          !(FTy = dyn_cast<FunctionType>(getTypeByID(Record[OpNum++]))))
+        return Error("Explicit invoke type is not a function type");
+
       Value *Callee;
       if (getValueTypePair(Record, OpNum, NextValueNo, Callee))
         return Error("Invalid record");
 
       PointerType *CalleeTy = dyn_cast<PointerType>(Callee->getType());
-      FunctionType *FTy = !CalleeTy ? nullptr :
-        dyn_cast<FunctionType>(CalleeTy->getElementType());
-
-      // Check that the right number of fixed parameters are here.
-      if (!FTy || !NormalBB || !UnwindBB ||
-          Record.size() < OpNum+FTy->getNumParams())
-        return Error("Invalid record");
+      if (!CalleeTy)
+        return Error("Callee is not a pointer");
+      if (!FTy) {
+        FTy = dyn_cast<FunctionType>(CalleeTy->getElementType());
+        if (!FTy)
+          return Error("Callee is not of pointer to function type");
+      } else if (CalleeTy->getElementType() != FTy)
+        return Error("Explicit invoke type does not match pointee type of "
+                     "callee operand");
+      if (Record.size() < FTy->getNumParams() + OpNum)
+        return Error("Insufficient operands to call");
 
       SmallVector<Value*, 16> Ops;
       for (unsigned i = 0, e = FTy->getNumParams(); i != e; ++i, ++OpNum) {
@@ -3898,8 +3927,8 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
 
       I = InvokeInst::Create(Callee, NormalBB, UnwindBB, Ops);
       InstructionList.push_back(I);
-      cast<InvokeInst>(I)->setCallingConv(
-        static_cast<CallingConv::ID>(CCInfo));
+      cast<InvokeInst>(I)
+          ->setCallingConv(static_cast<CallingConv::ID>(~(1U << 13) & CCInfo));
       cast<InvokeInst>(I)->setAttributes(PAL);
       break;
     }

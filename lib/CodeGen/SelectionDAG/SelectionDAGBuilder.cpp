@@ -4820,6 +4820,18 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::eh_begincatch:
   case Intrinsic::eh_endcatch:
     llvm_unreachable("begin/end catch intrinsics not lowered in codegen");
+  case Intrinsic::eh_exceptioncode: {
+    unsigned Reg = TLI.getExceptionPointerRegister();
+    assert(Reg && "cannot get exception code on this platform");
+    MVT PtrVT = TLI.getPointerTy();
+    const TargetRegisterClass *PtrRC = TLI.getRegClassFor(PtrVT);
+    unsigned VReg = FuncInfo.MBB->addLiveIn(Reg, PtrRC);
+    SDValue N =
+        DAG.getCopyFromReg(DAG.getEntryNode(), getCurSDLoc(), VReg, PtrVT);
+    N = DAG.getZExtOrTrunc(N, getCurSDLoc(), MVT::i32);
+    setValue(&I, N);
+    return nullptr;
+  }
   }
 }
 
@@ -7239,7 +7251,8 @@ bool SelectionDAGBuilder::buildJumpTable(CaseClusterVector &Clusters,
       for (uint64_t J = 0; J < Gap; J++)
         Table.push_back(DefaultMBB);
     }
-    for (APInt X = Low; X.sle(High); ++X)
+    uint64_t ClusterSize = (High - Low).getLimitedValue() + 1;
+    for (uint64_t J = 0; J < ClusterSize; ++J)
       Table.push_back(Clusters[I].MBB);
     JTWeights[Clusters[I].MBB] += Clusters[I].Weight;
   }
