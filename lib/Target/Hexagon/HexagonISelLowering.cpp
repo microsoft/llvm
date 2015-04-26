@@ -1262,15 +1262,6 @@ HexagonTargetLowering::LowerBlockAddress(SDValue Op, SelectionDAG &DAG) const {
 // TargetLowering Implementation
 //===----------------------------------------------------------------------===//
 
-void HexagonTargetLowering::setHexLibcallName(RTLIB::Libcall Call, Twine Name) {
-  std::string EmulationPrefix = "__hexagon_";
-  std::string N = EmulationPrefix + Name.str();
-  unsigned S = N.size()+1;
-  char *p = new char[S];
-  memcpy(p, N.c_str(), S);
-  setLibcallName(Call, p);
-}
-
 HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
                                              const HexagonSubtarget &STI)
     : TargetLowering(TM), HTM(static_cast<const HexagonTargetMachine&>(TM)),
@@ -1319,12 +1310,6 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
     addRegisterClass(MVT::f32, &Hexagon::IntRegsRegClass);
     addRegisterClass(MVT::f64, &Hexagon::DoubleRegsRegClass);
   }
-
-  // Generic action function (for use in std::for_each).
-  auto ExpandOp = [this] (MVT VT) -> std::function<void(unsigned)> {
-    HexagonTargetLowering *T = this;
-    return [T, VT] (unsigned Op) { T->setOperationAction(Op, VT, Expand); };
-  };
 
   //
   // Handling of scalar operations.
@@ -1425,23 +1410,20 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::MUL,   MVT::i64, Expand);
   setOperationAction(ISD::MULHS, MVT::i64, Expand);
 
-  static unsigned IntExpOps[] = {
-    ISD::SDIV,      ISD::UDIV,      ISD::SREM,      ISD::UREM,
-    ISD::SDIVREM,   ISD::UDIVREM,   ISD::ROTL,      ISD::ROTR,
-    ISD::BSWAP,     ISD::SHL_PARTS, ISD::SRA_PARTS, ISD::SRL_PARTS,
-    ISD::SMUL_LOHI, ISD::UMUL_LOHI
-  };
-  static unsigned IntExpOpsLen = array_lengthof(IntExpOps);
-  std::for_each(IntExpOps, IntExpOps+IntExpOpsLen, ExpandOp(MVT::i32));
-  std::for_each(IntExpOps, IntExpOps+IntExpOpsLen, ExpandOp(MVT::i64));
+  for (unsigned IntExpOp :
+       {ISD::SDIV, ISD::UDIV, ISD::SREM, ISD::UREM, ISD::SDIVREM, ISD::UDIVREM,
+        ISD::ROTL, ISD::ROTR, ISD::BSWAP, ISD::SHL_PARTS, ISD::SRA_PARTS,
+        ISD::SRL_PARTS, ISD::SMUL_LOHI, ISD::UMUL_LOHI}) {
+    setOperationAction(IntExpOp, MVT::i32, Expand);
+    setOperationAction(IntExpOp, MVT::i64, Expand);
+  }
 
-  static unsigned FPExpOps[] = {
-    ISD::FDIV, ISD::FREM, ISD::FSQRT, ISD::FSIN, ISD::FCOS, ISD::FSINCOS,
-    ISD::FPOW, ISD::FCOPYSIGN
-  };
-  static unsigned FPExpOpsLen = array_lengthof(FPExpOps);
-  std::for_each(FPExpOps, FPExpOps+FPExpOpsLen, ExpandOp(MVT::f32));
-  std::for_each(FPExpOps, FPExpOps+FPExpOpsLen, ExpandOp(MVT::f64));
+  for (unsigned FPExpOp :
+       {ISD::FDIV, ISD::FREM, ISD::FSQRT, ISD::FSIN, ISD::FCOS, ISD::FSINCOS,
+        ISD::FPOW, ISD::FCOPYSIGN}) {
+    setOperationAction(FPExpOp, MVT::f32, Expand);
+    setOperationAction(FPExpOp, MVT::f64, Expand);
+  }
 
   // No extending loads from i32.
   for (MVT VT : MVT::integer_valuetypes()) {
@@ -1509,10 +1491,10 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
     ISD::EXTRACT_SUBVECTOR,     ISD::INSERT_SUBVECTOR,
     ISD::CONCAT_VECTORS,        ISD::VECTOR_SHUFFLE
   };
-  static unsigned VectExpOpsLen = array_lengthof(VectExpOps);
 
   for (MVT VT : MVT::vector_valuetypes()) {
-    std::for_each(VectExpOps, VectExpOps+VectExpOpsLen, ExpandOp(VT));
+    for (unsigned VectExpOp : VectExpOps)
+      setOperationAction(VectExpOp, VT, Expand);
 
     // Expand all extended loads and truncating stores:
     for (MVT TargetVT : MVT::vector_valuetypes()) {
@@ -1526,28 +1508,22 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
   }
 
   // Types natively supported:
-  static MVT NativeVT[] = {
-    MVT::v2i1,    MVT::v4i1,    MVT::v8i1,  MVT::v32i1,   MVT::v64i1,
-    MVT::v4i8,    MVT::v8i8,
-    MVT::v2i16,   MVT::v4i16,
-    MVT::v1i32,   MVT::v2i32,
-    MVT::v1i64
-  };
-  static unsigned NativeVTLen = array_lengthof(NativeVT);
-  for (auto I = NativeVT, E = NativeVT+NativeVTLen; I != E; ++I) {
-    setOperationAction(ISD::BUILD_VECTOR,       *I, Custom);
-    setOperationAction(ISD::EXTRACT_VECTOR_ELT, *I, Custom);
-    setOperationAction(ISD::INSERT_VECTOR_ELT,  *I, Custom);
-    setOperationAction(ISD::EXTRACT_SUBVECTOR,  *I, Custom);
-    setOperationAction(ISD::INSERT_SUBVECTOR,   *I, Custom);
-    setOperationAction(ISD::CONCAT_VECTORS,     *I, Custom);
+  for (MVT NativeVT : {MVT::v2i1, MVT::v4i1, MVT::v8i1, MVT::v32i1, MVT::v64i1,
+                       MVT::v4i8, MVT::v8i8, MVT::v2i16, MVT::v4i16, MVT::v1i32,
+                       MVT::v2i32, MVT::v1i64}) {
+    setOperationAction(ISD::BUILD_VECTOR,       NativeVT, Custom);
+    setOperationAction(ISD::EXTRACT_VECTOR_ELT, NativeVT, Custom);
+    setOperationAction(ISD::INSERT_VECTOR_ELT,  NativeVT, Custom);
+    setOperationAction(ISD::EXTRACT_SUBVECTOR,  NativeVT, Custom);
+    setOperationAction(ISD::INSERT_SUBVECTOR,   NativeVT, Custom);
+    setOperationAction(ISD::CONCAT_VECTORS,     NativeVT, Custom);
 
-    setOperationAction(ISD::ADD, *I, Legal);
-    setOperationAction(ISD::SUB, *I, Legal);
-    setOperationAction(ISD::MUL, *I, Legal);
-    setOperationAction(ISD::AND, *I, Legal);
-    setOperationAction(ISD::OR,  *I, Legal);
-    setOperationAction(ISD::XOR, *I, Legal);
+    setOperationAction(ISD::ADD, NativeVT, Legal);
+    setOperationAction(ISD::SUB, NativeVT, Legal);
+    setOperationAction(ISD::MUL, NativeVT, Legal);
+    setOperationAction(ISD::AND, NativeVT, Legal);
+    setOperationAction(ISD::OR,  NativeVT, Legal);
+    setOperationAction(ISD::XOR, NativeVT, Legal);
   }
 
   setOperationAction(ISD::SETCC,          MVT::v2i16, Custom);
@@ -1593,34 +1569,25 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::CTPOP, MVT::i64, Expand);
 
     // Expand these operations for both f32 and f64:
-    static unsigned FPExpOpsV4[] = {
-      ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FABS, ISD::FNEG, ISD::FMA
-    };
-    static unsigned FPExpOpsV4Len = array_lengthof(FPExpOpsV4);
-    std::for_each(FPExpOpsV4, FPExpOpsV4+FPExpOpsV4Len, ExpandOp(MVT::f32));
-    std::for_each(FPExpOpsV4, FPExpOpsV4+FPExpOpsV4Len, ExpandOp(MVT::f64));
+    for (unsigned FPExpOpV4 :
+         {ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FABS, ISD::FNEG, ISD::FMA}) {
+      setOperationAction(FPExpOpV4, MVT::f32, Expand);
+      setOperationAction(FPExpOpV4, MVT::f64, Expand);
+    }
 
-    static ISD::CondCode FPExpCCV4[] = {
-      ISD::SETOEQ, ISD::SETOGT, ISD::SETOLT, ISD::SETOGE, ISD::SETOLE,
-      ISD::SETUO,  ISD::SETO
-    };
-    static unsigned FPExpCCV4Len = array_lengthof(FPExpCCV4);
-    for (auto I = FPExpCCV4, E = FPExpCCV4+FPExpCCV4Len; I != E; ++I) {
-      setCondCodeAction(*I, MVT::f32, Expand);
-      setCondCodeAction(*I, MVT::f64, Expand);
+    for (ISD::CondCode FPExpCCV4 :
+         {ISD::SETOEQ, ISD::SETOGT, ISD::SETOLT, ISD::SETOGE, ISD::SETOLE,
+          ISD::SETUO, ISD::SETO}) {
+      setCondCodeAction(FPExpCCV4, MVT::f32, Expand);
+      setCondCodeAction(FPExpCCV4, MVT::f64, Expand);
     }
   }
 
   // Handling of indexed loads/stores: default is "expand".
   //
-  static MVT LSXTys[] = {
-    MVT::i8,    MVT::i16,    MVT::i32,    MVT::i64,
-  };
-  static unsigned LSXTysLen = array_lengthof(LSXTys);
-
-  for (auto I = LSXTys, E = LSXTys+LSXTysLen; I != E; ++I) {
-    setIndexedLoadAction(ISD::POST_INC, *I, Legal);
-    setIndexedStoreAction(ISD::POST_INC, *I, Legal);
+  for (MVT LSXTy : {MVT::i8, MVT::i16, MVT::i32, MVT::i64}) {
+    setIndexedLoadAction(ISD::POST_INC, LSXTy, Legal);
+    setIndexedStoreAction(ISD::POST_INC, LSXTy, Legal);
   }
 
   computeRegisterProperties(&HRI);
@@ -1630,88 +1597,104 @@ HexagonTargetLowering::HexagonTargetLowering(const TargetMachine &TM,
   //
   bool FastMath  = EnableFastMath;
 
-  setHexLibcallName(RTLIB::SDIV_I32, "divsi3");
-  setHexLibcallName(RTLIB::SDIV_I64, "divdi3");
-  setHexLibcallName(RTLIB::UDIV_I32, "udivsi3");
-  setHexLibcallName(RTLIB::UDIV_I64, "udivdi3");
-  setHexLibcallName(RTLIB::SREM_I32, "modsi3");
-  setHexLibcallName(RTLIB::SREM_I64, "moddi3");
-  setHexLibcallName(RTLIB::UREM_I32, "umodsi3");
-  setHexLibcallName(RTLIB::UREM_I64, "umoddi3");
+  setLibcallName(RTLIB::SDIV_I32, "__hexagon_divsi3");
+  setLibcallName(RTLIB::SDIV_I64, "__hexagon_divdi3");
+  setLibcallName(RTLIB::UDIV_I32, "__hexagon_udivsi3");
+  setLibcallName(RTLIB::UDIV_I64, "__hexagon_udivdi3");
+  setLibcallName(RTLIB::SREM_I32, "__hexagon_modsi3");
+  setLibcallName(RTLIB::SREM_I64, "__hexagon_moddi3");
+  setLibcallName(RTLIB::UREM_I32, "__hexagon_umodsi3");
+  setLibcallName(RTLIB::UREM_I64, "__hexagon_umoddi3");
 
-  setHexLibcallName(RTLIB::SINTTOFP_I128_F64, "floattidf");
-  setHexLibcallName(RTLIB::SINTTOFP_I128_F32, "floattisf");
-  setHexLibcallName(RTLIB::FPTOUINT_F32_I128, "fixunssfti");
-  setHexLibcallName(RTLIB::FPTOUINT_F64_I128, "fixunsdfti");
-  setHexLibcallName(RTLIB::FPTOSINT_F32_I128, "fixsfti");
-  setHexLibcallName(RTLIB::FPTOSINT_F64_I128, "fixdfti");
+  setLibcallName(RTLIB::SINTTOFP_I128_F64, "__hexagon_floattidf");
+  setLibcallName(RTLIB::SINTTOFP_I128_F32, "__hexagon_floattisf");
+  setLibcallName(RTLIB::FPTOUINT_F32_I128, "__hexagon_fixunssfti");
+  setLibcallName(RTLIB::FPTOUINT_F64_I128, "__hexagon_fixunsdfti");
+  setLibcallName(RTLIB::FPTOSINT_F32_I128, "__hexagon_fixsfti");
+  setLibcallName(RTLIB::FPTOSINT_F64_I128, "__hexagon_fixdfti");
 
   if (IsV4) {
     // Handle single-precision floating point operations on V4.
-    Twine Pref = (FastMath ? "fast_" : "");
-    setHexLibcallName(RTLIB::ADD_F32, Pref+"addsf3");
-    setHexLibcallName(RTLIB::SUB_F32, Pref+"subsf3");
-    setHexLibcallName(RTLIB::MUL_F32, Pref+"mulsf3");
-    setHexLibcallName(RTLIB::OGT_F32, Pref+"gtsf2");
-    setHexLibcallName(RTLIB::OLT_F32, Pref+"ltsf2");
-    // Double-precision compares.
-    setHexLibcallName(RTLIB::OGT_F64, Pref+"gtdf2");
-    setHexLibcallName(RTLIB::OLT_F64, Pref+"ltdf2");
+    if (FastMath) {
+      setLibcallName(RTLIB::ADD_F32, "__hexagon_fast_addsf3");
+      setLibcallName(RTLIB::SUB_F32, "__hexagon_fast_subsf3");
+      setLibcallName(RTLIB::MUL_F32, "__hexagon_fast_mulsf3");
+      setLibcallName(RTLIB::OGT_F32, "__hexagon_fast_gtsf2");
+      setLibcallName(RTLIB::OLT_F32, "__hexagon_fast_ltsf2");
+      // Double-precision compares.
+      setLibcallName(RTLIB::OGT_F64, "__hexagon_fast_gtdf2");
+      setLibcallName(RTLIB::OLT_F64, "__hexagon_fast_ltdf2");
+    } else {
+      setLibcallName(RTLIB::ADD_F32, "__hexagon_addsf3");
+      setLibcallName(RTLIB::SUB_F32, "__hexagon_subsf3");
+      setLibcallName(RTLIB::MUL_F32, "__hexagon_mulsf3");
+      setLibcallName(RTLIB::OGT_F32, "__hexagon_gtsf2");
+      setLibcallName(RTLIB::OLT_F32, "__hexagon_ltsf2");
+      // Double-precision compares.
+      setLibcallName(RTLIB::OGT_F64, "__hexagon_gtdf2");
+      setLibcallName(RTLIB::OLT_F64, "__hexagon_ltdf2");
+    }
   }
 
   // This is the only fast library function for sqrtd.
   if (FastMath)
-    setHexLibcallName(RTLIB::SQRT_F64, "fast2_sqrtdf2");
+    setLibcallName(RTLIB::SQRT_F64, "__hexagon_fast2_sqrtdf2");
 
-  // PrefFP = nothing  for "slow-math",
-  //        = "fast2_" for V4 fast-math and V5+ fast-math double-precision
+  // Prefix is: nothing  for "slow-math",
+  //            "fast2_" for V4 fast-math and V5+ fast-math double-precision
   // (actually, keep fast-math and fast-math2 separate for now)
-  Twine PrefFP = (FastMath ? "fast_" : "");
-
-  setHexLibcallName(RTLIB::ADD_F64, PrefFP+"adddf3");
-  setHexLibcallName(RTLIB::SUB_F64, PrefFP+"subdf3");
-  setHexLibcallName(RTLIB::MUL_F64, PrefFP+"muldf3");
-  setHexLibcallName(RTLIB::DIV_F64, PrefFP+"divdf3");
-  // Calling __hexagon_fast2_divsf3 with fast-math on V5 (ok).
-  setHexLibcallName(RTLIB::DIV_F32, PrefFP+"divsf3");
+  if (FastMath) {
+    setLibcallName(RTLIB::ADD_F64, "__hexagon_fast_adddf3");
+    setLibcallName(RTLIB::SUB_F64, "__hexagon_fast_subdf3");
+    setLibcallName(RTLIB::MUL_F64, "__hexagon_fast_muldf3");
+    setLibcallName(RTLIB::DIV_F64, "__hexagon_fast_divdf3");
+    // Calling __hexagon_fast2_divsf3 with fast-math on V5 (ok).
+    setLibcallName(RTLIB::DIV_F32, "__hexagon_fast_divsf3");
+  } else {
+    setLibcallName(RTLIB::ADD_F64, "__hexagon_adddf3");
+    setLibcallName(RTLIB::SUB_F64, "__hexagon_subdf3");
+    setLibcallName(RTLIB::MUL_F64, "__hexagon_muldf3");
+    setLibcallName(RTLIB::DIV_F64, "__hexagon_divdf3");
+    setLibcallName(RTLIB::DIV_F32, "__hexagon_divsf3");
+  }
 
   if (Subtarget.hasV5TOps()) {
     if (FastMath)
-      setHexLibcallName(RTLIB::SQRT_F32, "fast2_sqrtf");
+      setLibcallName(RTLIB::SQRT_F32, "__hexagon_fast2_sqrtf");
     else
-      setHexLibcallName(RTLIB::SQRT_F32, "sqrtf");
+      setLibcallName(RTLIB::SQRT_F32, "__hexagon_sqrtf");
   } else {
     // V4
-    setHexLibcallName(RTLIB::SINTTOFP_I32_F32, "floatsisf");
-    setHexLibcallName(RTLIB::SINTTOFP_I32_F64, "floatsidf");
-    setHexLibcallName(RTLIB::SINTTOFP_I64_F32, "floatdisf");
-    setHexLibcallName(RTLIB::SINTTOFP_I64_F64, "floatdidf");
-    setHexLibcallName(RTLIB::UINTTOFP_I32_F32, "floatunsisf");
-    setHexLibcallName(RTLIB::UINTTOFP_I32_F64, "floatunsidf");
-    setHexLibcallName(RTLIB::UINTTOFP_I64_F32, "floatundisf");
-    setHexLibcallName(RTLIB::UINTTOFP_I64_F64, "floatundidf");
-    setHexLibcallName(RTLIB::FPTOUINT_F32_I32, "fixunssfsi");
-    setHexLibcallName(RTLIB::FPTOUINT_F32_I64, "fixunssfdi");
-    setHexLibcallName(RTLIB::FPTOUINT_F64_I32, "fixunsdfsi");
-    setHexLibcallName(RTLIB::FPTOUINT_F64_I64, "fixunsdfdi");
-    setHexLibcallName(RTLIB::FPTOSINT_F32_I32, "fixsfsi");
-    setHexLibcallName(RTLIB::FPTOSINT_F32_I64, "fixsfdi");
-    setHexLibcallName(RTLIB::FPTOSINT_F64_I32, "fixdfsi");
-    setHexLibcallName(RTLIB::FPTOSINT_F64_I64, "fixdfdi");
-    setHexLibcallName(RTLIB::FPEXT_F32_F64,    "extendsfdf2");
-    setHexLibcallName(RTLIB::FPROUND_F64_F32,  "truncdfsf2");
-    setHexLibcallName(RTLIB::OEQ_F32, "eqsf2");
-    setHexLibcallName(RTLIB::OEQ_F64, "eqdf2");
-    setHexLibcallName(RTLIB::OGE_F32, "gesf2");
-    setHexLibcallName(RTLIB::OGE_F64, "gedf2");
-    setHexLibcallName(RTLIB::OLE_F32, "lesf2");
-    setHexLibcallName(RTLIB::OLE_F64, "ledf2");
-    setHexLibcallName(RTLIB::UNE_F32, "nesf2");
-    setHexLibcallName(RTLIB::UNE_F64, "nedf2");
-    setHexLibcallName(RTLIB::UO_F32,  "unordsf2");
-    setHexLibcallName(RTLIB::UO_F64,  "unorddf2");
-    setHexLibcallName(RTLIB::O_F32,   "unordsf2");
-    setHexLibcallName(RTLIB::O_F64,   "unorddf2");
+    setLibcallName(RTLIB::SINTTOFP_I32_F32, "__hexagon_floatsisf");
+    setLibcallName(RTLIB::SINTTOFP_I32_F64, "__hexagon_floatsidf");
+    setLibcallName(RTLIB::SINTTOFP_I64_F32, "__hexagon_floatdisf");
+    setLibcallName(RTLIB::SINTTOFP_I64_F64, "__hexagon_floatdidf");
+    setLibcallName(RTLIB::UINTTOFP_I32_F32, "__hexagon_floatunsisf");
+    setLibcallName(RTLIB::UINTTOFP_I32_F64, "__hexagon_floatunsidf");
+    setLibcallName(RTLIB::UINTTOFP_I64_F32, "__hexagon_floatundisf");
+    setLibcallName(RTLIB::UINTTOFP_I64_F64, "__hexagon_floatundidf");
+    setLibcallName(RTLIB::FPTOUINT_F32_I32, "__hexagon_fixunssfsi");
+    setLibcallName(RTLIB::FPTOUINT_F32_I64, "__hexagon_fixunssfdi");
+    setLibcallName(RTLIB::FPTOUINT_F64_I32, "__hexagon_fixunsdfsi");
+    setLibcallName(RTLIB::FPTOUINT_F64_I64, "__hexagon_fixunsdfdi");
+    setLibcallName(RTLIB::FPTOSINT_F32_I32, "__hexagon_fixsfsi");
+    setLibcallName(RTLIB::FPTOSINT_F32_I64, "__hexagon_fixsfdi");
+    setLibcallName(RTLIB::FPTOSINT_F64_I32, "__hexagon_fixdfsi");
+    setLibcallName(RTLIB::FPTOSINT_F64_I64, "__hexagon_fixdfdi");
+    setLibcallName(RTLIB::FPEXT_F32_F64,    "__hexagon_extendsfdf2");
+    setLibcallName(RTLIB::FPROUND_F64_F32,  "__hexagon_truncdfsf2");
+    setLibcallName(RTLIB::OEQ_F32, "__hexagon_eqsf2");
+    setLibcallName(RTLIB::OEQ_F64, "__hexagon_eqdf2");
+    setLibcallName(RTLIB::OGE_F32, "__hexagon_gesf2");
+    setLibcallName(RTLIB::OGE_F64, "__hexagon_gedf2");
+    setLibcallName(RTLIB::OLE_F32, "__hexagon_lesf2");
+    setLibcallName(RTLIB::OLE_F64, "__hexagon_ledf2");
+    setLibcallName(RTLIB::UNE_F32, "__hexagon_nesf2");
+    setLibcallName(RTLIB::UNE_F64, "__hexagon_nedf2");
+    setLibcallName(RTLIB::UO_F32,  "__hexagon_unordsf2");
+    setLibcallName(RTLIB::UO_F64,  "__hexagon_unorddf2");
+    setLibcallName(RTLIB::O_F32,   "__hexagon_unordsf2");
+    setLibcallName(RTLIB::O_F64,   "__hexagon_unorddf2");
   }
 
   // These cause problems when the shift amount is non-constant.
