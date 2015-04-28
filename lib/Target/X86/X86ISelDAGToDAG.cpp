@@ -2936,14 +2936,22 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
                                        SDValue(StoreNode, 0), TrapAddr,
                                        MachinePointerInfo(TrapAddrV), false,
                                        false, false, 0);
+    MemSDNode *TrapLoadNode = cast<MemSDNode>(TrapLoad.getNode());
 
-    SDValue TrapCMP = CurDAG->getNode(X86ISD::CMP, SDLoc(Node), MVT::i32,
-                                      TrapLoad,
-                                      CurDAG->getConstant(0, MVT::i32));
+    SDValue Base, Scale, Index, Disp, Segment;
+    if (!SelectAddr(TrapLoadNode, TrapAddr, Base, Scale, Index, Disp, Segment))
+      llvm_unreachable("failed to select address!");
 
-    SDNode *TrapCMPNode = SelectCode(TrapCMP.getNode());
-    assert(TrapCMPNode != nullptr);
-    TrapCMPNode = AddGlueToNode(TrapCMPNode, SDValue(StoreNode, 1), CurDAG);
+    MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
+    MemOp[0] = TrapLoadNode->getMemOperand();
+    SDVTList CMPVTs = CurDAG->getVTList(MVT::i32, MVT::Other, MVT::Glue);
+
+    SDValue Comparand = CurDAG->getTargetConstant(0, MVT::i8);
+    const SDValue CMPOps[] = {Base, Scale, Index, Disp, Segment, Comparand, SDValue(StoreNode, 0), SDValue(StoreNode, 1)};
+    MachineSDNode *TrapCMPNode = CurDAG->getMachineNode(X86::CMP32mi8, SDLoc(Node), CMPVTs, CMPOps);
+    TrapCMPNode->setMemRefs(MemOp, MemOp + 1);
+
+    CurDAG->DeleteNode(TrapLoadNode);
 
     // Add a pseudo-instruction to conditionally perform the trap.
     SDVTList VTs = CurDAG->getVTList(MVT::Other, MVT::Glue);
