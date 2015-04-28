@@ -47,14 +47,14 @@ public:
     ATReg(1), Reorder(true), Macro(true), Features(Features_) {}
 
   MipsAssemblerOptions(const MipsAssemblerOptions *Opts) {
-    ATReg = Opts->getATRegNum();
+    ATReg = Opts->getATRegIndex();
     Reorder = Opts->isReorder();
     Macro = Opts->isMacro();
     Features = Opts->getFeatures();
   }
 
-  unsigned getATRegNum() const { return ATReg; }
-  bool setATReg(unsigned Reg) {
+  unsigned getATRegIndex() const { return ATReg; }
+  bool setATRegIndex(unsigned Reg) {
     if (Reg > 31)
       return false;
 
@@ -436,8 +436,8 @@ public:
   // TODO: see how can we get this info.
   bool abiUsesSoftFloat() const { return false; }
 
-  /// Warn if RegNo is the current assembler temporary.
-  void warnIfAssemblerTemporary(int RegNo, SMLoc Loc);
+  /// Warn if RegIndex is the same as the current AT.
+  void warnIfRegIndexIsAT(unsigned RegIndex, SMLoc Loc);
 };
 }
 
@@ -546,7 +546,7 @@ public:
   /// target.
   unsigned getGPR32Reg() const {
     assert(isRegIdx() && (RegIdx.Kind & RegKind_GPR) && "Invalid access!");
-    AsmParser.warnIfAssemblerTemporary(RegIdx.Index, StartLoc);
+    AsmParser.warnIfRegIndexIsAT(RegIdx.Index, StartLoc);
     unsigned ClassID = Mips::GPR32RegClassID;
     return RegIdx.RegInfo->getRegClass(ClassID).getRegister(RegIdx.Index);
   }
@@ -1752,7 +1752,7 @@ bool MipsAsmParser::expandLoadImm(MCInst &Inst, SMLoc IDLoc,
     // <- hi16 ->             <- lo16 ->
     //  _________________________________
     // |          |          |          |
-    // | 16-bytes | 16-bytes | 16-bytes |
+    // | 16-bits  | 16-bits  | 16-bits  |
     // |__________|__________|__________|
     //
     // For any 64-bit value that is representable as a 48-bit integer:
@@ -1777,7 +1777,7 @@ bool MipsAsmParser::expandLoadImm(MCInst &Inst, SMLoc IDLoc,
     // <- hi16 ->                        <- lo16 ->
     //  ___________________________________________
     // |          |          |          |          |
-    // | 16-bytes | 16-bytes | 16-bytes | 16-bytes |
+    // | 16-bits  | 16-bits  | 16-bits  | 16-bits  |
     // |__________|__________|__________|__________|
     //
     // For all other values which are representable as a 64-bit integer:
@@ -2203,15 +2203,10 @@ bool MipsAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   llvm_unreachable("Implement any new match types added!");
 }
 
-void MipsAsmParser::warnIfAssemblerTemporary(int RegIndex, SMLoc Loc) {
-  if ((RegIndex != 0) && 
-      ((int)AssemblerOptions.back()->getATRegNum() == RegIndex)) {
-    if (RegIndex == 1)
-      Warning(Loc, "used $at without \".set noat\"");
-    else
-      Warning(Loc, Twine("used $") + Twine(RegIndex) + " with \".set at=$" +
-                       Twine(RegIndex) + "\"");
-  }
+void MipsAsmParser::warnIfRegIndexIsAT(unsigned RegIndex, SMLoc Loc) {
+  if (RegIndex != 0 && AssemblerOptions.back()->getATRegIndex() == RegIndex)
+    Warning(Loc, "used $at (currently $" + Twine(RegIndex) +
+                     ") without \".set noat\"");
 }
 
 void
@@ -2386,7 +2381,7 @@ int MipsAsmParser::matchMSA128CtrlRegisterName(StringRef Name) {
 }
 
 unsigned MipsAsmParser::getATReg(SMLoc Loc) {
-  unsigned ATIndex = AssemblerOptions.back()->getATRegNum();
+  unsigned ATIndex = AssemblerOptions.back()->getATRegIndex();
   if (ATIndex == 0) {
     reportParseError(Loc,
                      "pseudo-instruction requires $at, which is not available");
@@ -3300,7 +3295,7 @@ bool MipsAsmParser::parseSetNoAtDirective() {
   // Line should look like: ".set noat".
 
   // Set the $at register to $0.
-  AssemblerOptions.back()->setATReg(0);
+  AssemblerOptions.back()->setATRegIndex(0);
 
   Parser.Lex(); // Eat "noat".
 
@@ -3323,7 +3318,7 @@ bool MipsAsmParser::parseSetAtDirective() {
 
   if (getLexer().is(AsmToken::EndOfStatement)) {
     // No register was specified, so we set $at to $1.
-    AssemblerOptions.back()->setATReg(1);
+    AssemblerOptions.back()->setATRegIndex(1);
 
     getTargetStreamer().emitDirectiveSetAt();
     Parser.Lex(); // Consume the EndOfStatement.
@@ -3360,7 +3355,7 @@ bool MipsAsmParser::parseSetAtDirective() {
   }
 
   // Check if $reg is a valid register. If it is, set $at to $reg.
-  if (!AssemblerOptions.back()->setATReg(AtRegNo)) {
+  if (!AssemblerOptions.back()->setATRegIndex(AtRegNo)) {
     reportParseError("invalid register");
     return false;
   }
