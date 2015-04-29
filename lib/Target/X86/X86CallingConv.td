@@ -762,12 +762,15 @@ def CSR_64 : CalleeSavedRegs<(add RBX, R12, R13, R14, R15, RBP)>;
 def CSR_32_NoGPRs : CalleeSavedRegs<(add EBP)>;
 def CSR_64_NoGPRs : CalleeSavedRegs<(add RBP)>;
 
+def CSR_64_WithRet : CalleeSavedRegs<(add CSR_64, RAX, RDX, XMM0, XMM1, FP0, FP1)>;
+
 def CSR_32EHRet : CalleeSavedRegs<(add EAX, EDX, CSR_32)>;
 def CSR_64EHRet : CalleeSavedRegs<(add RAX, RDX, CSR_64)>;
 
 def CSR_Win64 : CalleeSavedRegs<(add RBX, RBP, RDI, RSI, R12, R13, R14, R15,
                                      (sequence "XMM%u", 6, 15))>;
 def CSR_Win64_NoGPRs : CalleeSavedRegs<(add RBP, (sequence "XMM%u", 6, 15))>;
+def CSR_Win64_WithRet : CalleeSavedRegs<(add CSR_Win64, RAX, XMM0)>;
 
 // All GPRs - except r11
 def CSR_64_RT_MostRegs : CalleeSavedRegs<(add CSR_64, RAX, RCX, RDX, RSI, RDI,

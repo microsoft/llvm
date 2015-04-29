@@ -2947,8 +2947,11 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
     SDVTList CMPVTs = CurDAG->getVTList(MVT::i32, MVT::Other, MVT::Glue);
 
     SDValue Comparand = CurDAG->getTargetConstant(0, MVT::i8);
-    const SDValue CMPOps[] = {Base, Scale, Index, Disp, Segment, Comparand, SDValue(StoreNode, 0), SDValue(StoreNode, 1)};
-    MachineSDNode *TrapCMPNode = CurDAG->getMachineNode(X86::CMP32mi8, SDLoc(Node), CMPVTs, CMPOps);
+    const SDValue CMPOps[] = {Base, Scale, Index, Disp, Segment, Comparand,
+                              SDValue(StoreNode, 0), SDValue(StoreNode, 1)};
+    MachineSDNode *TrapCMPNode = CurDAG->getMachineNode(X86::CMP32mi8,
+                                                        SDLoc(Node), CMPVTs,
+                                                        CMPOps);
     TrapCMPNode->setMemRefs(MemOp, MemOp + 1);
 
     CurDAG->DeleteNode(TrapLoadNode);
