@@ -393,28 +393,152 @@ static bool usesTheStack(const MachineFunction &MF) {
   return false;
 }
 
-void X86FrameLowering::emitStackProbeInline(MachineFunction &MF,
-                                            MachineBasicBlock &MBB,
-                                            MachineBasicBlock::iterator MBBI,
-                                            DebugLoc DL, bool InProlog) {
+MachineBasicBlock *X86FrameLowering::emitStackProbeInline(
+  MachineFunction &MF, MachineBasicBlock &MBB,
+  MachineBasicBlock::iterator MBBI, DebugLoc DL, bool InProlog) {
   const X86Subtarget &STI = MF.getSubtarget<X86Subtarget>();
   assert(!InProlog && "special care needed for probes in prologs");
   assert(STI.is64Bit() && "different expansion needed for 32 bit");
   assert(STI.isTargetWindowsCoreCLR() && "custom expansion expects CoreCLR");
   const TargetInstrInfo &TII = *STI.getInstrInfo();
+  const BasicBlock *LLVM_BB = MBB.getBasicBlock();
 
-  // EAX/RAX contains the number of bytes of desired stack adjustment. 
+  // RAX contains the number of bytes of desired stack adjustment.
   // The handling here assumes this value has already been updated so as to
   // maintain stack alignment.
   //
-  // We need to exit with RSP/ESP modified by this amount and execute suitable
+  // We need to exit with RSP modified by this amount and execute suitable
   // page touches to notify the OS that we're growing the stack responsibly.
+  // All stack probing must be done without modifying RSP.
   //
-  // For now we just do the stack adjustment part. The probing is left
-  // as future work. 
-  BuildMI(MBB, MBBI, DL, TII.get(X86::SUB64rr), X86::RSP)
-    .addReg(X86::RSP)
+  // MBB:
+  //    ZeroReg = 0
+  //    CopyReg = RSP
+  //    Flags, TestReg = CopyReg - RAX
+  //    FinalReg = !Flags.Ovf ? TestReg : ZeroReg
+  //    LimitReg = gs magic thread env access
+  //    if FinalReg >= LimitReg goto ContinueMBB
+  // RoundBB:
+  //    RoundReg = page address of FinalReg
+  // LoopMBB:
+  //    LoopReg = PHI(LimitReg,ProbeReg)
+  //    ProbeReg = LoopReg - PageSize
+  //    [ProbeReg] = 0
+  //    if (ProbeReg > RoundReg) goto LoopMBB
+  // ContinueMBB:
+  //    RSP = RSP - RAX
+  //    [rest of original MBB]
+
+  // Set up the new basic blocks
+  MachineBasicBlock *RoundMBB = MF.CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *LoopMBB = MF.CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *ContinueMBB = MF.CreateMachineBasicBlock(LLVM_BB);
+
+  MachineFunction::iterator MBBIter = MBB;
+  ++MBBIter;
+
+  MF.insert(MBBIter, RoundMBB);
+  MF.insert(MBBIter, LoopMBB);
+  MF.insert(MBBIter, ContinueMBB);
+
+  // Split MBB and move the tail portion down to ContinueMBB.
+  ContinueMBB->splice(ContinueMBB->begin(), &MBB, std::next(MBBI), MBB.end());
+  ContinueMBB->transferSuccessorsAndUpdatePHIs(&MBB);
+
+  // Some useful constants
+  const int64_t ThreadEnvironmentStackLimit = 0x10;
+  const int64_t PageSize = 0x1000;
+  const int64_t PageMask = ~(PageSize - 1);
+
+  // Virtual registers we need.
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  const TargetRegisterClass *RegClass = &X86::GR64RegClass;
+  const unsigned ZeroReg = MRI.createVirtualRegister(RegClass),
+    CopyReg = MRI.createVirtualRegister(RegClass),
+    TestReg = MRI.createVirtualRegister(RegClass),
+    FinalReg = MRI.createVirtualRegister(RegClass),
+    RoundedReg = MRI.createVirtualRegister(RegClass),
+    LimitReg = MRI.createVirtualRegister(RegClass),
+    JoinReg = MRI.createVirtualRegister(RegClass),
+    ProbeReg = MRI.createVirtualRegister(RegClass);
+
+  // Add code to MBB to check for overflow and set the new target stack pointer
+  // to zero if so.
+  BuildMI(&MBB, DL, TII.get(X86::XOR64rr), ZeroReg)
+    .addReg(ZeroReg, RegState::Undef)
+    .addReg(ZeroReg, RegState::Undef);
+  BuildMI(&MBB, DL, TII.get(X86::MOV64rr), CopyReg).addReg(X86::RSP);
+  BuildMI(&MBB, DL, TII.get(X86::SUB64rr), TestReg)
+    .addReg(CopyReg)
     .addReg(X86::RAX);
+  BuildMI(&MBB, DL, TII.get(X86::CMOVB64rr), FinalReg)
+    .addReg(TestReg)
+    .addReg(ZeroReg);
+
+  // FinalReg now holds final stack pointer value, or zero if allocation would
+  // overflow. Compare against the current stack limit from the thread
+  // environment block.
+  BuildMI(&MBB, DL, TII.get(X86::MOV64rm), LimitReg)
+    .addReg(0)
+    .addImm(1)
+    .addReg(0)
+    .addImm(ThreadEnvironmentStackLimit)
+    .addReg(X86::GS);
+  BuildMI(&MBB, DL, TII.get(X86::CMP64rr)).addReg(FinalReg).addReg(LimitReg);
+  // Jump if the desired stack pointer is at or above the stack limit.
+  BuildMI(&MBB, DL, TII.get(X86::JAE_1)).addMBB(ContinueMBB);
+
+  // Add code to roundMBB to round the final stack pointer to a page boundary.
+  RoundMBB->addLiveIn(X86::RAX);
+  BuildMI(RoundMBB, DL, TII.get(X86::AND64ri32), RoundedReg)
+    .addReg(FinalReg)
+    .addImm(PageMask);
+  BuildMI(RoundMBB, DL, TII.get(X86::JMP_1)).addMBB(LoopMBB);
+
+  // LimitReg now holds the current stack limit, RoundedReg page-rounded
+  // final RSP value. Add code to loopMBB to decrement LimitReg page-by-page
+  // and probe until we reach RoundedReg.
+  LoopMBB->addLiveIn(X86::RAX);
+  BuildMI(LoopMBB, DL, TII.get(X86::PHI), JoinReg)
+    .addReg(LimitReg)
+    .addMBB(RoundMBB)
+    .addReg(ProbeReg)
+    .addMBB(LoopMBB);
+  BuildMI(LoopMBB, DL, TII.get(X86::LEA64r), ProbeReg)
+    .addReg(JoinReg)
+    .addImm(1)
+    .addReg(0)
+    .addImm(-PageSize)
+    .addReg(0);
+  // Probe by storing a byte onto the stack.
+  BuildMI(LoopMBB, DL, TII.get(X86::MOV8mi))
+    .addReg(ProbeReg)
+    .addImm(1)
+    .addReg(0)
+    .addImm(0)
+    .addReg(0)
+    .addImm(0);
+  BuildMI(LoopMBB, DL, TII.get(X86::CMP64rr))
+    .addReg(RoundedReg)
+    .addReg(ProbeReg);
+  BuildMI(LoopMBB, DL, TII.get(X86::JNE_1)).addMBB(LoopMBB);
+
+  // Now that the probing is done, add code to continueMBB to update
+  // the stack pointer for real.
+  ContinueMBB->addLiveIn(X86::RAX);
+  BuildMI(*ContinueMBB, ContinueMBB->getFirstNonPHI(), DL,
+          TII.get(X86::SUB64rr), X86::RSP)
+          .addReg(X86::RSP)
+          .addReg(X86::RAX);
+
+  // Add the control flow edges we need.
+  MBB.addSuccessor(ContinueMBB);
+  MBB.addSuccessor(RoundMBB);
+  RoundMBB->addSuccessor(LoopMBB);
+  LoopMBB->addSuccessor(ContinueMBB);
+  LoopMBB->addSuccessor(LoopMBB);
+
+  return ContinueMBB;
 }
 
 void X86FrameLowering::emitStackProbeCall(MachineFunction &MF,
