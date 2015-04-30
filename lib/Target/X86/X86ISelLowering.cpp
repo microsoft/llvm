@@ -18317,6 +18317,8 @@ X86TargetLowering::EmitGCTransitionPause(MachineInstr *MI,
   DebugLoc DL = MI->getDebugLoc();
   MachineFunction *MF = MBB->getParent();
   const TargetInstrInfo *TII = Subtarget->getInstrInfo();
+  const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
+  const X86RegisterInfo *X86RI = static_cast<const X86RegisterInfo *>(TRI);
 
   MVT PVT = getPointerTy();
   assert((PVT == MVT::i64 || PVT == MVT::i32) &&
@@ -18372,8 +18374,12 @@ X86TargetLowering::EmitGCTransitionPause(MachineInstr *MI,
     break;
   }
 
+  const uint32_t *RegMask = X86RI->getCallPreservedMask(*MF, CallingConv::C);
+  RegMask = X86RI->getCallPreservedMaskWithReturns(RegMask);
+
   MIB = BuildMI(*GCMBB, GCMBB->begin(), DL, TII->get(CallOpcode))
-          .addOperand(PauseHelper);
+          .addOperand(PauseHelper)
+          .addRegMask(RegMask);
 
   MIB.setMemRefs(MMOBegin, MMOEnd);
 
@@ -18391,7 +18397,6 @@ X86TargetLowering::EmitGCTransitionPause(MachineInstr *MI,
   MI->eraseFromParent();
 
   return SinkMBB;
-
 }
 
 MachineBasicBlock *

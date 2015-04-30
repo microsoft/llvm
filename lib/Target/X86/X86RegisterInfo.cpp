@@ -349,6 +349,15 @@ X86RegisterInfo::getCallPreservedMaskWithoutGPRs(const uint32_t *Mask) const {
   return CSR_NoRegs_RegMask;
 }
 
+const uint32_t *
+X86RegisterInfo::getCallPreservedMaskWithReturns(const uint32_t *Mask) const {
+  if (Mask == CSR_64_RegMask)
+    return CSR_64_WithRet_RegMask;
+
+  assert(Mask == CSR_Win64_RegMask && "Unsupported calling convention");
+  return CSR_Win64_WithRet_RegMask;
+}
+
 const uint32_t*
 X86RegisterInfo::getNoPreservedMask() const {
   return CSR_NoRegs_RegMask;
