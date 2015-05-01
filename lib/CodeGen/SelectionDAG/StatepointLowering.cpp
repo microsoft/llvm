@@ -488,16 +488,11 @@ static void lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
   // lowered.  Note that this is the number of *Values* not the
   // number of SDValues required to lower them.
   const int NumVMSArgs = StatepointSite.numTotalVMSArgs();
-<<<<<<< HEAD
-  Ops.push_back(Builder.DAG.getTargetConstant(StackMaps::ConstantOp, MVT::i64));
-  Ops.push_back(Builder.DAG.getTargetConstant(NumVMSArgs, MVT::i64));
-=======
-  Ops.push_back( Builder.DAG.getTargetConstant(StackMaps::ConstantOp,
-                                               Builder.getCurSDLoc(),
-                                               MVT::i64));
+  Ops.push_back(Builder.DAG.getTargetConstant(StackMaps::ConstantOp,
+                                              Builder.getCurSDLoc(),
+                                              MVT::i64));
   Ops.push_back(Builder.DAG.getTargetConstant(NumVMSArgs, Builder.getCurSDLoc(),
                                               MVT::i64));
->>>>>>> master
 
   assert(NumVMSArgs + 1 == std::distance(StatepointSite.vm_state_begin(),
                                          StatepointSite.vm_state_end()));
@@ -688,7 +683,6 @@ void SelectionDAGBuilder::LowerStatepoint(
 
   SDNode *StatepointMCNode =
       DAG.getMachineNode(TargetOpcode::STATEPOINT, getCurSDLoc(), NodeTys, Ops);
-<<<<<<< HEAD
 
   SDNode *SinkNode = StatepointMCNode;
 
@@ -718,8 +712,6 @@ void SelectionDAGBuilder::LowerStatepoint(
 
     SinkNode = GCTransitionStart.getNode();
   }
-=======
->>>>>>> master
 
   // Replace original call
   DAG.ReplaceAllUsesWith(CallNode, SinkNode); // This may update Root
