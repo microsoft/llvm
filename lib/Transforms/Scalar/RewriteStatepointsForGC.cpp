@@ -69,7 +69,7 @@ namespace {
 struct RewriteStatepointsForGC : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
 
-  RewriteStatepointsForGC() : FunctionPass(ID) {
+  RewriteStatepointsForGC() : FunctionPass(ID), MustTrackBasePointers(true) {
     initializeRewriteStatepointsForGCPass(*PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F) override;
