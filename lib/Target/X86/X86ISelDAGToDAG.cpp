@@ -2858,6 +2858,8 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
     // 7-8) Trap helper address
     // 9) Glue (optional)
 
+    SDLoc SDL(Node);
+
     // Add a pseudo-instruction to be lowered later on that will stash the
     // address of the instruction following the call into the return address
     // buffer.
@@ -2868,8 +2870,9 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
     const Value *RAAddrV =
         cast<SrcValueSDNode>(Node->getOperand(2))->getValue();
     SDValue RAStore = CurDAG->getStore(SDValue(Node->getOperand(0)),
-                                       SDLoc(Node),
-                                       CurDAG->getConstant(0, MVT::i64), RAAddr,
+                                       SDL,
+                                       CurDAG->getConstant(0, SDL, MVT::i64),
+                                       RAAddr,
                                        MachinePointerInfo(RAAddrV), false,
                                        false, 0);
     MemSDNode *RAStoreNode = cast<MemSDNode>(RAStore.getNode());
@@ -2888,7 +2891,7 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
       GCTransitionRAOps.push_back(Node->getOperand(Node->getNumOperands() - 1));
 
     MachineSDNode *GCTransitionRA =
-        CurDAG->getMachineNode(X86::GC_TRANSITION_RA, SDLoc(Node), VTs,
+        CurDAG->getMachineNode(X86::GC_TRANSITION_RA, SDL, VTs,
                                GCTransitionRAOps);
     GCTransitionRA->setMemRefs(MemOp, MemOp + 1);
 
@@ -2898,8 +2901,9 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
     SDValue GCAddr = Node->getOperand(3);
     const Value *GCAddrV =
         cast<SrcValueSDNode>(Node->getOperand(4))->getValue();
-    SDValue GCStore = CurDAG->getStore(SDValue(GCTransitionRA, 0), SDLoc(Node),
-                                       CurDAG->getConstant(0, MVT::i8), GCAddr,
+    SDValue GCStore = CurDAG->getStore(SDValue(GCTransitionRA, 0), SDL,
+                                       CurDAG->getConstant(0, SDL, MVT::i8),
+                                       GCAddr,
                                        MachinePointerInfo(GCAddrV), false,
                                        false, 0);
 
@@ -2924,13 +2928,16 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
 
     assert(Node->getGluedNode());
 
+    SDLoc SDL(Node);
+
     // Enable the CoreCLR GC's preemptive mode
     SDValue GCAddr = Node->getOperand(3);
     const Value *GCAddrV =
         cast<SrcValueSDNode>(Node->getOperand(4))->getValue();
 
-    SDValue GCStore = CurDAG->getStore(Node->getOperand(0), SDLoc(Node),
-                                       CurDAG->getConstant(1, MVT::i8), GCAddr,
+    SDValue GCStore = CurDAG->getStore(Node->getOperand(0), SDL,
+                                       CurDAG->getConstant(1, SDL, MVT::i8),
+                                       GCAddr,
                                        MachinePointerInfo(GCAddrV), false,
                                        false, 0);
     SDNode *StoreNode = SelectCode(GCStore.getNode());
@@ -2944,7 +2951,7 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
     SDValue TrapAddr = Node->getOperand(5);
     const Value *TrapAddrV =
         cast<SrcValueSDNode>(Node->getOperand(6))->getValue();
-    SDValue TrapLoad = CurDAG->getLoad(MVT::i32, SDLoc(Node),
+    SDValue TrapLoad = CurDAG->getLoad(MVT::i32, SDL,
                                        SDValue(StoreNode, 0), TrapAddr,
                                        MachinePointerInfo(TrapAddrV), false,
                                        false, false, 0);
@@ -2958,11 +2965,11 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
     MemOp[0] = TrapLoadNode->getMemOperand();
     SDVTList CMPVTs = CurDAG->getVTList(MVT::i32, MVT::Other, MVT::Glue);
 
-    SDValue Comparand = CurDAG->getTargetConstant(0, MVT::i8);
+    SDValue Comparand = CurDAG->getTargetConstant(0, SDL, MVT::i8);
     const SDValue CMPOps[] = {Base, Scale, Index, Disp, Segment, Comparand,
                               SDValue(StoreNode, 0), SDValue(StoreNode, 1)};
     MachineSDNode *TrapCMPNode = CurDAG->getMachineNode(X86::CMP32mi8,
-                                                        SDLoc(Node), CMPVTs,
+                                                        SDL, CMPVTs,
                                                         CMPOps);
     TrapCMPNode->setMemRefs(MemOp, MemOp + 1);
 
@@ -2974,8 +2981,7 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
                                 SDValue(TrapCMPNode, 1),
                                 SDValue(TrapCMPNode, 2)};
     MachineSDNode *GCTransitionPause =
-        CurDAG->getMachineNode(X86::GC_TRANSITION_PAUSE, SDLoc(Node), VTs,
-                               PauseOps);
+        CurDAG->getMachineNode(X86::GC_TRANSITION_PAUSE, SDL, VTs, PauseOps);
 
     ReplaceUses(SDValue(Node, 0), SDValue(GCTransitionPause, 0));
     ReplaceUses(SDValue(Node, 1), SDValue(GCTransitionPause, 1));
