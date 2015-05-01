@@ -525,7 +525,7 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
   if (!G)
     return;
 
-  MDLocation *L = getDebugLoc();
+  DILocation *L = getDebugLoc();
   if (!L)
     return;
 

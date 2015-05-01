@@ -93,3 +93,37 @@ RUN: not llvm-dis -disable-output %p/Inputs/invalid-non-vector-shufflevector.bc 
 RUN:   FileCheck --check-prefix=INVALID-TYPE %s
 
 INVALID-TYPE: Invalid type for value
+
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-fwdref-type-mismatch.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=FWDREF-TYPE %s
+
+FWDREF-TYPE: Invalid record
+
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-array-element-type.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=ELEMENT-TYPE %s
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-vector-element-type.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=ELEMENT-TYPE %s
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-pointer-element-type.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=ELEMENT-TYPE %s
+
+ELEMENT-TYPE: Invalid type
+
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-array-op-not-2nd-to-last.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=ARRAY-NOT-2LAST %s
+
+ARRAY-NOT-2LAST: Array op not second to last
+
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-too-big-fwdref.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=HUGE-FWDREF %s
+
+HUGE-FWDREF: Invalid record
+
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-load-pointer-type.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=LOAD-BAD-TYPE %s
+
+LOAD-BAD-TYPE: Load operand is not a pointer type
+
+RUN: not llvm-dis -disable-output %p/Inputs/invalid-GCTable-overflow.bc 2>&1 | \
+RUN:   FileCheck --check-prefix=GCTABLE-OFLOW %s
+
+GCTABLE-OFLOW: Invalid ID

@@ -443,11 +443,8 @@ static void
 ProfileBitsInit(FoldingSetNodeID &ID, ArrayRef<Init *> Range) {
   ID.AddInteger(Range.size());
 
-  for (ArrayRef<Init *>::iterator i = Range.begin(),
-         iend = Range.end();
-       i != iend;
-       ++i)
-    ID.AddPointer(*i);
+  for (Init *I : Range)
+    ID.AddPointer(I);
 }
 
 BitsInit *BitsInit::get(ArrayRef<Init *> Range) {
@@ -593,11 +590,8 @@ static void ProfileListInit(FoldingSetNodeID &ID,
   ID.AddInteger(Range.size());
   ID.AddPointer(EltTy);
 
-  for (ArrayRef<Init *>::iterator i = Range.begin(),
-         iend = Range.end();
-       i != iend;
-       ++i)
-    ID.AddPointer(*i);
+  for (Init *I : Range)
+    ID.AddPointer(I);
 }
 
 ListInit *ListInit::get(ArrayRef<Init *> Range, RecTy *EltTy) {
@@ -618,9 +612,7 @@ ListInit *ListInit::get(ArrayRef<Init *> Range, RecTy *EltTy) {
 }
 
 void ListInit::Profile(FoldingSetNodeID &ID) const {
-  ListRecTy *ListType = dyn_cast<ListRecTy>(getType());
-  assert(ListType && "Bad type for ListInit!");
-  RecTy *EltTy = ListType->getElementType();
+  RecTy *EltTy = cast<ListRecTy>(getType())->getElementType();
 
   ProfileListInit(ID, Values, EltTy);
 }
@@ -697,14 +689,10 @@ Init *OpInit::resolveListElementReference(Record &R, const RecordVal *IRV,
   }
 
   if (Resolved != this) {
-    TypedInit *Typed = dyn_cast<TypedInit>(Resolved);
-    assert(Typed && "Expected typed init for list reference");
-    if (Typed) {
-      Init *New = Typed->resolveListElementReference(R, IRV, Elt);
-      if (New)
-        return New;
-      return VarListElementInit::get(Typed, Elt);
-    }
+    TypedInit *Typed = cast<TypedInit>(Resolved);
+    if (Init *New = Typed->resolveListElementReference(R, IRV, Elt))
+      return New;
+    return VarListElementInit::get(Typed, Elt);
   }
 
   return nullptr;
@@ -1013,28 +1001,19 @@ static Init *ForeachHelper(Init *LHS, Init *MHS, Init *RHS, RecTy *Type,
 static Init *EvaluateOperation(OpInit *RHSo, Init *LHS, Init *Arg,
                                RecTy *Type, Record *CurRec,
                                MultiClass *CurMultiClass) {
-  std::vector<Init *> NewOperands;
-
-  TypedInit *TArg = dyn_cast<TypedInit>(Arg);
-
   // If this is a dag, recurse
-  if (TArg && TArg->getType()->getAsString() == "dag") {
-    Init *Result = ForeachHelper(LHS, Arg, RHSo, Type,
-                                 CurRec, CurMultiClass);
-    return Result;
-  }
+  if (auto *TArg = dyn_cast<TypedInit>(Arg))
+    if (TArg->getType()->getAsString() == "dag")
+      return ForeachHelper(LHS, Arg, RHSo, Type, CurRec, CurMultiClass);
 
+  std::vector<Init *> NewOperands;
   for (int i = 0; i < RHSo->getNumOperands(); ++i) {
-    OpInit *RHSoo = dyn_cast<OpInit>(RHSo->getOperand(i));
-
-    if (RHSoo) {
-      Init *Result = EvaluateOperation(RHSoo, LHS, Arg,
-                                       Type, CurRec, CurMultiClass);
-      if (Result) {
+    if (auto *RHSoo = dyn_cast<OpInit>(RHSo->getOperand(i))) {
+      if (Init *Result = EvaluateOperation(RHSoo, LHS, Arg,
+                                           Type, CurRec, CurMultiClass))
         NewOperands.push_back(Result);
-      } else {
+      else
         NewOperands.push_back(Arg);
-      }
     } else if (LHS->getAsString() == RHSo->getOperand(i)->getAsString()) {
       NewOperands.push_back(Arg);
     } else {
@@ -1097,11 +1076,7 @@ static Init *ForeachHelper(Init *LHS, Init *MHS, Init *RHS, RecTy *Type,
       std::vector<Init *> NewOperands;
       std::vector<Init *> NewList(MHSl->begin(), MHSl->end());
 
-      for (std::vector<Init *>::iterator li = NewList.begin(),
-             liend = NewList.end();
-           li != liend;
-           ++li) {
-        Init *Item = *li;
+      for (Init *&Item : NewList) {
         NewOperands.clear();
         for(int i = 0; i < RHSo->getNumOperands(); ++i) {
           // First, replace the foreach variable with the list item
@@ -1116,7 +1091,7 @@ static Init *ForeachHelper(Init *LHS, Init *MHS, Init *RHS, RecTy *Type,
         const OpInit *NewOp = RHSo->clone(NewOperands);
         Init *NewItem = NewOp->Fold(CurRec, CurMultiClass);
         if (NewItem != NewOp)
-          *li = NewItem;
+          Item = NewItem;
       }
       return ListInit::get(NewList, MHSl->getType());
     }
@@ -1139,9 +1114,9 @@ Init *TernOpInit::Fold(Record *CurRec, MultiClass *CurMultiClass) const {
     VarInit *RHSv = dyn_cast<VarInit>(RHS);
     StringInit *RHSs = dyn_cast<StringInit>(RHS);
 
-    if ((LHSd && MHSd && RHSd)
-        || (LHSv && MHSv && RHSv)
-        || (LHSs && MHSs && RHSs)) {
+    if ((LHSd && MHSd && RHSd) ||
+        (LHSv && MHSv && RHSv) ||
+        (LHSs && MHSs && RHSs)) {
       if (RHSd) {
         Record *Val = RHSd->getDef();
         if (LHSd->getAsString() == RHSd->getAsString()) {
@@ -1239,9 +1214,9 @@ std::string TernOpInit::getAsString() const {
   case SUBST: Result = "!subst"; break;
   case FOREACH: Result = "!foreach"; break;
   case IF: Result = "!if"; break;
- }
-  return Result + "(" + LHS->getAsString() + ", " + MHS->getAsString() + ", "
-    + RHS->getAsString() + ")";
+  }
+  return Result + "(" + LHS->getAsString() + ", " + MHS->getAsString() + ", " +
+         RHS->getAsString() + ")";
 }
 
 RecTy *TypedInit::getFieldType(const std::string &FieldName) const {
@@ -1301,8 +1276,7 @@ VarInit *VarInit::get(Init *VN, RecTy *T) {
 }
 
 const std::string &VarInit::getName() const {
-  StringInit *NameString = dyn_cast<StringInit>(getNameInit());
-  assert(NameString && "VarInit name is not a string!");
+  StringInit *NameString = cast<StringInit>(getNameInit());
   return NameString->getValue();
 }
 
@@ -1322,8 +1296,7 @@ Init *VarInit::resolveListElementReference(Record &R,
   assert(RV && "Reference to a non-existent variable?");
   ListInit *LI = dyn_cast<ListInit>(RV->getValue());
   if (!LI) {
-    TypedInit *VI = dyn_cast<TypedInit>(RV->getValue());
-    assert(VI && "Invalid list element!");
+    TypedInit *VI = cast<TypedInit>(RV->getValue());
     return VarListElementInit::get(VI, Elt);
   }
 
@@ -1551,17 +1524,12 @@ DagInit::get(Init *V, const std::string &VN,
 DagInit *
 DagInit::get(Init *V, const std::string &VN,
              const std::vector<std::pair<Init*, std::string> > &args) {
-  typedef std::pair<Init*, std::string> PairType;
-
   std::vector<Init *> Args;
   std::vector<std::string> Names;
 
-  for (std::vector<PairType>::const_iterator i = args.begin(),
-         iend = args.end();
-       i != iend;
-       ++i) {
-    Args.push_back(i->first);
-    Names.push_back(i->second);
+  for (const auto &Arg : args) {
+    Args.push_back(Arg.first);
+    Names.push_back(Arg.second);
   }
 
   return DagInit::get(V, VN, Args, Names);
@@ -1618,9 +1586,7 @@ RecordVal::RecordVal(const std::string &N, RecTy *T, unsigned P)
 }
 
 const std::string &RecordVal::getName() const {
-  StringInit *NameString = dyn_cast<StringInit>(Name);
-  assert(NameString && "RecordVal name is not a string!");
-  return NameString->getValue();
+  return cast<StringInit>(Name)->getValue();
 }
 
 void RecordVal::dump() const { errs() << *this; }
@@ -1648,8 +1614,7 @@ void Record::init() {
 
 void Record::checkName() {
   // Ensure the record name has string type.
-  const TypedInit *TypedName = dyn_cast<const TypedInit>(Name);
-  assert(TypedName && "Record name is not typed!");
+  const TypedInit *TypedName = cast<const TypedInit>(Name);
   RecTy *Type = TypedName->getType();
   if (!isa<StringRecTy>(Type))
     PrintFatalError(getLoc(), "Record name is not a string!");
@@ -1666,9 +1631,7 @@ DefInit *Record::getDefInit() {
 }
 
 const std::string &Record::getName() const {
-  const StringInit *NameString = dyn_cast<StringInit>(Name);
-  assert(NameString && "Record name is not a string!");
-  return NameString->getValue();
+  return cast<StringInit>(Name)->getValue();
 }
 
 void Record::setName(Init *NewName) {
@@ -1700,14 +1663,13 @@ void Record::resolveReferencesTo(const RecordVal *RV) {
       continue;
     if (Init *V = Values[i].getValue())
       if (Values[i].setValue(V->resolveReferences(*this, RV)))
-        PrintFatalError(getLoc(), "Invalid value is found when setting '"
-                      + Values[i].getNameInitAsString()
-                      + "' after resolving references"
-                      + (RV ? " against '" + RV->getNameInitAsString()
-                              + "' of ("
-                              + RV->getValue()->getAsUnquotedString() + ")"
-                            : "")
-                      + "\n");
+        PrintFatalError(getLoc(), "Invalid value is found when setting '" +
+                        Values[i].getNameInitAsString() +
+                        "' after resolving references" +
+                        (RV ? " against '" + RV->getNameInitAsString() +
+                              "' of (" + RV->getValue()->getAsUnquotedString() +
+                              ")"
+                            : "") + "\n");
   }
   Init *OldName = getNameInit();
   Init *NewName = Name->resolveReferences(*this, RV);
@@ -1958,11 +1920,8 @@ void MultiClass::dump() const {
   Rec.dump();
 
   errs() << "Defs:\n";
-  for (RecordVector::const_iterator r = DefPrototypes.begin(),
-         rend = DefPrototypes.end();
-       r != rend;
-       ++r) {
-    (*r)->dump();
+  for (const auto &Proto : DefPrototypes) {
+    Proto->dump();
   }
 }
 
