@@ -9,7 +9,7 @@ entry:
 ; CHECK-LABEL: entry
   %ptr = alloca i32
 ; CHECK-NOT: statepoint
-  call void (...)* @llvm.frameescape(i32* %ptr)
+  call void (...) @llvm.frameescape(i32* %ptr)
 ; CHECK: statepoint
   ret void
 }

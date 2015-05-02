@@ -18329,13 +18329,10 @@ X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
   const uint32_t *RegMask = X86RI->getCallPreservedMaskWithoutGPRs(RegMaskIt->getRegMask());
   *RegMaskIt = MachineOperand::CreateRegMask(RegMask);
 
-  // Call
-  ThisMBB->push_back(CallMI->removeFromParent());
   ThisMBB->addSuccessor(SinkMBB);
-
   MI->eraseFromParent();
 
-  return SinkMBB;
+  return ThisMBB;
 }
 
 MachineBasicBlock *
