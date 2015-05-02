@@ -19117,16 +19117,11 @@ X86TargetLowering::EmitLoweredSegAlloca(MachineInstr *MI,
 MachineBasicBlock *
 X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
                                         MachineBasicBlock *BB) const {
-  DebugLoc DL = MI->getDebugLoc();
-  MachineBasicBlock *ResumeBB = BB;
   assert(!Subtarget->isTargetMachO());
-  if (Subtarget->isTargetWindowsCoreCLR()) {
-    ResumeBB = X86FrameLowering::emitStackProbeInline(*BB->getParent(), *BB, MI,
-                                                      DL, false);
-  } else {
-    X86FrameLowering::emitStackProbeCall(*BB->getParent(), *BB, MI, DL);
-  }
-
+  DebugLoc DL = MI->getDebugLoc();
+  MachineInstr *ResumeMI =
+      X86FrameLowering::emitStackProbe(*BB->getParent(), *BB, MI, DL, false);
+  MachineBasicBlock *ResumeBB = ResumeMI->getParent();
   MI->eraseFromParent();   // The pseudo instruction is gone now.
   return ResumeBB;
 }
