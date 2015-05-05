@@ -2159,12 +2159,12 @@ SDValue SystemZTargetLowering::lowerBITCAST(SDValue Op,
                          DAG.getConstant(32, DL, MVT::i64));
     }
     SDValue Out64 = DAG.getNode(ISD::BITCAST, DL, MVT::f64, In64);
-    return DAG.getTargetExtractSubreg(SystemZ::subreg_h32,
+    return DAG.getTargetExtractSubreg(SystemZ::subreg_r32,
                                       DL, MVT::f32, Out64);
   }
   if (InVT == MVT::f32 && ResVT == MVT::i32) {
     SDNode *U64 = DAG.getMachineNode(TargetOpcode::IMPLICIT_DEF, DL, MVT::f64);
-    SDValue In64 = DAG.getTargetInsertSubreg(SystemZ::subreg_h32, DL,
+    SDValue In64 = DAG.getTargetInsertSubreg(SystemZ::subreg_r32, DL,
                                              MVT::f64, SDValue(U64, 0), In);
     SDValue Out64 = DAG.getNode(ISD::BITCAST, DL, MVT::i64, In64);
     if (Subtarget.hasHighWord())
@@ -2784,6 +2784,8 @@ const char *SystemZTargetLowering::getTargetNodeName(unsigned Opcode) const {
     OPCODE(RET_FLAG);
     OPCODE(CALL);
     OPCODE(SIBCALL);
+    OPCODE(TLS_GDCALL);
+    OPCODE(TLS_LDCALL);
     OPCODE(PCREL_WRAPPER);
     OPCODE(PCREL_OFFSET);
     OPCODE(IABS);
@@ -2794,7 +2796,9 @@ const char *SystemZTargetLowering::getTargetNodeName(unsigned Opcode) const {
     OPCODE(SELECT_CCMASK);
     OPCODE(ADJDYNALLOC);
     OPCODE(EXTRACT_ACCESS);
+    OPCODE(POPCNT);
     OPCODE(UMUL_LOHI64);
+    OPCODE(SDIVREM32);
     OPCODE(SDIVREM64);
     OPCODE(UDIVREM32);
     OPCODE(UDIVREM64);
@@ -2808,8 +2812,8 @@ const char *SystemZTargetLowering::getTargetNodeName(unsigned Opcode) const {
     OPCODE(XC_LOOP);
     OPCODE(CLC);
     OPCODE(CLC_LOOP);
-    OPCODE(STRCMP);
     OPCODE(STPCPY);
+    OPCODE(STRCMP);
     OPCODE(SEARCH_STRING);
     OPCODE(IPM);
     OPCODE(SERIALIZE);
