@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 #include <unordered_set>
+#include <set>
 
 #include "FuzzerInterface.h"
 
@@ -25,7 +26,8 @@ using namespace std::chrono;
 
 std::string FileToString(const std::string &Path);
 Unit FileToVector(const std::string &Path);
-void ReadDirToVectorOfUnits(const char *Path, std::vector<Unit> *V);
+void ReadDirToVectorOfUnits(const char *Path, std::vector<Unit> *V,
+                            long *Epoch);
 void WriteToFile(const Unit &U, const std::string &Path);
 void CopyFileToErr(const std::string &Path);
 // Returns "Dir/FileName" or equivalent for the current OS.
@@ -40,6 +42,7 @@ void Print(const Unit &U, const char *PrintAfter = "");
 void PrintASCII(const Unit &U, const char *PrintAfter = "");
 std::string Hash(const Unit &U);
 void SetTimer(int Seconds);
+void PrintFileAsBase64(const std::string &Path);
 
 class Fuzzer {
  public:
@@ -53,6 +56,7 @@ class Fuzzer {
     bool UseFullCoverageSet  = false;
     bool UseCoveragePairs = false;
     bool UseDFSan = false;
+    bool Reload = true;
     int PreferSmallDuringInitialShuffle = -1;
     size_t MaxNumberOfRuns = ULONG_MAX;
     std::string OutputCorpus;
@@ -60,13 +64,14 @@ class Fuzzer {
   };
   Fuzzer(UserCallback Callback, FuzzingOptions Options);
   void AddToCorpus(const Unit &U) { Corpus.push_back(U); }
-  size_t Loop(size_t NumIterations);
+  void Loop(size_t NumIterations);
   void ShuffleAndMinimize();
   void InitializeDFSan();
   size_t CorpusSize() const { return Corpus.size(); }
-  void ReadDir(const std::string &Path) {
-    ReadDirToVectorOfUnits(Path.c_str(), &Corpus);
+  void ReadDir(const std::string &Path, long *Epoch) {
+    ReadDirToVectorOfUnits(Path.c_str(), &Corpus, Epoch);
   }
+  void RereadOutputCorpus();
   // Save the current corpus to OutputCorpus.
   void SaveCorpus();
 
@@ -84,16 +89,28 @@ class Fuzzer {
  private:
   void AlarmCallback();
   void ExecuteCallback(const Unit &U);
-  size_t MutateAndTestOne(Unit *U);
+  void MutateAndTestOne(Unit *U);
+  void ReportNewCoverage(size_t NewCoverage, const Unit &U);
   size_t RunOne(const Unit &U);
+  void RunOneAndUpdateCorpus(const Unit &U);
   size_t RunOneMaximizeTotalCoverage(const Unit &U);
   size_t RunOneMaximizeFullCoverageSet(const Unit &U);
   size_t RunOneMaximizeCoveragePairs(const Unit &U);
   void WriteToOutputCorpus(const Unit &U);
   void WriteToCrash(const Unit &U, const char *Prefix);
-  bool MutateWithDFSan(Unit *U);
   void PrintStats(const char *Where, size_t Cov, const char *End = "\n");
   void PrintUnitInASCIIOrTokens(const Unit &U, const char *PrintAfter = "");
+
+  // Trace-based fuzzing: we run a unit with some kind of tracing
+  // enabled and record potentially useful mutations. Then
+  // We apply these mutations one by one to the unit and run it again.
+
+  // Start tracing; forget all previously proposed mutations.
+  void StartTraceRecording();
+  // Stop tracing and return the number of proposed mutations.
+  size_t StopTraceRecording();
+  // Apply Idx-th trace-based mutation to U.
+  void ApplyTraceBasedMutation(size_t Idx, Unit *U);
 
   void SetDeathCallback();
   static void StaticDeathCallback();
@@ -103,6 +120,7 @@ class Fuzzer {
   size_t TotalNumberOfRuns = 0;
 
   std::vector<Unit> Corpus;
+  std::set<Unit> UnitsAddedAfterInitialLoad;
   std::unordered_set<uintptr_t> FullCoverageSets;
   std::unordered_set<uint64_t>  CoveragePairs;
 
@@ -119,6 +137,7 @@ class Fuzzer {
   system_clock::time_point ProcessStartTime = system_clock::now();
   system_clock::time_point UnitStartTime;
   long TimeOfLongestUnitInSeconds = 0;
+  long EpochOfLastReadOfOutputCorpus = 0;
 };
 
 };  // namespace fuzzer

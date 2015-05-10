@@ -1196,7 +1196,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     // facts about the relocate value, while being careful to
     // preserve relocation semantics.
     GCRelocateOperands Operands(II);
-    Value *DerivedPtr = Operands.derivedPtr();
+    Value *DerivedPtr = Operands.getDerivedPtr();
 
     // Remove the relocation if unused, note that this check is required
     // to prevent the cases below from looping forever.
@@ -1513,10 +1513,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
 
     if (!CallerPAL.isEmpty() && !Caller->use_empty()) {
       AttrBuilder RAttrs(CallerPAL, AttributeSet::ReturnIndex);
-      if (RAttrs.
-          hasAttributes(AttributeFuncs::
-                        typeIncompatible(NewRetTy, AttributeSet::ReturnIndex),
-                        AttributeSet::ReturnIndex))
+      if (RAttrs.overlaps(AttributeFuncs::typeIncompatible(NewRetTy)))
         return false;   // Attribute not compatible with transformed value.
     }
 
@@ -1557,8 +1554,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
       return false;   // Cannot transform this parameter value.
 
     if (AttrBuilder(CallerPAL.getParamAttributes(i + 1), i + 1).
-          hasAttributes(AttributeFuncs::
-                        typeIncompatible(ParamTy, i + 1), i + 1))
+          overlaps(AttributeFuncs::typeIncompatible(ParamTy)))
       return false;   // Attribute not compatible with transformed value.
 
     if (CS.isInAllocaArgument(i))
@@ -1631,10 +1627,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
 
   // If the return value is not being used, the type may not be compatible
   // with the existing attributes.  Wipe out any problematic attributes.
-  RAttrs.
-    removeAttributes(AttributeFuncs::
-                     typeIncompatible(NewRetTy, AttributeSet::ReturnIndex),
-                     AttributeSet::ReturnIndex);
+  RAttrs.remove(AttributeFuncs::typeIncompatible(NewRetTy));
 
   // Add the new return attributes.
   if (RAttrs.hasAttributes())

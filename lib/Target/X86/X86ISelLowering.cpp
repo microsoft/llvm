@@ -3132,6 +3132,7 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     // This isn't right, although it's probably harmless on x86; liveouts
     // should be computed from returns not tail calls.  Consider a void
     // function making a tail call to a function returning int.
+    MF.getFrameInfo()->setHasTailCall();
     return DAG.getNode(X86ISD::TC_RETURN, dl, NodeTys, Ops);
   }
 
@@ -4353,7 +4354,8 @@ static bool getTargetShuffleMask(SDNode *N, MVT VT,
       return false;
 
     SDValue Ptr = MaskLoad->getBasePtr();
-    if (Ptr->getOpcode() == X86ISD::Wrapper)
+    if (Ptr->getOpcode() == X86ISD::Wrapper ||
+        Ptr->getOpcode() == X86ISD::WrapperRIP)
       Ptr = Ptr->getOperand(0);
 
     auto *MaskCP = dyn_cast<ConstantPoolSDNode>(Ptr);
@@ -14927,12 +14929,27 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
                                        Mask.getValueType().getSizeInBits());
       SDValue Cmp;
       if (IntrData->Type == CMP_MASK_CC) {
-        Cmp = DAG.getNode(IntrData->Opc0, dl, MaskVT, Op.getOperand(1),
-                    Op.getOperand(2), Op.getOperand(3));
+        SDValue CC = Op.getOperand(3);
+        CC = DAG.getNode(ISD::TRUNCATE, dl, MVT::i8, CC);
+        // We specify 2 possible opcodes for intrinsics with rounding modes.
+        // First, we check if the intrinsic may have non-default rounding mode,
+        // (IntrData->Opc1 != 0), then we check the rounding mode operand.
+        if (IntrData->Opc1 != 0) {
+          SDValue Rnd = Op.getOperand(5);
+          if (cast<ConstantSDNode>(Rnd)->getZExtValue() !=
+              X86::STATIC_ROUNDING::CUR_DIRECTION)
+            Cmp = DAG.getNode(IntrData->Opc1, dl, MaskVT, Op.getOperand(1),
+                              Op.getOperand(2), CC, Rnd);
+        }
+        //default rounding mode
+        if(!Cmp.getNode())
+            Cmp = DAG.getNode(IntrData->Opc0, dl, MaskVT, Op.getOperand(1),
+                              Op.getOperand(2), CC);
+
       } else {
         assert(IntrData->Type == CMP_MASK && "Unexpected intrinsic type!");
         Cmp = DAG.getNode(IntrData->Opc0, dl, MaskVT, Op.getOperand(1),
-                    Op.getOperand(2));
+                          Op.getOperand(2));
       }
       SDValue CmpMask = getVectorMaskingNode(Cmp, Mask,
                                              DAG.getTargetConstant(0, dl,
@@ -17717,8 +17734,8 @@ void X86TargetLowering::ReplaceNodeResults(SDNode *N,
 }
 
 const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
-  switch (Opcode) {
-  default: return nullptr;
+  switch ((X86ISD::NodeType)Opcode) {
+  case X86ISD::FIRST_NUMBER:       break;
   case X86ISD::BSF:                return "X86ISD::BSF";
   case X86ISD::BSR:                return "X86ISD::BSR";
   case X86ISD::SHLD:               return "X86ISD::SHLD";
@@ -17745,9 +17762,11 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::UCOMI:              return "X86ISD::UCOMI";
   case X86ISD::CMPM:               return "X86ISD::CMPM";
   case X86ISD::CMPMU:              return "X86ISD::CMPMU";
+  case X86ISD::CMPM_RND:           return "X86ISD::CMPM_RND";
   case X86ISD::SETCC:              return "X86ISD::SETCC";
   case X86ISD::SETCC_CARRY:        return "X86ISD::SETCC_CARRY";
   case X86ISD::FSETCC:             return "X86ISD::FSETCC";
+  case X86ISD::FGETSIGNx86:        return "X86ISD::FGETSIGNx86";
   case X86ISD::CMOV:               return "X86ISD::CMOV";
   case X86ISD::BRCOND:             return "X86ISD::BRCOND";
   case X86ISD::RET_FLAG:           return "X86ISD::RET_FLAG";
@@ -17756,16 +17775,21 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::GlobalBaseReg:      return "X86ISD::GlobalBaseReg";
   case X86ISD::Wrapper:            return "X86ISD::Wrapper";
   case X86ISD::WrapperRIP:         return "X86ISD::WrapperRIP";
+  case X86ISD::MOVDQ2Q:            return "X86ISD::MOVDQ2Q";
+  case X86ISD::MMX_MOVD2W:         return "X86ISD::MMX_MOVD2W";
+  case X86ISD::MMX_MOVW2D:         return "X86ISD::MMX_MOVW2D";
   case X86ISD::PEXTRB:             return "X86ISD::PEXTRB";
   case X86ISD::PEXTRW:             return "X86ISD::PEXTRW";
   case X86ISD::INSERTPS:           return "X86ISD::INSERTPS";
   case X86ISD::PINSRB:             return "X86ISD::PINSRB";
   case X86ISD::PINSRW:             return "X86ISD::PINSRW";
+  case X86ISD::MMX_PINSRW:         return "X86ISD::MMX_PINSRW";
   case X86ISD::PSHUFB:             return "X86ISD::PSHUFB";
   case X86ISD::ANDNP:              return "X86ISD::ANDNP";
   case X86ISD::PSIGN:              return "X86ISD::PSIGN";
   case X86ISD::BLENDI:             return "X86ISD::BLENDI";
   case X86ISD::SHRUNKBLEND:        return "X86ISD::SHRUNKBLEND";
+  case X86ISD::ADDUS:              return "X86ISD::ADDUS";
   case X86ISD::SUBUS:              return "X86ISD::SUBUS";
   case X86ISD::HADD:               return "X86ISD::HADD";
   case X86ISD::HSUB:               return "X86ISD::HSUB";
@@ -17859,6 +17883,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::UNPCKH:             return "X86ISD::UNPCKH";
   case X86ISD::VBROADCAST:         return "X86ISD::VBROADCAST";
   case X86ISD::VEXTRACT:           return "X86ISD::VEXTRACT";
+  case X86ISD::VPERMILPV:          return "X86ISD::VPERMILPV";
   case X86ISD::VPERMILPI:          return "X86ISD::VPERMILPI";
   case X86ISD::VPERM2X128:         return "X86ISD::VPERM2X128";
   case X86ISD::VPERMV:             return "X86ISD::VPERMV";
@@ -17871,6 +17896,9 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::VAARG_64:           return "X86ISD::VAARG_64";
   case X86ISD::WIN_ALLOCA:         return "X86ISD::WIN_ALLOCA";
   case X86ISD::MEMBARRIER:         return "X86ISD::MEMBARRIER";
+  case X86ISD::MFENCE:             return "X86ISD::MFENCE";
+  case X86ISD::SFENCE:             return "X86ISD::SFENCE";
+  case X86ISD::LFENCE:             return "X86ISD::LFENCE";
   case X86ISD::SEG_ALLOCA:         return "X86ISD::SEG_ALLOCA";
   case X86ISD::WIN_FTOL:           return "X86ISD::WIN_FTOL";
   case X86ISD::SAHF:               return "X86ISD::SAHF";
@@ -17882,6 +17910,13 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::FNMSUB:             return "X86ISD::FNMSUB";
   case X86ISD::FMADDSUB:           return "X86ISD::FMADDSUB";
   case X86ISD::FMSUBADD:           return "X86ISD::FMSUBADD";
+  case X86ISD::FMADD_RND:          return "X86ISD::FMADD_RND";
+  case X86ISD::FNMADD_RND:         return "X86ISD::FNMADD_RND";
+  case X86ISD::FMSUB_RND:          return "X86ISD::FMSUB_RND";
+  case X86ISD::FNMSUB_RND:         return "X86ISD::FNMSUB_RND";
+  case X86ISD::FMADDSUB_RND:       return "X86ISD::FMADDSUB_RND";
+  case X86ISD::FMSUBADD_RND:       return "X86ISD::FMSUBADD_RND";
+  case X86ISD::RNDSCALE:           return "X86ISD::RNDSCALE";
   case X86ISD::PCMPESTRI:          return "X86ISD::PCMPESTRI";
   case X86ISD::PCMPISTRI:          return "X86ISD::PCMPISTRI";
   case X86ISD::XTEST:              return "X86ISD::XTEST";
@@ -17890,12 +17925,16 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::SELECT:             return "X86ISD::SELECT";
   case X86ISD::ADDSUB:             return "X86ISD::ADDSUB";
   case X86ISD::RCP28:              return "X86ISD::RCP28";
+  case X86ISD::EXP2:               return "X86ISD::EXP2";
   case X86ISD::RSQRT28:            return "X86ISD::RSQRT28";
   case X86ISD::FADD_RND:           return "X86ISD::FADD_RND";
   case X86ISD::FSUB_RND:           return "X86ISD::FSUB_RND";
   case X86ISD::FMUL_RND:           return "X86ISD::FMUL_RND";
   case X86ISD::FDIV_RND:           return "X86ISD::FDIV_RND";
+  case X86ISD::ADDS:               return "X86ISD::ADDS";
+  case X86ISD::SUBS:               return "X86ISD::SUBS";
   }
+  return nullptr;
 }
 
 // isLegalAddressingMode - Return true if the addressing mode represented
@@ -21124,16 +21163,16 @@ matchIntegerMINMAX(SDValue Cond, EVT VT, SDValue LHS, SDValue RHS,
     default: break;
     case ISD::SETULT:
     case ISD::SETULE:
-      Opc = hasUnsigned ? X86ISD::UMIN : 0; break;
+      Opc = hasUnsigned ? X86ISD::UMIN : 0u; break;
     case ISD::SETUGT:
     case ISD::SETUGE:
-      Opc = hasUnsigned ? X86ISD::UMAX : 0; break;
+      Opc = hasUnsigned ? X86ISD::UMAX : 0u; break;
     case ISD::SETLT:
     case ISD::SETLE:
-      Opc = hasSigned ? X86ISD::SMIN : 0; break;
+      Opc = hasSigned ? X86ISD::SMIN : 0u; break;
     case ISD::SETGT:
     case ISD::SETGE:
-      Opc = hasSigned ? X86ISD::SMAX : 0; break;
+      Opc = hasSigned ? X86ISD::SMAX : 0u; break;
     }
   // Check for x CC y ? y : x -- a min/max with reversed arms.
   } else if (DAG.isEqualTo(LHS, Cond.getOperand(1)) &&
@@ -21142,16 +21181,16 @@ matchIntegerMINMAX(SDValue Cond, EVT VT, SDValue LHS, SDValue RHS,
     default: break;
     case ISD::SETULT:
     case ISD::SETULE:
-      Opc = hasUnsigned ? X86ISD::UMAX : 0; break;
+      Opc = hasUnsigned ? X86ISD::UMAX : 0u; break;
     case ISD::SETUGT:
     case ISD::SETUGE:
-      Opc = hasUnsigned ? X86ISD::UMIN : 0; break;
+      Opc = hasUnsigned ? X86ISD::UMIN : 0u; break;
     case ISD::SETLT:
     case ISD::SETLE:
-      Opc = hasSigned ? X86ISD::SMAX : 0; break;
+      Opc = hasSigned ? X86ISD::SMAX : 0u; break;
     case ISD::SETGT:
     case ISD::SETGE:
-      Opc = hasSigned ? X86ISD::SMIN : 0; break;
+      Opc = hasSigned ? X86ISD::SMIN : 0u; break;
     }
   }
 

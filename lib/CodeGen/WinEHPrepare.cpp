@@ -8,9 +8,11 @@
 //===----------------------------------------------------------------------===//
 //
 // This pass lowers LLVM IR exception handling into something closer to what the
-// backend wants. It snifs the personality function to see which kind of
-// preparation is necessary. If the personality function uses the Itanium LSDA,
-// this pass delegates to the DWARF EH preparation pass.
+// backend wants for functions using a personality function from a runtime
+// provided by MSVC. Functions with other personality functions are left alone
+// and may be prepared by other passes. In particular, all supported MSVC
+// personality functions require cleanup code to be outlined, and the C++
+// personality requires catch handler code to be outlined.
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,7 +33,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -922,7 +923,7 @@ bool WinEHPrepare::prepareExceptionHandlers(
   if (SEHExceptionCodeSlot) {
     if (SEHExceptionCodeSlot->hasNUses(0))
       SEHExceptionCodeSlot->eraseFromParent();
-    else
+    else if (isAllocaPromotable(SEHExceptionCodeSlot))
       PromoteMemToReg(SEHExceptionCodeSlot, *DT);
   }
 
@@ -933,6 +934,7 @@ bool WinEHPrepare::prepareExceptionHandlers(
   CleanupHandlerMap.clear();
   HandlerToParentFP.clear();
   DT = nullptr;
+  SEHExceptionCodeSlot = nullptr;
 
   return HandlersOutlined;
 }
@@ -1730,7 +1732,12 @@ Value *WinEHFrameVariableMaterializer::materializeValueFor(Value *V) {
   }
 
   if (isa<Instruction>(V) || isa<Argument>(V)) {
-    errs() << "Failed to demote instruction used in exception handler:\n";
+    Function *Parent = isa<Instruction>(V)
+                           ? cast<Instruction>(V)->getParent()->getParent()
+                           : cast<Argument>(V)->getParent();
+    errs()
+        << "Failed to demote instruction used in exception handler of function "
+        << GlobalValue::getRealLinkageName(Parent->getName()) << ":\n";
     errs() << "  " << *V << '\n';
     report_fatal_error("WinEHPrepare failed to demote instruction");
   }

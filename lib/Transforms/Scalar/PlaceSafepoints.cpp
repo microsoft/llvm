@@ -455,10 +455,9 @@ static Instruction *findLocationForEntrySafepoint(Function &F,
   // Note: SplitBlock modifies the DT.  Simply passing a Pass (which is a
   // module pass) is not enough.
   DT.recalculate(F);
-#ifndef NDEBUG
+
   // SplitBlock updates the DT
-  DT.verifyDomTree();
-#endif
+  DEBUG(DT.verifyDomTree());
 
   return BB->getTerminator();
 }
@@ -521,6 +520,23 @@ static bool enableEntrySafepoints(Function &F) { return !NoEntry; }
 static bool enableBackedgeSafepoints(Function &F) { return !NoBackedge; }
 static bool enableCallSafepoints(Function &F) { return !NoCall; }
 
+// Normalize basic block to make it ready to be target of invoke statepoint.
+// Ensure that 'BB' does not have phi nodes. It may require spliting it.
+static BasicBlock *normalizeForInvokeSafepoint(BasicBlock *BB,
+                                               BasicBlock *InvokeParent) {
+  BasicBlock *ret = BB;
+
+  if (!BB->getUniquePredecessor()) {
+    ret = SplitBlockPredecessors(BB, InvokeParent, "");
+  }
+
+  // Now that 'ret' has unique predecessor we can safely remove all phi nodes
+  // from it
+  FoldSingleEntryPHINodes(ret);
+  assert(!isa<PHINode>(ret->begin()));
+
+  return ret;
+}
 
 bool PlaceSafepoints::runOnFunction(Function &F) {
   if (F.isDeclaration() || F.empty()) {
@@ -674,6 +690,17 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
   Results.reserve(ParsePointNeeded.size());
   for (size_t i = 0; i < ParsePointNeeded.size(); i++) {
     CallSite &CS = ParsePointNeeded[i];
+
+    // For invoke statepoints we need to remove all phi nodes at the normal
+    // destination block.
+    // Reason for this is that we can place gc_result only after last phi node
+    // in basic block. We will get malformed code after RAUW for the
+    // gc_result if one of this phi nodes uses result from the invoke.
+    if (InvokeInst *Invoke = dyn_cast<InvokeInst>(CS.getInstruction())) {
+      normalizeForInvokeSafepoint(Invoke->getNormalDest(),
+                                  Invoke->getParent());
+    }
+
     Value *GCResult = ReplaceWithStatepoint(CS, nullptr);
     Results.push_back(GCResult);
   }
@@ -684,20 +711,8 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
     CallSite &CS = ParsePointNeeded[i];
     Value *GCResult = Results[i];
     if (GCResult) {
-      // In case if we inserted result in a different basic block than the
-      // original safepoint (this can happen for invokes). We need to be sure
-      // that
-      // original result value was not used in any of the phi nodes at the
-      // beginning of basic block with gc result. Because we know that all such
-      // blocks will have single predecessor we can safely assume that all phi
-      // nodes have single entry (because of normalizeBBForInvokeSafepoint).
-      // Just remove them all here.
-      if (CS.isInvoke()) {
-        FoldSingleEntryPHINodes(cast<Instruction>(GCResult)->getParent(),
-                                nullptr);
-        assert(
-            !isa<PHINode>(cast<Instruction>(GCResult)->getParent()->begin()));
-      }
+      // Can not RAUW for the gc result in case of phi nodes preset.
+      assert(!isa<PHINode>(cast<Instruction>(GCResult)->getParent()->begin()));
 
       // Replace all uses with the new call
       CS.getInstruction()->replaceAllUsesWith(GCResult);
@@ -842,37 +857,13 @@ InsertSafepointPoll(DominatorTree &DT, Instruction *term,
   assert(ParsePointsNeeded.size() <= calls.size());
 }
 
-// Normalize basic block to make it ready to be target of invoke statepoint.
-// It means spliting it to have single predecessor. Return newly created BB
-// ready to be successor of invoke statepoint.
-static BasicBlock *normalizeBBForInvokeSafepoint(BasicBlock *BB,
-                                                 BasicBlock *InvokeParent) {
-  BasicBlock *ret = BB;
-
-  if (!BB->getUniquePredecessor()) {
-    ret = SplitBlockPredecessors(BB, InvokeParent, "");
-  }
-
-  // Another requirement for such basic blocks is to not have any phi nodes.
-  // Since we just ensured that new BB will have single predecessor,
-  // all phi nodes in it will have one value. Here it would be naturall place
-  // to
-  // remove them all. But we can not do this because we are risking to remove
-  // one of the values stored in liveset of another statepoint. We will do it
-  // later after placing all safepoints.
-
-  return ret;
-}
-
 /// Replaces the given call site (Call or Invoke) with a gc.statepoint
 /// intrinsic with an empty deoptimization arguments list.  This does
 /// NOT do explicit relocation for GC support.
 static Value *ReplaceWithStatepoint(const CallSite &CS, /* to replace */
                                     Pass *P) {
-  BasicBlock *BB = CS.getInstruction()->getParent();
-  Function *F = BB->getParent();
-  Module *M = F->getParent();
-  assert(M && "must be set");
+  assert(CS.getInstruction()->getParent()->getParent()->getParent() &&
+         "must be set");
 
   // TODO: technically, a pass is not allowed to get functions from within a
   // function pass since it might trigger a new function addition.  Refactor
@@ -883,111 +874,84 @@ static Value *ReplaceWithStatepoint(const CallSite &CS, /* to replace */
   // immediately before the previous instruction under the assumption that all
   // arguments will be available here.  We can't insert afterwards since we may
   // be replacing a terminator.
-  Instruction *insertBefore = CS.getInstruction();
-  IRBuilder<> Builder(insertBefore);
+  IRBuilder<> Builder(CS.getInstruction());
 
   // Note: The gc args are not filled in at this time, that's handled by
   // RewriteStatepointsForGC (which is currently under review).
 
   // Create the statepoint given all the arguments
-  Instruction *token = nullptr;
-  AttributeSet return_attributes;
+  Instruction *Token = nullptr;
+  AttributeSet OriginalAttrs;
+
   if (CS.isCall()) {
-    CallInst *toReplace = cast<CallInst>(CS.getInstruction());
-    CallInst *Call = Builder.CreateGCStatepoint(
+    CallInst *ToReplace = cast<CallInst>(CS.getInstruction());
+    CallInst *Call = Builder.CreateGCStatepointCall(
         CS.getCalledValue(), makeArrayRef(CS.arg_begin(), CS.arg_end()), None,
         None, "safepoint_token");
-    Call->setTailCall(toReplace->isTailCall());
-    Call->setCallingConv(toReplace->getCallingConv());
+    Call->setTailCall(ToReplace->isTailCall());
+    Call->setCallingConv(ToReplace->getCallingConv());
 
     // Before we have to worry about GC semantics, all attributes are legal
-    AttributeSet new_attrs = toReplace->getAttributes();
-    // In case if we can handle this set of sttributes - set up function attrs
-    // directly on statepoint and return attrs later for gc_result intrinsic.
-    Call->setAttributes(new_attrs.getFnAttributes());
-    return_attributes = new_attrs.getRetAttributes();
     // TODO: handle param attributes
+    OriginalAttrs = ToReplace->getAttributes();
 
-    token = Call;
+    // In case if we can handle this set of attributes - set up function
+    // attributes directly on statepoint and return attributes later for
+    // gc_result intrinsic.
+    Call->setAttributes(OriginalAttrs.getFnAttributes());
+
+    Token = Call;
 
     // Put the following gc_result and gc_relocate calls immediately after the
-    // the old call (which we're about to delete)
-    BasicBlock::iterator next(toReplace);
-    assert(BB->end() != next && "not a terminator, must have next");
-    next++;
-    Instruction *IP = &*(next);
-    Builder.SetInsertPoint(IP);
-    Builder.SetCurrentDebugLocation(IP->getDebugLoc());
-
+    // the old call (which we're about to delete).
+    assert(ToReplace->getNextNode() && "not a terminator, must have next");
+    Builder.SetInsertPoint(ToReplace->getNextNode());
+    Builder.SetCurrentDebugLocation(ToReplace->getNextNode()->getDebugLoc());
   } else if (CS.isInvoke()) {
-    // TODO: make CreateGCStatepoint return an Instruction that we can cast to a
-    // Call or Invoke, instead of doing this junk here.
-
-    // Fill in the one generic type'd argument (the function is also
-    // vararg)
-    std::vector<Type *> argTypes;
-    argTypes.push_back(CS.getCalledValue()->getType());
-
-    Function *gc_statepoint_decl = Intrinsic::getDeclaration(
-        M, Intrinsic::experimental_gc_statepoint, argTypes);
-
-    // First, create the statepoint (with all live ptrs as arguments).
-    std::vector<llvm::Value *> args;
-    // target, #call args, unused, ... call parameters, #deopt args, ... deopt
-    // parameters, ... gc parameters
-    Value *Target = CS.getCalledValue();
-    args.push_back(Target);
-    int callArgSize = CS.arg_size();
-    // #call args
-    args.push_back(Builder.getInt32(callArgSize));
-    // unused
-    args.push_back(Builder.getInt32(0));
-    // call parameters
-    args.insert(args.end(), CS.arg_begin(), CS.arg_end());
-    // #deopt args: 0
-    args.push_back(Builder.getInt32(0));
-
-    InvokeInst *toReplace = cast<InvokeInst>(CS.getInstruction());
+    InvokeInst *ToReplace = cast<InvokeInst>(CS.getInstruction());
 
     // Insert the new invoke into the old block.  We'll remove the old one in a
     // moment at which point this will become the new terminator for the
     // original block.
-    InvokeInst *invoke = InvokeInst::Create(
-        gc_statepoint_decl, toReplace->getNormalDest(),
-        toReplace->getUnwindDest(), args, "", toReplace->getParent());
-    invoke->setCallingConv(toReplace->getCallingConv());
+    Builder.SetInsertPoint(ToReplace->getParent());
+    InvokeInst *Invoke = Builder.CreateGCStatepointInvoke(
+        CS.getCalledValue(), ToReplace->getNormalDest(),
+        ToReplace->getUnwindDest(), makeArrayRef(CS.arg_begin(), CS.arg_end()),
+        Builder.getInt32(0), None, "safepoint_token");
 
     // Currently we will fail on parameter attributes and on certain
     // function attributes.
-    AttributeSet new_attrs = toReplace->getAttributes();
-    // In case if we can handle this set of sttributes - set up function attrs
-    // directly on statepoint and return attrs later for gc_result intrinsic.
-    invoke->setAttributes(new_attrs.getFnAttributes());
-    return_attributes = new_attrs.getRetAttributes();
+    OriginalAttrs = ToReplace->getAttributes();
 
-    token = invoke;
+    // In case if we can handle this set of attributes - set up function
+    // attributes directly on statepoint and return attributes later for
+    // gc_result intrinsic.
+    Invoke->setAttributes(OriginalAttrs.getFnAttributes());
+
+    Token = Invoke;
 
     // We'll insert the gc.result into the normal block
-    BasicBlock *normalDest = normalizeBBForInvokeSafepoint(
-        toReplace->getNormalDest(), invoke->getParent());
-    Instruction *IP = &*(normalDest->getFirstInsertionPt());
+    BasicBlock *NormalDest = ToReplace->getNormalDest();
+    // Can not insert gc.result in case of phi nodes preset.
+    // Should have removed this cases prior to runnning this function
+    assert(!isa<PHINode>(NormalDest->begin()));
+    Instruction *IP = &*(NormalDest->getFirstInsertionPt());
     Builder.SetInsertPoint(IP);
   } else {
     llvm_unreachable("unexpect type of CallSite");
   }
-  assert(token);
+  assert(Token);
 
   // Handle the return value of the original call - update all uses to use a
   // gc_result hanging off the statepoint node we just inserted
 
   // Only add the gc_result iff there is actually a used result
   if (!CS.getType()->isVoidTy() && !CS.getInstruction()->use_empty()) {
-    std::string takenName =
-      CS.getInstruction()->hasName() ? CS.getInstruction()->getName() : "";
-    CallInst *gc_result =
-        Builder.CreateGCResult(token, CS.getType(), takenName);
-    gc_result->setAttributes(return_attributes);
-    return gc_result;
+    std::string TakenName =
+        CS.getInstruction()->hasName() ? CS.getInstruction()->getName() : "";
+    CallInst *GCResult = Builder.CreateGCResult(Token, CS.getType(), TakenName);
+    GCResult->setAttributes(OriginalAttrs.getRetAttributes());
+    return GCResult;
   } else {
     // No return value for the call.
     return nullptr;

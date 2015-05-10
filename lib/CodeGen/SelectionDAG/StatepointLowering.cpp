@@ -222,33 +222,62 @@ static void removeDuplicatesGCPtrs(SmallVectorImpl<const Value *> &Bases,
 /// Extract call from statepoint, lower it and return pointer to the
 /// call node. Also update NodeMap so that getValue(statepoint) will
 /// reference lowered call result
-static SDNode *lowerCallFromStatepoint(ImmutableStatepoint StatepointSite,
-                                       MachineBasicBlock *LandingPad,
-                                       SelectionDAGBuilder &Builder) {
+static SDNode *
+lowerCallFromStatepoint(ImmutableStatepoint ISP, MachineBasicBlock *LandingPad,
+                        SelectionDAGBuilder &Builder,
+                        SmallVectorImpl<SDValue> &PendingExports) {
 
-  ImmutableCallSite CS(StatepointSite.getCallSite());
+  ImmutableCallSite CS(ISP.getCallSite());
 
-  // Lower the actual call itself - This is a bit of a hack, but we want to
-  // avoid modifying the actual lowering code.  This is similiar in intent to
-  // the LowerCallOperands mechanism used by PATCHPOINT, but is structured
-  // differently.  Hopefully, this is slightly more robust w.r.t. calling
-  // convention, return values, and other function attributes.
-  Value *ActualCallee = const_cast<Value *>(StatepointSite.actualCallee());
+  SDValue ActualCallee = Builder.getValue(ISP.getActualCallee());
 
-  std::vector<Value *> Args;
-  CallInst::const_op_iterator arg_begin = StatepointSite.call_args_begin();
-  CallInst::const_op_iterator arg_end = StatepointSite.call_args_end();
-  Args.insert(Args.end(), arg_begin, arg_end);
-  // TODO: remove the creation of a new instruction!  We should not be
-  // modifying the IR (even temporarily) at this point.
-  CallInst *Tmp = CallInst::Create(ActualCallee, Args);
-  Tmp->setTailCall(CS.isTailCall());
-  Tmp->setCallingConv(CS.getCallingConv());
-  Tmp->setAttributes(CS.getAttributes());
-  Builder.LowerCallTo(Tmp, Builder.getValue(ActualCallee), false, LandingPad);
+  // Handle immediate and symbolic callees.
+  if (auto *ConstCallee = dyn_cast<ConstantSDNode>(ActualCallee.getNode()))
+    ActualCallee = Builder.DAG.getIntPtrConstant(ConstCallee->getZExtValue(),
+                                                 Builder.getCurSDLoc(),
+                                                 /*isTarget=*/true);
+  else if (auto *SymbolicCallee =
+               dyn_cast<GlobalAddressSDNode>(ActualCallee.getNode()))
+    ActualCallee = Builder.DAG.getTargetGlobalAddress(
+        SymbolicCallee->getGlobal(), SDLoc(SymbolicCallee),
+        SymbolicCallee->getValueType(0));
 
-  // Handle the return value of the call iff any.
-  const bool HasDef = !Tmp->getType()->isVoidTy();
+  assert(CS.getCallingConv() != CallingConv::AnyReg &&
+         "anyregcc is not supported on statepoints!");
+
+  Type *DefTy = ISP.getActualReturnType();
+  bool HasDef = !DefTy->isVoidTy();
+
+  SDValue ReturnValue, CallEndVal;
+  std::tie(ReturnValue, CallEndVal) = Builder.lowerCallOperands(
+      ISP.getCallSite(), ImmutableStatepoint::CallArgsBeginPos,
+      ISP.getNumCallArgs(), ActualCallee, DefTy, LandingPad,
+      false /* IsPatchPoint */);
+
+  SDNode *CallEnd = CallEndVal.getNode();
+
+  // Get a call instruction from the call sequence chain.  Tail calls are not
+  // allowed.  The following code is essentially reverse engineering X86's
+  // LowerCallTo.
+  //
+  // We are expecting DAG to have the following form:
+  //
+  // ch = eh_label (only in case of invoke statepoint)
+  //   ch, glue = callseq_start ch
+  //   ch, glue = X86::Call ch, glue
+  //   ch, glue = callseq_end ch, glue
+  //   get_return_value ch, glue
+  //
+  // get_return_value can either be a CopyFromReg to grab the return value from
+  // %RAX, or it can be a LOAD to load a value returned by reference via a stack
+  // slot.
+
+  if (HasDef && (CallEnd->getOpcode() == ISD::CopyFromReg ||
+                 CallEnd->getOpcode() == ISD::LOAD))
+    CallEnd = CallEnd->getOperand(0).getNode();
+
+  assert(CallEnd->getOpcode() == ISD::CALLSEQ_END && "expected!");
+
   if (HasDef) {
     if (CS.isInvoke()) {
       // Result value will be used in different basic block for invokes
@@ -258,62 +287,29 @@ static SDNode *lowerCallFromStatepoint(ImmutableStatepoint StatepointSite,
       // register with correct type and save value into it manually.
       // TODO: To eliminate this problem we can remove gc.result intrinsics
       //       completelly and make statepoint call to return a tuple.
-      unsigned reg = Builder.FuncInfo.CreateRegs(Tmp->getType());
-      Builder.CopyValueToVirtualRegister(Tmp, reg);
-      Builder.FuncInfo.ValueMap[CS.getInstruction()] = reg;
+      unsigned Reg = Builder.FuncInfo.CreateRegs(ISP.getActualReturnType());
+      RegsForValue RFV(*Builder.DAG.getContext(),
+                       Builder.DAG.getTargetLoweringInfo(), Reg,
+                       ISP.getActualReturnType());
+      SDValue Chain = Builder.DAG.getEntryNode();
+
+      RFV.getCopyToRegs(ReturnValue, Builder.DAG, Builder.getCurSDLoc(), Chain,
+                        nullptr);
+      PendingExports.push_back(Chain);
+      Builder.FuncInfo.ValueMap[CS.getInstruction()] = Reg;
     } else {
       // The value of the statepoint itself will be the value of call itself.
       // We'll replace the actually call node shortly.  gc_result will grab
       // this value.
-      Builder.setValue(CS.getInstruction(), Builder.getValue(Tmp));
+      Builder.setValue(CS.getInstruction(), ReturnValue);
     }
   } else {
     // The token value is never used from here on, just generate a poison value
     Builder.setValue(CS.getInstruction(),
                      Builder.DAG.getIntPtrConstant(-1, Builder.getCurSDLoc()));
   }
-  // Remove the fake entry we created so we don't have a hanging reference
-  // after we delete this node.
-  Builder.removeValue(Tmp);
-  delete Tmp;
-  Tmp = nullptr;
 
-  // Search for the call node
-  // The following code is essentially reverse engineering X86's
-  // LowerCallTo.
-  // We are expecting DAG to have the following form:
-  // ch = eh_label (only in case of invoke statepoint)
-  //   ch, glue = callseq_start ch
-  //   ch, glue = X86::Call ch, glue
-  //   ch, glue = callseq_end ch, glue
-  // ch = eh_label ch (only in case of invoke statepoint)
-  //
-  // DAG root will be either last eh_label or callseq_end.
-
-  SDNode *CallNode = nullptr;
-
-  // We just emitted a call, so it should be last thing generated
-  SDValue Chain = Builder.DAG.getRoot();
-
-  // Find closest CALLSEQ_END walking back through lowered nodes if needed
-  SDNode *CallEnd = Chain.getNode();
-  int Sanity = 0;
-  while (CallEnd->getOpcode() != ISD::CALLSEQ_END) {
-    assert(CallEnd->getNumOperands() >= 1 &&
-           CallEnd->getOperand(0).getValueType() == MVT::Other);
-
-    CallEnd = CallEnd->getOperand(0).getNode();
-
-    assert(Sanity < 20 && "should have found call end already");
-    Sanity++;
-  }
-  assert(CallEnd->getOpcode() == ISD::CALLSEQ_END &&
-         "Expected a callseq node.");
-  assert(CallEnd->getGluedNode());
-
-  // Step back inside the CALLSEQ
-  CallNode = CallEnd->getGluedNode();
-  return CallNode;
+  return CallEnd->getOperand(0).getNode();
 }
 
 /// Callect all gc pointers coming into statepoint intrinsic, clean them up,
@@ -330,8 +326,8 @@ static void getIncomingStatepointGCValues(
   for (GCRelocateOperands relocateOpers :
        StatepointSite.getRelocates(StatepointSite)) {
     Relocs.push_back(relocateOpers.getUnderlyingCallSite().getInstruction());
-    Bases.push_back(relocateOpers.basePtr());
-    Ptrs.push_back(relocateOpers.derivedPtr());
+    Bases.push_back(relocateOpers.getBasePtr());
+    Ptrs.push_back(relocateOpers.getDerivedPtr());
   }
 
   // Remove any redundant llvm::Values which map to the same SDValue as another
@@ -487,7 +483,7 @@ static void lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
   // First, prefix the list with the number of unique values to be
   // lowered.  Note that this is the number of *Values* not the
   // number of SDValues required to lower them.
-  const int NumVMSArgs = StatepointSite.numTotalVMSArgs();
+  const int NumVMSArgs = StatepointSite.getNumTotalVMSArgs();
   Ops.push_back(Builder.DAG.getTargetConstant(StackMaps::ConstantOp,
                                               Builder.getCurSDLoc(),
                                               MVT::i64));
@@ -582,11 +578,12 @@ void SelectionDAGBuilder::LowerStatepoint(
 #endif
 
   // Lower statepoint vmstate and gcstate arguments
-  SmallVector<SDValue, 10> LoweredArgs;
-  lowerStatepointMetaArgs(LoweredArgs, ISP, *this);
+  SmallVector<SDValue, 10> LoweredMetaArgs;
+  lowerStatepointMetaArgs(LoweredMetaArgs, ISP, *this);
 
   // Get call node, we will replace it later with statepoint
-  SDNode *CallNode = lowerCallFromStatepoint(ISP, LandingPad, *this);
+  SDNode *CallNode =
+      lowerCallFromStatepoint(ISP, LandingPad, *this, PendingExports);
 
   // Construct the actual GC_TRANSITION_START, STATEPOINT, and GC_TRANSITION_END
   // nodes with all the appropriate arguments and return values.
@@ -607,29 +604,38 @@ void SelectionDAGBuilder::LowerStatepoint(
   }
 
   // Build the GC_TRANSITION_START node if necessary.
-  if (ISP.isGCTransition()) {
-    SmallVector<SDValue, 8> Ops;
+  //
+  // The operands to the GC_TRANSITION_{START,END} nodes are laid out in the
+  // order in which they appear in the call to the statepoint intrinsic. If
+  // any of the operands is a pointer-typed, that operand is immediately
+  // followed by a SRCVALUE for the pointer that may be used during lowering
+  // (e.g. to form MachinePointerInfo values for loads/stores).
+  const bool IsGCTransition =
+      (ISP.getFlags() & (uint64_t)StatepointFlags::GCTransition) ==
+          (uint64_t)StatepointFlags::GCTransition;
+  if (IsGCTransition) {
+    SmallVector<SDValue, 8> TSOps;
 
     // Add chain
-    Ops.push_back(Chain);
+    TSOps.push_back(Chain);
 
     // Add GC transition arguments
     for (auto I = ISP.gc_transition_args_begin() + 1,
               E = ISP.gc_transition_args_end();
          I != E; ++I) {
-      Ops.push_back(getValue(*I));
+      TSOps.push_back(getValue(*I));
       if ((*I)->getType()->isPointerTy())
-        Ops.push_back(DAG.getSrcValue(*I));
+        TSOps.push_back(DAG.getSrcValue(*I));
     }
 
     // Add glue if necessary
     if (CallHasIncomingGlue)
-      Ops.push_back(Glue);
+      TSOps.push_back(Glue);
 
     SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
 
     SDValue GCTransitionStart =
-        DAG.getNode(ISD::GC_TRANSITION_START, getCurSDLoc(), NodeTys, Ops);
+        DAG.getNode(ISD::GC_TRANSITION_START, getCurSDLoc(), NodeTys, TSOps);
 
     Chain = GCTransitionStart.getValue(0);
     Glue = GCTransitionStart.getValue(1);
@@ -657,21 +663,27 @@ void SelectionDAGBuilder::LowerStatepoint(
   // Add a leading constant argument with the Flags and the calling convention
   // masked together
   CallingConv::ID CallConv = CS.getCallingConv();
-  int Flags = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
-  assert(Flags == 0 && "not expected to be used");
+  uint64_t Flags = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
+  assert(
+      ((Flags & ~(uint64_t)StatepointFlags::MaskAll) == 0)
+          && "unknown flag used");
+  const int Shift = 1;
+  static_assert(
+      ((~(uint64_t)0 << Shift) & (uint64_t)StatepointFlags::MaskAll) == 0,
+      "shift width too small");
   Ops.push_back(DAG.getTargetConstant(StackMaps::ConstantOp, getCurSDLoc(),
                                       MVT::i64));
-  Ops.push_back(DAG.getTargetConstant(Flags | ((unsigned)CallConv << 1),
+  Ops.push_back(DAG.getTargetConstant(Flags | ((unsigned)CallConv << Shift),
                                       getCurSDLoc(), MVT::i64));
 
   // Insert all vmstate and gcstate arguments
-  Ops.insert(Ops.end(), LoweredArgs.begin(), LoweredArgs.end());
+  Ops.insert(Ops.end(), LoweredMetaArgs.begin(), LoweredMetaArgs.end());
 
   // Add register mask from call node
   Ops.push_back(*RegMaskIt);
 
   // Add chain
-  Ops.push_back(CallNode->getOperand(0));
+  Ops.push_back(Chain);
 
   // Same for the glue, but we add it only if original call had it
   if (Glue.getNode())
@@ -687,28 +699,31 @@ void SelectionDAGBuilder::LowerStatepoint(
   SDNode *SinkNode = StatepointMCNode;
 
   // Build the GC_TRANSITION_END node if necessary.
-  if (ISP.isGCTransition()) {
-    SmallVector<SDValue, 8> Ops;
+  //
+  // See the comment above regarding GC_TRANSITION_START for the layout of
+  // the operands to the GC_TRANSITION_END node.
+  if (IsGCTransition) {
+    SmallVector<SDValue, 8> TEOps;
 
     // Add chain
-    Ops.push_back(SDValue(StatepointMCNode, 0));
+    TEOps.push_back(SDValue(StatepointMCNode, 0));
 
     // Add GC transition arguments
     for (auto I = ISP.gc_transition_args_begin() + 1,
               E = ISP.gc_transition_args_end();
          I != E; ++I) {
-      Ops.push_back(getValue(*I));
+      TEOps.push_back(getValue(*I));
       if ((*I)->getType()->isPointerTy())
-        Ops.push_back(DAG.getSrcValue(*I));
+        TEOps.push_back(DAG.getSrcValue(*I));
     }
 
     // Add glue
-    Ops.push_back(SDValue(StatepointMCNode, 1));
+    TEOps.push_back(SDValue(StatepointMCNode, 1));
 
     SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
 
     SDValue GCTransitionStart =
-        DAG.getNode(ISD::GC_TRANSITION_END, getCurSDLoc(), NodeTys, Ops);
+        DAG.getNode(ISD::GC_TRANSITION_END, getCurSDLoc(), NodeTys, TEOps);
 
     SinkNode = GCTransitionStart.getNode();
   }
@@ -741,7 +756,7 @@ void SelectionDAGBuilder::visitGCResult(const CallInst &CI) {
     // different, and getValue() will use CopyFromReg of the wrong type,
     // which is always i32 in our case.
     PointerType *CalleeType =
-        cast<PointerType>(ImmutableStatepoint(I).actualCallee()->getType());
+        cast<PointerType>(ImmutableStatepoint(I).getActualCallee()->getType());
     Type *RetTy =
         cast<FunctionType>(CalleeType->getElementType())->getReturnType();
     SDValue CopyFromReg = getCopyFromRegs(I, RetTy);
@@ -760,7 +775,7 @@ void SelectionDAGBuilder::visitGCRelocate(const CallInst &CI) {
 #endif
 
   GCRelocateOperands relocateOpers(&CI);
-  SDValue SD = getValue(relocateOpers.derivedPtr());
+  SDValue SD = getValue(relocateOpers.getDerivedPtr());
 
   if (isa<ConstantSDNode>(SD) || isa<FrameIndexSDNode>(SD)) {
     // We didn't need to spill these special cases (constants and allocas).

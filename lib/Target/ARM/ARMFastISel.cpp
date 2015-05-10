@@ -1657,12 +1657,12 @@ bool ARMFastISel::SelectSelect(const Instruction *I) {
     if (Op2Reg == 0) return false;
   }
 
-  unsigned CmpOpc = isThumb2 ? ARM::t2CMPri : ARM::CMPri;
-  CondReg = constrainOperandRegClass(TII.get(CmpOpc), CondReg, 0);
+  unsigned TstOpc = isThumb2 ? ARM::t2TSTri : ARM::TSTri;
+  CondReg = constrainOperandRegClass(TII.get(TstOpc), CondReg, 0);
   AddOptionalDefs(
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(CmpOpc))
+      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(TstOpc))
           .addReg(CondReg)
-          .addImm(0));
+          .addImm(1));
 
   unsigned MovCCOpc;
   const TargetRegisterClass *RC;
@@ -1793,6 +1793,10 @@ bool ARMFastISel::SelectBinaryFPOp(const Instruction *I, unsigned ISDOpcode) {
   EVT FPVT = TLI.getValueType(I->getType(), true);
   if (!FPVT.isSimple()) return false;
   MVT VT = FPVT.getSimpleVT();
+
+  // FIXME: Support vector types where possible.
+  if (VT.isVector())
+    return false;
 
   // We can get here in the case when we want to use NEON for our fp
   // operations, but can't figure out how to. Just use the vfp instructions

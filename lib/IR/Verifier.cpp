@@ -437,7 +437,7 @@ void Verifier::visitGlobalValue(const GlobalValue &GV) {
 
   if (GV.hasAppendingLinkage()) {
     const GlobalVariable *GVar = dyn_cast<GlobalVariable>(&GV);
-    Assert(GVar && GVar->getType()->getElementType()->isArrayTy(),
+    Assert(GVar && GVar->getValueType()->isArrayTy(),
            "Only global arrays can have appending linkage!", GVar);
   }
 }
@@ -469,7 +469,7 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
            "invalid linkage for intrinsic global variable", &GV);
     // Don't worry about emitting an error for it not being an array,
     // visitGlobalValue will complain on appending non-array.
-    if (ArrayType *ATy = dyn_cast<ArrayType>(GV.getType()->getElementType())) {
+    if (ArrayType *ATy = dyn_cast<ArrayType>(GV.getValueType())) {
       StructType *STy = dyn_cast<StructType>(ATy->getElementType());
       PointerType *FuncPtrTy =
           FunctionType::get(Type::getVoidTy(*Context), false)->getPointerTo();
@@ -1350,9 +1350,10 @@ void Verifier::VerifyParameterAttrs(AttributeSet Attrs, unsigned Idx, Type *Ty,
          V);
 
   Assert(!AttrBuilder(Attrs, Idx)
-              .hasAttributes(AttributeFuncs::typeIncompatible(Ty, Idx), Idx),
+              .overlaps(AttributeFuncs::typeIncompatible(Ty)),
          "Wrong types for attribute: " +
-             AttributeFuncs::typeIncompatible(Ty, Idx).getAsString(Idx),
+         AttributeSet::get(*Context, Idx,
+                        AttributeFuncs::typeIncompatible(Ty)).getAsString(Idx),
          V);
 
   if (PointerType *PTy = dyn_cast<PointerType>(Ty)) {
@@ -1488,10 +1489,8 @@ bool Verifier::VerifyAttributeCount(AttributeSet Attrs, unsigned Params) {
 /// \brief Verify that statepoint intrinsic is well formed.
 void Verifier::VerifyStatepoint(ImmutableCallSite CS) {
   assert(CS.getCalledFunction() &&
-         (CS.getCalledFunction()->getIntrinsicID() ==
-           Intrinsic::experimental_gc_statepoint ||
-          CS.getCalledFunction()->getIntrinsicID() ==
-           Intrinsic::experimental_gc_transition));
+         CS.getCalledFunction()->getIntrinsicID() ==
+           Intrinsic::experimental_gc_statepoint);
 
   const Instruction &CI = *CS.getInstruction();
 
@@ -1530,9 +1529,12 @@ void Verifier::VerifyStatepoint(ImmutableCallSite CS) {
     Assert(NumCallArgs == NumParams,
            "gc.statepoint mismatch in number of call args", &CI);
 
-  const Value *Unused = CS.getArgument(2);
-  Assert(isa<ConstantInt>(Unused) && cast<ConstantInt>(Unused)->isNullValue(),
-         "gc.statepoint parameter #3 must be zero", &CI);
+  const Value *FlagsV = CS.getArgument(2);
+  Assert(isa<ConstantInt>(FlagsV),
+         "gc.statepoint flags must be constant integer", &CI);
+  const uint64_t Flags = cast<ConstantInt>(FlagsV)->getZExtValue();
+  Assert((Flags & ~(uint64_t)StatepointFlags::MaskAll) == 0,
+         "unknown flag used in gc.statepoint flags argument", &CI);
 
   // Verify that the types of the call parameter arguments match
   // the type of the wrapped callee.
@@ -1545,7 +1547,19 @@ void Verifier::VerifyStatepoint(ImmutableCallSite CS) {
            &CI);
   }
   const int EndCallArgsInx = 2+NumCallArgs;
-  const Value *NumDeoptArgsV = CS.getArgument(EndCallArgsInx+1);
+
+  const Value *NumTransitionArgsV = CS.getArgument(EndCallArgsInx+1);
+  Assert(isa<ConstantInt>(NumTransitionArgsV),
+         "gc.statepoint number of transition arguments "
+         "must be constant integer",
+         &CI);
+  const int NumTransitionArgs =
+      cast<ConstantInt>(NumTransitionArgsV)->getZExtValue();
+  Assert(NumTransitionArgs >= 0,
+         "gc.statepoint number of transition arguments must be positive", &CI);
+  const int EndTransitionArgsInx = EndCallArgsInx + 1 + NumTransitionArgs;
+
+  const Value *NumDeoptArgsV = CS.getArgument(EndTransitionArgsInx+1);
   Assert(isa<ConstantInt>(NumDeoptArgsV),
          "gc.statepoint number of deoptimization arguments "
          "must be constant integer",
@@ -1555,7 +1569,9 @@ void Verifier::VerifyStatepoint(ImmutableCallSite CS) {
                             "must be positive",
          &CI);
 
-  Assert(4 + NumCallArgs + NumDeoptArgs <= (int)CS.arg_size(),
+  const int ExpectedNumArgs =
+      5 + NumCallArgs + NumTransitionArgs + NumDeoptArgs;
+  Assert(ExpectedNumArgs <= (int)CS.arg_size(),
          "gc.statepoint too few arguments according to length fields", &CI);
 
   // Check that the only uses of this gc.statepoint are gc.result or 
@@ -2335,8 +2351,7 @@ void Verifier::visitInvokeInst(InvokeInst &II) {
     // TODO: Ideally we should use visitIntrinsicFunction here. But it uses
     //       CallInst as an input parameter. It not woth updating this whole
     //       function only to support statepoint verification.
-    if (F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
-        F->getIntrinsicID() == Intrinsic::experimental_gc_transition)
+    if (F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint)
       VerifyStatepoint(ImmutableCallSite(&II));
 
   visitTerminatorInst(II);
@@ -2833,8 +2848,7 @@ void Verifier::visitInstruction(Instruction &I) {
               F->getIntrinsicID() == Intrinsic::donothing ||
               F->getIntrinsicID() == Intrinsic::experimental_patchpoint_void ||
               F->getIntrinsicID() == Intrinsic::experimental_patchpoint_i64 ||
-              F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
-              F->getIntrinsicID() == Intrinsic::experimental_gc_transition,
+              F->getIntrinsicID() == Intrinsic::experimental_gc_statepoint,
           "Cannot invoke an intrinsinc other than"
           " donothing or patchpoint",
           &I);
@@ -3251,7 +3265,6 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
   }
 
   case Intrinsic::experimental_gc_statepoint:
-  case Intrinsic::experimental_gc_transition:
     Assert(!CI.isInlineAsm(),
            "gc.statepoint support for inline assembly unimplemented", &CI);
     Assert(CI.getParent()->getParent()->hasGC(),
@@ -3270,10 +3283,8 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
     const Function *StatepointFn =
       StatepointCS.getInstruction() ? StatepointCS.getCalledFunction() : nullptr;
     Assert(StatepointFn && StatepointFn->isDeclaration() &&
-               (StatepointFn->getIntrinsicID() ==
-                   Intrinsic::experimental_gc_statepoint ||
-                StatepointFn->getIntrinsicID() ==
-                   Intrinsic::experimental_gc_transition),
+               StatepointFn->getIntrinsicID() ==
+                   Intrinsic::experimental_gc_statepoint,
            "gc.result operand #1 must be from a statepoint", &CI,
            CI.getArgOperand(0));
 
@@ -3322,7 +3333,7 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
     // Verify rest of the relocate arguments
 
     GCRelocateOperands ops(&CI);
-    ImmutableCallSite StatepointCS(ops.statepoint());
+    ImmutableCallSite StatepointCS(ops.getStatepoint());
 
     // Both the base and derived must be piped through the safepoint
     Value* Base = CI.getArgOperand(1);
@@ -3352,11 +3363,17 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
     Assert(StatepointCS.arg_size() > NumCallArgs+3,
            "gc.statepoint: mismatch in number of call arguments");
     Assert(isa<ConstantInt>(StatepointCS.getArgument(NumCallArgs+3)),
+           "gc.statepoint: number of transition arguments must be "
+           "a constant integer");
+    const int NumTransitionArgs =
+      cast<ConstantInt>(StatepointCS.getArgument(NumCallArgs + 3))->getZExtValue();
+    const int DeoptArgsStart = 2 + NumCallArgs + 1 + NumTransitionArgs + 1;
+    Assert(isa<ConstantInt>(StatepointCS.getArgument(DeoptArgsStart)),
            "gc.statepoint: number of deoptimization arguments must be "
            "a constant integer");
     const int NumDeoptArgs =
-      cast<ConstantInt>(StatepointCS.getArgument(NumCallArgs + 3))->getZExtValue();
-    const int GCParamArgsStart = NumCallArgs + NumDeoptArgs + 4;
+      cast<ConstantInt>(StatepointCS.getArgument(DeoptArgsStart))->getZExtValue();
+    const int GCParamArgsStart = DeoptArgsStart + 1 + NumDeoptArgs;
     const int GCParamArgsEnd = StatepointCS.arg_size();
     Assert(GCParamArgsStart <= BaseIndex && BaseIndex < GCParamArgsEnd,
            "gc.relocate: statepoint base index doesn't fall within the "
@@ -3369,7 +3386,7 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
 
     // Assert that the result type matches the type of the relocated pointer
     GCRelocateOperands Operands(&CI);
-    Assert(Operands.derivedPtr()->getType() == CI.getType(),
+    Assert(Operands.getDerivedPtr()->getType() == CI.getType(),
            "gc.relocate: relocating a pointer shouldn't change its type", &CI);
     break;
   }

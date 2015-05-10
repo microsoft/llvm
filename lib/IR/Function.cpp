@@ -117,6 +117,12 @@ uint64_t Argument::getDereferenceableBytes() const {
   return getParent()->getDereferenceableBytes(getArgNo()+1);
 }
 
+uint64_t Argument::getDereferenceableOrNullBytes() const {
+  assert(getType()->isPointerTy() &&
+         "Only pointers have dereferenceable bytes");
+  return getParent()->getDereferenceableOrNullBytes(getArgNo()+1);
+}
+
 /// hasNestAttr - Return true if this argument has the nest attribute on
 /// it in its containing function.
 bool Argument::hasNestAttr() const {
@@ -484,10 +490,8 @@ static std::string getMangledTypeStr(Type* Ty) {
     Result += "a" + llvm::utostr(ATyp->getNumElements()) +
       getMangledTypeStr(ATyp->getElementType());
   } else if (StructType* STyp = dyn_cast<StructType>(Ty)) {
-    if (!STyp->isLiteral())
-      Result += STyp->getName();
-    else
-      llvm_unreachable("TODO: implement literal types");
+    assert(!STyp->isLiteral() && "TODO: implement literal types");
+    Result += STyp->getName();
   } else if (FunctionType* FT = dyn_cast<FunctionType>(Ty)) {
     Result += "f_" + getMangledTypeStr(FT->getReturnType());
     for (size_t i = 0; i < FT->getNumParams(); i++)
@@ -968,4 +972,17 @@ void Function::setPrologueData(Constant *PrologueData) {
     PDData &= ~(1<<2);
   }
   setValueSubclassData(PDData);
+}
+
+void llvm::overrideFunctionAttribute(StringRef Kind, StringRef Value,
+                                     Function &F) {
+  auto &Ctx = F.getContext();
+  AttributeSet Attrs = F.getAttributes(), AttrsToRemove;
+
+  AttrsToRemove =
+      AttrsToRemove.addAttribute(Ctx, AttributeSet::FunctionIndex, Kind);
+  Attrs = Attrs.removeAttributes(Ctx, AttributeSet::FunctionIndex,
+                                 AttrsToRemove);
+  Attrs = Attrs.addAttribute(Ctx, AttributeSet::FunctionIndex, Kind, Value);
+  F.setAttributes(Attrs);
 }

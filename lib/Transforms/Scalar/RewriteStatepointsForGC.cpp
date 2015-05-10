@@ -374,7 +374,6 @@ static Value *findBaseDefiningValue(Value *I) {
       // fall through to general call handling
       break;
     case Intrinsic::experimental_gc_statepoint:
-    case Intrinsic::experimental_gc_transition:
     case Intrinsic::experimental_gc_result_float:
     case Intrinsic::experimental_gc_result_int:
       llvm_unreachable("these don't produce pointers");
@@ -1352,7 +1351,8 @@ insertRelocationStores(iterator_range<Value::user_iterator> gcRelocs,
     }
 
     GCRelocateOperands relocateOperands(relocatedValue);
-    Value *originalValue = const_cast<Value *>(relocateOperands.derivedPtr());
+    Value *originalValue =
+        const_cast<Value *>(relocateOperands.getDerivedPtr());
     assert(allocaMap.count(originalValue));
     Value *alloca = allocaMap[originalValue];
 

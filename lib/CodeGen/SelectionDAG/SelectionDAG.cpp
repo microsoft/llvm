@@ -515,10 +515,9 @@ static void AddNodeIDCustom(FoldingSetNodeID &ID, const SDNode *N) {
   case ISD::SUB:
   case ISD::SHL: {
     const BinaryWithFlagsSDNode *BinNode = cast<BinaryWithFlagsSDNode>(N);
-    AddBinaryNodeIDCustom(ID, N->getOpcode(),
-                          BinNode->Flags.hasNoUnsignedWrap(),
-                          BinNode->Flags.hasNoSignedWrap(),
-                          BinNode->Flags.hasExact());
+    AddBinaryNodeIDCustom(
+        ID, N->getOpcode(), BinNode->Flags.hasNoUnsignedWrap(),
+        BinNode->Flags.hasNoSignedWrap(), BinNode->Flags.hasExact());
     break;
   }
   case ISD::ATOMIC_CMP_SWAP:
@@ -3415,6 +3414,10 @@ SDValue SelectionDAG::getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1,
   case ISD::EXTRACT_VECTOR_ELT:
     // EXTRACT_VECTOR_ELT of an UNDEF is an UNDEF.
     if (N1.getOpcode() == ISD::UNDEF)
+      return getUNDEF(VT);
+
+    // EXTRACT_VECTOR_ELT of out-of-bounds element is an UNDEF
+    if (N2C && N2C->getZExtValue() >= N1.getValueType().getVectorNumElements())
       return getUNDEF(VT);
 
     // EXTRACT_VECTOR_ELT of CONCAT_VECTORS is often formed while lowering is

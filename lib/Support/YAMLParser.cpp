@@ -260,8 +260,8 @@ namespace yaml {
 /// @brief Scans YAML tokens from a MemoryBuffer.
 class Scanner {
 public:
-  Scanner(StringRef Input, SourceMgr &SM);
-  Scanner(MemoryBufferRef Buffer, SourceMgr &SM_);
+  Scanner(StringRef Input, SourceMgr &SM, bool ShowColors = true);
+  Scanner(MemoryBufferRef Buffer, SourceMgr &SM_, bool ShowColors = true);
 
   /// @brief Parse the next token and return it without popping it.
   Token &peekNext();
@@ -271,7 +271,7 @@ public:
 
   void printError(SMLoc Loc, SourceMgr::DiagKind Kind, const Twine &Message,
                   ArrayRef<SMRange> Ranges = None) {
-    SM.PrintMessage(Loc, Kind, Message, Ranges);
+    SM.PrintMessage(Loc, Kind, Message, Ranges, /* FixIts= */ None, ShowColors);
   }
 
   void setError(const Twine &Message, StringRef::iterator Position) {
@@ -417,6 +417,10 @@ private:
                  , Token::TokenKind Kind
                  , TokenQueueT::iterator InsertPoint);
 
+  /// @brief Skip a single-line comment when the comment starts at the current
+  /// position of the scanner.
+  void skipComment();
+
   /// @brief Skip whitespace and comments until the start of the next token.
   void scanToNextToken();
 
@@ -500,6 +504,9 @@ private:
 
   /// @brief True if an error has occurred.
   bool Failed;
+
+  /// @brief Should colors be used when printing out the diagnostic messages?
+  bool ShowColors;
 
   /// @brief Queue of tokens. This is required to queue up tokens while looking
   ///        for the end of a simple key. And for cases where a single character
@@ -702,11 +709,13 @@ std::string yaml::escape(StringRef Input) {
   return EscapedInput;
 }
 
-Scanner::Scanner(StringRef Input, SourceMgr &sm) : SM(sm) {
+Scanner::Scanner(StringRef Input, SourceMgr &sm, bool ShowColors)
+    : SM(sm), ShowColors(ShowColors) {
   init(MemoryBufferRef(Input, "YAML"));
 }
 
-Scanner::Scanner(MemoryBufferRef Buffer, SourceMgr &SM_) : SM(SM_) {
+Scanner::Scanner(MemoryBufferRef Buffer, SourceMgr &SM_, bool ShowColors)
+    : SM(SM_), ShowColors(ShowColors) {
   init(Buffer);
 }
 
@@ -962,24 +971,27 @@ bool Scanner::rollIndent( int ToColumn
   return true;
 }
 
+void Scanner::skipComment() {
+  if (*Current != '#')
+    return;
+  while (true) {
+    // This may skip more than one byte, thus Column is only incremented
+    // for code points.
+    StringRef::iterator I = skip_nb_char(Current);
+    if (I == Current)
+      break;
+    Current = I;
+    ++Column;
+  }
+}
+
 void Scanner::scanToNextToken() {
   while (true) {
     while (*Current == ' ' || *Current == '\t') {
       skip(1);
     }
 
-    // Skip comment.
-    if (*Current == '#') {
-      while (true) {
-        // This may skip more than one byte, thus Column is only incremented
-        // for code points.
-        StringRef::iterator i = skip_nb_char(Current);
-        if (i == Current)
-          break;
-        Current = i;
-        ++Column;
-      }
-    }
+    skipComment();
 
     // Skip EOL.
     StringRef::iterator i = skip_b_break(Current);
@@ -1518,11 +1530,11 @@ bool Scanner::fetchMoreTokens() {
   return false;
 }
 
-Stream::Stream(StringRef Input, SourceMgr &SM)
-    : scanner(new Scanner(Input, SM)), CurrentDoc() {}
+Stream::Stream(StringRef Input, SourceMgr &SM, bool ShowColors)
+    : scanner(new Scanner(Input, SM, ShowColors)), CurrentDoc() {}
 
-Stream::Stream(MemoryBufferRef InputBuffer, SourceMgr &SM)
-    : scanner(new Scanner(InputBuffer, SM)), CurrentDoc() {}
+Stream::Stream(MemoryBufferRef InputBuffer, SourceMgr &SM, bool ShowColors)
+    : scanner(new Scanner(InputBuffer, SM, ShowColors)), CurrentDoc() {}
 
 Stream::~Stream() {}
 

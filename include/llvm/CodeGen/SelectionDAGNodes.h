@@ -1030,7 +1030,7 @@ public:
   SDNodeFlags Flags;
   BinaryWithFlagsSDNode(unsigned Opc, unsigned Order, DebugLoc dl, SDVTList VTs,
                         SDValue X, SDValue Y)
-    : BinarySDNode(Opc, Order, dl, VTs, X, Y), Flags() { }
+      : BinarySDNode(Opc, Order, dl, VTs, X, Y), Flags() {}
   static bool classof(const SDNode *N) {
     return isBinOpWithFlags(N->getOpcode());
   }
@@ -1401,10 +1401,11 @@ public:
 class ConstantSDNode : public SDNode {
   const ConstantInt *Value;
   friend class SelectionDAG;
+  // XXX: DebugLoc is unused intentionally until constant coalescing is resolved
   ConstantSDNode(bool isTarget, bool isOpaque, const ConstantInt *val,
-                 DebugLoc DL, EVT VT)
+                 DebugLoc, EVT VT)
     : SDNode(isTarget ? ISD::TargetConstant : ISD::Constant,
-             0, DL, getSDVTList(VT)), Value(val) {
+             0, DebugLoc(), getSDVTList(VT)), Value(val) {
     SubclassData |= (uint16_t)isOpaque;
   }
 public:

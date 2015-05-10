@@ -801,6 +801,8 @@ inline Type *checkGEPType(Type *Ty) {
 /// access elements of arrays and structs
 ///
 class GetElementPtrInst : public Instruction {
+  Type *SourceElementType;
+
   GetElementPtrInst(const GetElementPtrInst &GEPI);
   void init(Value *Ptr, ArrayRef<Value *> IdxList, const Twine &NameStr);
 
@@ -823,6 +825,13 @@ public:
                                    const Twine &NameStr = "",
                                    Instruction *InsertBefore = nullptr) {
     unsigned Values = 1 + unsigned(IdxList.size());
+    if (!PointeeType)
+      PointeeType =
+          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType();
+    else
+      assert(
+          PointeeType ==
+          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType());
     return new (Values) GetElementPtrInst(PointeeType, Ptr, IdxList, Values,
                                           NameStr, InsertBefore);
   }
@@ -831,6 +840,13 @@ public:
                                    const Twine &NameStr,
                                    BasicBlock *InsertAtEnd) {
     unsigned Values = 1 + unsigned(IdxList.size());
+    if (!PointeeType)
+      PointeeType =
+          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType();
+    else
+      assert(
+          PointeeType ==
+          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType());
     return new (Values) GetElementPtrInst(PointeeType, Ptr, IdxList, Values,
                                           NameStr, InsertAtEnd);
   }
@@ -876,10 +892,9 @@ public:
     return cast<SequentialType>(Instruction::getType());
   }
 
-  Type *getSourceElementType() const {
-    return cast<SequentialType>(getPointerOperandType()->getScalarType())
-        ->getElementType();
-  }
+  Type *getSourceElementType() const { return SourceElementType; }
+
+  void setSourceElementType(Type *Ty) { SourceElementType = Ty; }
 
   Type *getResultElementType() const {
     return cast<PointerType>(getType()->getScalarType())->getElementType();
@@ -1002,23 +1017,21 @@ GetElementPtrInst::GetElementPtrInst(Type *PointeeType, Value *Ptr,
                                      ArrayRef<Value *> IdxList, unsigned Values,
                                      const Twine &NameStr,
                                      Instruction *InsertBefore)
-    : Instruction(PointeeType ? getGEPReturnType(PointeeType, Ptr, IdxList)
-                              : getGEPReturnType(Ptr, IdxList),
-                  GetElementPtr,
+    : Instruction(getGEPReturnType(PointeeType, Ptr, IdxList), GetElementPtr,
                   OperandTraits<GetElementPtrInst>::op_end(this) - Values,
-                  Values, InsertBefore) {
+                  Values, InsertBefore),
+      SourceElementType(PointeeType) {
   init(Ptr, IdxList, NameStr);
-  assert(!PointeeType || PointeeType == getSourceElementType());
 }
 GetElementPtrInst::GetElementPtrInst(Type *PointeeType, Value *Ptr,
                                      ArrayRef<Value *> IdxList, unsigned Values,
                                      const Twine &NameStr,
                                      BasicBlock *InsertAtEnd)
-    : Instruction(getGEPReturnType(Ptr, IdxList), GetElementPtr,
+    : Instruction(getGEPReturnType(PointeeType, Ptr, IdxList), GetElementPtr,
                   OperandTraits<GetElementPtrInst>::op_end(this) - Values,
-                  Values, InsertAtEnd) {
+                  Values, InsertAtEnd),
+      SourceElementType(PointeeType) {
   init(Ptr, IdxList, NameStr);
-  assert(!PointeeType || PointeeType == getSourceElementType());
 }
 
 
@@ -1478,6 +1491,12 @@ public:
     return AttributeList.getDereferenceableBytes(i);
   }
 
+  /// \brief Extract the number of dereferenceable_or_null bytes for a call or
+  /// parameter (0=unknown).
+  uint64_t getDereferenceableOrNullBytes(unsigned i) const {
+    return AttributeList.getDereferenceableOrNullBytes(i);
+  }
+  
   /// \brief Return true if the call should not be treated as a call to a
   /// builtin.
   bool isNoBuiltin() const {
@@ -3186,6 +3205,12 @@ public:
   /// parameter (0=unknown).
   uint64_t getDereferenceableBytes(unsigned i) const {
     return AttributeList.getDereferenceableBytes(i);
+  }
+  
+  /// \brief Extract the number of dereferenceable_or_null bytes for a call or
+  /// parameter (0=unknown).
+  uint64_t getDereferenceableOrNullBytes(unsigned i) const {
+    return AttributeList.getDereferenceableOrNullBytes(i);
   }
 
   /// \brief Return true if the call should not be treated as a call to a

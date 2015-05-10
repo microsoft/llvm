@@ -2,7 +2,12 @@
 # basic blocks and we'll fail to discover the targets.
 # Also enable the coverage instrumentation back (it is disabled
 # for the Fuzzer lib)
-set(CMAKE_CXX_FLAGS_RELEASE "${LIBFUZZER_FLAGS_BASE} -O0 -fsanitize-coverage=4")
+set(CMAKE_CXX_FLAGS_RELEASE "${LIBFUZZER_FLAGS_BASE} -O0 -fsanitize-coverage=edge,indirect-calls")
+
+set(DFSanTests
+  DFSanMemcmpTest
+  DFSanSimpleCmpTest
+  )
 
 set(Tests
   CounterTest
@@ -13,11 +18,9 @@ set(Tests
   NullDerefTest
   SimpleTest
   TimeoutTest
+  ${DFSanTests}
   )
 
-set(DFSanTests
-  DFSanSimpleCmpTest
-  )
 
 set(TestBinaries)
 
@@ -59,7 +62,7 @@ set(TestBinaries ${TestBinaries} LLVMFuzzer-Unittest)
 add_subdirectory(dfsan)
 
 foreach(Test ${DFSanTests})
-  set(TestBinaries ${TestBinaries} LLVMFuzzer-${Test})
+  set(TestBinaries ${TestBinaries} LLVMFuzzer-${Test}-DFSan)
 endforeach()
 
 
