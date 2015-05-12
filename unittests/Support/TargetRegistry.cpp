@@ -22,9 +22,8 @@ TEST(TargetRegistry, TargetHasArchType) {
 
   llvm::InitializeAllTargetInfos();
 
-  llvm::TargetRegistry RegistryRoot;
-  for (const auto &Target : RegistryRoot) {
-    StringRef Name = Target.getName();
+  for (const Target &T : TargetRegistry::targets()) {
+    StringRef Name = T.getName();
     // There is really no way (at present) to ask a Target whether it targets
     // a specific architecture, because the logic for that is buried in a
     // predicate.

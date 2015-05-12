@@ -652,35 +652,39 @@ public:
 
   /// Gets or creates the specified node.
   ///
+  SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT,
+                  ArrayRef<SDUse> Ops);
+  SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT,
+                  ArrayRef<SDValue> Ops);
+  SDValue getNode(unsigned Opcode, SDLoc DL, ArrayRef<EVT> ResultTys,
+                  ArrayRef<SDValue> Ops);
+  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
+                  ArrayRef<SDValue> Ops);
+
+  // Specialize based on number of operands.
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
-                  bool nuw = false, bool nsw = false, bool exact = false);
+                  const SDNodeFlags *Flags = nullptr);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
                   SDValue N3);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
                   SDValue N3, SDValue N4);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
                   SDValue N3, SDValue N4, SDValue N5);
-  SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, ArrayRef<SDUse> Ops);
-  SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT,
-                  ArrayRef<SDValue> Ops);
-  SDValue getNode(unsigned Opcode, SDLoc DL,
-                  ArrayRef<EVT> ResultTys,
-                  ArrayRef<SDValue> Ops);
-  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
-                  ArrayRef<SDValue> Ops);
+  
+  // Specialize again based on number of operands for nodes with a VTList
+  // rather than a single VT.
   SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs);
   SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs, SDValue N);
-  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
-                  SDValue N1, SDValue N2);
-  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
-                  SDValue N1, SDValue N2, SDValue N3);
-  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
-                  SDValue N1, SDValue N2, SDValue N3, SDValue N4);
-  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
-                  SDValue N1, SDValue N2, SDValue N3, SDValue N4,
-                  SDValue N5);
+  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs, SDValue N1,
+                  SDValue N2);
+  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs, SDValue N1,
+                  SDValue N2, SDValue N3);
+  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs, SDValue N1,
+                  SDValue N2, SDValue N3, SDValue N4);
+  SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs, SDValue N1,
+                  SDValue N2, SDValue N3, SDValue N4, SDValue N5);
 
   /// Compute a TokenFactor to force all the incoming stack arguments to be
   /// loaded from the stack. This is used in tail call lowering to protect
@@ -978,8 +982,7 @@ public:
 
   /// Get the specified node if it's already available, or else return NULL.
   SDNode *getNodeIfExists(unsigned Opcode, SDVTList VTs, ArrayRef<SDValue> Ops,
-                          bool nuw = false, bool nsw = false,
-                          bool exact = false);
+                          const SDNodeFlags *Flags = nullptr);
 
   /// Creates a SDDbgValue node.
   SDDbgValue *getDbgValue(MDNode *Var, MDNode *Expr, SDNode *N, unsigned R,
@@ -1237,8 +1240,8 @@ private:
   void allnodes_clear();
 
   BinarySDNode *GetBinarySDNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
-                                SDValue N1, SDValue N2, bool nuw, bool nsw,
-                                bool exact);
+                                SDValue N1, SDValue N2,
+                                const SDNodeFlags *Flags = nullptr);
 
   /// List of non-single value types.
   FoldingSet<SDVTListNode> VTListMap;

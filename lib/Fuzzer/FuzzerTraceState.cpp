@@ -1,4 +1,4 @@
-//===- FuzzerDFSan.cpp - DFSan-based fuzzer mutator -----------------------===//
+//===- FuzzerTraceState.cpp - Trace-based fuzzer mutator ------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -6,25 +6,37 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
+// This file implements a mutation algorithm based on instruction traces and
+// on taint analysis feedback from DFSan.
+//
+// Instruction traces are special hooks inserted by the compiler around
+// interesting instructions. Currently supported traces:
+//   * __sanitizer_cov_trace_cmp -- inserted before every ICMP instruction,
+//    receives the type, size and arguments of ICMP.
+//
+// Every time a traced event is intercepted we analyse the data involved
+// in the event and suggest a mutation for future executions.
+// For example if 4 bytes of data that derive from input bytes {4,5,6,7}
+// are compared with a constant 12345,
+// we try to insert 12345, 12344, 12346 into bytes
+// {4,5,6,7} of the next fuzzed inputs.
+//
+// The fuzzer can work only with the traces, or with both traces and DFSan.
+//
 // DataFlowSanitizer (DFSan) is a tool for
 // generalised dynamic data flow (taint) analysis:
 // http://clang.llvm.org/docs/DataFlowSanitizer.html .
 //
-// This file implements a mutation algorithm based on taint
-// analysis feedback from DFSan.
-//
-// The approach has some similarity to "Taint-based Directed Whitebox Fuzzing"
+// The approach with DFSan-based fuzzing has some similarity to
+// "Taint-based Directed Whitebox Fuzzing"
 // by Vijay Ganesh & Tim Leek & Martin Rinard:
 // http://dspace.mit.edu/openaccess-disseminate/1721.1/59320,
 // but it uses a full blown LLVM IR taint analysis and separate instrumentation
 // to analyze all of the "attack points" at once.
 //
-// Workflow:
+// Workflow with DFSan:
 //   * lib/Fuzzer/Fuzzer*.cpp is compiled w/o any instrumentation.
-//   * The code under test is compiled with DFSan *and* with special extra hooks
-//     that are inserted before dfsan. Currently supported hooks:
-//     - __sanitizer_cov_trace_cmp: inserted before every ICMP instruction,
-//       receives the type, size and arguments of ICMP.
+//   * The code under test is compiled with DFSan *and* with instruction traces.
 //   * Every call to HOOK(a,b) is replaced by DFSan with
 //     __dfsw_HOOK(a, b, label(a), label(b)) so that __dfsw_HOOK
 //     gets all the taint labels for the arguments.
@@ -34,14 +46,10 @@
 //   * The __dfsw_* functions (implemented in this file) record the
 //     parameters (i.e. the application data and the corresponding taint labels)
 //     in a global state.
-//   * Fuzzer::MutateWithDFSan() tries to use the data recorded by __dfsw_*
-//     hooks to guide the fuzzing towards new application states.
-//     For example if 4 bytes of data that derive from input bytes {4,5,6,7}
-//     are compared with a constant 12345 and the comparison always yields
-//     the same result, we try to insert 12345, 12344, 12346 into bytes
-//     {4,5,6,7} of the next fuzzed inputs.
+//   * Fuzzer::ApplyTraceBasedMutation() tries to use the data recorded
+//     by __dfsw_* hooks to guide the fuzzing towards new application states.
 //
-// This code does not function when DFSan is not linked in.
+// Parts of this code will not function when DFSan is not linked in.
 // Instead of using ifdefs and thus requiring a separate build of lib/Fuzzer
 // we redeclare the dfsan_* interface functions as weak and check if they
 // are nullptr before calling.
@@ -53,7 +61,7 @@
 // like test/dfsan/DFSanSimpleCmpTest.cpp.
 //===----------------------------------------------------------------------===//
 
-/* Example of manual usage:
+/* Example of manual usage (-fsanitize=dataflow is optional):
 (
   cd $LLVM/lib/Fuzzer/
   clang  -fPIC -c -g -O2 -std=c++11 Fuzzer*.cpp
@@ -85,7 +93,11 @@ __attribute__((weak))
 dfsan_label dfsan_read_label(const void *addr, size_t size);
 }  // extern "C"
 
-namespace {
+namespace fuzzer {
+
+static bool ReallyHaveDFSan() {
+  return &dfsan_create_label != nullptr;
+}
 
 // These values are copied from include/llvm/IR/InstrTypes.h.
 // We do not include the LLVM headers here to remain independent.
@@ -164,17 +176,22 @@ struct TraceBasedMutation {
   uint64_t Data;
 };
 
-class DFSanState {
+class TraceState {
  public:
-   DFSanState(const fuzzer::Fuzzer::FuzzingOptions &Options)
-       : Options(Options) {}
+   TraceState(const Fuzzer::FuzzingOptions &Options, const Unit &CurrentUnit)
+       : Options(Options), CurrentUnit(CurrentUnit) {}
 
   LabelRange GetLabelRange(dfsan_label L);
   void DFSanCmpCallback(uintptr_t PC, size_t CmpSize, size_t CmpType,
                         uint64_t Arg1, uint64_t Arg2, dfsan_label L1,
                         dfsan_label L2);
+  void TraceCmpCallback(size_t CmpSize, size_t CmpType, uint64_t Arg1,
+                        uint64_t Arg2);
+  int TryToAddDesiredData(uint64_t PresentData, uint64_t DesiredData,
+                           size_t DataSize);
 
   void StartTraceRecording() {
+    if (!Options.UseTraces) return;
     RecordingTraces = true;
     Mutations.clear();
   }
@@ -188,13 +205,19 @@ class DFSanState {
   void ApplyTraceBasedMutation(size_t Idx, fuzzer::Unit *U);
 
  private:
+  bool IsTwoByteData(uint64_t Data) {
+    int64_t Signed = static_cast<int64_t>(Data);
+    Signed >>= 16;
+    return Signed == 0 || Signed == -1L;
+  }
   bool RecordingTraces = false;
   std::vector<TraceBasedMutation> Mutations;
   LabelRange LabelRanges[1 << (sizeof(dfsan_label) * 8)] = {};
-  const fuzzer::Fuzzer::FuzzingOptions &Options;
+  const Fuzzer::FuzzingOptions &Options;
+  const Unit &CurrentUnit;
 };
 
-LabelRange DFSanState::GetLabelRange(dfsan_label L) {
+LabelRange TraceState::GetLabelRange(dfsan_label L) {
   LabelRange &LR = LabelRanges[L];
   if (LR.Beg < LR.End || L == 0)
     return LR;
@@ -204,7 +227,7 @@ LabelRange DFSanState::GetLabelRange(dfsan_label L) {
   return LR = LabelRange::Singleton(LI);
 }
 
-void DFSanState::ApplyTraceBasedMutation(size_t Idx, fuzzer::Unit *U) {
+void TraceState::ApplyTraceBasedMutation(size_t Idx, fuzzer::Unit *U) {
   assert(Idx < Mutations.size());
   auto &M = Mutations[Idx];
   if (Options.Verbosity >= 3)
@@ -213,9 +236,10 @@ void DFSanState::ApplyTraceBasedMutation(size_t Idx, fuzzer::Unit *U) {
   memcpy(U->data() + M.Pos, &M.Data, M.Size);
 }
 
-void DFSanState::DFSanCmpCallback(uintptr_t PC, size_t CmpSize, size_t CmpType,
+void TraceState::DFSanCmpCallback(uintptr_t PC, size_t CmpSize, size_t CmpType,
                                   uint64_t Arg1, uint64_t Arg2, dfsan_label L1,
                                   dfsan_label L2) {
+  assert(ReallyHaveDFSan());
   if (!RecordingTraces) return;
   if (L1 == 0 && L2 == 0)
     return;  // Not actionable.
@@ -248,31 +272,64 @@ void DFSanState::DFSanCmpCallback(uintptr_t PC, size_t CmpSize, size_t CmpType,
               << "\n";
 }
 
-static DFSanState *DFSan;
+int TraceState::TryToAddDesiredData(uint64_t PresentData, uint64_t DesiredData,
+                                    size_t DataSize) {
+  int Res = 0;
+  const uint8_t *Beg = CurrentUnit.data();
+  const uint8_t *End = Beg + CurrentUnit.size();
+  for (const uint8_t *Cur = Beg; Cur < End; Cur += DataSize) {
+    Cur = (uint8_t *)memmem(Cur, End - Cur, &PresentData, DataSize);
+    if (!Cur)
+      break;
+    // std::cerr << "Cur " << (void*)Cur << "\n";
+    size_t Pos = Cur - Beg;
+    assert(Pos < CurrentUnit.size());
+    Mutations.push_back({Pos, DataSize, DesiredData});
+    Mutations.push_back({Pos, DataSize, DesiredData + 1});
+    Mutations.push_back({Pos, DataSize, DesiredData - 1});
+    Cur += DataSize;
+    Res++;
+  }
+  return Res;
+}
 
-}  // namespace
+void TraceState::TraceCmpCallback(size_t CmpSize, size_t CmpType, uint64_t Arg1,
+                        uint64_t Arg2) {
+  if (!RecordingTraces) return;
+  int Added = 0;
+  if (Options.Verbosity >= 3)
+    std::cerr << "TraceCmp: " << Arg1 << " " << Arg2 << "\n";
+  Added += TryToAddDesiredData(Arg1, Arg2, CmpSize);
+  Added += TryToAddDesiredData(Arg2, Arg1, CmpSize);
+  if (!Added && CmpSize == 4 && IsTwoByteData(Arg1) && IsTwoByteData(Arg2)) {
+    Added += TryToAddDesiredData(Arg1, Arg2, 2);
+    Added += TryToAddDesiredData(Arg2, Arg1, 2);
+  }
+}
 
-namespace fuzzer {
+static TraceState *TS;
 
 void Fuzzer::StartTraceRecording() {
-  if (!DFSan) return;
-  DFSan->StartTraceRecording();
+  if (!TS) return;
+  TS->StartTraceRecording();
 }
 
 size_t Fuzzer::StopTraceRecording() {
-  if (!DFSan) return 0;
-  return DFSan->StopTraceRecording();
+  if (!TS) return 0;
+  return TS->StopTraceRecording();
 }
 
 void Fuzzer::ApplyTraceBasedMutation(size_t Idx, Unit *U) {
-  assert(DFSan);
-  DFSan->ApplyTraceBasedMutation(Idx, U);
+  assert(TS);
+  TS->ApplyTraceBasedMutation(Idx, U);
 }
 
-void Fuzzer::InitializeDFSan() {
-  if (!&dfsan_create_label || !Options.UseDFSan) return;
-  DFSan = new DFSanState(Options);
+void Fuzzer::InitializeTraceState() {
+  if (!Options.UseTraces) return;
+  TS = new TraceState(Options, CurrentUnit);
   CurrentUnit.resize(Options.MaxLen);
+  // The rest really requires DFSan.
+  if (!ReallyHaveDFSan()) return;
   for (size_t i = 0; i < static_cast<size_t>(Options.MaxLen); i++) {
     dfsan_label L = dfsan_create_label("input", (void*)(i + 1));
     // We assume that no one else has called dfsan_create_label before.
@@ -283,20 +340,24 @@ void Fuzzer::InitializeDFSan() {
 
 }  // namespace fuzzer
 
+using fuzzer::TS;
+
 extern "C" {
 void __dfsw___sanitizer_cov_trace_cmp(uint64_t SizeAndType, uint64_t Arg1,
                                       uint64_t Arg2, dfsan_label L0,
                                       dfsan_label L1, dfsan_label L2) {
+  assert(TS);
   assert(L0 == 0);
   uintptr_t PC = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
   uint64_t CmpSize = (SizeAndType >> 32) / 8;
   uint64_t Type = (SizeAndType << 32) >> 32;
-  DFSan->DFSanCmpCallback(PC, CmpSize, Type, Arg1, Arg2, L1, L2);
+  TS->DFSanCmpCallback(PC, CmpSize, Type, Arg1, Arg2, L1, L2);
 }
 
 void dfsan_weak_hook_memcmp(void *caller_pc, const void *s1, const void *s2,
                             size_t n, dfsan_label s1_label,
                             dfsan_label s2_label, dfsan_label n_label) {
+  assert(TS);
   uintptr_t PC = reinterpret_cast<uintptr_t>(caller_pc);
   uint64_t S1 = 0, S2 = 0;
   // Simplification: handle only first 8 bytes.
@@ -304,13 +365,15 @@ void dfsan_weak_hook_memcmp(void *caller_pc, const void *s1, const void *s2,
   memcpy(&S2, s2, std::min(n, sizeof(S2)));
   dfsan_label L1 = dfsan_read_label(s1, n);
   dfsan_label L2 = dfsan_read_label(s2, n);
-  DFSan->DFSanCmpCallback(PC, n, ICMP_EQ, S1, S2, L1, L2);
+  TS->DFSanCmpCallback(PC, n, fuzzer::ICMP_EQ, S1, S2, L1, L2);
 }
 
 void __sanitizer_cov_trace_cmp(uint64_t SizeAndType, uint64_t Arg1,
                                uint64_t Arg2) {
-  // This symbol will be present if dfsan is disabled on the given function.
-  // FIXME: implement poor man's taint analysis here (w/o dfsan).
+  if (!TS) return;
+  uint64_t CmpSize = (SizeAndType >> 32) / 8;
+  uint64_t Type = (SizeAndType << 32) >> 32;
+  TS->TraceCmpCallback(CmpSize, Type, Arg1, Arg2);
 }
 
 }  // extern "C"

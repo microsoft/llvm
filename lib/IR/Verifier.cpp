@@ -3065,8 +3065,8 @@ bool Verifier::VerifyIntrinsicType(Type *Ty,
       dyn_cast<PointerType>(ThisArgVecTy->getVectorElementType());
     if (!ThisArgEltTy)
       return true;
-    return (!(ThisArgEltTy->getElementType() ==
-            ReferenceType->getVectorElementType()));
+    return ThisArgEltTy->getElementType() !=
+           ReferenceType->getVectorElementType();
   }
   }
   llvm_unreachable("unhandled");
@@ -3192,7 +3192,7 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
       Assert(AI, "llvm.gcroot parameter #1 must be an alloca.", &CI);
       Assert(isa<Constant>(CI.getArgOperand(1)),
              "llvm.gcroot parameter #2 must be a constant.", &CI);
-      if (!AI->getType()->getElementType()->isPointerTy()) {
+      if (!AI->getAllocatedType()->isPointerTy()) {
         Assert(!isa<ConstantPointerNull>(CI.getArgOperand(1)),
                "llvm.gcroot parameter #1 must either be a pointer alloca, "
                "or argument #2 must be a non-null constant.",
@@ -3309,17 +3309,17 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
              "gc relocate on unwind path incorrectly linked to the statepoint",
              &CI);
 
-      const BasicBlock *invokeBB =
+      const BasicBlock *InvokeBB =
         ExtractValue->getParent()->getUniquePredecessor();
 
       // Landingpad relocates should have only one predecessor with invoke
       // statepoint terminator
-      Assert(invokeBB, "safepoints should have unique landingpads",
+      Assert(InvokeBB, "safepoints should have unique landingpads",
              ExtractValue->getParent());
-      Assert(invokeBB->getTerminator(), "safepoint block should be well formed",
-             invokeBB);
-      Assert(isStatepoint(invokeBB->getTerminator()),
-             "gc relocate should be linked to a statepoint", invokeBB);
+      Assert(InvokeBB->getTerminator(), "safepoint block should be well formed",
+             InvokeBB);
+      Assert(isStatepoint(InvokeBB->getTerminator()),
+             "gc relocate should be linked to a statepoint", InvokeBB);
     }
     else {
       // In all other cases relocate should be tied to the statepoint directly.
@@ -3332,8 +3332,8 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
 
     // Verify rest of the relocate arguments
 
-    GCRelocateOperands ops(&CI);
-    ImmutableCallSite StatepointCS(ops.getStatepoint());
+    GCRelocateOperands Ops(&CI);
+    ImmutableCallSite StatepointCS(Ops.getStatepoint());
 
     // Both the base and derived must be piped through the safepoint
     Value* Base = CI.getArgOperand(1);
@@ -3384,10 +3384,8 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
            "'gc parameters' section of the statepoint call",
            &CI);
 
-    // Assert that the result type matches the type of the relocated pointer
-    GCRelocateOperands Operands(&CI);
-    Assert(Operands.getDerivedPtr()->getType() == CI.getType(),
-           "gc.relocate: relocating a pointer shouldn't change its type", &CI);
+    // gc_relocate does not need to be the same type as the relocated pointer.
+    // It can casted to the correct type later if it's desired
     break;
   }
   };
