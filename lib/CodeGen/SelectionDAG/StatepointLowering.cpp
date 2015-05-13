@@ -38,6 +38,14 @@ STATISTIC(NumOfStatepoints, "Number of statepoint nodes encountered");
 STATISTIC(StatepointMaxSlotsRequired,
           "Maximum number of stack slots required for a singe statepoint");
 
+static void pushStackMapConstant(SmallVectorImpl<SDValue>& Ops,
+                                 SelectionDAGBuilder &Builder, uint64_t Value) {
+  SDLoc L = Builder.getCurSDLoc();
+  Ops.push_back(Builder.DAG.getTargetConstant(StackMaps::ConstantOp, L,
+                                              MVT::i64));
+  Ops.push_back(Builder.DAG.getTargetConstant(Value, L, MVT::i64));
+}
+
 void StatepointLoweringState::startNewStatepoint(SelectionDAGBuilder &Builder) {
   // Consistency check
   assert(PendingGCRelocateCalls.empty() &&
@@ -386,12 +394,7 @@ static void lowerIncomingStatepointValue(SDValue Incoming,
     // such in the stackmap.  This is required so that the consumer can
     // parse any internal format to the deopt state.  It also handles null
     // pointers and other constant pointers in GC states
-    Ops.push_back(Builder.DAG.getTargetConstant(StackMaps::ConstantOp,
-                                                Builder.getCurSDLoc(),
-                                                MVT::i64));
-    Ops.push_back(Builder.DAG.getTargetConstant(C->getSExtValue(),
-                                                Builder.getCurSDLoc(),
-                                                MVT::i64));
+    pushStackMapConstant(Ops, Builder, C->getSExtValue());
   } else if (FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Incoming)) {
     // This handles allocas as arguments to the statepoint (this is only
     // really meaningful for a deopt value.  For GC, we'd be trying to
@@ -466,32 +469,26 @@ static void lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
   // particular value.  This is purely an optimization over the code below and
   // doesn't change semantics at all.  It is important for performance that we
   // reserve slots for both deopt and gc values before lowering either.
-  for (auto I = StatepointSite.vm_state_begin() + 1,
-            E = StatepointSite.vm_state_end();
-       I != E; ++I) {
-    Value *V = *I;
+  for (const Value *V : StatepointSite.vm_state_args()) {
     SDValue Incoming = Builder.getValue(V);
     reservePreviousStackSlotForValue(Incoming, Builder);
   }
-  for (unsigned i = 0; i < Bases.size() * 2; ++i) {
-    // Even elements will contain base, odd elements - derived ptr
-    const Value *V = i % 2 ? Bases[i / 2] : Ptrs[i / 2];
-    SDValue Incoming = Builder.getValue(V);
-    reservePreviousStackSlotForValue(Incoming, Builder);
+  for (unsigned i = 0; i < Bases.size(); ++i) {
+    const Value *Base = Bases[i];
+    reservePreviousStackSlotForValue(Builder.getValue(Base), Builder);
+
+    const Value *Ptr = Ptrs[i];
+    reservePreviousStackSlotForValue(Builder.getValue(Ptr), Builder);
   }
 
   // First, prefix the list with the number of unique values to be
   // lowered.  Note that this is the number of *Values* not the
   // number of SDValues required to lower them.
   const int NumVMSArgs = StatepointSite.getNumTotalVMSArgs();
-  Ops.push_back(Builder.DAG.getTargetConstant(StackMaps::ConstantOp,
-                                              Builder.getCurSDLoc(),
-                                              MVT::i64));
-  Ops.push_back(Builder.DAG.getTargetConstant(NumVMSArgs, Builder.getCurSDLoc(),
-                                              MVT::i64));
+  pushStackMapConstant(Ops, Builder, NumVMSArgs);
 
-  assert(NumVMSArgs + 1 == std::distance(StatepointSite.vm_state_begin(),
-                                         StatepointSite.vm_state_end()));
+  assert(NumVMSArgs == std::distance(StatepointSite.vm_state_begin(),
+                                     StatepointSite.vm_state_end()));
 
   // The vm state arguments are lowered in an opaque manner.  We do
   // not know what type of values are contained within.  We skip the
@@ -499,10 +496,7 @@ static void lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
   // explicitly just above.  We could have left it in the loop and
   // not done it explicitly, but it's far easier to understand this
   // way.
-  for (auto I = StatepointSite.vm_state_begin() + 1,
-            E = StatepointSite.vm_state_end();
-       I != E; ++I) {
-    const Value *V = *I;
+  for (const Value *V : StatepointSite.vm_state_args()) {
     SDValue Incoming = Builder.getValue(V);
     lowerIncomingStatepointValue(Incoming, Ops, Builder);
   }
@@ -512,11 +506,12 @@ static void lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
   // arrays interwoven with each (lowered) base pointer immediately followed by
   // it's (lowered) derived pointer.  i.e
   // (base[0], ptr[0], base[1], ptr[1], ...)
-  for (unsigned i = 0; i < Bases.size() * 2; ++i) {
-    // Even elements will contain base, odd elements - derived ptr
-    const Value *V = i % 2 ? Bases[i / 2] : Ptrs[i / 2];
-    SDValue Incoming = Builder.getValue(V);
-    lowerIncomingStatepointValue(Incoming, Ops, Builder);
+  for (unsigned i = 0; i < Bases.size(); ++i) {
+    const Value *Base = Bases[i];
+    lowerIncomingStatepointValue(Builder.getValue(Base), Ops, Builder);
+
+    const Value *Ptr = Ptrs[i];
+    lowerIncomingStatepointValue(Builder.getValue(Ptr), Ops, Builder);
   }
 
   // If there are any explicit spill slots passed to the statepoint, record
@@ -588,11 +583,6 @@ void SelectionDAGBuilder::LowerStatepoint(
   // Construct the actual GC_TRANSITION_START, STATEPOINT, and GC_TRANSITION_END
   // nodes with all the appropriate arguments and return values.
 
-  // TODO: Currently, all of these operands are being marked as read/write in
-  // PrologEpilougeInserter.cpp, we should special case the VMState arguments
-  // and flags to be read-only.
-  SmallVector<SDValue, 40> Ops;
-
   // Call Node: Chain, Target, {Args}, RegMask, [Glue]
   SDValue Chain = CallNode->getOperand(0);
 
@@ -620,12 +610,10 @@ void SelectionDAGBuilder::LowerStatepoint(
     TSOps.push_back(Chain);
 
     // Add GC transition arguments
-    for (auto I = ISP.gc_transition_args_begin() + 1,
-              E = ISP.gc_transition_args_end();
-         I != E; ++I) {
-      TSOps.push_back(getValue(*I));
-      if ((*I)->getType()->isPointerTy())
-        TSOps.push_back(DAG.getSrcValue(*I));
+    for (const Value *V : ISP.gc_transition_args()) {
+      TSOps.push_back(getValue(V));
+      if (V->getType()->isPointerTy())
+        TSOps.push_back(DAG.getSrcValue(V));
     }
 
     // Add glue if necessary
@@ -640,6 +628,16 @@ void SelectionDAGBuilder::LowerStatepoint(
     Chain = GCTransitionStart.getValue(0);
     Glue = GCTransitionStart.getValue(1);
   }
+
+  // TODO: Currently, all of these operands are being marked as read/write in
+  // PrologEpilougeInserter.cpp, we should special case the VMState arguments
+  // and flags to be read-only.
+  SmallVector<SDValue, 40> Ops;
+
+  // Add the <id> and <numBytes> constants.
+  Ops.push_back(DAG.getTargetConstant(ISP.getID(), getCurSDLoc(), MVT::i64));
+  Ops.push_back(
+      DAG.getTargetConstant(ISP.getNumPatchBytes(), getCurSDLoc(), MVT::i32));
 
   // Calculate and push starting position of vmstate arguments
   // Get number of arguments incoming directly into call node
@@ -660,21 +658,15 @@ void SelectionDAGBuilder::LowerStatepoint(
     RegMaskIt = CallNode->op_end() - 1;
   Ops.insert(Ops.end(), CallNode->op_begin() + 2, RegMaskIt);
 
-  // Add a leading constant argument with the Flags and the calling convention
-  // masked together
-  CallingConv::ID CallConv = CS.getCallingConv();
-  uint64_t Flags = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
+  // Add a constant argument for the calling convention
+  pushStackMapConstant(Ops, *this, CS.getCallingConv());
+
+  // Add a constant argument for the flags
+  uint64_t Flags = ISP.getFlags();
   assert(
       ((Flags & ~(uint64_t)StatepointFlags::MaskAll) == 0)
           && "unknown flag used");
-  const int Shift = 1;
-  static_assert(
-      ((~(uint64_t)0 << Shift) & (uint64_t)StatepointFlags::MaskAll) == 0,
-      "shift width too small");
-  Ops.push_back(DAG.getTargetConstant(StackMaps::ConstantOp, getCurSDLoc(),
-                                      MVT::i64));
-  Ops.push_back(DAG.getTargetConstant(Flags | ((unsigned)CallConv << Shift),
-                                      getCurSDLoc(), MVT::i64));
+  pushStackMapConstant(Ops, *this, Flags);
 
   // Insert all vmstate and gcstate arguments
   Ops.insert(Ops.end(), LoweredMetaArgs.begin(), LoweredMetaArgs.end());
@@ -709,12 +701,10 @@ void SelectionDAGBuilder::LowerStatepoint(
     TEOps.push_back(SDValue(StatepointMCNode, 0));
 
     // Add GC transition arguments
-    for (auto I = ISP.gc_transition_args_begin() + 1,
-              E = ISP.gc_transition_args_end();
-         I != E; ++I) {
-      TEOps.push_back(getValue(*I));
-      if ((*I)->getType()->isPointerTy())
-        TEOps.push_back(DAG.getSrcValue(*I));
+    for (const Value *V : ISP.gc_transition_args()) {
+      TEOps.push_back(getValue(V));
+      if (V->getType()->isPointerTy())
+        TEOps.push_back(DAG.getSrcValue(V));
     }
 
     // Add glue

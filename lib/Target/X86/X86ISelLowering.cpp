@@ -1362,6 +1362,8 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::SELECT,             MVT::v8f64, Custom);
     setOperationAction(ISD::SELECT,             MVT::v8i64, Custom);
     setOperationAction(ISD::SELECT,             MVT::v16f32, Custom);
+    setOperationAction(ISD::SELECT,             MVT::v16i1, Custom);
+    setOperationAction(ISD::SELECT,             MVT::v8i1,  Custom);
 
     setOperationAction(ISD::ADD,                MVT::v8i64, Legal);
     setOperationAction(ISD::ADD,                MVT::v16i32, Legal);
@@ -1464,6 +1466,8 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::CONCAT_VECTORS,     MVT::v64i1, Custom);
     setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v32i1, Custom);
     setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v64i1, Custom);
+    setOperationAction(ISD::SELECT,             MVT::v32i1, Custom);
+    setOperationAction(ISD::SELECT,             MVT::v64i1, Custom);
 
     for (int i = MVT::v32i8; i != MVT::v8i64; ++i) {
       const MVT VT = (MVT::SimpleValueType)i;
@@ -1491,6 +1495,8 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::CONCAT_VECTORS,     MVT::v8i1, Custom);
     setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v8i1, Custom);
     setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v4i1, Custom);
+    setOperationAction(ISD::SELECT,             MVT::v4i1, Custom);
+    setOperationAction(ISD::SELECT,             MVT::v2i1, Custom);
 
     setOperationAction(ISD::AND,                MVT::v8i32, Legal);
     setOperationAction(ISD::OR,                 MVT::v8i32, Legal);
@@ -1498,6 +1504,8 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::AND,                MVT::v4i32, Legal);
     setOperationAction(ISD::OR,                 MVT::v4i32, Legal);
     setOperationAction(ISD::XOR,                MVT::v4i32, Legal);
+    setOperationAction(ISD::SRA,                MVT::v2i64, Custom);
+    setOperationAction(ISD::SRA,                MVT::v4i64, Custom);
   }
 
   // We want to custom lower some of our intrinsics.
@@ -1577,7 +1585,6 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
   setTargetDAGCombine(ISD::ANY_EXTEND);
   setTargetDAGCombine(ISD::SIGN_EXTEND);
   setTargetDAGCombine(ISD::SIGN_EXTEND_INREG);
-  setTargetDAGCombine(ISD::TRUNCATE);
   setTargetDAGCombine(ISD::SINT_TO_FP);
   setTargetDAGCombine(ISD::SETCC);
   setTargetDAGCombine(ISD::INTRINSIC_WO_CHAIN);
@@ -12585,8 +12592,7 @@ SDValue X86TargetLowering::EmitTest(SDValue Op, unsigned X86CC, SDLoc dl,
     case ISD::SUB:
     case ISD::MUL:
     case ISD::SHL: {
-      const BinaryWithFlagsSDNode *BinNode =
-          cast<BinaryWithFlagsSDNode>(Op.getNode());
+      const auto *BinNode = cast<BinaryWithFlagsSDNode>(Op.getNode());
       if (BinNode->Flags.hasNoSignedWrap())
         break;
     }
@@ -13604,6 +13610,17 @@ SDValue X86TargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
       SDValue And = DAG.getNode(X86ISD::FAND, DL, VT, Cmp, Op1);
       return DAG.getNode(X86ISD::FOR, DL, VT, AndN, And);
     }
+  }
+
+  if (VT == MVT::v4i1 || VT == MVT::v2i1) {
+    SDValue zeroConst = DAG.getIntPtrConstant(0, DL);
+    Op1 = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, MVT::v8i1,
+                      DAG.getUNDEF(MVT::v8i1), Op1, zeroConst);
+    Op2 = DAG.getNode(ISD::INSERT_SUBVECTOR, DL, MVT::v8i1,
+                      DAG.getUNDEF(MVT::v8i1), Op2, zeroConst);
+    SDValue newSelect = DAG.getNode(ISD::SELECT, DL, MVT::v8i1,
+                                    Cond, Op1, Op2);
+    return DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, VT, newSelect, zeroConst);
   }
 
   if (Cond.getOpcode() == ISD::SETCC) {
@@ -16311,6 +16328,53 @@ static SDValue LowerMUL_LOHI(SDValue Op, const X86Subtarget *Subtarget,
   return DAG.getMergeValues(Ops, dl);
 }
 
+// Return true if the requred (according to Opcode) shift-imm form is natively
+// supported by the Subtarget
+static bool SupportedVectorShiftWithImm(MVT VT, const X86Subtarget *Subtarget, 
+                                        unsigned Opcode) {
+  if (VT.getScalarSizeInBits() < 16)
+    return false;
+ 
+  if (VT.is512BitVector() &&
+      (VT.getScalarSizeInBits() > 16 || Subtarget->hasBWI()))
+    return true;
+
+  bool LShift = VT.is128BitVector() || 
+    (VT.is256BitVector() && Subtarget->hasInt256());
+
+  bool AShift = LShift && (Subtarget->hasVLX() ||
+    (VT != MVT::v2i64 && VT != MVT::v4i64));
+  return (Opcode == ISD::SRA) ? AShift : LShift;
+}
+
+// The shift amount is a variable, but it is the same for all vector lanes.
+// These instrcutions are defined together with shift-immediate.
+static 
+bool SupportedVectorShiftWithBaseAmnt(MVT VT, const X86Subtarget *Subtarget, 
+                                      unsigned Opcode) {
+  return SupportedVectorShiftWithImm(VT, Subtarget, Opcode);
+}
+
+// Return true if the requred (according to Opcode) variable-shift form is
+// natively supported by the Subtarget
+static bool SupportedVectorVarShift(MVT VT, const X86Subtarget *Subtarget, 
+                                    unsigned Opcode) {
+
+  if (!Subtarget->hasInt256() || VT.getScalarSizeInBits() < 16)
+    return false;
+
+  // vXi16 supported only on AVX-512, BWI
+  if (VT.getScalarSizeInBits() == 16 && !Subtarget->hasBWI())
+    return false;
+
+  if (VT.is512BitVector() || Subtarget->hasVLX())
+    return true;
+
+  bool LShift = VT.is128BitVector() || VT.is256BitVector();
+  bool AShift = LShift &&  VT != MVT::v2i64 && VT != MVT::v4i64;
+  return (Opcode == ISD::SRA) ? AShift : LShift;
+}
+
 static SDValue LowerScalarImmediateShift(SDValue Op, SelectionDAG &DAG,
                                          const X86Subtarget *Subtarget) {
   MVT VT = Op.getSimpleValueType();
@@ -16318,26 +16382,16 @@ static SDValue LowerScalarImmediateShift(SDValue Op, SelectionDAG &DAG,
   SDValue R = Op.getOperand(0);
   SDValue Amt = Op.getOperand(1);
 
+  unsigned X86Opc = (Op.getOpcode() == ISD::SHL) ? X86ISD::VSHLI :
+    (Op.getOpcode() == ISD::SRL) ? X86ISD::VSRLI : X86ISD::VSRAI;
+
   // Optimize shl/srl/sra with constant shift amount.
   if (auto *BVAmt = dyn_cast<BuildVectorSDNode>(Amt)) {
     if (auto *ShiftConst = BVAmt->getConstantSplatNode()) {
       uint64_t ShiftAmt = ShiftConst->getZExtValue();
 
-      if (VT == MVT::v2i64 || VT == MVT::v4i32 || VT == MVT::v8i16 ||
-          (Subtarget->hasInt256() &&
-           (VT == MVT::v4i64 || VT == MVT::v8i32 || VT == MVT::v16i16)) ||
-          (Subtarget->hasAVX512() &&
-           (VT == MVT::v8i64 || VT == MVT::v16i32))) {
-        if (Op.getOpcode() == ISD::SHL)
-          return getTargetVShiftByConstNode(X86ISD::VSHLI, dl, VT, R, ShiftAmt,
-                                            DAG);
-        if (Op.getOpcode() == ISD::SRL)
-          return getTargetVShiftByConstNode(X86ISD::VSRLI, dl, VT, R, ShiftAmt,
-                                            DAG);
-        if (Op.getOpcode() == ISD::SRA && VT != MVT::v2i64 && VT != MVT::v4i64)
-          return getTargetVShiftByConstNode(X86ISD::VSRAI, dl, VT, R, ShiftAmt,
-                                            DAG);
-      }
+      if (SupportedVectorShiftWithImm(VT, Subtarget, Op.getOpcode()))
+        return getTargetVShiftByConstNode(X86Opc, dl, VT, R, ShiftAmt, DAG);
 
       if (VT == MVT::v16i8 || (Subtarget->hasInt256() && VT == MVT::v32i8)) {
         unsigned NumElts = VT.getVectorNumElements();
@@ -16418,19 +16472,7 @@ static SDValue LowerScalarImmediateShift(SDValue Op, SelectionDAG &DAG,
       if (ShAmt != ShiftAmt)
         return SDValue();
     }
-    switch (Op.getOpcode()) {
-    default:
-      llvm_unreachable("Unknown shift opcode!");
-    case ISD::SHL:
-      return getTargetVShiftByConstNode(X86ISD::VSHLI, dl, VT, R, ShiftAmt,
-                                        DAG);
-    case ISD::SRL:
-      return getTargetVShiftByConstNode(X86ISD::VSRLI, dl, VT, R, ShiftAmt,
-                                        DAG);
-    case ISD::SRA:
-      return getTargetVShiftByConstNode(X86ISD::VSRAI, dl, VT, R, ShiftAmt,
-                                        DAG);
-    }
+    return getTargetVShiftByConstNode(X86Opc, dl, VT, R, ShiftAmt, DAG);
   }
 
   return SDValue();
@@ -16443,12 +16485,13 @@ static SDValue LowerScalarVariableShift(SDValue Op, SelectionDAG &DAG,
   SDValue R = Op.getOperand(0);
   SDValue Amt = Op.getOperand(1);
 
-  if ((VT == MVT::v2i64 && Op.getOpcode() != ISD::SRA) ||
-      VT == MVT::v4i32 || VT == MVT::v8i16 ||
-      (Subtarget->hasInt256() &&
-       ((VT == MVT::v4i64 && Op.getOpcode() != ISD::SRA) ||
-        VT == MVT::v8i32 || VT == MVT::v16i16)) ||
-       (Subtarget->hasAVX512() && (VT == MVT::v8i64 || VT == MVT::v16i32))) {
+  unsigned X86OpcI = (Op.getOpcode() == ISD::SHL) ? X86ISD::VSHLI :
+    (Op.getOpcode() == ISD::SRL) ? X86ISD::VSRLI : X86ISD::VSRAI;
+
+  unsigned X86OpcV = (Op.getOpcode() == ISD::SHL) ? X86ISD::VSHL :
+    (Op.getOpcode() == ISD::SRL) ? X86ISD::VSRL : X86ISD::VSRA;
+
+  if (SupportedVectorShiftWithBaseAmnt(VT, Subtarget, Op.getOpcode())) {
     SDValue BaseShAmt;
     EVT EltVT = VT.getVectorElementType();
 
@@ -16492,47 +16535,7 @@ static SDValue LowerScalarVariableShift(SDValue Op, SelectionDAG &DAG,
       else if (EltVT.bitsLT(MVT::i32))
         BaseShAmt = DAG.getNode(ISD::ZERO_EXTEND, dl, MVT::i32, BaseShAmt);
 
-      switch (Op.getOpcode()) {
-      default:
-        llvm_unreachable("Unknown shift opcode!");
-      case ISD::SHL:
-        switch (VT.SimpleTy) {
-        default: return SDValue();
-        case MVT::v2i64:
-        case MVT::v4i32:
-        case MVT::v8i16:
-        case MVT::v4i64:
-        case MVT::v8i32:
-        case MVT::v16i16:
-        case MVT::v16i32:
-        case MVT::v8i64:
-          return getTargetVShiftNode(X86ISD::VSHLI, dl, VT, R, BaseShAmt, DAG);
-        }
-      case ISD::SRA:
-        switch (VT.SimpleTy) {
-        default: return SDValue();
-        case MVT::v4i32:
-        case MVT::v8i16:
-        case MVT::v8i32:
-        case MVT::v16i16:
-        case MVT::v16i32:
-        case MVT::v8i64:
-          return getTargetVShiftNode(X86ISD::VSRAI, dl, VT, R, BaseShAmt, DAG);
-        }
-      case ISD::SRL:
-        switch (VT.SimpleTy) {
-        default: return SDValue();
-        case MVT::v2i64:
-        case MVT::v4i32:
-        case MVT::v8i16:
-        case MVT::v4i64:
-        case MVT::v8i32:
-        case MVT::v16i16:
-        case MVT::v16i32:
-        case MVT::v8i64:
-          return getTargetVShiftNode(X86ISD::VSRLI, dl, VT, R, BaseShAmt, DAG);
-        }
-      }
+      return getTargetVShiftNode(X86OpcI, dl, VT, R, BaseShAmt, DAG);
     }
   }
 
@@ -16551,18 +16554,8 @@ static SDValue LowerScalarVariableShift(SDValue Op, SelectionDAG &DAG,
         if (Vals[j] != Amt.getOperand(i + j))
           return SDValue();
     }
-    switch (Op.getOpcode()) {
-    default:
-      llvm_unreachable("Unknown shift opcode!");
-    case ISD::SHL:
-      return DAG.getNode(X86ISD::VSHL, dl, VT, R, Op.getOperand(1));
-    case ISD::SRL:
-      return DAG.getNode(X86ISD::VSRL, dl, VT, R, Op.getOperand(1));
-    case ISD::SRA:
-      return DAG.getNode(X86ISD::VSRA, dl, VT, R, Op.getOperand(1));
-    }
+    return DAG.getNode(X86OpcV, dl, VT, R, Op.getOperand(1));
   }
-
   return SDValue();
 }
 
@@ -16582,22 +16575,8 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget* Subtarget,
   if (SDValue V = LowerScalarVariableShift(Op, DAG, Subtarget))
       return V;
 
-  if (Subtarget->hasAVX512() && (VT == MVT::v16i32 || VT == MVT::v8i64))
+  if (SupportedVectorVarShift(VT, Subtarget, Op.getOpcode()))
     return Op;
-
-  // AVX2 has VPSLLV/VPSRAV/VPSRLV.
-  if (Subtarget->hasInt256()) {
-    if (Op.getOpcode() == ISD::SRL &&
-        (VT == MVT::v2i64 || VT == MVT::v4i32 ||
-         VT == MVT::v4i64 || VT == MVT::v8i32))
-      return Op;
-    if (Op.getOpcode() == ISD::SHL &&
-        (VT == MVT::v2i64 || VT == MVT::v4i32 ||
-         VT == MVT::v4i64 || VT == MVT::v8i32))
-      return Op;
-    if (Op.getOpcode() == ISD::SRA && (VT == MVT::v4i32 || VT == MVT::v8i32))
-      return Op;
-  }
 
   // 2i64 vector logical shifts can efficiently avoid scalarization - do the
   // shifts per-lane and then shuffle the partial results back together.
@@ -19645,6 +19624,10 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   case X86::CMOV_RFP32:
   case X86::CMOV_RFP64:
   case X86::CMOV_RFP80:
+  case X86::CMOV_V8I1:
+  case X86::CMOV_V16I1:
+  case X86::CMOV_V32I1:
+  case X86::CMOV_V64I1:
     return EmitLoweredSelect(MI, BB);
 
   case X86::FP32_TO_INT16_IN_MEM:
@@ -20880,15 +20863,6 @@ static SDValue PerformShuffleCombine(SDNode *N, SelectionDAG &DAG,
       return SDValue(); // This routine will use CombineTo to replace N.
   }
 
-  return SDValue();
-}
-
-/// PerformTruncateCombine - Converts truncate operation to
-/// a sequence of vector shuffle operations.
-/// It is possible when we truncate 256-bit vector to 128-bit vector
-static SDValue PerformTruncateCombine(SDNode *N, SelectionDAG &DAG,
-                                      TargetLowering::DAGCombinerInfo &DCI,
-                                      const X86Subtarget *Subtarget)  {
   return SDValue();
 }
 
@@ -23485,7 +23459,7 @@ static SDValue PerformSTORECombine(SDNode *N, SelectionDAG &DAG,
     SDValue OldExtract = St->getOperand(1);
     SDValue ExtOp0 = OldExtract.getOperand(0);
     unsigned VecSize = ExtOp0.getValueSizeInBits();
-    MVT VecVT = MVT::getVectorVT(MVT::f64, VecSize / 64);
+    EVT VecVT = EVT::getVectorVT(*DAG.getContext(), MVT::f64, VecSize / 64);
     SDValue BitCast = DAG.getNode(ISD::BITCAST, dl, VecVT, ExtOp0);
     SDValue NewExtract = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, MVT::f64,
                                      BitCast, OldExtract.getOperand(1));
@@ -24454,7 +24428,6 @@ SDValue X86TargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::SIGN_EXTEND:    return PerformSExtCombine(N, DAG, DCI, Subtarget);
   case ISD::SIGN_EXTEND_INREG:
     return PerformSIGN_EXTEND_INREGCombine(N, DAG, Subtarget);
-  case ISD::TRUNCATE:       return PerformTruncateCombine(N, DAG,DCI,Subtarget);
   case ISD::SETCC:          return PerformISDSETCCCombine(N, DAG, Subtarget);
   case X86ISD::SETCC:       return PerformSETCCCombine(N, DAG, DCI, Subtarget);
   case X86ISD::BRCOND:      return PerformBrCondCombine(N, DAG, DCI, Subtarget);

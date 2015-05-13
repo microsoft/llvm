@@ -288,6 +288,10 @@ enum NodeType : unsigned {
   BUILD_VERTICAL_VECTOR,
   /// Pointer to the start of the shader's constant data.
   CONST_DATA_PTR,
+  SENDMSG,
+  INTERP_MOV,
+  INTERP_P1,
+  INTERP_P2,
   FIRST_MEM_OPCODE_NUMBER = ISD::FIRST_TARGET_MEMORY_OPCODE,
   STORE_MSKOR,
   LOAD_CONSTANT,

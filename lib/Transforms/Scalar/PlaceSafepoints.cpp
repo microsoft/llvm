@@ -51,6 +51,7 @@
 #include "llvm/Pass.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/ADT/SetOperations.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -109,9 +110,9 @@ static cl::opt<bool> TraceLSP("spp-trace", cl::Hidden, cl::init(false));
 
 namespace {
 
-/** An analysis pass whose purpose is to identify each of the backedges in
-    the function which require a safepoint poll to be inserted. */
-struct PlaceBackedgeSafepointsImpl : public LoopPass {
+/// An analysis pass whose purpose is to identify each of the backedges in
+/// the function which require a safepoint poll to be inserted.
+struct PlaceBackedgeSafepointsImpl : public FunctionPass {
   static char ID;
 
   /// The output of the pass - gives a list of each backedge (described by
@@ -121,20 +122,38 @@ struct PlaceBackedgeSafepointsImpl : public LoopPass {
   /// True unless we're running spp-no-calls in which case we need to disable
   /// the call dependend placement opts.
   bool CallSafepointsEnabled;
+
+  ScalarEvolution *SE = nullptr;
+  DominatorTree *DT = nullptr;
+  LoopInfo *LI = nullptr;
+  
   PlaceBackedgeSafepointsImpl(bool CallSafepoints = false)
-      : LoopPass(ID), CallSafepointsEnabled(CallSafepoints) {
+      : FunctionPass(ID), CallSafepointsEnabled(CallSafepoints) {
     initializePlaceBackedgeSafepointsImplPass(*PassRegistry::getPassRegistry());
   }
 
-  bool runOnLoop(Loop *, LPPassManager &LPM) override;
+  bool runOnLoop(Loop *);
+  void runOnLoopAndSubLoops(Loop *L) {
+    // Visit all the subloops
+    for (auto I = L->begin(), E = L->end(); I != E; I++)
+      runOnLoopAndSubLoops(*I);
+    runOnLoop(L);
+  }
 
+  bool runOnFunction(Function &F) override {
+    SE = &getAnalysis<ScalarEvolution>();
+    DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    for (auto I = LI->begin(), E = LI->end(); I != E; I++) {
+      runOnLoopAndSubLoops(*I);
+    }
+    return false;
+  }
+  
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    // needed for determining if the loop is finite
+    AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<ScalarEvolution>();
-    // to ensure each edge has a single backedge
-    // TODO: is this still required?
-    AU.addRequiredID(LoopSimplifyID);
-
+    AU.addRequired<LoopInfoWrapperPass>();
     // We no longer modify the IR at all in this pass.  Thus all
     // analysis are preserved.
     AU.setPreservesAll();
@@ -147,20 +166,13 @@ static cl::opt<bool> NoCall("spp-no-call", cl::Hidden, cl::init(false));
 static cl::opt<bool> NoBackedge("spp-no-backedge", cl::Hidden, cl::init(false));
 
 namespace {
-struct PlaceSafepoints : public ModulePass {
+struct PlaceSafepoints : public FunctionPass {
   static char ID; // Pass identification, replacement for typeid
 
-  PlaceSafepoints() : ModulePass(ID) {
+  PlaceSafepoints() : FunctionPass(ID) {
     initializePlaceSafepointsPass(*PassRegistry::getPassRegistry());
   }
-  bool runOnModule(Module &M) override {
-    bool modified = false;
-    for (Function &F : M) {
-      modified |= runOnFunction(F);
-    }
-    return modified;
-  }
-  bool runOnFunction(Function &F);
+  bool runOnFunction(Function &F) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     // We modify the graph wholesale (inlining, block insertion, etc).  We
@@ -173,8 +185,8 @@ struct PlaceSafepoints : public ModulePass {
 // Insert a safepoint poll immediately before the given instruction.  Does
 // not handle the parsability of state at the runtime call, that's the
 // callers job.
-static void
-InsertSafepointPoll(DominatorTree &DT, Instruction *after,
+static void 
+InsertSafepointPoll(Instruction *after,
                     std::vector<CallSite> &ParsePointsNeeded /*rval*/);
 
 static bool isGCLeafFunction(const CallSite &CS);
@@ -314,26 +326,17 @@ static void scanInlinedCode(Instruction *start, Instruction *end,
   }
 }
 
-bool PlaceBackedgeSafepointsImpl::runOnLoop(Loop *L, LPPassManager &LPM) {
-  ScalarEvolution *SE = &getAnalysis<ScalarEvolution>();
-
-  // Loop through all predecessors of the loop header and identify all
-  // backedges.  We need to place a safepoint on every backedge (potentially).
-  // Note: Due to LoopSimplify there should only be one.  Assert?  Or can we
-  // relax this?
+bool PlaceBackedgeSafepointsImpl::runOnLoop(Loop *L) {
+  // Loop through all loop latches (branches controlling backedges).  We need
+  // to place a safepoint on every backedge (potentially). 
+  // Note: In common usage, there will be only one edge due to LoopSimplify
+  // having run sometime earlier in the pipeline, but this code must be correct
+  // w.r.t. loops with multiple backedges.
   BasicBlock *header = L->getHeader();
-
-  // TODO: Use the analysis pass infrastructure for this.  There is no reason
-  // to recalculate this here.
-  DominatorTree DT;
-  DT.recalculate(*header->getParent());
-
-  bool modified = false;
-  for (BasicBlock *pred : predecessors(header)) {
-    if (!L->contains(pred)) {
-      // This is not a backedge, it's coming from outside the loop
-      continue;
-    }
+  SmallVector<BasicBlock*, 16> LoopLatches;
+  L->getLoopLatches(LoopLatches);
+  for (BasicBlock *pred : LoopLatches) {
+    assert(L->contains(pred));
 
     // Make a policy decision about whether this loop needs a safepoint or
     // not.  Note that this is about unburdening the optimizer in loops, not
@@ -346,7 +349,7 @@ bool PlaceBackedgeSafepointsImpl::runOnLoop(Loop *L, LPPassManager &LPM) {
         continue;
       }
       if (CallSafepointsEnabled &&
-          containsUnconditionalCallSafepoint(L, header, pred, DT)) {
+          containsUnconditionalCallSafepoint(L, header, pred, *DT)) {
         // Note: This is only semantically legal since we won't do any further
         // IPO or inlining before the actual call insertion..  If we hadn't, we
         // might latter loose this call safepoint.
@@ -362,9 +365,6 @@ bool PlaceBackedgeSafepointsImpl::runOnLoop(Loop *L, LPPassManager &LPM) {
     // not help runtime performance that much, but it might help our ability to
     // optimize the inner loop.
 
-    // We're unconditionally going to modify this loop.
-    modified = true;
-
     // Safepoint insertion would involve creating a new basic block (as the
     // target of the current backedge) which does the safepoint (of all live
     // variables) and branches to the true header
@@ -378,7 +378,7 @@ bool PlaceBackedgeSafepointsImpl::runOnLoop(Loop *L, LPPassManager &LPM) {
     PollLocations.push_back(term);
   }
 
-  return modified;
+  return false;
 }
 
 static Instruction *findLocationForEntrySafepoint(Function &F,
@@ -450,11 +450,7 @@ static Instruction *findLocationForEntrySafepoint(Function &F,
   }
 
   BasicBlock *BB = cursor->getParent();
-  SplitBlock(BB, cursor, nullptr);
-
-  // Note: SplitBlock modifies the DT.  Simply passing a Pass (which is a
-  // module pass) is not enough.
-  DT.recalculate(F);
+  SplitBlock(BB, cursor, &DT);
 
   // SplitBlock updates the DT
   DEBUG(DT.verifyDomTree());
@@ -567,10 +563,10 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
   // actually insert parse points yet.  That will be done for all polls and
   // calls in a single pass.
 
-  // Note: With the migration, we need to recompute this for each 'pass'.  Once
-  // we merge these, we'll do it once before the analysis
   DominatorTree DT;
+  DT.recalculate(F);
 
+  SmallVector<Instruction *, 16> PollsNeeded;
   std::vector<CallSite> ParsePointNeeded;
 
   if (enableBackedgeSafepoints(F)) {
@@ -583,23 +579,34 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
     PlaceBackedgeSafepointsImpl *PBS =
       new PlaceBackedgeSafepointsImpl(CanAssumeCallSafepoints);
     FPM.add(PBS);
-    // Note: While the analysis pass itself won't modify the IR, LoopSimplify
-    // (which it depends on) may.  i.e. analysis must be recalculated after run
     FPM.run(F);
 
     // We preserve dominance information when inserting the poll, otherwise
     // we'd have to recalculate this on every insert
     DT.recalculate(F);
 
+    auto &PollLocations = PBS->PollLocations;
+
+    auto OrderByBBName = [](Instruction *a, Instruction *b) {
+      return a->getParent()->getName() < b->getParent()->getName();
+    };
+    // We need the order of list to be stable so that naming ends up stable
+    // when we split edges.  This makes test cases much easier to write.
+    std::sort(PollLocations.begin(), PollLocations.end(), OrderByBBName);
+
+    // We can sometimes end up with duplicate poll locations.  This happens if
+    // a single loop is visited more than once.   The fact this happens seems
+    // wrong, but it does happen for the split-backedge.ll test case.
+    PollLocations.erase(std::unique(PollLocations.begin(),
+                                    PollLocations.end()),
+                        PollLocations.end());
+
     // Insert a poll at each point the analysis pass identified
-    for (size_t i = 0; i < PBS->PollLocations.size(); i++) {
+    // The poll location must be the terminator of a loop latch block.
+    for (TerminatorInst *Term : PollLocations) {
       // We are inserting a poll, the function is modified
       modified = true;
-
-      // The poll location must be the terminator of a loop latch block.
-      TerminatorInst *Term = PBS->PollLocations[i];
-
-      std::vector<CallSite> ParsePoints;
+      
       if (SplitBackedge) {
         // Split the backedge of the loop and insert the poll within that new
         // basic block.  This creates a loop with two latches per original
@@ -610,8 +617,8 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
         // Since this is a latch, at least one of the successors must dominate
         // it. Its possible that we have a) duplicate edges to the same header
         // and b) edges to distinct loop headers.  We need to insert pools on
-        // each. (Note: This still relies on LoopSimplify.)
-        DenseSet<BasicBlock *> Headers;
+        // each.
+        SetVector<BasicBlock *> Headers;
         for (unsigned i = 0; i < Term->getNumSuccessors(); i++) {
           BasicBlock *Succ = Term->getSuccessor(i);
           if (DT.dominates(Succ, Term->getParent())) {
@@ -623,46 +630,45 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
         // The split loop structure here is so that we only need to recalculate
         // the dominator tree once.  Alternatively, we could just keep it up to
         // date and use a more natural merged loop.
-        DenseSet<BasicBlock *> SplitBackedges;
+        SetVector<BasicBlock *> SplitBackedges;
         for (BasicBlock *Header : Headers) {
-          BasicBlock *NewBB = SplitEdge(Term->getParent(), Header, nullptr);
-          SplitBackedges.insert(NewBB);
-        }
-        DT.recalculate(F);
-        for (BasicBlock *NewBB : SplitBackedges) {
-          InsertSafepointPoll(DT, NewBB->getTerminator(), ParsePoints);
+          BasicBlock *NewBB = SplitEdge(Term->getParent(), Header, &DT);
+          PollsNeeded.push_back(NewBB->getTerminator());
           NumBackedgeSafepoints++;
         }
-
       } else {
         // Split the latch block itself, right before the terminator.
-        InsertSafepointPoll(DT, Term, ParsePoints);
+        PollsNeeded.push_back(Term);
         NumBackedgeSafepoints++;
       }
-
-      // Record the parse points for later use
-      ParsePointNeeded.insert(ParsePointNeeded.end(), ParsePoints.begin(),
-                              ParsePoints.end());
     }
   }
 
   if (enableEntrySafepoints(F)) {
-    DT.recalculate(F);
-    Instruction *term = findLocationForEntrySafepoint(F, DT);
-    if (!term) {
+    Instruction *Location = findLocationForEntrySafepoint(F, DT);
+    if (!Location) {
       // policy choice not to insert?
     } else {
-      std::vector<CallSite> RuntimeCalls;
-      InsertSafepointPoll(DT, term, RuntimeCalls);
+      PollsNeeded.push_back(Location);
       modified = true;
       NumEntrySafepoints++;
-      ParsePointNeeded.insert(ParsePointNeeded.end(), RuntimeCalls.begin(),
-                              RuntimeCalls.end());
     }
   }
 
+  // Now that we've identified all the needed safepoint poll locations, insert
+  // safepoint polls themselves.
+  for (Instruction *PollLocation : PollsNeeded) {
+    std::vector<CallSite> RuntimeCalls;
+    InsertSafepointPoll(PollLocation, RuntimeCalls);
+    ParsePointNeeded.insert(ParsePointNeeded.end(), RuntimeCalls.begin(),
+                            RuntimeCalls.end());
+  }
+  PollsNeeded.clear(); // make sure we don't accidentally use
+  // The dominator tree has been invalidated by the inlining performed in the
+  // above loop.  TODO: Teach the inliner how to update the dom tree?
+  DT.recalculate(F);
+  
   if (enableCallSafepoints(F)) {
-    DT.recalculate(F);
     std::vector<CallSite> Calls;
     findCallSafepoints(F, Calls);
     NumCallSafepoints += Calls.size();
@@ -677,7 +683,6 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
   unique_unsorted(ParsePointNeeded);
 
   // Any parse point (no matter what source) will be handled here
-  DT.recalculate(F); // Needed?
 
   // We're about to start modifying the function
   if (!ParsePointNeeded.empty())
@@ -728,13 +733,16 @@ bool PlaceSafepoints::runOnFunction(Function &F) {
 char PlaceBackedgeSafepointsImpl::ID = 0;
 char PlaceSafepoints::ID = 0;
 
-ModulePass *llvm::createPlaceSafepointsPass() { return new PlaceSafepoints(); }
+FunctionPass *llvm::createPlaceSafepointsPass() {
+  return new PlaceSafepoints();
+}
 
 INITIALIZE_PASS_BEGIN(PlaceBackedgeSafepointsImpl,
                       "place-backedge-safepoints-impl",
                       "Place Backedge Safepoints", false, false)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
-INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(PlaceBackedgeSafepointsImpl,
                     "place-backedge-safepoints-impl",
                     "Place Backedge Safepoints", false, false)
@@ -770,7 +778,7 @@ static bool isGCLeafFunction(const CallSite &CS) {
 }
 
 static void
-InsertSafepointPoll(DominatorTree &DT, Instruction *term,
+InsertSafepointPoll(Instruction *term,
                     std::vector<CallSite> &ParsePointsNeeded /*rval*/) {
   Module *M = term->getParent()->getParent()->getParent();
   assert(M);
@@ -800,7 +808,6 @@ InsertSafepointPoll(DominatorTree &DT, Instruction *term,
   }
   after++;
   assert(after != poll->getParent()->end() && "must have successor");
-  assert(DT.dominates(before, after) && "trivially true");
 
   // do the actual inlining
   InlineFunctionInfo IFI;
@@ -829,13 +836,6 @@ InsertSafepointPoll(DominatorTree &DT, Instruction *term,
          "malformed poll function");
 
   scanInlinedCode(&*(start), &*(after), calls, BBs);
-
-  // Recompute since we've invalidated cached data.  Conceptually we
-  // shouldn't need to do this, but implementation wise we appear to.  Needed
-  // so we can insert safepoints correctly.
-  // TODO: update more cheaply
-  DT.recalculate(*after->getParent()->getParent());
-
   assert(!calls.empty() && "slow path not found for safepoint poll");
 
   // Record the fact we need a parsable state at the runtime call contained in
@@ -886,8 +886,8 @@ static Value *ReplaceWithStatepoint(const CallSite &CS, /* to replace */
   if (CS.isCall()) {
     CallInst *ToReplace = cast<CallInst>(CS.getInstruction());
     CallInst *Call = Builder.CreateGCStatepointCall(
-        CS.getCalledValue(), makeArrayRef(CS.arg_begin(), CS.arg_end()), None,
-        None, "safepoint_token");
+        0xABCDEF00, 0, CS.getCalledValue(), makeArrayRef(CS.arg_begin(), CS.arg_end()),
+        None, None, "safepoint_token");
     Call->setTailCall(ToReplace->isTailCall());
     Call->setCallingConv(ToReplace->getCallingConv());
 
@@ -915,7 +915,7 @@ static Value *ReplaceWithStatepoint(const CallSite &CS, /* to replace */
     // original block.
     Builder.SetInsertPoint(ToReplace->getParent());
     InvokeInst *Invoke = Builder.CreateGCStatepointInvoke(
-        CS.getCalledValue(), ToReplace->getNormalDest(),
+        0xABCDEF00, 0, CS.getCalledValue(), ToReplace->getNormalDest(),
         ToReplace->getUnwindDest(), makeArrayRef(CS.arg_begin(), CS.arg_end()),
         Builder.getInt32(0), None, "safepoint_token");
 
