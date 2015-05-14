@@ -776,7 +776,7 @@ bool LLParser::ParseGlobal(const std::string &Name, LocTy NameLoc,
                             Name, nullptr, GlobalVariable::NotThreadLocal,
                             AddrSpace);
   } else {
-    if (GVal->getType()->getElementType() != Ty)
+    if (GVal->getValueType() != Ty)
       return Error(TyLoc,
             "forward reference and definition of global have different types");
 
@@ -4826,7 +4826,7 @@ bool LLParser::ParseInvoke(Instruction *&Inst, PerFunctionState &PFS) {
   // Finish off the Attribute and check them
   AttributeSet PAL = AttributeSet::get(Context, Attrs);
 
-  InvokeInst *II = InvokeInst::Create(Callee, NormalBB, UnwindBB, Args);
+  InvokeInst *II = InvokeInst::Create(Ty, Callee, NormalBB, UnwindBB, Args);
   II->setCallingConv(CC);
   II->setAttributes(PAL);
   ForwardRefAttrGroups[II] = FwdRefAttrGrps;

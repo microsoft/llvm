@@ -142,8 +142,8 @@ resulting relocation sequence is:
 
   define i8 addrspace(1)* @test1(i8 addrspace(1)* %obj) 
          gc "statepoint-example" {
-    %0 = call i32 (void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(i64 0, i32 0, void ()* @foo, i32 0, i32 0, i32 0, i8 addrspace(1)* %obj)
-    %obj.relocated = call coldcc i8 addrspace(1)* @llvm.experimental.gc.relocate.p1i8(i32 %0, i32 4, i32 4)
+    %0 = call i32 (i64, i32, void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(i64 0, i32 0, void ()* @foo, i32 0, i32 0, i32 0, i32 0, i8 addrspace(1)* %obj)
+    %obj.relocated = call coldcc i8 addrspace(1)* @llvm.experimental.gc.relocate.p1i8(i32 %0, i32 7, i32 7)
     ret i8 addrspace(1)* %obj.relocated
   }
 
@@ -242,8 +242,8 @@ to unmanaged code. The resulting relocation sequence is:
   define i8 addrspace(1)* @test1(i8 addrspace(1) *%obj)
          gc "hypothetical-gc" {
 
-    %0 = call i32 (void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(void ()* @foo, i32 0, i32 1, i32* @Flag, i32 0, i8 addrspace(1)* %obj)
-    %obj.relocated = call coldcc i8 addrspace(1)* @llvm.experimental.gc.relocate.p1i8(i32 %0, i32 4, i32 4)
+    %0 = call i32 (i64, i32, void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(i64 0, i32 0, void ()* @foo, i32 0, i32 1, i32* @Flag, i32 0, i8 addrspace(1)* %obj)
+    %obj.relocated = call coldcc i8 addrspace(1)* @llvm.experimental.gc.relocate.p1i8(i32 %0, i32 7, i32 7)
     ret i8 addrspace(1)* %obj.relocated
   }
 
@@ -299,7 +299,7 @@ Syntax:
       declare i32
         @llvm.experimental.gc.statepoint(i64 <id>, i32 <num patch bytes>,
                        func_type <target>, 
-                       i64 <#call args>. i64 <flags>,
+                       i64 <#call args>, i64 <flags>,
                        ... (call parameters),
                        i64 <# transition args>, ... (transition parameters),
                        i64 <# deopt args>, ... (deopt parameters),
@@ -590,7 +590,7 @@ As an example, given this code:
 
   define i8 addrspace(1)* @test1(i8 addrspace(1)* %obj) 
          gc "statepoint-example" {
-    call i32 (void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(void ()* @foo, i32 0, i32 0, i32 0, i32 5, i32 0, i32 -1, i32 0, i32 0, i32 0)
+    call i32 (i64, i32, void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(i64 2882400000, i32 0, void ()* @foo, i32 0, i32 0, i32 0, i32 5, i32 0, i32 -1, i32 0, i32 0, i32 0)
     ret i8 addrspace(1)* %obj
   }
 
@@ -600,8 +600,8 @@ The pass would produce this IR:
 
   define i8 addrspace(1)* @test1(i8 addrspace(1)* %obj) 
          gc "statepoint-example" {
-    %0 = call i32 (void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(void ()* @foo, i32 0, i32 0, i32 0, i32 5, i32 0, i32 -1, i32 0, i32 0, i32 0, i8 addrspace(1)* %obj)
-    %obj.relocated = call coldcc i8 addrspace(1)* @llvm.experimental.gc.relocate.p1i8(i32 %0, i32 9, i32 9)
+    %0 = call i32 (i64, i32, void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(i64 2882400000, i32 0, void ()* @foo, i32 0, i32 0, i32 0, i32 5, i32 0, i32 -1, i32 0, i32 0, i32 0, i8 addrspace(1)* %obj)
+    %obj.relocated = call coldcc i8 addrspace(1)* @llvm.experimental.gc.relocate.p1i8(i32 %0, i32 12, i32 12)
     ret i8 addrspace(1)* %obj.relocated
   }
 
@@ -654,8 +654,8 @@ This pass would produce the following IR:
 .. code-block:: llvm
 
   define void @test() gc "statepoint-example" {
-    %safepoint_token = call i32 (void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(void ()* @do_safepoint, i32 0, i32 0, i32 0, i32 0)
-    %safepoint_token1 = call i32 (void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(void ()* @foo, i32 0, i32 0, i32 0, i32 0)
+    %safepoint_token = call i32 (i64, i32, void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(i64 2882400000, i32 0, void ()* @do_safepoint, i32 0, i32 0, i32 0, i32 0)
+    %safepoint_token1 = call i32 (i64, i32, void ()*, i32, i32, ...)* @llvm.experimental.gc.statepoint.p0f_isVoidf(i64 2882400000, i32 0, void ()* @foo, i32 0, i32 0, i32 0, i32 0)
     ret void
   }
 
@@ -676,6 +676,21 @@ function of the name ``gc.safepoint_poll`` in the containing Module.  The body
 of this function is inserted at each poll site desired.  While calls or invokes
 inside this method are transformed to a ``gc.statepoints``, recursive poll 
 insertion is not performed.
+
+By default PlaceSafepoints passes in ``0xABCDEF00`` as the statepoint
+ID and ``0`` as the number of patchable bytes to the newly constructed
+``gc.statepoint``.  These values can be configured on a per-callsite
+basis using the attributes ``"statepoint-id"`` and
+``"statepoint-num-patch-bytes"``.  If a call site is marked with a
+``"statepoint-id"`` function attribute and its value is a positive
+integer (represented as a string), then that value is used as the ID
+of the newly constructed ``gc.statepoint``.  If a call site is marked
+with a ``"statepoint-num-patch-bytes"`` function attribute and its
+value is a positive integer, then that value is used as the 'num patch
+bytes' parameter of the newly constructed ``gc.statepoint``.  The
+``"statepoint-id"`` and ``"statepoint-num-patch-bytes"`` attributes
+are not propagated to the ``gc.statepoint`` call or invoke if they
+could be successfully parsed.
 
 If you are scheduling the RewriteStatepointsForGC pass late in the pass order,
 you should probably schedule this pass immediately before it.  The exception 

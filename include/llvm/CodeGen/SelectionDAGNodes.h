@@ -1017,11 +1017,6 @@ static bool isBinOpWithFlags(unsigned Opcode) {
   case ISD::ADD:
   case ISD::SUB:
   case ISD::SHL:
-  case ISD::FADD:
-  case ISD::FDIV:
-  case ISD::FMUL:
-  case ISD::FREM:
-  case ISD::FSUB:
     return true;
   default:
     return false;
@@ -1034,8 +1029,8 @@ class BinaryWithFlagsSDNode : public BinarySDNode {
 public:
   SDNodeFlags Flags;
   BinaryWithFlagsSDNode(unsigned Opc, unsigned Order, DebugLoc dl, SDVTList VTs,
-                        SDValue X, SDValue Y, const SDNodeFlags &NodeFlags)
-      : BinarySDNode(Opc, Order, dl, VTs, X, Y), Flags(NodeFlags) {}
+                        SDValue X, SDValue Y)
+      : BinarySDNode(Opc, Order, dl, VTs, X, Y), Flags() {}
   static bool classof(const SDNode *N) {
     return isBinOpWithFlags(N->getOpcode());
   }
@@ -1406,11 +1401,10 @@ public:
 class ConstantSDNode : public SDNode {
   const ConstantInt *Value;
   friend class SelectionDAG;
-  // XXX: DebugLoc is unused intentionally until constant coalescing is resolved
   ConstantSDNode(bool isTarget, bool isOpaque, const ConstantInt *val,
-                 DebugLoc, EVT VT)
+                 DebugLoc DL, EVT VT)
     : SDNode(isTarget ? ISD::TargetConstant : ISD::Constant,
-             0, DebugLoc(), getSDVTList(VT)), Value(val) {
+             0, DL, getSDVTList(VT)), Value(val) {
     SubclassData |= (uint16_t)isOpaque;
   }
 public:
@@ -1435,9 +1429,9 @@ public:
 class ConstantFPSDNode : public SDNode {
   const ConstantFP *Value;
   friend class SelectionDAG;
-  ConstantFPSDNode(bool isTarget, const ConstantFP *val, EVT VT)
+  ConstantFPSDNode(bool isTarget, const ConstantFP *val, DebugLoc DL, EVT VT)
     : SDNode(isTarget ? ISD::TargetConstantFP : ISD::ConstantFP,
-             0, DebugLoc(), getSDVTList(VT)), Value(val) {
+             0, DL, getSDVTList(VT)), Value(val) {
   }
 public:
 

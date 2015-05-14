@@ -159,7 +159,7 @@ namespace {
                                        MachineOperand *InitialValue,
                                        const MachineOperand *Endvalue,
                                        int64_t IVBump) const;
-    
+
     /// \brief Analyze the statements in a loop to determine if the loop
     /// has a computable trip count and, if so, return a value that represents
     /// the trip count expression.
@@ -179,15 +179,16 @@ namespace {
 
     /// \brief Return true if the instruction is not valid within a hardware
     /// loop.
-    bool isInvalidLoopOperation(const MachineInstr *MI) const;
+    bool isInvalidLoopOperation(const MachineInstr *MI,
+                                bool IsInnerHWLoop) const;
 
     /// \brief Return true if the loop contains an instruction that inhibits
     /// using the hardware loop.
-    bool containsInvalidInstruction(MachineLoop *L) const;
+    bool containsInvalidInstruction(MachineLoop *L, bool IsInnerHWLoop) const;
 
     /// \brief Given a loop, check if we can convert it to a hardware loop.
     /// If so, then perform the conversion and return true.
-    bool convertToHardwareLoop(MachineLoop *L);
+    bool convertToHardwareLoop(MachineLoop *L, bool &L0used, bool &L1used);
 
     /// \brief Return true if the instruction is now dead.
     bool isDead(const MachineInstr *MI,
@@ -307,17 +308,9 @@ INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
 INITIALIZE_PASS_END(HexagonHardwareLoops, "hwloops",
                     "Hexagon Hardware Loops", false, false)
 
-
-/// \brief Returns true if the instruction is a hardware loop instruction.
-static bool isHardwareLoop(const MachineInstr *MI) {
-  return MI->getOpcode() == Hexagon::J2_loop0r ||
-    MI->getOpcode() == Hexagon::J2_loop0i;
-}
-
 FunctionPass *llvm::createHexagonHardwareLoops() {
   return new HexagonHardwareLoops();
 }
-
 
 bool HexagonHardwareLoops::runOnMachineFunction(MachineFunction &MF) {
   DEBUG(dbgs() << "********* Hexagon Hardware Loops *********\n");
@@ -329,12 +322,12 @@ bool HexagonHardwareLoops::runOnMachineFunction(MachineFunction &MF) {
   MDT = &getAnalysis<MachineDominatorTree>();
   TII = MF.getSubtarget<HexagonSubtarget>().getInstrInfo();
 
-  for (MachineLoopInfo::iterator I = MLI->begin(), E = MLI->end();
-       I != E; ++I) {
-    MachineLoop *L = *I;
-    if (!L->getParentLoop())
-      Changed |= convertToHardwareLoop(L);
-  }
+  for (auto &L : *MLI)
+    if (!L->getParentLoop()) {
+      bool L0Used = false;
+      bool L1Used = false;
+      Changed |= convertToHardwareLoop(L, L0Used, L1Used);
+    }
 
   return Changed;
 }
@@ -467,27 +460,27 @@ HexagonHardwareLoops::getComparisonKind(unsigned CondOpc,
   case Hexagon::C2_cmpeqi:
   case Hexagon::C2_cmpeq:
   case Hexagon::C2_cmpeqp:
-    Cmp = Comparison::Kind::EQ;
+    Cmp = Comparison::EQ;
     break;
   case Hexagon::C4_cmpneq:
   case Hexagon::C4_cmpneqi:
-    Cmp = Comparison::Kind::NE;
+    Cmp = Comparison::NE;
     break;
   case Hexagon::C4_cmplte:
-    Cmp = Comparison::Kind::LEs;
+    Cmp = Comparison::LEs;
     break;
   case Hexagon::C4_cmplteu:
-    Cmp = Comparison::Kind::LEu;
+    Cmp = Comparison::LEu;
     break;
   case Hexagon::C2_cmpgtui:
   case Hexagon::C2_cmpgtu:
   case Hexagon::C2_cmpgtup:
-    Cmp = Comparison::Kind::GTu;
+    Cmp = Comparison::GTu;
     break;
   case Hexagon::C2_cmpgti:
   case Hexagon::C2_cmpgt:
   case Hexagon::C2_cmpgtp:
-    Cmp = Comparison::Kind::GTs;
+    Cmp = Comparison::GTs;
     break;
   default:
     return (Comparison::Kind)0;
@@ -555,7 +548,7 @@ CountValue *HexagonHardwareLoops::getLoopTripCount(MachineLoop *L,
 
   SmallVector<MachineOperand,2> Cond;
   MachineBasicBlock *TB = nullptr, *FB = nullptr;
-  bool NotAnalyzed = TII->AnalyzeBranch(*Latch, TB, FB, Cond, false);
+  bool NotAnalyzed = TII->AnalyzeBranch(*ExitingBlock, TB, FB, Cond, false);
   if (NotAnalyzed)
     return nullptr;
 
@@ -563,7 +556,7 @@ CountValue *HexagonHardwareLoops::getLoopTripCount(MachineLoop *L,
   // TB must be non-null.  If FB is also non-null, one of them must be
   // the header.  Otherwise, branch to TB could be exiting the loop, and
   // the fall through can go to the header.
-  assert (TB && "Latch block without a branch?");
+  assert (TB && "Exit block without a branch?");
   if (ExitingBlock != Latch && (TB == Latch || FB == Latch)) {
     MachineBasicBlock *LTB = 0, *LFB = 0;
     SmallVector<MachineOperand,2> LCond;
@@ -571,9 +564,9 @@ CountValue *HexagonHardwareLoops::getLoopTripCount(MachineLoop *L,
     if (NotAnalyzed)
       return nullptr;
     if (TB == Latch)
-      (LTB == Header) ? TB = LTB: TB = LFB;
-    else // FB == Latch
-      (LTB == Header) ? FB = LTB: FB = LFB;
+      TB = (LTB == Header) ? LTB : LFB;
+    else
+      FB = (LTB == Header) ? LTB: LFB;
   }
   assert ((!FB || TB == Header || FB == Header) && "Branches not to header?");
   if (!TB || (FB && TB != Header && FB != Header))
@@ -749,7 +742,7 @@ CountValue *HexagonHardwareLoops::computeCount(MachineLoop *Loop,
   MachineBasicBlock::iterator InsertPos = PH->getFirstTerminator();
   DebugLoc DL;
   if (InsertPos != PH->end())
-    InsertPos->getDebugLoc();
+    DL = InsertPos->getDebugLoc();
 
   // If Start is an immediate and End is a register, the trip count
   // will be "reg - imm".  Hexagon's "subtract immediate" instruction
@@ -828,7 +821,7 @@ CountValue *HexagonHardwareLoops::computeCount(MachineLoop *Loop,
     const MCInstrDesc &SubD = RegToReg ? TII->get(Hexagon::A2_sub) :
                               (RegToImm ? TII->get(Hexagon::A2_subri) :
                                           TII->get(Hexagon::A2_addi));
-    if (RegToReg || RegToImm) {    
+    if (RegToReg || RegToImm) {
       unsigned SubR = MRI->createVirtualRegister(IntRC);
       MachineInstrBuilder SubIB =
         BuildMI(*PH, InsertPos, DL, SubD, SubR);
@@ -902,50 +895,49 @@ CountValue *HexagonHardwareLoops::computeCount(MachineLoop *Loop,
   return new CountValue(CountValue::CV_Register, CountR, CountSR);
 }
 
-
 /// \brief Return true if the operation is invalid within hardware loop.
-bool HexagonHardwareLoops::isInvalidLoopOperation(
-      const MachineInstr *MI) const {
+bool HexagonHardwareLoops::isInvalidLoopOperation(const MachineInstr *MI,
+                                                  bool IsInnerHWLoop) const {
 
   // Call is not allowed because the callee may use a hardware loop except for
   // the case when the call never returns.
   if (MI->getDesc().isCall() && MI->getOpcode() != Hexagon::CALLv3nr)
     return true;
 
-  // do not allow nested hardware loops
-  if (isHardwareLoop(MI))
-    return true;
-
-  // check if the instruction defines a hardware loop register
+  // Check if the instruction defines a hardware loop register.
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI->getOperand(i);
     if (!MO.isReg() || !MO.isDef())
       continue;
     unsigned R = MO.getReg();
-    if (R == Hexagon::LC0 || R == Hexagon::LC1 ||
-        R == Hexagon::SA0 || R == Hexagon::SA1)
+    if (IsInnerHWLoop && (R == Hexagon::LC0 || R == Hexagon::SA0 ||
+                          R == Hexagon::LC1 || R == Hexagon::SA1))
+      return true;
+    if (!IsInnerHWLoop && (R == Hexagon::LC1 || R == Hexagon::SA1))
       return true;
   }
   return false;
 }
 
-
-/// \brief - Return true if the loop contains an instruction that inhibits
-/// the use of the hardware loop function.
-bool HexagonHardwareLoops::containsInvalidInstruction(MachineLoop *L) const {
+/// \brief Return true if the loop contains an instruction that inhibits
+/// the use of the hardware loop instruction.
+bool HexagonHardwareLoops::containsInvalidInstruction(MachineLoop *L,
+    bool IsInnerHWLoop) const {
   const std::vector<MachineBasicBlock *> &Blocks = L->getBlocks();
+  DEBUG(dbgs() << "\nhw_loop head, BB#" << Blocks[0]->getNumber(););
   for (unsigned i = 0, e = Blocks.size(); i != e; ++i) {
     MachineBasicBlock *MBB = Blocks[i];
     for (MachineBasicBlock::iterator
            MII = MBB->begin(), E = MBB->end(); MII != E; ++MII) {
       const MachineInstr *MI = &*MII;
-      if (isInvalidLoopOperation(MI))
+      if (isInvalidLoopOperation(MI, IsInnerHWLoop)) {
+        DEBUG(dbgs()<< "\nCannot convert to hw_loop due to:"; MI->dump(););
         return true;
+      }
     }
   }
   return false;
 }
-
 
 /// \brief Returns true if the instruction is dead.  This was essentially
 /// copied from DeadMachineInstructionElim::isDead, but with special cases
@@ -1041,18 +1033,46 @@ void HexagonHardwareLoops::removeIfDead(MachineInstr *MI) {
 ///
 /// The code makes several assumptions about the representation of the loop
 /// in llvm.
-bool HexagonHardwareLoops::convertToHardwareLoop(MachineLoop *L) {
+bool HexagonHardwareLoops::convertToHardwareLoop(MachineLoop *L,
+                                                 bool &RecL0used,
+                                                 bool &RecL1used) {
   // This is just for sanity.
   assert(L->getHeader() && "Loop without a header?");
 
   bool Changed = false;
+  bool L0Used = false;
+  bool L1Used = false;
+
   // Process nested loops first.
-  for (MachineLoop::iterator I = L->begin(), E = L->end(); I != E; ++I)
-    Changed |= convertToHardwareLoop(*I);
+  for (MachineLoop::iterator I = L->begin(), E = L->end(); I != E; ++I) {
+    Changed |= convertToHardwareLoop(*I, RecL0used, RecL1used);
+    L0Used |= RecL0used;
+    L1Used |= RecL1used;
+  }
 
   // If a nested loop has been converted, then we can't convert this loop.
-  if (Changed)
+  if (Changed && L0Used && L1Used)
     return Changed;
+
+  unsigned LOOP_i;
+  unsigned LOOP_r;
+  unsigned ENDLOOP;
+
+  // Flag used to track loopN instruction:
+  // 1 - Hardware loop is being generated for the inner most loop.
+  // 0 - Hardware loop is being generated for the outer loop.
+  unsigned IsInnerHWLoop = 1;
+
+  if (L0Used) {
+    LOOP_i = Hexagon::J2_loop1i;
+    LOOP_r = Hexagon::J2_loop1r;
+    ENDLOOP = Hexagon::ENDLOOP1;
+    IsInnerHWLoop = 0;
+  } else {
+    LOOP_i = Hexagon::J2_loop0i;
+    LOOP_r = Hexagon::J2_loop0r;
+    ENDLOOP = Hexagon::ENDLOOP0;
+  }
 
 #ifndef NDEBUG
   // Stop trying after reaching the limit (if any).
@@ -1065,10 +1085,10 @@ bool HexagonHardwareLoops::convertToHardwareLoop(MachineLoop *L) {
 #endif
 
   // Does the loop contain any invalid instructions?
-  if (containsInvalidInstruction(L))
+  if (containsInvalidInstruction(L, IsInnerHWLoop))
     return false;
 
-  MachineBasicBlock *LastMBB = L->getExitingBlock();
+  MachineBasicBlock *LastMBB = getExitingBlock(L);
   // Don't generate hw loop if the loop has more than one exit.
   if (!LastMBB)
     return false;
@@ -1141,8 +1161,7 @@ bool HexagonHardwareLoops::convertToHardwareLoop(MachineLoop *L) {
     BuildMI(*Preheader, InsertPos, DL, TII->get(TargetOpcode::COPY), CountReg)
       .addReg(TripCount->getReg(), 0, TripCount->getSubReg());
     // Add the Loop instruction to the beginning of the loop.
-    BuildMI(*Preheader, InsertPos, DL, TII->get(Hexagon::J2_loop0r))
-      .addMBB(LoopStart)
+    BuildMI(*Preheader, InsertPos, DL, TII->get(LOOP_r)).addMBB(LoopStart)
       .addReg(CountReg);
   } else {
     assert(TripCount->isImm() && "Expecting immediate value for trip count");
@@ -1150,14 +1169,14 @@ bool HexagonHardwareLoops::convertToHardwareLoop(MachineLoop *L) {
     // if the immediate fits in the instructions.  Otherwise, we need to
     // create a new virtual register.
     int64_t CountImm = TripCount->getImm();
-    if (!TII->isValidOffset(Hexagon::J2_loop0i, CountImm)) {
+    if (!TII->isValidOffset(LOOP_i, CountImm)) {
       unsigned CountReg = MRI->createVirtualRegister(&Hexagon::IntRegsRegClass);
       BuildMI(*Preheader, InsertPos, DL, TII->get(Hexagon::A2_tfrsi), CountReg)
         .addImm(CountImm);
-      BuildMI(*Preheader, InsertPos, DL, TII->get(Hexagon::J2_loop0r))
+      BuildMI(*Preheader, InsertPos, DL, TII->get(LOOP_r))
         .addMBB(LoopStart).addReg(CountReg);
     } else
-      BuildMI(*Preheader, InsertPos, DL, TII->get(Hexagon::J2_loop0i))
+      BuildMI(*Preheader, InsertPos, DL, TII->get(LOOP_i))
         .addMBB(LoopStart).addImm(CountImm);
   }
 
@@ -1171,8 +1190,7 @@ bool HexagonHardwareLoops::convertToHardwareLoop(MachineLoop *L) {
 
   // Replace the loop branch with an endloop instruction.
   DebugLoc LastIDL = LastI->getDebugLoc();
-  BuildMI(*LastMBB, LastI, LastIDL,
-          TII->get(Hexagon::ENDLOOP0)).addMBB(LoopStart);
+  BuildMI(*LastMBB, LastI, LastIDL, TII->get(ENDLOOP)).addMBB(LoopStart);
 
   // The loop ends with either:
   //  - a conditional branch followed by an unconditional branch, or
@@ -1200,6 +1218,15 @@ bool HexagonHardwareLoops::convertToHardwareLoop(MachineLoop *L) {
     removeIfDead(OldInsts[i]);
 
   ++NumHWLoops;
+
+  // Set RecL1used and RecL0used only after hardware loop has been
+  // successfully generated. Doing it earlier can cause wrong loop instruction
+  // to be used.
+  if (L0Used) // Loop0 was already used. So, the correct loop must be loop1.
+    RecL1used = true;
+  else
+    RecL0used = true;
+
   return true;
 }
 
@@ -1347,17 +1374,38 @@ bool HexagonHardwareLoops::fixupInductionVariable(MachineLoop *L) {
   MachineBasicBlock *TB = nullptr, *FB = nullptr;
   SmallVector<MachineOperand,2> Cond;
   // AnalyzeBranch returns true if it fails to analyze branch.
-  bool NotAnalyzed = TII->AnalyzeBranch(*Latch, TB, FB, Cond, false);
-  if (NotAnalyzed)
+  bool NotAnalyzed = TII->AnalyzeBranch(*ExitingBlock, TB, FB, Cond, false);
+  if (NotAnalyzed || Cond.empty())
     return false;
 
-  // Check if the latch branch is unconditional.
-  if (Cond.empty())
-    return false;
+  if (ExitingBlock != Latch && (TB == Latch || FB == Latch)) {
+    MachineBasicBlock *LTB = 0, *LFB = 0;
+    SmallVector<MachineOperand,2> LCond;
+    bool NotAnalyzed = TII->AnalyzeBranch(*Latch, LTB, LFB, LCond, false);
+    if (NotAnalyzed)
+      return false;
 
-  if (TB != Header && FB != Header)
-    // The latch does not go back to the header.  Not a latch we know and love.
-    return false;
+    // Since latch is not the exiting block, the latch branch should be an
+    // unconditional branch to the loop header.
+    if (TB == Latch)
+      TB = (LTB == Header) ? LTB : LFB;
+    else
+      FB = (LTB == Header) ? LTB : LFB;
+  }
+  if (TB != Header) {
+    if (FB != Header) {
+      // The latch/exit block does not go back to the header.
+      return false;
+    }
+    // FB is the header (i.e., uncond. jump to branch header)
+    // In this case, the LoopBody -> TB should not be a back edge otherwise
+    // it could result in an infinite loop after conversion to hw_loop.
+    // This case can happen when the Latch has two jumps like this:
+    // Jmp_c OuterLoopHeader <-- TB
+    // Jmp   InnerLoopHeader <-- FB
+    if (MDT->dominates(TB, FB))
+      return false;
+  }
 
   // Expecting a predicate register as a condition.  It won't be a hardware
   // predicate register at this point yet, just a vreg.
@@ -1366,6 +1414,9 @@ bool HexagonHardwareLoops::fixupInductionVariable(MachineLoop *L) {
   // it's just the register.
   unsigned CSz = Cond.size();
   if (CSz != 1 && CSz != 2)
+    return false;
+
+  if (!Cond[CSz-1].isReg())
     return false;
 
   unsigned P = Cond[CSz-1].getReg();
@@ -1509,7 +1560,7 @@ MachineBasicBlock *HexagonHardwareLoops::createPreheaderForLoop(
   if (Header->pred_size() > 2) {
     // Ensure that the header has only two predecessors: the preheader and
     // the loop latch.  Any additional predecessors of the header should
-    // join at the newly created preheader.  Inspect all PHI nodes from the
+    // join at the newly created preheader. Inspect all PHI nodes from the
     // header and create appropriate corresponding PHI nodes in the preheader.
 
     for (instr_iterator I = Header->instr_begin(), E = Header->instr_end();
