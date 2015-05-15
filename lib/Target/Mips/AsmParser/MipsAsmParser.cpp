@@ -194,7 +194,8 @@ class MipsAsmParser : public MCTargetAsmParser {
   bool expandUncondBranchMMPseudo(MCInst &Inst, SMLoc IDLoc,
                                   SmallVectorImpl<MCInst> &Instructions);
 
-  void expandLoadAddressSym(MCInst &Inst, SMLoc IDLoc,
+  void expandLoadAddressSym(const MCOperand &DstRegOp, const MCOperand &SymOp,
+                            bool Is32BitSym, SMLoc IDLoc,
                             SmallVectorImpl<MCInst> &Instructions);
 
   void expandMemInst(MCInst &Inst, SMLoc IDLoc,
@@ -1758,6 +1759,9 @@ bool MipsAsmParser::loadImmediate(int64_t ImmValue, unsigned DstReg,
     tmpInst.addOperand(MCOperand::createImm(ImmValue));
     Instructions.push_back(tmpInst);
   } else if ((ImmValue & 0xffffffff) == ImmValue) {
+    if (!AssemblerOptions.back()->isMacro())
+      Warning(IDLoc, "macro instruction expanded into multiple instructions");
+
     // For all other values which are representable as a 32-bit integer:
     // li d,j => lui d,hi16(j)
     //           ori d,d,lo16(j)
@@ -1778,6 +1782,8 @@ bool MipsAsmParser::loadImmediate(int64_t ImmValue, unsigned DstReg,
       Error(IDLoc, "instruction requires a 32-bit immediate");
       return true;
     }
+    if (!AssemblerOptions.back()->isMacro())
+      Warning(IDLoc, "macro instruction expanded into multiple instructions");
 
     //            <-------  lo32 ------>
     // <-------  hi32 ------>
@@ -1811,6 +1817,8 @@ bool MipsAsmParser::loadImmediate(int64_t ImmValue, unsigned DstReg,
       Error(IDLoc, "instruction requires a 32-bit immediate");
       return true;
     }
+    if (!AssemblerOptions.back()->isMacro())
+      Warning(IDLoc, "macro instruction expanded into multiple instructions");
 
     // <-------  hi32 ------> <-------  lo32 ------>
     // <- hi16 ->                        <- lo16 ->
@@ -1869,17 +1877,18 @@ bool MipsAsmParser::expandLoadImm(MCInst &Inst, bool Is32BitImm, SMLoc IDLoc,
 bool
 MipsAsmParser::expandLoadAddressReg(MCInst &Inst, bool Is32BitImm, SMLoc IDLoc,
                                     SmallVectorImpl<MCInst> &Instructions) {
+  const MCOperand &DstRegOp = Inst.getOperand(0);
+  assert(DstRegOp.isReg() && "expected register operand kind");
+
   const MCOperand &ImmOp = Inst.getOperand(2);
   assert((ImmOp.isImm() || ImmOp.isExpr()) &&
          "expected immediate operand kind");
   if (!ImmOp.isImm()) {
-    expandLoadAddressSym(Inst, IDLoc, Instructions);
+    expandLoadAddressSym(DstRegOp, ImmOp, Is32BitImm, IDLoc, Instructions);
     return false;
   }
   const MCOperand &SrcRegOp = Inst.getOperand(1);
   assert(SrcRegOp.isReg() && "expected register operand kind");
-  const MCOperand &DstRegOp = Inst.getOperand(0);
-  assert(DstRegOp.isReg() && "expected register operand kind");
 
   if (loadImmediate(ImmOp.getImm(), DstRegOp.getReg(), SrcRegOp.getReg(),
                     Is32BitImm, IDLoc, Instructions))
@@ -1891,15 +1900,16 @@ MipsAsmParser::expandLoadAddressReg(MCInst &Inst, bool Is32BitImm, SMLoc IDLoc,
 bool
 MipsAsmParser::expandLoadAddressImm(MCInst &Inst, bool Is32BitImm, SMLoc IDLoc,
                                     SmallVectorImpl<MCInst> &Instructions) {
+  const MCOperand &DstRegOp = Inst.getOperand(0);
+  assert(DstRegOp.isReg() && "expected register operand kind");
+
   const MCOperand &ImmOp = Inst.getOperand(1);
   assert((ImmOp.isImm() || ImmOp.isExpr()) &&
          "expected immediate operand kind");
   if (!ImmOp.isImm()) {
-    expandLoadAddressSym(Inst, IDLoc, Instructions);
+    expandLoadAddressSym(DstRegOp, ImmOp, Is32BitImm, IDLoc, Instructions);
     return false;
   }
-  const MCOperand &DstRegOp = Inst.getOperand(0);
-  assert(DstRegOp.isReg() && "expected register operand kind");
 
   if (loadImmediate(ImmOp.getImm(), DstRegOp.getReg(), Mips::NoRegister,
                     Is32BitImm, IDLoc, Instructions))
@@ -1908,24 +1918,17 @@ MipsAsmParser::expandLoadAddressImm(MCInst &Inst, bool Is32BitImm, SMLoc IDLoc,
   return false;
 }
 
-void
-MipsAsmParser::expandLoadAddressSym(MCInst &Inst, SMLoc IDLoc,
-                                    SmallVectorImpl<MCInst> &Instructions) {
-  // FIXME: If we do have a valid at register to use, we should generate a
-  // slightly shorter sequence here.
+void MipsAsmParser::expandLoadAddressSym(
+    const MCOperand &DstRegOp, const MCOperand &SymOp, bool Is32BitSym,
+    SMLoc IDLoc, SmallVectorImpl<MCInst> &Instructions) {
+  if (!AssemblerOptions.back()->isMacro())
+    Warning(IDLoc, "macro instruction expanded into multiple instructions");
+
+  if (Is32BitSym && isABI_N64())
+    Warning(IDLoc, "instruction loads the 32-bit address of a 64-bit symbol");
+
   MCInst tmpInst;
-  int ExprOperandNo = 1;
-  // Sometimes the assembly parser will get the immediate expression as
-  // a $zero + an immediate.
-  if (Inst.getNumOperands() == 3) {
-    assert(Inst.getOperand(1).getReg() ==
-           (isGP64bit() ? Mips::ZERO_64 : Mips::ZERO));
-    ExprOperandNo = 2;
-  }
-  const MCOperand &SymOp = Inst.getOperand(ExprOperandNo);
-  assert(SymOp.isExpr() && "expected symbol operand kind");
-  const MCOperand &RegOp = Inst.getOperand(0);
-  unsigned RegNo = RegOp.getReg();
+  unsigned RegNo = DstRegOp.getReg();
   const MCSymbolRefExpr *Symbol = cast<MCSymbolRefExpr>(SymOp.getExpr());
   const MCSymbolRefExpr *HiExpr =
       MCSymbolRefExpr::Create(Symbol->getSymbol().getName(),
@@ -1933,7 +1936,7 @@ MipsAsmParser::expandLoadAddressSym(MCInst &Inst, SMLoc IDLoc,
   const MCSymbolRefExpr *LoExpr =
       MCSymbolRefExpr::Create(Symbol->getSymbol().getName(),
                               MCSymbolRefExpr::VK_Mips_ABS_LO, getContext());
-  if (isGP64bit()) {
+  if (!Is32BitSym) {
     // If it's a 64-bit architecture, expand to:
     // la d,sym => lui  d,highest(sym)
     //             ori  d,d,higher(sym)
@@ -3441,6 +3444,7 @@ bool MipsAsmParser::parseSetMacroDirective() {
     return false;
   }
   AssemblerOptions.back()->setMacro();
+  getTargetStreamer().emitDirectiveSetMacro();
   Parser.Lex(); // Consume the EndOfStatement.
   return false;
 }
@@ -3458,6 +3462,7 @@ bool MipsAsmParser::parseSetNoMacroDirective() {
     return false;
   }
   AssemblerOptions.back()->setNoMacro();
+  getTargetStreamer().emitDirectiveSetNoMacro();
   Parser.Lex(); // Consume the EndOfStatement.
   return false;
 }
