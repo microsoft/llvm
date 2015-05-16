@@ -778,14 +778,14 @@ Init *UnOpInit::Fold(Record *CurRec, MultiClass *CurMultiClass) const {
   }
   case HEAD: {
     if (ListInit *LHSl = dyn_cast<ListInit>(LHS)) {
-      assert(!LHSl->empty() && "Empty list in car");
+      assert(!LHSl->empty() && "Empty list in head");
       return LHSl->getElement(0);
     }
     break;
   }
   case TAIL: {
     if (ListInit *LHSl = dyn_cast<ListInit>(LHS)) {
-      assert(!LHSl->empty() && "Empty list in cdr");
+      assert(!LHSl->empty() && "Empty list in tail");
       // Note the +1.  We can't just pass the result of getValues()
       // directly.
       return ListInit::get(LHSl->getValues().slice(1), LHSl->getType());
@@ -793,12 +793,10 @@ Init *UnOpInit::Fold(Record *CurRec, MultiClass *CurMultiClass) const {
     break;
   }
   case EMPTY: {
-    if (ListInit *LHSl = dyn_cast<ListInit>(LHS)) {
-      return IntInit::get(!!LHSl->empty());
-    }
-    if (StringInit *LHSs = dyn_cast<StringInit>(LHS)) {
-      return IntInit::get(!!LHSs->getValue().empty());
-    }
+    if (ListInit *LHSl = dyn_cast<ListInit>(LHS))
+      return IntInit::get(LHSl->empty());
+    if (StringInit *LHSs = dyn_cast<StringInit>(LHS))
+      return IntInit::get(LHSs->getValue().empty());
 
     break;
   }
@@ -1113,12 +1111,13 @@ Init *TernOpInit::Fold(Record *CurRec, MultiClass *CurMultiClass) const {
 
       std::string::size_type found;
       std::string::size_type idx = 0;
-      do {
+      while (true) {
         found = Val.find(LHSs->getValue(), idx);
-        if (found != std::string::npos)
-          Val.replace(found, LHSs->getValue().size(), MHSs->getValue());
-        idx = found +  MHSs->getValue().size();
-      } while (found != std::string::npos);
+        if (found == std::string::npos)
+          break;
+        Val.replace(found, LHSs->getValue().size(), MHSs->getValue());
+        idx = found + MHSs->getValue().size();
+      }
 
       return StringInit::get(Val);
     }

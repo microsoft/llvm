@@ -244,12 +244,11 @@ class ELFObjectWriter : public MCObjectWriter {
 
     void writeRelocations(const MCAssembler &Asm, const MCSectionELF &Sec);
 
-    bool
-    IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
-                                           const MCSymbolData &DataA,
-                                           const MCFragment &FB,
-                                           bool InSet,
-                                           bool IsPCRel) const override;
+    bool IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
+                                                const MCSymbol &SymA,
+                                                const MCFragment &FB,
+                                                bool InSet,
+                                                bool IsPCRel) const override;
 
     bool isWeak(const MCSymbolData &SD) const override;
 
@@ -422,8 +421,8 @@ void ELFObjectWriter::ExecutePostLayoutBinding(MCAssembler &Asm,
   // The presence of symbol versions causes undefined symbols and
   // versions declared with @@@ to be renamed.
 
-  for (MCSymbolData &OriginalData : Asm.symbols()) {
-    const MCSymbol &Alias = OriginalData.getSymbol();
+  for (const MCSymbol &Alias : Asm.symbols()) {
+    MCSymbolData &OriginalData = Alias.getData();
 
     // Not an alias.
     if (!Alias.isVariable())
@@ -936,8 +935,8 @@ void ELFObjectWriter::computeSymbolTable(
   }
 
   // Add the data for the symbols.
-  for (MCSymbolData &SD : Asm.symbols()) {
-    const MCSymbol &Symbol = SD.getSymbol();
+  for (const MCSymbol &Symbol : Asm.symbols()) {
+    MCSymbolData &SD = Symbol.getData();
 
     bool Used = UsedInReloc.count(&Symbol);
     bool WeakrefUsed = WeakrefUsedInReloc.count(&Symbol);
@@ -1469,14 +1468,14 @@ void ELFObjectWriter::WriteObject(MCAssembler &Asm,
 }
 
 bool ELFObjectWriter::IsSymbolRefDifferenceFullyResolvedImpl(
-    const MCAssembler &Asm, const MCSymbolData &DataA, const MCFragment &FB,
+    const MCAssembler &Asm, const MCSymbol &SymA, const MCFragment &FB,
     bool InSet, bool IsPCRel) const {
   if (IsPCRel) {
     assert(!InSet);
-    if (::isWeak(DataA))
+    if (::isWeak(SymA.getData()))
       return false;
   }
-  return MCObjectWriter::IsSymbolRefDifferenceFullyResolvedImpl(Asm, DataA, FB,
+  return MCObjectWriter::IsSymbolRefDifferenceFullyResolvedImpl(Asm, SymA, FB,
                                                                 InSet, IsPCRel);
 }
 

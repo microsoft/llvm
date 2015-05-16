@@ -240,9 +240,9 @@ public:
 
   bool isDematerializable(const GlobalValue *GV) const override;
   std::error_code materialize(GlobalValue *GV) override;
-  std::error_code MaterializeModule(Module *M) override;
+  std::error_code materializeModule(Module *M) override;
   std::vector<StructType *> getIdentifiedStructTypes() const override;
-  void Dematerialize(GlobalValue *GV) override;
+  void dematerialize(GlobalValue *GV) override;
 
   /// @brief Main interface to parsing a bitcode buffer.
   /// @returns true if an error occurred.
@@ -3555,10 +3555,13 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       if (getValueTypePair(Record, OpNum, NextValueNo, Agg))
         return Error("Invalid record");
 
+      unsigned RecSize = Record.size();
+      if (OpNum == RecSize)
+        return Error("EXTRACTVAL: Invalid instruction with 0 indices");
+
       SmallVector<unsigned, 4> EXTRACTVALIdx;
       Type *CurTy = Agg->getType();
-      for (unsigned RecSize = Record.size();
-           OpNum != RecSize; ++OpNum) {
+      for (; OpNum != RecSize; ++OpNum) {
         bool IsArray = CurTy->isArrayTy();
         bool IsStruct = CurTy->isStructTy();
         uint64_t Index = Record[OpNum];
@@ -3594,18 +3597,19 @@ std::error_code BitcodeReader::ParseFunctionBody(Function *F) {
       if (getValueTypePair(Record, OpNum, NextValueNo, Val))
         return Error("Invalid record");
 
+      unsigned RecSize = Record.size();
+      if (OpNum == RecSize)
+        return Error("INSERTVAL: Invalid instruction with 0 indices");
+
       SmallVector<unsigned, 4> INSERTVALIdx;
       Type *CurTy = Agg->getType();
-      for (unsigned RecSize = Record.size();
-           OpNum != RecSize; ++OpNum) {
+      for (; OpNum != RecSize; ++OpNum) {
         bool IsArray = CurTy->isArrayTy();
         bool IsStruct = CurTy->isStructTy();
         uint64_t Index = Record[OpNum];
 
         if (!IsStruct && !IsArray)
           return Error("INSERTVAL: Invalid type");
-        if (!CurTy->isStructTy() && !CurTy->isArrayTy())
-          return Error("Invalid type");
         if ((unsigned)Index != Index)
           return Error("Invalid value");
         if (IsStruct && Index >= CurTy->subtypes().size())
@@ -4447,7 +4451,7 @@ bool BitcodeReader::isDematerializable(const GlobalValue *GV) const {
   return DeferredFunctionInfo.count(const_cast<Function*>(F));
 }
 
-void BitcodeReader::Dematerialize(GlobalValue *GV) {
+void BitcodeReader::dematerialize(GlobalValue *GV) {
   Function *F = dyn_cast<Function>(GV);
   // If this function isn't dematerializable, this is a noop.
   if (!F || !isDematerializable(F))
@@ -4460,7 +4464,7 @@ void BitcodeReader::Dematerialize(GlobalValue *GV) {
   F->setIsMaterializable(true);
 }
 
-std::error_code BitcodeReader::MaterializeModule(Module *M) {
+std::error_code BitcodeReader::materializeModule(Module *M) {
   assert(M == TheModule &&
          "Can only Materialize the Module this BitcodeReader is attached to.");
 

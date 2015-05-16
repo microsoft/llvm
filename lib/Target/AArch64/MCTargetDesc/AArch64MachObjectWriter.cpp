@@ -154,7 +154,7 @@ void AArch64MachObjectWriter::RecordRelocation(
   unsigned Index = 0;
   unsigned Type = 0;
   unsigned Kind = Fixup.getKind();
-  const MCSymbolData *RelSymbol = nullptr;
+  const MCSymbol *RelSymbol = nullptr;
 
   FixupOffset += Fixup.getOffset();
 
@@ -211,11 +211,11 @@ void AArch64MachObjectWriter::RecordRelocation(
   } else if (Target.getSymB()) { // A - B + constant
     const MCSymbol *A = &Target.getSymA()->getSymbol();
     const MCSymbolData &A_SD = Asm.getSymbolData(*A);
-    const MCSymbolData *A_Base = Asm.getAtom(&A_SD);
+    const MCSymbol *A_Base = Asm.getAtom(&A_SD);
 
     const MCSymbol *B = &Target.getSymB()->getSymbol();
     const MCSymbolData &B_SD = Asm.getSymbolData(*B);
-    const MCSymbolData *B_Base = Asm.getAtom(&B_SD);
+    const MCSymbol *B_Base = Asm.getAtom(&B_SD);
 
     // Check for "_foo@got - .", which comes through here as:
     // Ltmp0:
@@ -265,16 +265,16 @@ void AArch64MachObjectWriter::RecordRelocation(
       Asm.getContext().FatalError(Fixup.getLoc(),
                                   "unsupported relocation with identical base");
 
-    Value += (!A_SD.getFragment() ? 0
-                                  : Writer->getSymbolAddress(&A_SD, Layout)) -
-             (!A_Base || !A_Base->getFragment()
-                  ? 0
-                  : Writer->getSymbolAddress(A_Base, Layout));
-    Value -= (!B_SD.getFragment() ? 0
-                                  : Writer->getSymbolAddress(&B_SD, Layout)) -
-             (!B_Base || !B_Base->getFragment()
-                  ? 0
-                  : Writer->getSymbolAddress(B_Base, Layout));
+    Value +=
+        (!A_SD.getFragment() ? 0 : Writer->getSymbolAddress(&A_SD, Layout)) -
+        (!A_Base || !A_Base->getData().getFragment()
+             ? 0
+             : Writer->getSymbolAddress(&A_Base->getData(), Layout));
+    Value -=
+        (!B_SD.getFragment() ? 0 : Writer->getSymbolAddress(&B_SD, Layout)) -
+        (!B_Base || !B_Base->getData().getFragment()
+             ? 0
+             : Writer->getSymbolAddress(&B_Base->getData(), Layout));
 
     Type = MachO::ARM64_RELOC_UNSIGNED;
 
@@ -299,7 +299,7 @@ void AArch64MachObjectWriter::RecordRelocation(
     }
 
     const MCSymbolData &SD = Asm.getSymbolData(*Symbol);
-    const MCSymbolData *Base = Asm.getAtom(&SD);
+    const MCSymbol *Base = Asm.getAtom(&SD);
 
     // If the symbol is a variable and we weren't able to get a Base for it
     // (i.e., it's not in the symbol table associated with a section) resolve
@@ -342,8 +342,9 @@ void AArch64MachObjectWriter::RecordRelocation(
       RelSymbol = Base;
 
       // Add the local offset, if needed.
-      if (Base != &SD)
-        Value += Layout.getSymbolOffset(&SD) - Layout.getSymbolOffset(Base);
+      if (&Base->getData() != &SD)
+        Value += Layout.getSymbolOffset(&SD) -
+                 Layout.getSymbolOffset(&Base->getData());
     } else if (Symbol->isInSection()) {
       if (!CanUseLocalRelocation)
         Asm.getContext().FatalError(

@@ -113,7 +113,7 @@ void X86MachObjectWriter::RecordX86_64Relocation(
   unsigned Index = 0;
   unsigned IsExtern = 0;
   unsigned Type = 0;
-  const MCSymbolData *RelSymbol = nullptr;
+  const MCSymbol *RelSymbol = nullptr;
 
   Value = Target.getConstant();
 
@@ -143,13 +143,13 @@ void X86MachObjectWriter::RecordX86_64Relocation(
     if (A->isTemporary())
       A = &Writer->findAliasedSymbol(*A);
     const MCSymbolData &A_SD = Asm.getSymbolData(*A);
-    const MCSymbolData *A_Base = Asm.getAtom(&A_SD);
+    const MCSymbol *A_Base = Asm.getAtom(&A_SD);
 
     const MCSymbol *B = &Target.getSymB()->getSymbol();
     if (B->isTemporary())
       B = &Writer->findAliasedSymbol(*B);
     const MCSymbolData &B_SD = Asm.getSymbolData(*B);
-    const MCSymbolData *B_Base = Asm.getAtom(&B_SD);
+    const MCSymbol *B_Base = Asm.getAtom(&B_SD);
 
     // Neither symbol can be modified.
     if (Target.getSymA()->getKind() != MCSymbolRefExpr::VK_None ||
@@ -184,10 +184,12 @@ void X86MachObjectWriter::RecordX86_64Relocation(
         Name + "' can not be undefined in a subtraction expression");
     }
 
-    Value += Writer->getSymbolAddress(&A_SD, Layout) -
-      (!A_Base ? 0 : Writer->getSymbolAddress(A_Base, Layout));
-    Value -= Writer->getSymbolAddress(&B_SD, Layout) -
-      (!B_Base ? 0 : Writer->getSymbolAddress(B_Base, Layout));
+    Value +=
+        Writer->getSymbolAddress(&A_SD, Layout) -
+        (!A_Base ? 0 : Writer->getSymbolAddress(&A_Base->getData(), Layout));
+    Value -=
+        Writer->getSymbolAddress(&B_SD, Layout) -
+        (!B_Base ? 0 : Writer->getSymbolAddress(&B_Base->getData(), Layout));
 
     if (!A_Base)
       Index = A_SD.getFragment()->getParent()->getOrdinal() + 1;
@@ -230,9 +232,9 @@ void X86MachObjectWriter::RecordX86_64Relocation(
     // non-local symbol).
     if (RelSymbol) {
       // Add the local offset, if needed.
-      if (RelSymbol != &SD)
-        Value +=
-            Layout.getSymbolOffset(&SD) - Layout.getSymbolOffset(RelSymbol);
+      if (&RelSymbol->getData() != &SD)
+        Value += Layout.getSymbolOffset(&SD) -
+                 Layout.getSymbolOffset(&RelSymbol->getData());
     } else if (Symbol->isInSection() && !Symbol->isVariable()) {
       // The index is the section ordinal (1-based).
       Index = SD.getFragment()->getParent()->getOrdinal() + 1;
@@ -449,9 +451,6 @@ void X86MachObjectWriter::RecordTLVPRelocation(MachObjectWriter *Writer,
   uint32_t Value = Layout.getFragmentOffset(Fragment)+Fixup.getOffset();
   unsigned IsPCRel = 0;
 
-  // Get the symbol data.
-  const MCSymbolData *SD_A = &Asm.getSymbolData(Target.getSymA()->getSymbol());
-
   // We're only going to have a second symbol in pic mode and it'll be a
   // subtraction from the picbase. For 32-bit pic the addend is the difference
   // between the picbase and the next address.  For 32-bit static the addend is
@@ -475,7 +474,8 @@ void X86MachObjectWriter::RecordTLVPRelocation(MachObjectWriter *Writer,
   MRE.r_word0 = Value;
   MRE.r_word1 =
       (IsPCRel << 24) | (Log2Size << 25) | (MachO::GENERIC_RELOC_TLV << 28);
-  Writer->addRelocation(SD_A, Fragment->getParent(), MRE);
+  Writer->addRelocation(&Target.getSymA()->getSymbol(), Fragment->getParent(),
+                        MRE);
 }
 
 void X86MachObjectWriter::RecordX86Relocation(MachObjectWriter *Writer,
@@ -527,7 +527,7 @@ void X86MachObjectWriter::RecordX86Relocation(MachObjectWriter *Writer,
   uint32_t FixupOffset = Layout.getFragmentOffset(Fragment)+Fixup.getOffset();
   unsigned Index = 0;
   unsigned Type = 0;
-  const MCSymbolData *RelSymbol = nullptr;
+  const MCSymbol *RelSymbol = nullptr;
 
   if (Target.isAbsolute()) { // constant
     // SymbolNum of 0 indicates the absolute section.
@@ -548,7 +548,7 @@ void X86MachObjectWriter::RecordX86Relocation(MachObjectWriter *Writer,
 
     // Check whether we need an external or internal relocation.
     if (Writer->doesSymbolRequireExternRelocation(SD)) {
-      RelSymbol = SD;
+      RelSymbol = &SD->getSymbol();
       // For external relocations, make sure to offset the fixup value to
       // compensate for the addend of the symbol address, if it was
       // undefined. This occurs with weak definitions, for example.
