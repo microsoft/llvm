@@ -14019,8 +14019,8 @@ static SDValue LowerExtendedLoad(SDValue Op, const X86Subtarget *Subtarget,
          "Can only lower sext loads with a single scalar load!");
 
   unsigned loadRegZize = RegSz;
-  if (Ext == ISD::SEXTLOAD && RegSz == 256)
-    loadRegZize /= 2;
+  if (Ext == ISD::SEXTLOAD && RegSz >= 256)
+    loadRegZize = 128;
 
   // Represent our vector as a sequence of elements which are the
   // largest scalar that we can load.
@@ -14896,11 +14896,12 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
       SDValue Src0 = Op.getOperand(3);
       SDValue Mask = Op.getOperand(4);
       // There are 2 kinds of intrinsics in this group:
-      // (1) With supress-all-exceptions (sae) - 6 operands
+      // (1) With supress-all-exceptions (sae) or rounding mode- 6 operands
       // (2) With rounding mode and sae - 7 operands.
       if (Op.getNumOperands() == 6) {
         SDValue Sae  = Op.getOperand(5);
-        return getScalarMaskingNode(DAG.getNode(IntrData->Opc0, dl, VT, Src1, Src2,
+        unsigned Opc = IntrData->Opc1 ? IntrData->Opc1 : IntrData->Opc0;
+        return getScalarMaskingNode(DAG.getNode(Opc, dl, VT, Src1, Src2,
                                                 Sae),
                                     Mask, Src0, Subtarget, DAG);
       }
@@ -17905,6 +17906,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::UNPCKL:             return "X86ISD::UNPCKL";
   case X86ISD::UNPCKH:             return "X86ISD::UNPCKH";
   case X86ISD::VBROADCAST:         return "X86ISD::VBROADCAST";
+  case X86ISD::SUBV_BROADCAST:     return "X86ISD::SUBV_BROADCAST";
   case X86ISD::VEXTRACT:           return "X86ISD::VEXTRACT";
   case X86ISD::VPERMILPV:          return "X86ISD::VPERMILPV";
   case X86ISD::VPERMILPI:          return "X86ISD::VPERMILPI";
