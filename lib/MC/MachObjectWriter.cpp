@@ -39,15 +39,14 @@ void MachObjectWriter::reset() {
   MCObjectWriter::reset();
 }
 
-bool MachObjectWriter::
-doesSymbolRequireExternRelocation(const MCSymbolData *SD) {
+bool MachObjectWriter::doesSymbolRequireExternRelocation(const MCSymbol &S) {
   // Undefined symbols are always extern.
-  if (SD->getSymbol().isUndefined())
+  if (S.isUndefined())
     return true;
 
   // References to weak definitions require external relocation entries; the
   // definition may not always be the one in the same object file.
-  if (SD->getFlags() & SF_WeakDefinition)
+  if (S.getData().getFlags() & SF_WeakDefinition)
     return true;
 
   // Otherwise, we can use an internal relocation.
@@ -56,8 +55,7 @@ doesSymbolRequireExternRelocation(const MCSymbolData *SD) {
 
 bool MachObjectWriter::
 MachSymbolData::operator<(const MachSymbolData &RHS) const {
-  return SymbolData->getSymbol().getName() <
-    RHS.SymbolData->getSymbol().getName();
+  return Symbol->getName() < RHS.Symbol->getName();
 }
 
 bool MachObjectWriter::isFixupKindPCRel(const MCAssembler &Asm, unsigned Kind) {
@@ -73,10 +71,8 @@ uint64_t MachObjectWriter::getFragmentAddress(const MCFragment *Fragment,
     Layout.getFragmentOffset(Fragment);
 }
 
-uint64_t MachObjectWriter::getSymbolAddress(const MCSymbolData* SD,
+uint64_t MachObjectWriter::getSymbolAddress(const MCSymbol &S,
                                             const MCAsmLayout &Layout) const {
-  const MCSymbol &S = SD->getSymbol();
-
   // If this is a variable, then recursively evaluate now.
   if (S.isVariable()) {
     if (const MCConstantExpr *C =
@@ -99,16 +95,14 @@ uint64_t MachObjectWriter::getSymbolAddress(const MCSymbolData* SD,
 
     uint64_t Address = Target.getConstant();
     if (Target.getSymA())
-      Address += getSymbolAddress(&Layout.getAssembler().getSymbolData(
-                                    Target.getSymA()->getSymbol()), Layout);
+      Address += getSymbolAddress(Target.getSymA()->getSymbol(), Layout);
     if (Target.getSymB())
-      Address += getSymbolAddress(&Layout.getAssembler().getSymbolData(
-                                    Target.getSymB()->getSymbol()), Layout);
+      Address += getSymbolAddress(Target.getSymB()->getSymbol(), Layout);
     return Address;
   }
 
-  return getSectionAddress(SD->getFragment()->getParent()) +
-    Layout.getSymbolOffset(SD);
+  return getSectionAddress(S.getData().getFragment()->getParent()) +
+         Layout.getSymbolOffset(S);
 }
 
 uint64_t MachObjectWriter::getPaddingSize(const MCSectionData *SD,
@@ -307,15 +301,15 @@ void MachObjectWriter::WriteDysymtabLoadCommand(uint32_t FirstLocalSymbol,
 MachObjectWriter::MachSymbolData *
 MachObjectWriter::findSymbolData(const MCSymbol &Sym) {
   for (auto &Entry : LocalSymbolData)
-    if (&Entry.SymbolData->getSymbol() == &Sym)
+    if (Entry.Symbol == &Sym)
       return &Entry;
 
   for (auto &Entry : ExternalSymbolData)
-    if (&Entry.SymbolData->getSymbol() == &Sym)
+    if (Entry.Symbol == &Sym)
       return &Entry;
 
   for (auto &Entry : UndefinedSymbolData)
-    if (&Entry.SymbolData->getSymbol() == &Sym)
+    if (Entry.Symbol == &Sym)
       return &Entry;
 
   return nullptr;
@@ -335,8 +329,8 @@ const MCSymbol &MachObjectWriter::findAliasedSymbol(const MCSymbol &Sym) const {
 
 void MachObjectWriter::WriteNlist(MachSymbolData &MSD,
                                   const MCAsmLayout &Layout) {
-  MCSymbolData &Data = *MSD.SymbolData;
-  const MCSymbol *Symbol = &Data.getSymbol();
+  const MCSymbol *Symbol = MSD.Symbol;
+  MCSymbolData &Data = Symbol->getData();
   const MCSymbol *AliasedSymbol = &findAliasedSymbol(*Symbol);
   uint8_t SectionIndex = MSD.SectionIndex;
   uint8_t Type = 0;
@@ -344,12 +338,14 @@ void MachObjectWriter::WriteNlist(MachSymbolData &MSD,
   uint64_t Address = 0;
   bool IsAlias = Symbol != AliasedSymbol;
 
+  const MCSymbol &OrigSymbol = *Symbol;
   MachSymbolData *AliaseeInfo;
   if (IsAlias) {
     AliaseeInfo = findSymbolData(*AliasedSymbol);
     if (AliaseeInfo)
       SectionIndex = AliaseeInfo->SectionIndex;
     Symbol = AliasedSymbol;
+    // FIXME: Should this update Data as well?  Do we need OrigSymbol at all?
   }
 
   // Set the N_TYPE bits. See <mach-o/nlist.h>.
@@ -377,7 +373,7 @@ void MachObjectWriter::WriteNlist(MachSymbolData &MSD,
   if (IsAlias && Symbol->isUndefined())
     Address = AliaseeInfo->StringIndex;
   else if (Symbol->isDefined())
-    Address = getSymbolAddress(&Data, Layout);
+    Address = getSymbolAddress(OrigSymbol, Layout);
   else if (Data.isCommon()) {
     // Common symbols are encoded with the size in the address
     // field, and their alignment in the flags.
@@ -572,7 +568,7 @@ void MachObjectWriter::ComputeSymbolTable(
       continue;
 
     MachSymbolData MSD;
-    MSD.SymbolData = &SD;
+    MSD.Symbol = &Symbol;
     MSD.StringIndex = StringTable.getOffset(Symbol.getName());
 
     if (Symbol.isUndefined()) {
@@ -600,7 +596,7 @@ void MachObjectWriter::ComputeSymbolTable(
       continue;
 
     MachSymbolData MSD;
-    MSD.SymbolData = &SD;
+    MSD.Symbol = &Symbol;
     MSD.StringIndex = StringTable.getOffset(Symbol.getName());
 
     if (Symbol.isAbsolute()) {
@@ -620,11 +616,11 @@ void MachObjectWriter::ComputeSymbolTable(
   // Set the symbol indices.
   Index = 0;
   for (unsigned i = 0, e = LocalSymbolData.size(); i != e; ++i)
-    LocalSymbolData[i].SymbolData->setIndex(Index++);
+    LocalSymbolData[i].Symbol->getData().setIndex(Index++);
   for (unsigned i = 0, e = ExternalSymbolData.size(); i != e; ++i)
-    ExternalSymbolData[i].SymbolData->setIndex(Index++);
+    ExternalSymbolData[i].Symbol->getData().setIndex(Index++);
   for (unsigned i = 0, e = UndefinedSymbolData.size(); i != e; ++i)
-    UndefinedSymbolData[i].SymbolData->setIndex(Index++);
+    UndefinedSymbolData[i].Symbol->getData().setIndex(Index++);
 
   for (const MCSectionData &SD : Asm) {
     std::vector<RelAndSymbol> &Relocs = Relocations[&SD];
@@ -940,12 +936,8 @@ void MachObjectWriter::WriteObject(MCAssembler &Asm,
          it = Asm.data_region_begin(), ie = Asm.data_region_end();
          it != ie; ++it) {
     const DataRegionData *Data = &(*it);
-    uint64_t Start =
-      getSymbolAddress(&Layout.getAssembler().getSymbolData(*Data->Start),
-                       Layout);
-    uint64_t End =
-      getSymbolAddress(&Layout.getAssembler().getSymbolData(*Data->End),
-                       Layout);
+    uint64_t Start = getSymbolAddress(*Data->Start, Layout);
+    uint64_t End = getSymbolAddress(*Data->End, Layout);
     DEBUG(dbgs() << "data in code region-- kind: " << Data->Kind
                  << "  start: " << Start << "(" << Data->Start->getName() << ")"
                  << "  end: " << End << "(" << Data->End->getName() << ")"

@@ -215,6 +215,7 @@ int FuzzerDriver(int argc, char **argv, UserCallback Callback) {
   Fuzzer::FuzzingOptions Options;
   Options.Verbosity = Flags.verbosity;
   Options.MaxLen = Flags.max_len;
+  Options.UnitTimeoutSec = Flags.timeout;
   Options.DoCrossOver = Flags.cross_over;
   Options.MutateDepth = Flags.mutate_depth;
   Options.ExitOnFirst = Flags.exit_on_first;
@@ -230,6 +231,9 @@ int FuzzerDriver(int argc, char **argv, UserCallback Callback) {
     Options.MaxNumberOfRuns = Flags.runs;
   if (!inputs.empty())
     Options.OutputCorpus = inputs[0];
+  if (Flags.sync_command)
+    Options.SyncCommand = Flags.sync_command;
+  Options.SyncTimeout = Flags.sync_timeout;
   Fuzzer F(Callback, Options);
 
   unsigned seed = Flags.seed;
@@ -242,7 +246,7 @@ int FuzzerDriver(int argc, char **argv, UserCallback Callback) {
 
   // Timer
   if (Flags.timeout > 0)
-    SetTimer(Flags.timeout);
+    SetTimer(Flags.timeout / 2 + 1);
 
   if (Flags.verbosity >= 2) {
     std::cerr << "Tokens: {";

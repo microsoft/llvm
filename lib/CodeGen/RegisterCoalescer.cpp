@@ -908,7 +908,7 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
   if (!definesFullReg(*DefMI, SrcReg))
     return false;
   bool SawStore = false;
-  if (!DefMI->isSafeToMove(TII, AA, SawStore))
+  if (!DefMI->isSafeToMove(AA, SawStore))
     return false;
   const MCInstrDesc &MCID = DefMI->getDesc();
   if (MCID.getNumDefs() != 1)
@@ -955,12 +955,11 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
   TII->reMaterialize(*MBB, MII, DstReg, SrcIdx, DefMI, *TRI);
   MachineInstr *NewMI = std::prev(MII);
 
-  // A situation like the following:
-  //     %vreg0:subX = instr           ; DefMI
-  //     %vregY      = copy %vreg:subX ; CopyMI
-  // does not need subregisters/regclass widening after rematerialization, just
-  // do:
-  //     %vregY = instr
+  // In a situation like the following:
+  //     %vreg0:subreg = instr              ; DefMI, subreg = DstIdx
+  //     %vreg1        = copy %vreg0:subreg ; CopyMI, SrcIdx = 0
+  // instead of widening %vreg1 to the register class of %vreg0 simply do:
+  //     %vreg1 = instr
   const TargetRegisterClass *NewRC = CP.getNewRC();
   if (DstIdx != 0) {
     MachineOperand &DefMO = NewMI->getOperand(0);
