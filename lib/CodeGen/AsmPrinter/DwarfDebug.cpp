@@ -192,8 +192,8 @@ static LLVM_CONSTEXPR DwarfAccelTable::Atom TypeAtoms[] = {
     DwarfAccelTable::Atom(dwarf::DW_ATOM_type_flags, dwarf::DW_FORM_data1)};
 
 DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
-    : Asm(A), MMI(Asm->MMI), PrevLabel(nullptr),
-      InfoHolder(A, "info_string", DIEValueAllocator),
+    : Asm(A), MMI(Asm->MMI), DebugLocs(A->OutStreamer->isVerboseAsm()),
+      PrevLabel(nullptr), InfoHolder(A, "info_string", DIEValueAllocator),
       UsedNonDefaultText(false),
       SkeletonHolder(A, "skel_string", DIEValueAllocator),
       IsDarwin(Triple(A->getTargetTriple()).isOSDarwin()),
@@ -997,7 +997,7 @@ void DwarfDebug::beginInstruction(const MachineInstr *MI) {
     return;
 
   if (!PrevLabel) {
-    PrevLabel = MMI->getContext().CreateTempSymbol();
+    PrevLabel = MMI->getContext().createTempSymbol();
     Asm->OutStreamer->EmitLabel(PrevLabel);
   }
   I->second = PrevLabel;
@@ -1025,7 +1025,7 @@ void DwarfDebug::endInstruction() {
 
   // We need a label after this instruction.
   if (!PrevLabel) {
-    PrevLabel = MMI->getContext().CreateTempSymbol();
+    PrevLabel = MMI->getContext().createTempSymbol();
     Asm->OutStreamer->EmitLabel(PrevLabel);
   }
   I->second = PrevLabel;

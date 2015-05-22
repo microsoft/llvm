@@ -53,6 +53,29 @@ void MCObjectStreamer::flushPendingLabels(MCFragment *F, uint64_t FOffset) {
   }
 }
 
+bool MCObjectStreamer::emitAbsoluteSymbolDiff(const MCSymbol *Hi,
+                                              const MCSymbol *Lo,
+                                              unsigned Size) {
+  // Must have symbol data.
+  if (!Assembler->hasSymbolData(*Hi) || !Assembler->hasSymbolData(*Lo))
+    return false;
+  auto &HiD = Assembler->getSymbolData(*Hi);
+  auto &LoD = Assembler->getSymbolData(*Lo);
+
+  // Must both be assigned to the same (valid) fragment.
+  if (!HiD.getFragment() || HiD.getFragment() != LoD.getFragment())
+    return false;
+
+  // Must be a data fragment.
+  if (!isa<MCDataFragment>(HiD.getFragment()))
+    return false;
+
+  assert(HiD.getOffset() >= LoD.getOffset() &&
+         "Expected Hi to be greater than Lo");
+  EmitIntValue(HiD.getOffset() - LoD.getOffset(), Size);
+  return true;
+}
+
 void MCObjectStreamer::reset() {
   if (Assembler)
     Assembler->reset();
@@ -127,12 +150,12 @@ void MCObjectStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
 
 void MCObjectStreamer::EmitCFIStartProcImpl(MCDwarfFrameInfo &Frame) {
   // We need to create a local symbol to avoid relocations.
-  Frame.Begin = getContext().CreateTempSymbol();
+  Frame.Begin = getContext().createTempSymbol();
   EmitLabel(Frame.Begin);
 }
 
 void MCObjectStreamer::EmitCFIEndProcImpl(MCDwarfFrameInfo &Frame) {
-  Frame.End = getContext().CreateTempSymbol();
+  Frame.End = getContext().createTempSymbol();
   EmitLabel(Frame.End);
 }
 
@@ -375,7 +398,7 @@ bool MCObjectStreamer::EmitValueToOffset(const MCExpr *Offset,
     return false;
   }
 
-  MCSymbol *CurrentPos = getContext().CreateTempSymbol();
+  MCSymbol *CurrentPos = getContext().createTempSymbol();
   EmitLabel(CurrentPos);
   MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
   const MCExpr *Ref =

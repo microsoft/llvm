@@ -627,6 +627,10 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr *MI) const {
   case ARM::t2MOVi32imm:
     return 8;
   case ARM::CONSTPOOL_ENTRY:
+  case ARM::JUMPTABLE_INSTS:
+  case ARM::JUMPTABLE_ADDRS:
+  case ARM::JUMPTABLE_TBB:
+  case ARM::JUMPTABLE_TBH:
     // If this machine instr is a constant pool entry, its size is recorded as
     // operand #2.
     return MI->getOperand(2).getImm();
@@ -641,42 +645,6 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr *MI) const {
   case ARM::t2Int_eh_sjlj_setjmp:
   case ARM::t2Int_eh_sjlj_setjmp_nofp:
     return 12;
-  case ARM::BR_JTr:
-  case ARM::BR_JTm:
-  case ARM::BR_JTadd:
-  case ARM::tBR_JTr:
-  case ARM::t2BR_JT:
-  case ARM::t2TBB_JT:
-  case ARM::t2TBH_JT: {
-    // These are jumptable branches, i.e. a branch followed by an inlined
-    // jumptable. The size is 4 + 4 * number of entries. For TBB, each
-    // entry is one byte; TBH two byte each.
-    unsigned EntrySize = (Opc == ARM::t2TBB_JT)
-      ? 1 : ((Opc == ARM::t2TBH_JT) ? 2 : 4);
-    unsigned NumOps = MCID.getNumOperands();
-    MachineOperand JTOP =
-      MI->getOperand(NumOps - (MI->isPredicable() ? 2 : 1));
-    unsigned JTI = JTOP.getIndex();
-    const MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
-    assert(MJTI != nullptr);
-    const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
-    assert(JTI < JT.size());
-    // Thumb instructions are 2 byte aligned, but JT entries are 4 byte
-    // 4 aligned. The assembler / linker may add 2 byte padding just before
-    // the JT entries.  The size does not include this padding; the
-    // constant islands pass does separate bookkeeping for it.
-    // FIXME: If we know the size of the function is less than (1 << 16) *2
-    // bytes, we can use 16-bit entries instead. Then there won't be an
-    // alignment issue.
-    unsigned InstSize = (Opc == ARM::tBR_JTr || Opc == ARM::t2BR_JT) ? 2 : 4;
-    unsigned NumEntries = JT[JTI].MBBs.size();
-    if (Opc == ARM::t2TBB_JT && (NumEntries & 1))
-      // Make sure the instruction that follows TBB is 2-byte aligned.
-      // FIXME: Constant island pass should insert an "ALIGN" instruction
-      // instead.
-      ++NumEntries;
-    return NumEntries * EntrySize + InstSize;
-  }
   case ARM::SPACE:
     return MI->getOperand(1).getImm();
   }
@@ -1434,7 +1402,7 @@ ARMBaseInstrInfo::duplicate(MachineInstr *Orig, MachineFunction &MF) const {
 bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
                                         const MachineInstr *MI1,
                                         const MachineRegisterInfo *MRI) const {
-  int Opcode = MI0->getOpcode();
+  unsigned Opcode = MI0->getOpcode();
   if (Opcode == ARM::t2LDRpci ||
       Opcode == ARM::t2LDRpci_pic ||
       Opcode == ARM::tLDRpci ||
@@ -1771,7 +1739,7 @@ llvm::getInstrPredicate(const MachineInstr *MI, unsigned &PredReg) {
 }
 
 
-int llvm::getMatchingCondBranchOpcode(int Opc) {
+unsigned llvm::getMatchingCondBranchOpcode(unsigned Opc) {
   if (Opc == ARM::B)
     return ARM::Bcc;
   if (Opc == ARM::tB)
@@ -1839,8 +1807,7 @@ static MachineInstr *canFoldIntoMOVCC(unsigned Reg,
       return nullptr;
   }
   bool DontMoveAcrossStores = true;
-  if (!MI->isSafeToMove(TII, /* AliasAnalysis = */ nullptr,
-                        DontMoveAcrossStores))
+  if (!MI->isSafeToMove(/* AliasAnalysis = */ nullptr, DontMoveAcrossStores))
     return nullptr;
   return MI;
 }

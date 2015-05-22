@@ -859,6 +859,13 @@ bool MemCpyOpt::processMemSetMemCpyDependence(MemCpyInst *MemCpy,
   if (MemSet->getDest() != MemCpy->getDest())
     return false;
 
+  // Check that there are no other dependencies on the memset destination.
+  MemDepResult DstDepInfo =
+      MD->getPointerDependencyFrom(AliasAnalysis::getLocationForDest(MemSet),
+                                   false, MemCpy, MemCpy->getParent());
+  if (DstDepInfo.getInst() != MemSet)
+    return false;
+
   // Use the same i8* dest as the memcpy, killing the memset dest if different.
   Value *Dest = MemCpy->getRawDest();
   Value *DestSize = MemSet->getLength();
@@ -874,7 +881,7 @@ bool MemCpyOpt::processMemSetMemCpyDependence(MemCpyInst *MemCpy,
     if (ConstantInt *SrcSizeC = dyn_cast<ConstantInt>(SrcSize))
       Align = MinAlign(SrcSizeC->getZExtValue(), DestAlign);
 
-  IRBuilder<> Builder(MemCpy->getNextNode());
+  IRBuilder<> Builder(MemCpy);
 
   // If the sizes have different types, zext the smaller one.
   if (DestSize->getType() != SrcSize->getType()) {
@@ -924,7 +931,7 @@ bool MemCpyOpt::performMemCpyToMemSetOptzn(MemCpyInst *MemCpy,
   if (!MemSetSize || CopySize->getZExtValue() > MemSetSize->getZExtValue())
     return false;
 
-  IRBuilder<> Builder(MemCpy->getNextNode());
+  IRBuilder<> Builder(MemCpy);
   Builder.CreateMemSet(MemCpy->getRawDest(), MemSet->getOperand(1),
                        CopySize, MemCpy->getAlignment());
   return true;

@@ -266,9 +266,10 @@ Function::Function(FunctionType *Ty, LinkageTypes Linkage, const Twine &name,
     ParentModule->getFunctionList().push_back(this);
 
   // Ensure intrinsics have the right parameter attributes.
-  if (unsigned IID = getIntrinsicID())
-    setAttributes(Intrinsic::getAttributes(getContext(), Intrinsic::ID(IID)));
-
+  // Note, the IntID field will have been set in Value::setName if this function
+  // name is a valid intrinsic ID.
+  if (IntID)
+    setAttributes(Intrinsic::getAttributes(getContext(), IntID));
 }
 
 Function::~Function() {
@@ -280,10 +281,6 @@ Function::~Function() {
 
   // Remove the function from the on-the-side GC table.
   clearGC();
-
-  // Remove the intrinsicID from the Cache.
-  if (getValueName() && isIntrinsic())
-    getContext().pImpl->IntrinsicIDCache.erase(this);
 }
 
 void Function::BuildLazyArguments() const {
@@ -433,33 +430,9 @@ void Function::copyAttributesFrom(const GlobalValue *Src) {
     setPrologueData(nullptr);
 }
 
-/// getIntrinsicID - This method returns the ID number of the specified
-/// function, or Intrinsic::not_intrinsic if the function is not an
-/// intrinsic, or if the pointer is null.  This value is always defined to be
-/// zero to allow easy checking for whether a function is intrinsic or not.  The
-/// particular intrinsic functions which correspond to this value are defined in
-/// llvm/Intrinsics.h.  Results are cached in the LLVM context, subsequent
-/// requests for the same ID return results much faster from the cache.
-///
-unsigned Function::getIntrinsicID() const {
-  const ValueName *ValName = this->getValueName();
-  if (!ValName || !isIntrinsic())
-    return 0;
-
-  LLVMContextImpl::IntrinsicIDCacheTy &IntrinsicIDCache =
-    getContext().pImpl->IntrinsicIDCache;
-  if (!IntrinsicIDCache.count(this)) {
-    unsigned Id = lookupIntrinsicID();
-    IntrinsicIDCache[this]=Id;
-    return Id;
-  }
-  return IntrinsicIDCache[this];
-}
-
-/// This private method does the actual lookup of an intrinsic ID when the query
-/// could not be answered from the cache.
-unsigned Function::lookupIntrinsicID() const {
-  const ValueName *ValName = this->getValueName();
+/// \brief This does the actual lookup of an intrinsic ID which
+/// matches the given function name.
+static Intrinsic::ID lookupIntrinsicID(const ValueName *ValName) {
   unsigned Len = ValName->getKeyLength();
   const char *Name = ValName->getKeyData();
 
@@ -467,7 +440,16 @@ unsigned Function::lookupIntrinsicID() const {
 #include "llvm/IR/Intrinsics.gen"
 #undef GET_FUNCTION_RECOGNIZER
 
-  return 0;
+  return Intrinsic::not_intrinsic;
+}
+
+void Function::recalculateIntrinsicID() {
+  const ValueName *ValName = this->getValueName();
+  if (!ValName || !isIntrinsic()) {
+    IntID = Intrinsic::not_intrinsic;
+    return;
+  }
+  IntID = lookupIntrinsicID(ValName);
 }
 
 /// Returns a stable mangling for the type specified for use in the name
