@@ -81,6 +81,7 @@ EHPersonality llvm::classifyEHPersonality(StringRef PersName) {
     .Case("_except_handler4",      EHPersonality::MSVC_X86SEH)
     .Case("__C_specific_handler",  EHPersonality::MSVC_Win64SEH)
     .Case("__CxxFrameHandler3",    EHPersonality::MSVC_CXX)
+    .Case("ProcessCLRException",   EHPersonality::CoreCLR)
     .Default(EHPersonality::Unknown);
 }
 

@@ -16,6 +16,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/Win64EH.h"
+#include "llvm/Analysis/LibCallSemantics.h"
 
 namespace llvm {
 
@@ -206,10 +207,17 @@ static void EmitUnwindInfo(MCStreamer &streamer, WinEH::FrameInfo *info) {
   if (flags & (Win64EH::UNW_ChainInfo << 3))
     EmitRuntimeFunction(streamer, info->ChainedParent);
   else if (flags &
-           ((Win64EH::UNW_TerminateHandler|Win64EH::UNW_ExceptionHandler) << 3))
-    streamer.EmitValue(MCSymbolRefExpr::create(info->ExceptionHandler,
-                                              MCSymbolRefExpr::VK_COFF_IMGREL32,
-                                              context), 4);
+           ((Win64EH::UNW_TerminateHandler|Win64EH::UNW_ExceptionHandler) << 3)) {
+    if (streamer.getContext().getObjectFileInfo()->getTargetTriple().isWindowsCoreCLREnvironment()) {
+      // CoreCLR runtime expects the personality slot in the unwind info to be null
+      assert(classifyEHPersonality(info->ExceptionHandler->getName()) == EHPersonality::CoreCLR);
+      streamer.EmitIntValue(0, 4);
+    } else {
+      streamer.EmitValue(MCSymbolRefExpr::create(info->ExceptionHandler,
+                         MCSymbolRefExpr::VK_COFF_IMGREL32,
+                         context), 4);
+    }
+  }
   else if (numCodes == 0) {
     // The minimum size of an UNWIND_INFO struct is 8 bytes. If we're not
     // a chained unwind info, if there is no handler, and if there are fewer

@@ -40,11 +40,14 @@ class WinException : public EHStreamer {
 
   void emitCXXFrameHandler3Table(const MachineFunction *MF);
 
+  void emitCLRExceptionTable(const MachineFunction *MF);
+
   void extendIP2StateTable(const MachineFunction *MF, const Function *ParentF,
                            WinEHFuncInfo &FuncInfo);
 
   const MCExpr *create32bitRef(const MCSymbol *Value);
   const MCExpr *create32bitRef(const GlobalValue *GV);
+  const MCExpr *getOffset(MCSymbol *OffsetOf, MCSymbol *OffsetFrom);
 
 public:
   //===--------------------------------------------------------------------===//

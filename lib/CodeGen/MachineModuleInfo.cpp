@@ -481,6 +481,12 @@ void MachineModuleInfo::addSEHCleanupHandler(MachineBasicBlock *LandingPad,
   LP.SEHHandlers.push_back(Handler);
 }
 
+void MachineModuleInfo::addHandlerTreeNode(MachineBasicBlock *LandingPad,
+                                            HandlerTreeNode *TreeNode) {
+  LandingPadInfo &LP = getOrCreateLandingPadInfo(LandingPad);
+  LP.TreeNode = TreeNode;
+}
+
 /// TidyLandingPads - Remap landing pad labels and remove any deleted landing
 /// pads.
 void MachineModuleInfo::TidyLandingPads(DenseMap<MCSymbol*, uintptr_t> *LPMap) {
@@ -623,5 +629,12 @@ WinEHFuncInfo &MachineModuleInfo::getWinEHFuncInfo(const Function *F) {
   auto &Ptr = FuncInfoMap[getWinEHParent(F)];
   if (!Ptr)
     Ptr.reset(new WinEHFuncInfo);
+  return *Ptr;
+}
+
+ClrEHFuncInfo &MachineModuleInfo::getClrEHFuncInfo(const Function *F) {
+  auto &Ptr = ClrEHFuncInfoMap[getWinEHParent(F)];
+  if (!Ptr)
+    Ptr.reset(new ClrEHFuncInfo);
   return *Ptr;
 }
