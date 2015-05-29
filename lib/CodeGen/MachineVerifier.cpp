@@ -694,7 +694,7 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
 
   const MachineFrameInfo *MFI = MF->getFrameInfo();
   assert(MFI && "Function has no frame info");
-  BitVector PR = MFI->getPristineRegs(MBB);
+  BitVector PR = MFI->getPristineRegs(*MF);
   for (int I = PR.find_first(); I>0; I = PR.find_next(I)) {
     for (MCSubRegIterator SubRegs(I, TRI, /*IncludeSelf=*/true);
          SubRegs.isValid(); ++SubRegs)
@@ -1716,8 +1716,8 @@ namespace {
 /// by a FrameDestroy <n>, stack adjustments are identical on all
 /// CFG edges to a merge point, and frame is destroyed at end of a return block.
 void MachineVerifier::verifyStackFrame() {
-  int FrameSetupOpcode   = TII->getCallFrameSetupOpcode();
-  int FrameDestroyOpcode = TII->getCallFrameDestroyOpcode();
+  unsigned FrameSetupOpcode   = TII->getCallFrameSetupOpcode();
+  unsigned FrameDestroyOpcode = TII->getCallFrameDestroyOpcode();
 
   SmallVector<StackStateOfBB, 8> SPState;
   SPState.resize(MF->getNumBlockIDs());

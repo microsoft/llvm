@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
@@ -134,7 +133,7 @@ void MCWinCOFFStreamer::EmitCOFFSymbolStorageClass(int StorageClass) {
     FatalError("storage class specified outside of symbol definition");
 
   if (StorageClass & ~COFF::SSC_Invalid)
-    FatalError(Twine("storage class value '") + itostr(StorageClass) +
+    FatalError("storage class value '" + Twine(StorageClass) +
                "' out of range");
 
   MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*CurSymbol);
@@ -146,7 +145,7 @@ void MCWinCOFFStreamer::EmitCOFFSymbolType(int Type) {
     FatalError("symbol type specified outside of a symbol definition");
 
   if (Type & ~0xffff)
-    FatalError(Twine("type value '") + itostr(Type) + "' out of range");
+    FatalError("type value '" + Twine(Type) + "' out of range");
 
   MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*CurSymbol);
   SD.modifyFlags(Type << COFF::SF_TypeShift, COFF::SF_TypeMask);
@@ -219,10 +218,10 @@ void MCWinCOFFStreamer::EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                               unsigned ByteAlignment) {
   assert(!Symbol->isInSection() && "Symbol must not already have a section!");
 
-  const MCSection *Section = getContext().getObjectFileInfo()->getBSSSection();
-  MCSectionData &SectionData = getAssembler().getOrCreateSectionData(*Section);
-  if (SectionData.getAlignment() < ByteAlignment)
-    SectionData.setAlignment(ByteAlignment);
+  MCSection *Section = getContext().getObjectFileInfo()->getBSSSection();
+  getAssembler().registerSection(*Section);
+  if (Section->getAlignment() < ByteAlignment)
+    Section->setAlignment(ByteAlignment);
 
   MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
   SD.setExternal(false);
@@ -231,22 +230,20 @@ void MCWinCOFFStreamer::EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
 
   if (ByteAlignment != 1)
     new MCAlignFragment(ByteAlignment, /*Value=*/0, /*ValueSize=*/0,
-                        ByteAlignment, &SectionData);
+                        ByteAlignment, Section);
 
-  MCFillFragment *Fragment =
-      new MCFillFragment(/*Value=*/0, /*ValueSize=*/0, Size, &SectionData);
+  MCFillFragment *Fragment = new MCFillFragment(
+      /*Value=*/0, /*ValueSize=*/0, Size, Section);
   SD.setFragment(Fragment);
 }
 
-void MCWinCOFFStreamer::EmitZerofill(const MCSection *Section,
-                                     MCSymbol *Symbol, uint64_t Size,
-                                     unsigned ByteAlignment) {
+void MCWinCOFFStreamer::EmitZerofill(MCSection *Section, MCSymbol *Symbol,
+                                     uint64_t Size, unsigned ByteAlignment) {
   llvm_unreachable("not implemented");
 }
 
-void MCWinCOFFStreamer::EmitTBSSSymbol(const MCSection *Section,
-                                       MCSymbol *Symbol, uint64_t Size,
-                                       unsigned ByteAlignment) {
+void MCWinCOFFStreamer::EmitTBSSSymbol(MCSection *Section, MCSymbol *Symbol,
+                                       uint64_t Size, unsigned ByteAlignment) {
   llvm_unreachable("not implemented");
 }
 
@@ -269,7 +266,7 @@ void MCWinCOFFStreamer::FinishImpl() {
 
 LLVM_ATTRIBUTE_NORETURN
 void MCWinCOFFStreamer::FatalError(const Twine &Msg) const {
-  getContext().FatalError(SMLoc(), Msg);
+  getContext().reportFatalError(SMLoc(), Msg);
 }
 }
 

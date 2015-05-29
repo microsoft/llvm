@@ -173,6 +173,9 @@ public:
     return false;
   }
 
+  /// Return true if the target needs to disable frame pointer elimination.
+  virtual bool noFramePointerElim(const MachineFunction &MF) const;
+
   /// hasFP - Return true if the specified function should have a dedicated
   /// frame pointer register. For most targets this is true only if the function
   /// has variable sized allocas or if frame pointer elimination is disabled.
@@ -253,6 +256,30 @@ public:
                                 MachineBasicBlock::iterator MI) const {
     llvm_unreachable("Call Frame Pseudo Instructions do not exist on this "
                      "target!");
+  }
+
+  /// Check whether or not the given \p MBB can be used as a prologue
+  /// for the target.
+  /// The prologue will be inserted first in this basic block.
+  /// This method is used by the shrink-wrapping pass to decide if
+  /// \p MBB will be correctly handled by the target.
+  /// As soon as the target enable shrink-wrapping without overriding
+  /// this method, we assume that each basic block is a valid
+  /// prologue.
+  virtual bool canUseAsPrologue(const MachineBasicBlock &MBB) const {
+    return true;
+  }
+
+  /// Check whether or not the given \p MBB can be used as a epilogue
+  /// for the target.
+  /// The epilogue will be inserted before the first terminator of that block.
+  /// This method is used by the shrink-wrapping pass to decide if
+  /// \p MBB will be correctly handled by the target.
+  /// As soon as the target enable shrink-wrapping without overriding
+  /// this method, we assume that each basic block is a valid
+  /// epilogue.
+  virtual bool canUseAsEpilogue(const MachineBasicBlock &MBB) const {
+    return true;
   }
 };
 

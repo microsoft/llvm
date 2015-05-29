@@ -1434,7 +1434,7 @@ ARMBaseInstrInfo::duplicate(MachineInstr *Orig, MachineFunction &MF) const {
 bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
                                         const MachineInstr *MI1,
                                         const MachineRegisterInfo *MRI) const {
-  int Opcode = MI0->getOpcode();
+  unsigned Opcode = MI0->getOpcode();
   if (Opcode == ARM::t2LDRpci ||
       Opcode == ARM::t2LDRpci_pic ||
       Opcode == ARM::tLDRpci ||
@@ -1771,7 +1771,7 @@ llvm::getInstrPredicate(const MachineInstr *MI, unsigned &PredReg) {
 }
 
 
-int llvm::getMatchingCondBranchOpcode(int Opc) {
+unsigned llvm::getMatchingCondBranchOpcode(unsigned Opc) {
   if (Opc == ARM::B)
     return ARM::Bcc;
   if (Opc == ARM::tB)
@@ -1839,8 +1839,7 @@ static MachineInstr *canFoldIntoMOVCC(unsigned Reg,
       return nullptr;
   }
   bool DontMoveAcrossStores = true;
-  if (!MI->isSafeToMove(TII, /* AliasAnalysis = */ nullptr,
-                        DontMoveAcrossStores))
+  if (!MI->isSafeToMove(/* AliasAnalysis = */ nullptr, DontMoveAcrossStores))
     return nullptr;
   return MI;
 }
@@ -4539,7 +4538,7 @@ breakPartialRegDependency(MachineBasicBlock::iterator MI,
 }
 
 bool ARMBaseInstrInfo::hasNOP() const {
-  return (Subtarget.getFeatureBits() & ARM::HasV6KOps) != 0;
+  return Subtarget.getFeatureBits()[ARM::HasV6KOps];
 }
 
 bool ARMBaseInstrInfo::isSwiftFastImmShift(const MachineInstr *MI) const {

@@ -97,3 +97,16 @@ define i32 @t8(i64 %a, i32 %b) {
   %7 = zext i1 %6 to i32
   ret i32 %7
 }
+
+; Ensure this doesn't get converted to a min/max.
+; CHECK-LABEL: @t9
+; CHECK-NEXT: icmp
+; CHECK-NEXT: sext
+; CHECK-NEXT: 4294967295
+; CHECK-NEXT: ret
+define i64 @t9(i32 %a) {
+  %1 = icmp sgt i32 %a, -1
+  %2 = sext i32 %a to i64
+  %3 = select i1 %1, i64 %2, i64 4294967295
+  ret i64 %3
+}

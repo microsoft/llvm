@@ -243,40 +243,40 @@ class ARMAsmParser : public MCTargetAsmParser {
 
   bool isThumb() const {
     // FIXME: Can tablegen auto-generate this?
-    return (STI.getFeatureBits() & ARM::ModeThumb) != 0;
+    return STI.getFeatureBits()[ARM::ModeThumb];
   }
   bool isThumbOne() const {
-    return isThumb() && (STI.getFeatureBits() & ARM::FeatureThumb2) == 0;
+    return isThumb() && !STI.getFeatureBits()[ARM::FeatureThumb2];
   }
   bool isThumbTwo() const {
-    return isThumb() && (STI.getFeatureBits() & ARM::FeatureThumb2);
+    return isThumb() && STI.getFeatureBits()[ARM::FeatureThumb2];
   }
   bool hasThumb() const {
-    return STI.getFeatureBits() & ARM::HasV4TOps;
+    return STI.getFeatureBits()[ARM::HasV4TOps];
   }
   bool hasV6Ops() const {
-    return STI.getFeatureBits() & ARM::HasV6Ops;
+    return STI.getFeatureBits()[ARM::HasV6Ops];
   }
   bool hasV6MOps() const {
-    return STI.getFeatureBits() & ARM::HasV6MOps;
+    return STI.getFeatureBits()[ARM::HasV6MOps];
   }
   bool hasV7Ops() const {
-    return STI.getFeatureBits() & ARM::HasV7Ops;
+    return STI.getFeatureBits()[ARM::HasV7Ops];
   }
   bool hasV8Ops() const {
-    return STI.getFeatureBits() & ARM::HasV8Ops;
+    return STI.getFeatureBits()[ARM::HasV8Ops];
   }
   bool hasARM() const {
-    return !(STI.getFeatureBits() & ARM::FeatureNoARM);
+    return !STI.getFeatureBits()[ARM::FeatureNoARM];
   }
   bool hasThumb2DSP() const {
-    return STI.getFeatureBits() & ARM::FeatureDSPThumb2;
+    return STI.getFeatureBits()[ARM::FeatureDSPThumb2];
   }
   bool hasD16() const {
-    return STI.getFeatureBits() & ARM::FeatureD16;
+    return STI.getFeatureBits()[ARM::FeatureD16];
   }
   bool hasV8_1aOps() const {
-    return STI.getFeatureBits() & ARM::HasV8_1aOps;
+    return STI.getFeatureBits()[ARM::HasV8_1aOps];
   }
 
   void SwitchMode() {
@@ -284,7 +284,7 @@ class ARMAsmParser : public MCTargetAsmParser {
     setAvailableFeatures(FB);
   }
   bool isMClass() const {
-    return STI.getFeatureBits() & ARM::FeatureMClass;
+    return STI.getFeatureBits()[ARM::FeatureMClass];
   }
 
   /// @name Auto-generated Match Functions
@@ -2870,7 +2870,7 @@ void ARMOperand::print(raw_ostream &OS) const {
     OS << "<banked reg: " << getBankedReg() << ">";
     break;
   case k_Immediate:
-    getImm()->print(OS);
+    OS << *getImm();
     break;
   case k_MemBarrierOpt:
     OS << "<ARM_MB::" << MemBOptToString(getMemBarrierOpt(), false) << ">";
@@ -6749,7 +6749,7 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
       // Turn PC-relative expression into absolute expression.
       // Reading PC provides the start of the current instruction + 8 and
       // the transform to adr is biased by that.
-      MCSymbol *Dot = getContext().CreateTempSymbol();
+      MCSymbol *Dot = getContext().createTempSymbol();
       Out.EmitLabel(Dot);
       const MCExpr *OpExpr = Inst.getOperand(2).getExpr();
       const MCExpr *InstPC = MCSymbolRefExpr::Create(Dot,
@@ -8896,7 +8896,7 @@ bool ARMAsmParser::parseDirectiveThumbFunc(SMLoc L) {
       }
 
       MCSymbol *Func =
-          getParser().getContext().GetOrCreateSymbol(Tok.getIdentifier());
+          getParser().getContext().getOrCreateSymbol(Tok.getIdentifier());
       getParser().getStreamer().EmitThumbFunc(Func);
       Parser.Lex(); // Consume the identifier token.
       return false;
@@ -9187,52 +9187,53 @@ bool ARMAsmParser::parseDirectiveCPU(SMLoc L) {
 // tools/clang/lib/Driver/Tools.cpp
 static const struct {
   const unsigned ID;
-  const uint64_t Enabled;
-  const uint64_t Disabled;
+  const FeatureBitset Enabled;
+  const FeatureBitset Disabled;
 } FPUs[] = {
-    {/* ID */ ARM::FK_VFP,
-     /* Enabled */ ARM::FeatureVFP2,
-     /* Disabled */ ARM::FeatureNEON},
-    {/* ID */ ARM::FK_VFPV2,
-     /* Enabled */ ARM::FeatureVFP2,
-     /* Disabled */ ARM::FeatureNEON},
-    {/* ID */ ARM::FK_VFPV3,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3,
-     /* Disabled */ ARM::FeatureNEON | ARM::FeatureD16},
-    {/* ID */ ARM::FK_VFPV3_D16,
-     /* Enable */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureD16,
-     /* Disabled */ ARM::FeatureNEON},
-    {/* ID */ ARM::FK_VFPV4,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureVFP4,
-     /* Disabled */ ARM::FeatureNEON | ARM::FeatureD16},
-    {/* ID */ ARM::FK_VFPV4_D16,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureVFP4 |
-         ARM::FeatureD16,
-     /* Disabled */ ARM::FeatureNEON},
-    {/* ID */ ARM::FK_FPV5_D16,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureVFP4 |
-         ARM::FeatureFPARMv8 | ARM::FeatureD16,
-     /* Disabled */ ARM::FeatureNEON | ARM::FeatureCrypto},
-    {/* ID */ ARM::FK_FP_ARMV8,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureVFP4 |
-         ARM::FeatureFPARMv8,
-     /* Disabled */ ARM::FeatureNEON | ARM::FeatureCrypto | ARM::FeatureD16},
-    {/* ID */ ARM::FK_NEON,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureNEON,
-     /* Disabled */ ARM::FeatureD16},
-    {/* ID */ ARM::FK_NEON_VFPV4,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureVFP4 |
-         ARM::FeatureNEON,
-     /* Disabled */ ARM::FeatureD16},
-    {/* ID */ ARM::FK_NEON_FP_ARMV8,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureVFP4 |
-         ARM::FeatureFPARMv8 | ARM::FeatureNEON,
-     /* Disabled */ ARM::FeatureCrypto | ARM::FeatureD16},
+    {/* ID */ ARM::FK_VFP, 
+     /* Enabled */ {ARM::FeatureVFP2}, 
+     /* Disabled */ {ARM::FeatureNEON}},
+    {/* ID */ ARM::FK_VFPV2, 
+     /* Enabled */ {ARM::FeatureVFP2}, 
+     /* Disabled */ {ARM::FeatureNEON}},
+    {/* ID */ ARM::FK_VFPV3, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3},  
+     /* Disabled */ {ARM::FeatureNEON, ARM::FeatureD16}},
+    {/* ID */ ARM::FK_VFPV3_D16, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureD16},
+     /* Disabled */ {ARM::FeatureNEON}},
+    {/* ID */ ARM::FK_VFPV4, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureVFP4},
+     /* Disabled */ {ARM::FeatureNEON, ARM::FeatureD16}},
+    {/* ID */ ARM::FK_VFPV4_D16, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureVFP4,
+                    ARM::FeatureD16},
+     /* Disabled */ {ARM::FeatureNEON}},
+    {/* ID */ ARM::FK_FPV5_D16, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureVFP4,
+                    ARM::FeatureFPARMv8, ARM::FeatureD16},
+     /* Disabled */ {ARM::FeatureNEON, ARM::FeatureCrypto}},
+    {/* ID */ ARM::FK_FP_ARMV8, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureVFP4,
+                    ARM::FeatureFPARMv8},
+     /* Disabled */ {ARM::FeatureNEON, ARM::FeatureCrypto, ARM::FeatureD16}},
+    {/* ID */ ARM::FK_NEON, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureNEON}, 
+     /* Disabled */ {ARM::FeatureD16}},
+    {/* ID */ ARM::FK_NEON_VFPV4, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureVFP4,
+                    ARM::FeatureNEON}, 
+     /* Disabled */ {ARM::FeatureD16}},
+    {/* ID */ ARM::FK_NEON_FP_ARMV8, 
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureVFP4,
+                    ARM::FeatureFPARMv8, ARM::FeatureNEON},
+     /* Disabled */ {ARM::FeatureCrypto, ARM::FeatureD16}},
     {/* ID */ ARM::FK_CRYPTO_NEON_FP_ARMV8,
-     /* Enabled */ ARM::FeatureVFP2 | ARM::FeatureVFP3 | ARM::FeatureVFP4 |
-         ARM::FeatureFPARMv8 | ARM::FeatureNEON | ARM::FeatureCrypto,
-     /* Disabled */ ARM::FeatureD16},
-    {ARM::FK_SOFTVFP, 0, 0},
+     /* Enabled */ {ARM::FeatureVFP2, ARM::FeatureVFP3, ARM::FeatureVFP4,
+                    ARM::FeatureFPARMv8, ARM::FeatureNEON, 
+                    ARM::FeatureCrypto},
+     /* Disabled */ {ARM::FeatureD16}},
+    {ARM::FK_SOFTVFP, {}, {}},
 };
 
 /// parseDirectiveFPU
@@ -9254,8 +9255,8 @@ bool ARMAsmParser::parseDirectiveFPU(SMLoc L) {
 
     // Need to toggle features that should be on but are off and that
     // should off but are on.
-    uint64_t Toggle = (Entry.Enabled & ~STI.getFeatureBits()) |
-                      (Entry.Disabled & STI.getFeatureBits());
+    FeatureBitset Toggle = (Entry.Enabled & ~STI.getFeatureBits()) |
+                           (Entry.Disabled & STI.getFeatureBits());
     setAvailableFeatures(ComputeAvailableFeatures(STI.ToggleFeature(Toggle)));
     break;
   }
@@ -9362,7 +9363,7 @@ bool ARMAsmParser::parseDirectivePersonality(SMLoc L) {
   StringRef Name(Parser.getTok().getIdentifier());
   Parser.Lex();
 
-  MCSymbol *PR = getParser().getContext().GetOrCreateSymbol(Name);
+  MCSymbol *PR = getParser().getContext().getOrCreateSymbol(Name);
   getTargetStreamer().emitPersonality(PR);
   return false;
 }
@@ -9963,7 +9964,7 @@ bool ARMAsmParser::parseDirectiveThumbSet(SMLoc L) {
   }
   Lex();
 
-  MCSymbol *Alias = getContext().GetOrCreateSymbol(Name);
+  MCSymbol *Alias = getContext().getOrCreateSymbol(Name);
   getTargetStreamer().emitThumbSet(Alias, Value);
   return false;
 }
@@ -9984,30 +9985,30 @@ extern "C" void LLVMInitializeARMAsmParser() {
 static const struct {
   const char *Name;
   const unsigned ArchCheck;
-  const uint64_t Features;
+  const FeatureBitset Features;
 } Extensions[] = {
-  { "crc", Feature_HasV8, ARM::FeatureCRC },
+  { "crc", Feature_HasV8, {ARM::FeatureCRC} },
   { "crypto",  Feature_HasV8,
-    ARM::FeatureCrypto | ARM::FeatureNEON | ARM::FeatureFPARMv8 },
-  { "fp", Feature_HasV8, ARM::FeatureFPARMv8 },
+    {ARM::FeatureCrypto, ARM::FeatureNEON, ARM::FeatureFPARMv8} },
+  { "fp", Feature_HasV8, {ARM::FeatureFPARMv8} },
   { "idiv", Feature_HasV7 | Feature_IsNotMClass,
-    ARM::FeatureHWDiv | ARM::FeatureHWDivARM },
+    {ARM::FeatureHWDiv, ARM::FeatureHWDivARM} },
   // FIXME: iWMMXT not supported
-  { "iwmmxt", Feature_None, 0 },
+  { "iwmmxt", Feature_None, {} },
   // FIXME: iWMMXT2 not supported
-  { "iwmmxt2", Feature_None, 0 },
+  { "iwmmxt2", Feature_None, {} },
   // FIXME: Maverick not supported
-  { "maverick", Feature_None, 0 },
-  { "mp", Feature_HasV7 | Feature_IsNotMClass, ARM::FeatureMP },
+  { "maverick", Feature_None, {} },
+  { "mp", Feature_HasV7 | Feature_IsNotMClass, {ARM::FeatureMP} },
   // FIXME: ARMv6-m OS Extensions feature not checked
-  { "os", Feature_None, 0 },
+  { "os", Feature_None, {} },
   // FIXME: Also available in ARMv6-K
-  { "sec", Feature_HasV7, ARM::FeatureTrustZone },
-  { "simd", Feature_HasV8, ARM::FeatureNEON | ARM::FeatureFPARMv8 },
+  { "sec", Feature_HasV7, {ARM::FeatureTrustZone} },
+  { "simd", Feature_HasV8, {ARM::FeatureNEON, ARM::FeatureFPARMv8} },
   // FIXME: Only available in A-class, isel not predicated
-  { "virt", Feature_HasV7, ARM::FeatureVirtualization },
+  { "virt", Feature_HasV7, {ARM::FeatureVirtualization} },
   // FIXME: xscale not supported
-  { "xscale", Feature_None, 0 },
+  { "xscale", Feature_None, {} },
 };
 
 /// parseDirectiveArchExtension
@@ -10035,7 +10036,7 @@ bool ARMAsmParser::parseDirectiveArchExtension(SMLoc L) {
     if (Extension.Name != Name)
       continue;
 
-    if (!Extension.Features)
+    if (Extension.Features.none())
       report_fatal_error("unsupported architectural extension: " + Name);
 
     if ((getAvailableFeatures() & Extension.ArchCheck) != Extension.ArchCheck) {
@@ -10044,9 +10045,10 @@ bool ARMAsmParser::parseDirectiveArchExtension(SMLoc L) {
       return false;
     }
 
-    uint64_t ToggleFeatures = EnableFeature
-                                  ? (~STI.getFeatureBits() & Extension.Features)
-                                  : ( STI.getFeatureBits() & Extension.Features);
+    FeatureBitset ToggleFeatures = EnableFeature
+      ? (~STI.getFeatureBits() & Extension.Features)
+      : ( STI.getFeatureBits() & Extension.Features);
+
     uint64_t Features =
         ComputeAvailableFeatures(STI.ToggleFeature(ToggleFeatures));
     setAvailableFeatures(Features);

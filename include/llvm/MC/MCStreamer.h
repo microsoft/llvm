@@ -42,7 +42,7 @@ class raw_ostream;
 class formatted_raw_ostream;
 class AssemblerConstantPools;
 
-typedef std::pair<const MCSection *, const MCExpr *> MCSectionSubPair;
+typedef std::pair<MCSection *, const MCExpr *> MCSectionSubPair;
 
 /// Target specific streamer interface. This is used so that targets can
 /// implement support for target specific assembly directives.
@@ -85,29 +85,6 @@ public:
   virtual void emitAssignment(MCSymbol *Symbol, const MCExpr *Value);
 
   virtual void finish();
-};
-
-class AArch64TargetStreamer : public MCTargetStreamer {
-public:
-  AArch64TargetStreamer(MCStreamer &S);
-  ~AArch64TargetStreamer() override;
-
-  void finish() override;
-
-  /// Callback used to implement the ldr= pseudo.
-  /// Add a new entry to the constant pool for the current section and return an
-  /// MCExpr that can be used to refer to the constant pool location.
-  const MCExpr *addConstantPoolEntry(const MCExpr *, unsigned Size);
-
-  /// Callback used to implemnt the .ltorg directive.
-  /// Emit contents of constant pool for the current section.
-  void emitCurrentConstantPool();
-
-  /// Callback used to implement the .inst directive.
-  virtual void emitInst(uint32_t Inst);
-
-private:
-  std::unique_ptr<AssemblerConstantPools> ConstantPools;
 };
 
 // FIXME: declared here because it is used from
@@ -295,6 +272,7 @@ public:
       return SectionStack.back().first;
     return MCSectionSubPair();
   }
+  MCSection *getCurrentSectionOnly() const { return getCurrentSection().first; }
 
   /// \brief Return the previous section that the streamer is emitting code to.
   MCSectionSubPair getPreviousSection() const {
@@ -313,7 +291,7 @@ public:
   ///
   /// This is called by PopSection and SwitchSection, if the current
   /// section changes.
-  virtual void ChangeSection(const MCSection *, const MCExpr *);
+  virtual void ChangeSection(MCSection *, const MCExpr *);
 
   /// \brief Save the current and previous section on the section stack.
   void PushSection() {
@@ -348,13 +326,13 @@ public:
   /// is required to update CurSection.
   ///
   /// This corresponds to assembler directives like .section, .text, etc.
-  virtual void SwitchSection(const MCSection *Section,
+  virtual void SwitchSection(MCSection *Section,
                              const MCExpr *Subsection = nullptr);
 
   /// \brief Set the current section where code is being emitted to \p Section.
   /// This is required to update CurSection. This version does not call
   /// ChangeSection.
-  void SwitchSectionNoChange(const MCSection *Section,
+  void SwitchSectionNoChange(MCSection *Section,
                              const MCExpr *Subsection = nullptr) {
     assert(Section && "Cannot switch to a null section!");
     MCSectionSubPair curSection = SectionStack.back().first;
@@ -366,13 +344,13 @@ public:
   /// \brief Create the default sections and set the initial one.
   virtual void InitSections(bool NoExecStack);
 
-  MCSymbol *endSection(const MCSection *Section);
+  MCSymbol *endSection(MCSection *Section);
 
   /// \brief Sets the symbol's section.
   ///
   /// Each emitted symbol will be tracked in the ordering table,
   /// so we can sort on them later.
-  void AssignSection(MCSymbol *Symbol, const MCSection *Section);
+  void AssignSection(MCSymbol *Symbol, MCSection *Section);
 
   /// \brief Emit a label for \p Symbol into the current section.
   ///
@@ -500,9 +478,8 @@ public:
   /// \param Size - The size of the zerofill symbol.
   /// \param ByteAlignment - The alignment of the zerofill symbol if
   /// non-zero. This must be a power of 2 on some targets.
-  virtual void EmitZerofill(const MCSection *Section,
-                            MCSymbol *Symbol = nullptr, uint64_t Size = 0,
-                            unsigned ByteAlignment = 0) = 0;
+  virtual void EmitZerofill(MCSection *Section, MCSymbol *Symbol = nullptr,
+                            uint64_t Size = 0, unsigned ByteAlignment = 0) = 0;
 
   /// \brief Emit a thread local bss (.tbss) symbol.
   ///
@@ -511,7 +488,7 @@ public:
   /// \param Size - The size of the symbol.
   /// \param ByteAlignment - The alignment of the thread local common symbol
   /// if non-zero.  This must be a power of 2 on some targets.
-  virtual void EmitTBSSSymbol(const MCSection *Section, MCSymbol *Symbol,
+  virtual void EmitTBSSSymbol(MCSection *Section, MCSymbol *Symbol,
                               uint64_t Size, unsigned ByteAlignment = 0);
 
   /// @}
@@ -652,6 +629,15 @@ public:
                                      unsigned Isa, unsigned Discriminator,
                                      StringRef FileName);
 
+  /// Emit the absolute difference between two symbols if possible.
+  ///
+  /// \pre Offset of \c Hi is greater than the offset \c Lo.
+  /// \return true on success.
+  virtual bool emitAbsoluteSymbolDiff(const MCSymbol *Hi, const MCSymbol *Lo,
+                                      unsigned Size) {
+    return false;
+  }
+
   virtual MCSymbol *getDwarfLineTableSymbol(unsigned CUID);
   virtual void EmitCFISections(bool EH, bool Debug);
   void EmitCFIStartProc(bool IsSimple);
@@ -719,7 +705,7 @@ public:
   /// \brief Finish emission of machine code.
   void Finish();
 
-  virtual bool mayHaveInstructions() const { return true; }
+  virtual bool mayHaveInstructions(MCSection &Sec) const { return true; }
 };
 
 /// Create a dummy machine code streamer, which does nothing. This is useful for

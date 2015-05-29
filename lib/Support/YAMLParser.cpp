@@ -2377,11 +2377,14 @@ parse_property:
                 , AnchorInfo.Range.substr(1)
                 , TagInfo.Range
                 , T.Range);
-  case Token::TK_BlockScalar:
+  case Token::TK_BlockScalar: {
     getNext();
+    StringRef NullTerminatedStr(T.Value.c_str(), T.Value.length() + 1);
+    StringRef StrCopy = NullTerminatedStr.copy(NodeAllocator).drop_back();
     return new (NodeAllocator)
         BlockScalarNode(stream.CurrentDoc, AnchorInfo.Range.substr(1),
-                        TagInfo.Range, T.Value, T.Range);
+                        TagInfo.Range, StrCopy, T.Range);
+  }
   case Token::TK_Key:
     // Don't eat the TK_Key, KeyValueNode expects it.
     return new (NodeAllocator)

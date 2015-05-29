@@ -1196,6 +1196,13 @@ example:
     computing edge weights, basic blocks post-dominated by a cold
     function call are also considered to be cold; and, thus, given low
     weight.
+``convergent``
+    This attribute indicates that the callee is dependent on a convergent
+    thread execution pattern under certain parallel execution models.
+    Transformations that are execution model agnostic may only move or
+    tranform this call if the final location is control equivalent to its
+    original position in the program, where control equivalence is defined as
+    A dominates B and B post-dominates A, or vice versa.
 ``inlinehint``
     This attribute indicates that the source code contained a hint that
     inlining this function is desirable (such as the "inline" keyword in
@@ -5658,7 +5665,7 @@ Syntax:
 
 ::
 
-      <result> = load [volatile] <ty>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !nonnull !<index>]
+      <result> = load [volatile] <ty>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !nonnull !<index>][, !dereferenceable !<index>][, !dereferenceable_or_null !<index>]
       <result> = load atomic [volatile] <ty>* <pointer> [singlethread] <ordering>, align <alignment>
       !<index> = !{ i32 1 }
 
@@ -5721,6 +5728,25 @@ entries. The existence of the ``!nonnull`` metadata on the
 instruction tells the optimizer that the value loaded is known to
 never be null.  This is analogous to the ''nonnull'' attribute
 on parameters and return values.  This metadata can only be applied
+to loads of a pointer type.
+
+The optional ``!dereferenceable`` metadata must reference a single
+metadata name ``<index>`` corresponding to a metadata node with one ``i64``
+entry. The existence of the ``!dereferenceable`` metadata on the instruction 
+tells the optimizer that the value loaded is known to be dereferenceable.
+The number of bytes known to be dereferenceable is specified by the integer 
+value in the metadata node. This is analogous to the ''dereferenceable'' 
+attribute on parameters and return values.  This metadata can only be applied 
+to loads of a pointer type.
+
+The optional ``!dereferenceable_or_null`` metadata must reference a single
+metadata name ``<index>`` corresponding to a metadata node with one ``i64``
+entry. The existence of the ``!dereferenceable_or_null`` metadata on the 
+instruction tells the optimizer that the value loaded is known to be either
+dereferenceable or null.
+The number of bytes known to be dereferenceable is specified by the integer 
+value in the metadata node. This is analogous to the ''dereferenceable_or_null'' 
+attribute on parameters and return values.  This metadata can only be applied 
 to loads of a pointer type.
 
 Semantics:

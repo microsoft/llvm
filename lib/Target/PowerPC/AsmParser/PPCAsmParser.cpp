@@ -460,6 +460,8 @@ public:
   bool isU8ImmX8() const { return Kind == Immediate &&
                                   isUInt<8>(getImm()) &&
                                   (getImm() & 7) == 0; }
+  
+  bool isU10Imm() const { return Kind == Immediate && isUInt<10>(getImm()); }
   bool isU12Imm() const { return Kind == Immediate && isUInt<12>(getImm()); }
   bool isU16Imm() const {
     switch (Kind) {
@@ -790,10 +792,10 @@ void PPCOperand::print(raw_ostream &OS) const {
     OS << getImm();
     break;
   case Expression:
-    getExpr()->print(OS);
+    OS << *getExpr();
     break;
   case TLSRegister:
-    getTLSReg()->print(OS);
+    OS << *getTLSReg();
     break;
   }
 }
@@ -1680,7 +1682,7 @@ bool PPCAsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
   //  where th can be omitted when it is 0. dcbtst is the same. We take the
   //  server form to be the default, so swap the operands if we're parsing for
   //  an embedded core (they'll be swapped again upon printing).
-  if ((STI.getFeatureBits() & PPC::FeatureBookE) != 0 &&
+  if (STI.getFeatureBits()[PPC::FeatureBookE] &&
       Operands.size() == 4 &&
       (Name == "dcbt" || Name == "dcbtst")) {
     std::swap(Operands[1], Operands[3]);
@@ -1861,7 +1863,7 @@ bool PPCAsmParser::ParseDirectiveLocalEntry(SMLoc L) {
     Error(L, "expected identifier in directive");
     return false;
   }
-  MCSymbol *Sym = getContext().GetOrCreateSymbol(Name);
+  MCSymbol *Sym = getContext().getOrCreateSymbol(Name);
 
   if (getLexer().isNot(AsmToken::Comma)) {
     Error(L, "unexpected token in directive");

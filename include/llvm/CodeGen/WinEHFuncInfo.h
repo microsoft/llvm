@@ -23,6 +23,7 @@ class BasicBlock;
 class Constant;
 class Function;
 class GlobalVariable;
+class InvokeInst;
 class IntrinsicInst;
 class LandingPadInst;
 class MCSymbol;
@@ -131,6 +132,10 @@ struct WinEHTryBlockMapEntry {
 };
 
 struct WinEHFuncInfo {
+  DenseMap<const Function *, const LandingPadInst *> RootLPad;
+  DenseMap<const Function *, const InvokeInst *> LastInvoke;
+  DenseMap<const Function *, int> HandlerEnclosedState;
+  DenseMap<const Function *, bool> LastInvokeVisited;
   DenseMap<const LandingPadInst *, int> LandingPadStateMap;
   DenseMap<const Function *, int> CatchHandlerParentFrameObjIdx;
   DenseMap<const Function *, int> CatchHandlerParentFrameObjOffset;
@@ -148,6 +153,12 @@ struct WinEHFuncInfo {
       : UnwindHelpFrameIdx(INT_MAX), UnwindHelpFrameOffset(-1),
         NumIPToStateFuncsVisited(0) {}
 };
+
+/// Analyze the IR in ParentFn and it's handlers to build WinEHFuncInfo, which
+/// describes the state numbers and tables used by __CxxFrameHandler3. This
+/// analysis assumes that WinEHPrepare has already been run.
+void calculateWinCXXEHStateNumbers(const Function *ParentFn,
+                                   WinEHFuncInfo &FuncInfo);
 
 }
 #endif // LLVM_CODEGEN_WINEHFUNCINFO_H

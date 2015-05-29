@@ -255,7 +255,7 @@ class LWPC_DESC: PCREL_DESC_BASE<"lwpc", GPR32Opnd, simm19_lsl2>;
 class LWUPC_DESC: PCREL_DESC_BASE<"lwupc", GPR32Opnd, simm19_lsl2>;
 
 class ALIGN_DESC_BASE<string instr_asm, RegisterOperand GPROpnd,
-                      Operand ImmOpnd> {
+                      Operand ImmOpnd>  : MipsR6Arch<instr_asm> {
   dag OutOperandList = (outs GPROpnd:$rd);
   dag InOperandList = (ins GPROpnd:$rs, GPROpnd:$rt, ImmOpnd:$bp);
   string AsmString = !strconcat(instr_asm, "\t$rd, $rs, $rt, $bp");
@@ -275,7 +275,8 @@ class ALUIPC_DESC_BASE<string instr_asm, RegisterOperand GPROpnd>
 class ALUIPC_DESC : ALUIPC_DESC_BASE<"aluipc", GPR32Opnd>;
 class AUIPC_DESC : ALUIPC_DESC_BASE<"auipc", GPR32Opnd>;
 
-class AUI_DESC_BASE<string instr_asm, RegisterOperand GPROpnd> {
+class AUI_DESC_BASE<string instr_asm, RegisterOperand GPROpnd>
+    : MipsR6Arch<instr_asm> {
   dag OutOperandList = (outs GPROpnd:$rs);
   dag InOperandList = (ins GPROpnd:$rt, simm16:$imm);
   string AsmString = !strconcat(instr_asm, "\t$rs, $rt, $imm");
@@ -315,7 +316,8 @@ class CMP_CBR_EQNE_Z_DESC_BASE<string instr_asm, DAGOperand opnd,
 }
 
 class CMP_CBR_RT_Z_DESC_BASE<string instr_asm, DAGOperand opnd,
-                             RegisterOperand GPROpnd> : BRANCH_DESC_BASE {
+                             RegisterOperand GPROpnd>
+    : BRANCH_DESC_BASE, MipsR6Arch<instr_asm> {
   dag InOperandList = (ins GPROpnd:$rt, opnd:$offset);
   dag OutOperandList = (outs);
   string AsmString = !strconcat(instr_asm, "\t$rt, $offset");
@@ -414,7 +416,8 @@ class BITSWAP_DESC_BASE<string instr_asm, RegisterOperand GPROpnd>
 class BITSWAP_DESC : BITSWAP_DESC_BASE<"bitswap", GPR32Opnd>;
 
 class DIVMOD_DESC_BASE<string instr_asm, RegisterOperand GPROpnd,
-                       SDPatternOperator Op=null_frag> {
+                       SDPatternOperator Op=null_frag>
+    : MipsR6Arch<instr_asm> {
   dag OutOperandList = (outs GPROpnd:$rd);
   dag InOperandList = (ins GPROpnd:$rs, GPROpnd:$rt);
   string AsmString = !strconcat(instr_asm, "\t$rd, $rs, $rt");
@@ -585,7 +588,7 @@ class SDC2_R6_DESC : COP2ST_DESC_BASE<"sdc2", COP2Opnd>;
 class SWC2_R6_DESC : COP2ST_DESC_BASE<"swc2", COP2Opnd>;
 
 class LSA_R6_DESC_BASE<string instr_asm, RegisterOperand GPROpnd,
-                       Operand ImmOpnd> {
+                       Operand ImmOpnd> : MipsR6Arch<instr_asm> {
   dag OutOperandList = (outs GPROpnd:$rd);
   dag InOperandList = (ins GPROpnd:$rs, GPROpnd:$rt, ImmOpnd:$imm2);
   string AsmString = !strconcat(instr_asm, "\t$rd, $rs, $rt, $imm2");
@@ -649,9 +652,9 @@ class SDBBP_R6_DESC {
 //===----------------------------------------------------------------------===//
 
 def ADDIUPC : R6MMR6Rel, ADDIUPC_ENC, ADDIUPC_DESC, ISA_MIPS32R6;
-def ALIGN : ALIGN_ENC, ALIGN_DESC, ISA_MIPS32R6;
+def ALIGN : R6MMR6Rel, ALIGN_ENC, ALIGN_DESC, ISA_MIPS32R6;
 def ALUIPC : R6MMR6Rel, ALUIPC_ENC, ALUIPC_DESC, ISA_MIPS32R6;
-def AUI : AUI_ENC, AUI_DESC, ISA_MIPS32R6;
+def AUI : R6MMR6Rel, AUI_ENC, AUI_DESC, ISA_MIPS32R6;
 def AUIPC : R6MMR6Rel, AUIPC_ENC, AUIPC_DESC, ISA_MIPS32R6;
 def BAL : BAL_ENC, BAL_DESC, ISA_MIPS32R6;
 def BALC : R6MMR6Rel, BALC_ENC, BALC_DESC, ISA_MIPS32R6;
@@ -661,23 +664,23 @@ def BC2EQZ : BC2EQZ_ENC, BC2EQZ_DESC, ISA_MIPS32R6;
 def BC2NEZ : BC2NEZ_ENC, BC2NEZ_DESC, ISA_MIPS32R6;
 def BC : R6MMR6Rel, BC_ENC, BC_DESC, ISA_MIPS32R6;
 def BEQC : BEQC_ENC, BEQC_DESC, ISA_MIPS32R6;
-def BEQZALC : BEQZALC_ENC, BEQZALC_DESC, ISA_MIPS32R6;
+def BEQZALC : R6MMR6Rel, BEQZALC_ENC, BEQZALC_DESC, ISA_MIPS32R6;
 def BEQZC : BEQZC_ENC, BEQZC_DESC, ISA_MIPS32R6;
 def BGEC : BGEC_ENC, BGEC_DESC, ISA_MIPS32R6;
 def BGEUC : BGEUC_ENC, BGEUC_DESC, ISA_MIPS32R6;
-def BGEZALC : BGEZALC_ENC, BGEZALC_DESC, ISA_MIPS32R6;
+def BGEZALC : R6MMR6Rel, BGEZALC_ENC, BGEZALC_DESC, ISA_MIPS32R6;
 def BGEZC : BGEZC_ENC, BGEZC_DESC, ISA_MIPS32R6;
-def BGTZALC : BGTZALC_ENC, BGTZALC_DESC, ISA_MIPS32R6;
+def BGTZALC : R6MMR6Rel, BGTZALC_ENC, BGTZALC_DESC, ISA_MIPS32R6;
 def BGTZC : BGTZC_ENC, BGTZC_DESC, ISA_MIPS32R6;
 def BITSWAP : R6MMR6Rel, BITSWAP_ENC, BITSWAP_DESC, ISA_MIPS32R6;
-def BLEZALC : BLEZALC_ENC, BLEZALC_DESC, ISA_MIPS32R6;
+def BLEZALC : R6MMR6Rel, BLEZALC_ENC, BLEZALC_DESC, ISA_MIPS32R6;
 def BLEZC : BLEZC_ENC, BLEZC_DESC, ISA_MIPS32R6;
 def BLTC : BLTC_ENC, BLTC_DESC, ISA_MIPS32R6;
 def BLTUC : BLTUC_ENC, BLTUC_DESC, ISA_MIPS32R6;
-def BLTZALC : BLTZALC_ENC, BLTZALC_DESC, ISA_MIPS32R6;
+def BLTZALC : R6MMR6Rel, BLTZALC_ENC, BLTZALC_DESC, ISA_MIPS32R6;
 def BLTZC : BLTZC_ENC, BLTZC_DESC, ISA_MIPS32R6;
 def BNEC : BNEC_ENC, BNEC_DESC, ISA_MIPS32R6;
-def BNEZALC : BNEZALC_ENC, BNEZALC_DESC, ISA_MIPS32R6;
+def BNEZALC : R6MMR6Rel, BNEZALC_ENC, BNEZALC_DESC, ISA_MIPS32R6;
 def BNEZC : BNEZC_ENC, BNEZC_DESC, ISA_MIPS32R6;
 def BNVC : BNVC_ENC, BNVC_DESC, ISA_MIPS32R6;
 def BOVC : BOVC_ENC, BOVC_DESC, ISA_MIPS32R6;
@@ -688,14 +691,14 @@ def CLO_R6 : R6MMR6Rel, CLO_R6_ENC, CLO_R6_DESC, ISA_MIPS32R6;
 def CLZ_R6 : R6MMR6Rel, CLZ_R6_ENC, CLZ_R6_DESC, ISA_MIPS32R6;
 defm S : CMP_CC_M<FIELD_CMP_FORMAT_S, "s", FGR32Opnd>;
 defm D : CMP_CC_M<FIELD_CMP_FORMAT_D, "d", FGR64Opnd>;
-def DIV : DIV_ENC, DIV_DESC, ISA_MIPS32R6;
-def DIVU : DIVU_ENC, DIVU_DESC, ISA_MIPS32R6;
+def DIV : R6MMR6Rel, DIV_ENC, DIV_DESC, ISA_MIPS32R6;
+def DIVU : R6MMR6Rel, DIVU_ENC, DIVU_DESC, ISA_MIPS32R6;
 def JIALC : R6MMR6Rel, JIALC_ENC, JIALC_DESC, ISA_MIPS32R6;
 def JIC : R6MMR6Rel, JIC_ENC, JIC_DESC, ISA_MIPS32R6;
 def JR_HB_R6 : JR_HB_R6_ENC, JR_HB_R6_DESC, ISA_MIPS32R6;
 def LDC2_R6 : LDC2_R6_ENC, LDC2_R6_DESC, ISA_MIPS32R6;
 def LL_R6 : LL_R6_ENC, LL_R6_DESC, ISA_MIPS32R6;
-def LSA_R6 : LSA_R6_ENC, LSA_R6_DESC, ISA_MIPS32R6;
+def LSA_R6 : R6MMR6Rel, LSA_R6_ENC, LSA_R6_DESC, ISA_MIPS32R6;
 def LWC2_R6 : LWC2_R6_ENC, LWC2_R6_DESC, ISA_MIPS32R6;
 def LWPC : R6MMR6Rel, LWPC_ENC, LWPC_DESC, ISA_MIPS32R6;
 def LWUPC : LWUPC_ENC, LWUPC_DESC, ISA_MIPS32R6;
@@ -709,8 +712,8 @@ def MINA_D  : MINA_D_ENC, MINA_D_DESC, ISA_MIPS32R6, HARDFLOAT;
 def MINA_S  : MINA_S_ENC, MINA_S_DESC, ISA_MIPS32R6, HARDFLOAT;
 def MIN_D   : MIN_D_ENC, MIN_D_DESC, ISA_MIPS32R6, HARDFLOAT;
 def MIN_S   : MIN_S_ENC, MIN_S_DESC, ISA_MIPS32R6, HARDFLOAT;
-def MOD : MOD_ENC, MOD_DESC, ISA_MIPS32R6;
-def MODU : MODU_ENC, MODU_DESC, ISA_MIPS32R6;
+def MOD : R6MMR6Rel, MOD_ENC, MOD_DESC, ISA_MIPS32R6;
+def MODU : R6MMR6Rel, MODU_ENC, MODU_DESC, ISA_MIPS32R6;
 def MSUBF_S : MSUBF_S_ENC, MSUBF_S_DESC, ISA_MIPS32R6, HARDFLOAT;
 def MSUBF_D : MSUBF_D_ENC, MSUBF_D_DESC, ISA_MIPS32R6, HARDFLOAT;
 def MUH    : R6MMR6Rel, MUH_ENC, MUH_DESC, ISA_MIPS32R6;

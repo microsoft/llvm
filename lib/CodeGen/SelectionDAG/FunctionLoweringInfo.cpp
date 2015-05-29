@@ -80,31 +80,6 @@ static ISD::NodeType getPreferredExtendForValue(const Value *V) {
   return ExtendKind;
 }
 
-namespace {
-struct WinEHNumbering {
-  WinEHNumbering(WinEHFuncInfo &FuncInfo) : FuncInfo(FuncInfo),
-      CurrentBaseState(-1), NextState(0) {}
-
-  WinEHFuncInfo &FuncInfo;
-  int CurrentBaseState;
-  int NextState;
-
-  SmallVector<std::unique_ptr<ActionHandler>, 4> HandlerStack;
-  SmallPtrSet<const Function *, 4> VisitedHandlers;
-
-  int currentEHNumber() const {
-    return HandlerStack.empty() ? CurrentBaseState : HandlerStack.back()->getEHState();
-  }
-
-  void createUnwindMapEntry(int ToState, ActionHandler *AH);
-  void createTryBlockMapEntry(int TryLow, int TryHigh,
-                              ArrayRef<CatchHandler *> Handlers);
-  void processCallSite(MutableArrayRef<std::unique_ptr<ActionHandler>> Actions,
-                       ImmutableCallSite CS);
-  void calculateStateNumbers(const Function &F);
-};
-}
-
 void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
                                SelectionDAG *DAG) {
   Fn = &fn;
@@ -289,24 +264,18 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   if (!isMSVCEHPersonality(Personality))
     return;
 
-  WinEHFuncInfo *EHInfo = nullptr;
   if (Personality == EHPersonality::MSVC_Win64SEH) {
     addSEHHandlersForLPads(LPads);
   } else if (Personality == EHPersonality::MSVC_CXX) {
     const Function *WinEHParentFn = MMI.getWinEHParent(&fn);
-    EHInfo = &MMI.getWinEHFuncInfo(WinEHParentFn);
-    if (EHInfo->LandingPadStateMap.empty()) {
-      WinEHNumbering Num(*EHInfo);
-      Num.calculateStateNumbers(*WinEHParentFn);
-      // Pop everything on the handler stack.
-      Num.processCallSite(None, ImmutableCallSite());
-    }
+    WinEHFuncInfo &EHInfo = MMI.getWinEHFuncInfo(WinEHParentFn);
+    calculateWinCXXEHStateNumbers(WinEHParentFn, EHInfo);
 
     // Copy the state numbers to LandingPadInfo for the current function, which
     // could be a handler or the parent.
     for (const LandingPadInst *LP : LPads) {
       MachineBasicBlock *LPadMBB = MBBMap[LP->getParent()];
-      MMI.addWinEHState(LPadMBB, EHInfo->LandingPadStateMap[LP]);
+      MMI.addWinEHState(LPadMBB, EHInfo.LandingPadStateMap[LP]);
     }
   }
 }
@@ -349,216 +318,6 @@ void FunctionLoweringInfo::addSEHHandlersForLPads(
   }
 }
 
-void WinEHNumbering::createUnwindMapEntry(int ToState, ActionHandler *AH) {
-  WinEHUnwindMapEntry UME;
-  UME.ToState = ToState;
-  if (auto *CH = dyn_cast_or_null<CleanupHandler>(AH))
-    UME.Cleanup = cast<Function>(CH->getHandlerBlockOrFunc());
-  else
-    UME.Cleanup = nullptr;
-  FuncInfo.UnwindMap.push_back(UME);
-}
-
-void WinEHNumbering::createTryBlockMapEntry(int TryLow, int TryHigh,
-                                            ArrayRef<CatchHandler *> Handlers) {
-  WinEHTryBlockMapEntry TBME;
-  TBME.TryLow = TryLow;
-  TBME.TryHigh = TryHigh;
-  assert(TBME.TryLow <= TBME.TryHigh);
-  for (CatchHandler *CH : Handlers) {
-    WinEHHandlerType HT;
-    if (CH->getSelector()->isNullValue()) {
-      HT.Adjectives = 0x40;
-      HT.TypeDescriptor = nullptr;
-    } else {
-      auto *GV = cast<GlobalVariable>(CH->getSelector()->stripPointerCasts());
-      // Selectors are always pointers to GlobalVariables with 'struct' type.
-      // The struct has two fields, adjectives and a type descriptor.
-      auto *CS = cast<ConstantStruct>(GV->getInitializer());
-      HT.Adjectives =
-          cast<ConstantInt>(CS->getAggregateElement(0U))->getZExtValue();
-      HT.TypeDescriptor =
-          cast<GlobalVariable>(CS->getAggregateElement(1)->stripPointerCasts());
-    }
-    HT.Handler = cast<Function>(CH->getHandlerBlockOrFunc());
-    HT.CatchObjRecoverIdx = CH->getExceptionVarIndex();
-    TBME.HandlerArray.push_back(HT);
-  }
-  FuncInfo.TryBlockMap.push_back(TBME);
-}
-
-static void print_name(const Value *V) {
-#ifndef NDEBUG
-  if (!V) {
-    DEBUG(dbgs() << "null");
-    return;
-  }
-
-  if (const auto *F = dyn_cast<Function>(V))
-    DEBUG(dbgs() << F->getName());
-  else
-    DEBUG(V->dump());
-#endif
-}
-
-void WinEHNumbering::processCallSite(
-    MutableArrayRef<std::unique_ptr<ActionHandler>> Actions,
-    ImmutableCallSite CS) {
-  DEBUG(dbgs() << "processCallSite (EH state = " << currentEHNumber()
-               << ") for: ");
-  print_name(CS ? CS.getCalledValue() : nullptr);
-  DEBUG(dbgs() << '\n');
-
-  DEBUG(dbgs() << "HandlerStack: \n");
-  for (int I = 0, E = HandlerStack.size(); I < E; ++I) {
-    DEBUG(dbgs() << "  ");
-    print_name(HandlerStack[I]->getHandlerBlockOrFunc());
-    DEBUG(dbgs() << '\n');
-  }
-  DEBUG(dbgs() << "Actions: \n");
-  for (int I = 0, E = Actions.size(); I < E; ++I) {
-    DEBUG(dbgs() << "  ");
-    print_name(Actions[I]->getHandlerBlockOrFunc());
-    DEBUG(dbgs() << '\n');
-  }
-  int FirstMismatch = 0;
-  for (int E = std::min(HandlerStack.size(), Actions.size()); FirstMismatch < E;
-       ++FirstMismatch) {
-    if (HandlerStack[FirstMismatch]->getHandlerBlockOrFunc() !=
-        Actions[FirstMismatch]->getHandlerBlockOrFunc())
-      break;
-  }
-
-  // Don't recurse while we are looping over the handler stack.  Instead, defer
-  // the numbering of the catch handlers until we are done popping.
-  SmallVector<CatchHandler *, 4> PoppedCatches;
-  for (int I = HandlerStack.size() - 1; I >= FirstMismatch; --I) {
-    std::unique_ptr<ActionHandler> Handler = HandlerStack.pop_back_val();
-    if (isa<CatchHandler>(Handler.get()))
-      PoppedCatches.push_back(cast<CatchHandler>(Handler.release()));
-  }
-
-  int TryHigh = NextState - 1;
-  int LastTryLowIdx = 0;
-  for (int I = 0, E = PoppedCatches.size(); I != E; ++I) {
-    CatchHandler *CH = PoppedCatches[I];
-    DEBUG(dbgs() << "Popped handler with state " << CH->getEHState() << "\n");
-    if (I + 1 == E || CH->getEHState() != PoppedCatches[I + 1]->getEHState()) {
-      int TryLow = CH->getEHState();
-      auto Handlers =
-          makeArrayRef(&PoppedCatches[LastTryLowIdx], I - LastTryLowIdx + 1);
-      DEBUG(dbgs() << "createTryBlockMapEntry(" << TryLow << ", " << TryHigh);
-      for (size_t J = 0; J < Handlers.size(); ++J) {
-        DEBUG(dbgs() << ", ");
-        print_name(Handlers[J]->getHandlerBlockOrFunc());
-      }
-      DEBUG(dbgs() << ")\n");
-      createTryBlockMapEntry(TryLow, TryHigh, Handlers);
-      LastTryLowIdx = I + 1;
-    }
-  }
-
-  for (CatchHandler *CH : PoppedCatches) {
-    if (auto *F = dyn_cast<Function>(CH->getHandlerBlockOrFunc())) {
-      DEBUG(dbgs() << "Assigning base state " << NextState << " to ");
-      print_name(F);
-      DEBUG(dbgs() << '\n');
-      FuncInfo.HandlerBaseState[F] = NextState;
-      DEBUG(dbgs() << "createUnwindMapEntry(" << currentEHNumber() 
-                   << ", null)\n");
-      createUnwindMapEntry(currentEHNumber(), nullptr);
-      ++NextState;
-      calculateStateNumbers(*F);
-    }
-    delete CH;
-  }
-
-  // The handler functions may have pushed actions onto the handler stack
-  // that we expected to push here.  Compare the handler stack to our
-  // actions again to check for that possibility.
-  if (HandlerStack.size() > (size_t)FirstMismatch) {
-    for (int E = std::min(HandlerStack.size(), Actions.size());
-         FirstMismatch < E; ++FirstMismatch) {
-      if (HandlerStack[FirstMismatch]->getHandlerBlockOrFunc() !=
-          Actions[FirstMismatch]->getHandlerBlockOrFunc())
-        break;
-    }
-  }
-
-  DEBUG(dbgs() << "Pushing actions for CallSite: ");
-  print_name(CS ? CS.getCalledValue() : nullptr);
-  DEBUG(dbgs() << '\n');
-
-  bool LastActionWasCatch = false;
-  for (size_t I = FirstMismatch; I != Actions.size(); ++I) {
-    // We can reuse eh states when pushing two catches for the same invoke.
-    bool CurrActionIsCatch = isa<CatchHandler>(Actions[I].get());
-    // FIXME: Reenable this optimization!
-    if (CurrActionIsCatch && LastActionWasCatch && false) {
-      DEBUG(dbgs() << "setEHState for handler to " << currentEHNumber()
-                   << "\n");
-      Actions[I]->setEHState(currentEHNumber());
-    } else {
-      DEBUG(dbgs() << "createUnwindMapEntry(" << currentEHNumber() << ", ");
-      print_name(Actions[I]->getHandlerBlockOrFunc());
-      DEBUG(dbgs() << ")\n");
-      createUnwindMapEntry(currentEHNumber(), Actions[I].get());
-      DEBUG(dbgs() << "setEHState for handler to " << NextState << "\n");
-      Actions[I]->setEHState(NextState);
-      NextState++;
-    }
-    HandlerStack.push_back(std::move(Actions[I]));
-    LastActionWasCatch = CurrActionIsCatch;
-  }
-
-  DEBUG(dbgs() << "In EHState " << currentEHNumber() << " for CallSite: ");
-  print_name(CS ? CS.getCalledValue() : nullptr);
-  DEBUG(dbgs() << '\n');
-}
-
-void WinEHNumbering::calculateStateNumbers(const Function &F) {
-  auto I = VisitedHandlers.insert(&F);
-  if (!I.second)
-    return; // We've already visited this handler, don't renumber it.
-
-  int OldBaseState = CurrentBaseState;
-  if (FuncInfo.HandlerBaseState.count(&F)) {
-    CurrentBaseState = FuncInfo.HandlerBaseState[&F];
-  }
-
-  DEBUG(dbgs() << "Calculating state numbers for: " << F.getName() << '\n');
-  SmallVector<std::unique_ptr<ActionHandler>, 4> ActionList;
-  for (const BasicBlock &BB : F) {
-    for (const Instruction &I : BB) {
-      const auto *CI = dyn_cast<CallInst>(&I);
-      if (!CI || CI->doesNotThrow())
-        continue;
-      processCallSite(None, CI);
-    }
-    const auto *II = dyn_cast<InvokeInst>(BB.getTerminator());
-    if (!II)
-      continue;
-    const LandingPadInst *LPI = II->getLandingPadInst();
-    auto *ActionsCall = dyn_cast<IntrinsicInst>(LPI->getNextNode());
-    if (!ActionsCall)
-      continue;
-    assert(ActionsCall->getIntrinsicID() == Intrinsic::eh_actions);
-    parseEHActions(ActionsCall, ActionList);
-    if (ActionList.empty())
-      continue;
-    processCallSite(ActionList, II);
-    ActionList.clear();
-    FuncInfo.LandingPadStateMap[LPI] = currentEHNumber();
-    DEBUG(dbgs() << "Assigning state " << currentEHNumber()
-                  << " to landing pad at " << LPI->getParent()->getName()
-                  << '\n');
-  }
-
-  FuncInfo.CatchHandlerMaxState[&F] = NextState - 1;
-
-  CurrentBaseState = OldBaseState;
-}
-
 /// clear - Clear out all the function-specific state. This returns this
 /// FunctionLoweringInfo to an empty state, ready to be used for a
 /// different function.
@@ -579,6 +338,7 @@ void FunctionLoweringInfo::clear() {
   ByValArgFrameIndexMap.clear();
   RegFixups.clear();
   StatepointStackSlots.clear();
+  StatepointRelocatedValues.clear();
   PreferredExtendType.clear();
 }
 

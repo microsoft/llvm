@@ -225,7 +225,7 @@ void NVPTXAsmPrinter::lowerImageHandleSymbol(unsigned Index, MCOperand &MCOp) {
   const char *Sym = MFI->getImageHandleSymbol(Index);
   std::string *SymNamePtr =
     nvTM.getManagedStrPool()->getManagedString(Sym);
-  MCOp = GetSymbolRef(OutContext.GetOrCreateSymbol(
+  MCOp = GetSymbolRef(OutContext.getOrCreateSymbol(
     StringRef(SymNamePtr->c_str())));
 }
 
@@ -235,7 +235,7 @@ void NVPTXAsmPrinter::lowerToMCInst(const MachineInstr *MI, MCInst &OutMI) {
   if (MI->getOpcode() == NVPTX::CALL_PROTOTYPE) {
     const MachineOperand &MO = MI->getOperand(0);
     OutMI.addOperand(GetSymbolRef(
-      OutContext.GetOrCreateSymbol(Twine(MO.getSymbolName()))));
+      OutContext.getOrCreateSymbol(Twine(MO.getSymbolName()))));
     return;
   }
 
@@ -1189,11 +1189,9 @@ void NVPTXAsmPrinter::printModuleLevelGV(const GlobalVariable *GVar,
         // The frontend adds zero-initializer to variables that don't have an
         // initial value, so skip warning for this case.
         if (!GVar->getInitializer()->isNullValue()) {
-          std::string warnMsg =
-              ("initial value of '" + GVar->getName() +
-               "' is not allowed in addrspace(" +
-               Twine(llvm::utostr_32(PTy->getAddressSpace())) + ")").str();
-          report_fatal_error(warnMsg.c_str());
+          report_fatal_error("initial value of '" + GVar->getName() +
+                             "' is not allowed in addrspace(" +
+                             Twine(PTy->getAddressSpace()) + ")");
         }
       }
     }
@@ -1368,7 +1366,7 @@ void NVPTXAsmPrinter::emitPTXGlobalVariable(const GlobalVariable *GVar,
     ElementSize = TD->getTypeStoreSize(ETy);
     O << " .b8 " << *getSymbol(GVar) << "[";
     if (ElementSize) {
-      O << itostr(ElementSize);
+      O << ElementSize;
     }
     O << "]";
     break;

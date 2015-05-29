@@ -32,9 +32,12 @@ class LexicalScope;
 class StringRef;
 class DwarfDebug;
 class MCSection;
+class MDNode;
 class DwarfFile {
   // Target of Dwarf emission, used for sizing of abbreviations.
   AsmPrinter *Asm;
+
+  BumpPtrAllocator AbbrevAllocator;
 
   // Used to uniquely define abbreviations.
   FoldingSet<DIEAbbrev> AbbreviationsSet;
@@ -71,8 +74,11 @@ public:
   /// \brief Compute the size and offset of all the DIEs.
   void computeSizeAndOffsets();
 
-  /// \brief Define a unique number for the abbreviation.
-  void assignAbbrevNumber(DIEAbbrev &Abbrev);
+  /// Define a unique number for the abbreviation.
+  ///
+  /// Compute the abbreviation for \c Die, look up its unique number, and
+  /// return a reference to it in the uniquing table.
+  DIEAbbrev &assignAbbrevNumber(DIE &Die);
 
   /// \brief Add a unit to the list of CUs.
   void addUnit(std::unique_ptr<DwarfUnit> U);
@@ -82,11 +88,10 @@ public:
   void emitUnits(bool UseOffsets);
 
   /// \brief Emit a set of abbreviations to the specific section.
-  void emitAbbrevs(const MCSection *);
+  void emitAbbrevs(MCSection *);
 
   /// \brief Emit all of the strings to the section given.
-  void emitStrings(const MCSection *StrSection,
-                   const MCSection *OffsetSection = nullptr);
+  void emitStrings(MCSection *StrSection, MCSection *OffsetSection = nullptr);
 
   /// \brief Returns the string pool.
   DwarfStringPool &getStringPool() { return StrPool; }

@@ -121,7 +121,7 @@ void PPCInstPrinter::printInst(const MCInst *MI, raw_ostream &O,
       O << "t";
     O << " ";
 
-    bool IsBookE = (STI.getFeatureBits() & PPC::FeatureBookE) != 0;
+    bool IsBookE = STI.getFeatureBits()[PPC::FeatureBookE];
     if (IsBookE && TH != 0 && TH != 16)
       O << (unsigned int) TH << ", ";
 
@@ -297,6 +297,13 @@ void PPCInstPrinter::printU6ImmOperand(const MCInst *MI, unsigned OpNo,
   unsigned int Value = MI->getOperand(OpNo).getImm();
   assert(Value <= 63 && "Invalid u6imm argument!");
   O << (unsigned int)Value;
+}
+
+void PPCInstPrinter::printU10ImmOperand(const MCInst *MI, unsigned OpNo,
+                                        raw_ostream &O) {
+  unsigned short Value = MI->getOperand(OpNo).getImm();
+  assert(Value <= 1023 && "Invalid u10imm argument!");
+  O << (unsigned short)Value;
 }
 
 void PPCInstPrinter::printU12ImmOperand(const MCInst *MI, unsigned OpNo,

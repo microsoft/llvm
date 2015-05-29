@@ -229,7 +229,6 @@ JTableType("jump-table-type",
 static inline TargetOptions InitTargetOptionsFromCodeGenFlags() {
   TargetOptions Options;
   Options.LessPreciseFPMADOption = EnableFPMAD;
-  Options.NoFramePointerElim = DisableFPElim;
   Options.AllowFPOpFusion = FuseFPOps;
   Options.UnsafeFPMath = EnableUnsafeFPMath;
   Options.NoInfsFPMath = EnableNoInfsFPMath;
@@ -273,6 +272,7 @@ static inline std::string getFeaturesStr() {
   // If user asked for the 'native' CPU, we need to autodetect features.
   // This is necessary for x86 where the CPU might not support all the
   // features the autodetected CPU name lists in the target. For example,
+  // not all Sandybridge processors support AVX.
   if (MCPU == "native") {
     StringMap<bool> HostFeatures;
     if (sys::getHostCPUFeatures(HostFeatures))
@@ -286,14 +286,30 @@ static inline std::string getFeaturesStr() {
   return Features.getString();
 }
 
-static inline void overrideFunctionAttributes(StringRef CPU, StringRef Features,
-                                              Module &M) {
+/// \brief Set function attributes of functions in Module M based on CPU,
+/// Features, and command line flags.
+static inline void setFunctionAttributes(StringRef CPU, StringRef Features,
+                                         Module &M) {
   for (auto &F : M) {
+    auto &Ctx = F.getContext();
+    AttributeSet Attrs = F.getAttributes(), NewAttrs;
+
     if (!CPU.empty())
-      llvm::overrideFunctionAttribute("target-cpu", CPU, F);
+      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeSet::FunctionIndex,
+                                       "target-cpu", CPU);
 
     if (!Features.empty())
-      llvm::overrideFunctionAttribute("target-features", Features, F);
+      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeSet::FunctionIndex,
+                                       "target-features", Features);
+
+    if (DisableFPElim.getNumOccurrences() > 0)
+      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeSet::FunctionIndex,
+                                       "no-frame-pointer-elim",
+                                       DisableFPElim ? "true" : "false");
+
+    // Let NewAttrs override Attrs.
+    NewAttrs = Attrs.addAttributes(Ctx, AttributeSet::FunctionIndex, NewAttrs);
+    F.setAttributes(NewAttrs);
   }
 }
 

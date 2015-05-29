@@ -194,24 +194,36 @@ static const Target *getTarget(const ObjectFile *Obj = nullptr) {
   return TheTarget;
 }
 
-void llvm::DumpBytes(ArrayRef<uint8_t> bytes) {
-  static const char hex_rep[] = "0123456789abcdef";
-  SmallString<64> output;
-
-  for (char i: bytes) {
-    output.push_back(hex_rep[(i & 0xF0) >> 4]);
-    output.push_back(hex_rep[i & 0xF]);
-    output.push_back(' ');
-  }
-
-  outs() << output.c_str();
-}
-
 bool llvm::RelocAddressLess(RelocationRef a, RelocationRef b) {
   uint64_t a_addr, b_addr;
   if (error(a.getOffset(a_addr))) return false;
   if (error(b.getOffset(b_addr))) return false;
   return a_addr < b_addr;
+}
+
+namespace {
+class PrettyPrinter {
+public:
+  virtual ~PrettyPrinter(){}
+  virtual void printInst(MCInstPrinter &IP, const MCInst *MI, bool ShowRawInsn,
+                         ArrayRef<uint8_t> Bytes, uint64_t Address,
+                         raw_ostream &OS, StringRef Annot,
+                         MCSubtargetInfo const &STI) {
+    outs() << format("%8" PRIx64 ":", Address);
+    if (!NoShowRawInsn) {
+      outs() << "\t";
+      dumpBytes(Bytes, outs());
+    }
+    IP.printInst(MI, outs(), "", STI);
+  }
+};
+PrettyPrinter PrettyPrinterInst;
+PrettyPrinter &selectPrettyPrinter(Triple const &Triple, MCInstPrinter &IP) {
+  switch(Triple.getArch()) {
+  default:
+    return PrettyPrinterInst;
+  }
+}
 }
 
 static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
@@ -280,6 +292,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
       << '\n';
     return;
   }
+  PrettyPrinter &PIP = selectPrettyPrinter(Triple(TripleName), *IP);
 
   StringRef Fmt = Obj->getBytesInAddress() > 4 ? "\t\t%016" PRIx64 ":  " :
                                                  "\t\t\t%08" PRIx64 ":  ";
@@ -396,12 +409,9 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
         if (DisAsm->getInstruction(Inst, Size, Bytes.slice(Index),
                                    SectionAddr + Index, DebugOut,
                                    CommentStream)) {
-          outs() << format("%8" PRIx64 ":", SectionAddr + Index);
-          if (!NoShowRawInsn) {
-            outs() << "\t";
-            DumpBytes(ArrayRef<uint8_t>(Bytes.data() + Index, Size));
-          }
-          IP->printInst(&Inst, outs(), "", *STI);
+          PIP.printInst(*IP, &Inst, !NoShowRawInsn,
+                        Bytes.slice(Index, Size),
+                        SectionAddr + Index, outs(), "", *STI);
           outs() << CommentStream.str();
           Comments.clear();
           outs() << "\n";

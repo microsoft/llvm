@@ -124,7 +124,7 @@ void MCExpr::print(raw_ostream &OS) const {
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 void MCExpr::dump() const {
-  print(dbgs());
+  dbgs() << *this;
   dbgs() << '\n';
 }
 #endif
@@ -164,7 +164,7 @@ const MCSymbolRefExpr *MCSymbolRefExpr::Create(const MCSymbol *Sym,
 
 const MCSymbolRefExpr *MCSymbolRefExpr::Create(StringRef Name, VariantKind Kind,
                                                MCContext &Ctx) {
-  return Create(Ctx.GetOrCreateSymbol(Name), Kind, Ctx);
+  return Create(Ctx.getOrCreateSymbol(Name), Kind, Ctx);
 }
 
 StringRef MCSymbolRefExpr::getVariantKindName(VariantKind Kind) {
@@ -471,8 +471,8 @@ static void AttemptToFoldSymbolOffsetDifference(
   if (!Asm->getWriter().IsSymbolRefDifferenceFullyResolved(*Asm, A, B, InSet))
     return;
 
-  const MCSymbolData &AD = Asm->getSymbolData(SA);
-  const MCSymbolData &BD = Asm->getSymbolData(SB);
+  const MCSymbolData &AD = SA.getData();
+  const MCSymbolData &BD = SB.getData();
 
   if (AD.getFragment() == BD.getFragment()) {
     Addend += (AD.getOffset() - BD.getOffset());
@@ -491,15 +491,15 @@ static void AttemptToFoldSymbolOffsetDifference(
   if (!Layout)
     return;
 
-  const MCSectionData &SecA = *AD.getFragment()->getParent();
-  const MCSectionData &SecB = *BD.getFragment()->getParent();
+  const MCSection &SecA = *AD.getFragment()->getParent();
+  const MCSection &SecB = *BD.getFragment()->getParent();
 
   if ((&SecA != &SecB) && !Addrs)
     return;
 
   // Eagerly evaluate.
-  Addend += (Layout->getSymbolOffset(&Asm->getSymbolData(A->getSymbol())) -
-             Layout->getSymbolOffset(&Asm->getSymbolData(B->getSymbol())));
+  Addend += Layout->getSymbolOffset(A->getSymbol()) -
+            Layout->getSymbolOffset(B->getSymbol());
   if (Addrs && (&SecA != &SecB))
     Addend += (Addrs->lookup(&SecA) - Addrs->lookup(&SecB));
 
@@ -608,8 +608,7 @@ static bool canExpand(const MCSymbol &Sym, const MCAssembler *Asm, bool InSet) {
     return true;
   if (!Asm)
     return false;
-  const MCSymbolData &SD = Asm->getSymbolData(Sym);
-  return !Asm->getWriter().isWeak(SD);
+  return !Asm->getWriter().isWeak(Sym);
 }
 
 bool MCExpr::EvaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
@@ -756,7 +755,7 @@ bool MCExpr::EvaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
   llvm_unreachable("Invalid assembly expression kind!");
 }
 
-const MCSection *MCExpr::FindAssociatedSection() const {
+MCSection *MCExpr::FindAssociatedSection() const {
   switch (getKind()) {
   case Target:
     // We never look through target specific expressions.
@@ -780,8 +779,8 @@ const MCSection *MCExpr::FindAssociatedSection() const {
 
   case Binary: {
     const MCBinaryExpr *BE = cast<MCBinaryExpr>(this);
-    const MCSection *LHS_S = BE->getLHS()->FindAssociatedSection();
-    const MCSection *RHS_S = BE->getRHS()->FindAssociatedSection();
+    MCSection *LHS_S = BE->getLHS()->FindAssociatedSection();
+    MCSection *RHS_S = BE->getRHS()->FindAssociatedSection();
 
     // If either section is absolute, return the other.
     if (LHS_S == MCSymbol::AbsolutePseudoSection)
