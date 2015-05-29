@@ -68,7 +68,11 @@ EHPersonality llvm::classifyEHPersonality(const Value *Pers) {
   const Function *F = dyn_cast<Function>(Pers->stripPointerCasts());
   if (!F)
     return EHPersonality::Unknown;
-  return StringSwitch<EHPersonality>(F->getName())
+  return classifyEHPersonality(F->getName());
+}
+
+EHPersonality llvm::classifyEHPersonality(StringRef PersName) {
+  return StringSwitch<EHPersonality>(PersName)
     .Case("__gnat_eh_personality", EHPersonality::GNU_Ada)
     .Case("__gxx_personality_v0",  EHPersonality::GNU_CXX)
     .Case("__gcc_personality_v0",  EHPersonality::GNU_C)

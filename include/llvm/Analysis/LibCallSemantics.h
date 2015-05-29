@@ -178,6 +178,7 @@ class InvokeInst;
   /// that we understand.  If so, return a description of it; otherwise return
   /// Unknown.
   EHPersonality classifyEHPersonality(const Value *Pers);
+  EHPersonality classifyEHPersonality(StringRef PersName);
 
   /// \brief Returns true if this personality function catches asynchronous
   /// exceptions.
