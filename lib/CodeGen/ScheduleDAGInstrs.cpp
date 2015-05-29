@@ -167,10 +167,7 @@ static void getUnderlyingObjectsForInstr(const MachineInstr *MI,
   SmallVector<Value *, 4> Objs;
   getUnderlyingObjects(V, Objs, DL);
 
-  for (SmallVectorImpl<Value *>::iterator I = Objs.begin(), IE = Objs.end();
-         I != IE; ++I) {
-    V = *I;
-
+  for (Value *V : Objs) {
     if (!isIdentifiedObject(V)) {
       Objects.clear();
       return;
@@ -502,10 +499,9 @@ static inline bool isUnsafeMemoryObject(MachineInstr *MI,
 
   SmallVector<Value *, 4> Objs;
   getUnderlyingObjects(V, Objs, DL);
-  for (SmallVectorImpl<Value *>::iterator I = Objs.begin(),
-         IE = Objs.end(); I != IE; ++I) {
+  for (Value *V : Objs) {
     // Does this pointer refer to a distinct and identifiable object?
-    if (!isIdentifiedObject(*I))
+    if (!isIdentifiedObject(V))
       return true;
   }
 
@@ -1110,25 +1106,25 @@ static void toggleBundleKillFlag(MachineInstr *MI, unsigned Reg,
   MachineBasicBlock::instr_iterator Begin = MI;
   MachineBasicBlock::instr_iterator End = getBundleEnd(MI);
   while (Begin != End) {
-    for (MIOperands MO(--End); MO.isValid(); ++MO) {
-      if (!MO->isReg() || MO->isDef() || Reg != MO->getReg())
+    for (MachineOperand &MO : (--End)->operands()) {
+      if (!MO.isReg() || MO.isDef() || Reg != MO.getReg())
         continue;
 
       // DEBUG_VALUE nodes do not contribute to code generation and should
       // always be ignored.  Failure to do so may result in trying to modify
       // KILL flags on DEBUG_VALUE nodes, which is distressing.
-      if (MO->isDebug())
+      if (MO.isDebug())
         continue;
 
       // If the register has the internal flag then it could be killing an
       // internal def of the register.  In this case, just skip.  We only want
       // to toggle the flag on operands visible outside the bundle.
-      if (MO->isInternalRead())
+      if (MO.isInternalRead())
         continue;
 
-      if (MO->isKill() == NewKillState)
+      if (MO.isKill() == NewKillState)
         continue;
-      MO->setIsKill(NewKillState);
+      MO.setIsKill(NewKillState);
       if (NewKillState)
         return;
     }

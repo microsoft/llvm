@@ -494,7 +494,7 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
                        GV.getName() == "llvm.compiler.used")) {
     Assert(!GV.hasInitializer() || GV.hasAppendingLinkage(),
            "invalid linkage for intrinsic global variable", &GV);
-    Type *GVType = GV.getType()->getElementType();
+    Type *GVType = GV.getValueType();
     if (ArrayType *ATy = dyn_cast<ArrayType>(GVType)) {
       PointerType *PTy = dyn_cast<PointerType>(ATy->getElementType());
       Assert(PTy, "wrong type for intrinsic global variable", &GV);
@@ -1268,7 +1268,8 @@ void Verifier::VerifyAttributeTypes(AttributeSet Attrs, unsigned Idx,
         I->getKindAsEnum() == Attribute::NoBuiltin ||
         I->getKindAsEnum() == Attribute::Cold ||
         I->getKindAsEnum() == Attribute::OptimizeNone ||
-        I->getKindAsEnum() == Attribute::JumpTable) {
+        I->getKindAsEnum() == Attribute::JumpTable ||
+        I->getKindAsEnum() == Attribute::Convergent) {
       if (!isFunction) {
         CheckFailed("Attribute '" + I->getAsString() +
                     "' only applies to functions!", V);
@@ -2390,7 +2391,7 @@ void Verifier::visitCallInst(CallInst &CI) {
     verifyMustTailCall(CI);
 
   if (Function *F = CI.getCalledFunction())
-    if (Intrinsic::ID ID = (Intrinsic::ID)F->getIntrinsicID())
+    if (Intrinsic::ID ID = F->getIntrinsicID())
       visitIntrinsicFunctionCall(ID, CI);
 }
 
@@ -3440,8 +3441,18 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
            "'gc parameters' section of the statepoint call",
            &CI);
 
-    // gc_relocate does not need to be the same type as the relocated pointer.
-    // It can casted to the correct type later if it's desired
+    // Relocated value must be a pointer type, but gc_relocate does not need to return the
+    // same pointer type as the relocated pointer. It can be casted to the correct type later
+    // if it's desired. However, they must have the same address space.
+    GCRelocateOperands Operands(&CI);
+    Assert(Operands.getDerivedPtr()->getType()->isPointerTy(),
+           "gc.relocate: relocated value must be a gc pointer", &CI);
+
+    // gc_relocate return type must be a pointer type, and is verified earlier in
+    // VerifyIntrinsicType().
+    Assert(cast<PointerType>(CI.getType())->getAddressSpace() ==
+           cast<PointerType>(Operands.getDerivedPtr()->getType())->getAddressSpace(),
+           "gc.relocate: relocating a pointer shouldn't change its address space", &CI);
     break;
   }
   };

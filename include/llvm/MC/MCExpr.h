@@ -21,13 +21,12 @@ class MCAssembler;
 class MCContext;
 class MCFixup;
 class MCSection;
-class MCSectionData;
 class MCStreamer;
 class MCSymbol;
 class MCValue;
 class raw_ostream;
 class StringRef;
-typedef DenseMap<const MCSectionData*, uint64_t> SectionAddrMap;
+typedef DenseMap<const MCSection *, uint64_t> SectionAddrMap;
 
 /// \brief Base class for the full range of assembler expressions which are
 /// needed for parsing.
@@ -116,7 +115,7 @@ public:
   /// currently defined as the absolute section for constants, or
   /// otherwise the section associated with the first defined symbol in the
   /// expression.
-  const MCSection *FindAssociatedSection() const;
+  MCSection *FindAssociatedSection() const;
 
   /// @}
 };
@@ -159,7 +158,7 @@ public:
 /// of the symbol as external.
 class MCSymbolRefExpr : public MCExpr {
 public:
-  enum VariantKind {
+  enum VariantKind : uint16_t {
     VK_None,
     VK_Invalid,
 
@@ -295,7 +294,7 @@ public:
 
 private:
   /// The symbol reference modifier.
-  const unsigned Kind : 16;
+  const VariantKind Kind;
 
   /// Specifies how the variant kind should be printed.
   const unsigned UseParensForSymbolVariant : 1;
@@ -328,7 +327,7 @@ public:
 
   const MCSymbol &getSymbol() const { return *Symbol; }
 
-  VariantKind getKind() const { return static_cast<VariantKind>(Kind); }
+  VariantKind getKind() const { return Kind; }
 
   void printVariantKind(raw_ostream &OS) const;
 
@@ -558,7 +557,7 @@ public:
                                          const MCAsmLayout *Layout,
                                          const MCFixup *Fixup) const = 0;
   virtual void visitUsedExpr(MCStreamer& Streamer) const = 0;
-  virtual const MCSection *FindAssociatedSection() const = 0;
+  virtual MCSection *FindAssociatedSection() const = 0;
 
   virtual void fixELFSymbolsInTLSFixups(MCAssembler &) const = 0;
 

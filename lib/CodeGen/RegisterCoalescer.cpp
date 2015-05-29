@@ -908,7 +908,7 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
   if (!definesFullReg(*DefMI, SrcReg))
     return false;
   bool SawStore = false;
-  if (!DefMI->isSafeToMove(TII, AA, SawStore))
+  if (!DefMI->isSafeToMove(AA, SawStore))
     return false;
   const MCInstrDesc &MCID = DefMI->getDesc();
   if (MCID.getNumDefs() != 1)
@@ -955,12 +955,11 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
   TII->reMaterialize(*MBB, MII, DstReg, SrcIdx, DefMI, *TRI);
   MachineInstr *NewMI = std::prev(MII);
 
-  // A situation like the following:
-  //     %vreg0:subX = instr           ; DefMI
-  //     %vregY      = copy %vreg:subX ; CopyMI
-  // does not need subregisters/regclass widening after rematerialization, just
-  // do:
-  //     %vregY = instr
+  // In a situation like the following:
+  //     %vreg0:subreg = instr              ; DefMI, subreg = DstIdx
+  //     %vreg1        = copy %vreg0:subreg ; CopyMI, SrcIdx = 0
+  // instead of widening %vreg1 to the register class of %vreg0 simply do:
+  //     %vreg1 = instr
   const TargetRegisterClass *NewRC = CP.getNewRC();
   if (DstIdx != 0) {
     MachineOperand &DefMO = NewMI->getOperand(0);
@@ -1835,12 +1834,12 @@ public:
 unsigned JoinVals::computeWriteLanes(const MachineInstr *DefMI, bool &Redef)
   const {
   unsigned L = 0;
-  for (ConstMIOperands MO(DefMI); MO.isValid(); ++MO) {
-    if (!MO->isReg() || MO->getReg() != Reg || !MO->isDef())
+  for (const MachineOperand &MO : DefMI->operands()) {
+    if (!MO.isReg() || MO.getReg() != Reg || !MO.isDef())
       continue;
     L |= TRI->getSubRegIndexLaneMask(
-           TRI->composeSubRegIndices(SubIdx, MO->getSubReg()));
-    if (MO->readsReg())
+           TRI->composeSubRegIndices(SubIdx, MO.getSubReg()));
+    if (MO.readsReg())
       Redef = true;
   }
   return L;
@@ -2225,13 +2224,13 @@ bool JoinVals::usesLanes(const MachineInstr *MI, unsigned Reg, unsigned SubIdx,
                          unsigned Lanes) const {
   if (MI->isDebugValue())
     return false;
-  for (ConstMIOperands MO(MI); MO.isValid(); ++MO) {
-    if (!MO->isReg() || MO->isDef() || MO->getReg() != Reg)
+  for (const MachineOperand &MO : MI->operands()) {
+    if (!MO.isReg() || MO.isDef() || MO.getReg() != Reg)
       continue;
-    if (!MO->readsReg())
+    if (!MO.readsReg())
       continue;
     if (Lanes & TRI->getSubRegIndexLaneMask(
-                  TRI->composeSubRegIndices(SubIdx, MO->getSubReg())))
+                  TRI->composeSubRegIndices(SubIdx, MO.getSubReg())))
       return true;
   }
   return false;
@@ -2340,11 +2339,11 @@ void JoinVals::pruneValues(JoinVals &Other,
           // Remove <def,read-undef> flags. This def is now a partial redef.
           // Also remove <def,dead> flags since the joined live range will
           // continue past this instruction.
-          for (MIOperands MO(Indexes->getInstructionFromIndex(Def));
-               MO.isValid(); ++MO) {
-            if (MO->isReg() && MO->isDef() && MO->getReg() == Reg) {
-              MO->setIsUndef(EraseImpDef);
-              MO->setIsDead(false);
+          for (MachineOperand &MO :
+               Indexes->getInstructionFromIndex(Def)->operands()) {
+            if (MO.isReg() && MO.isDef() && MO.getReg() == Reg) {
+              MO.setIsUndef(EraseImpDef);
+              MO.setIsDead(false);
             }
           }
         }

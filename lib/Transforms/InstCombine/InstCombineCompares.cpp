@@ -2097,7 +2097,7 @@ static Instruction *ProcessUGT_ADDCST_ADD(ICmpInst &I, Value *A, Value *B,
 
   Value *TruncA = Builder->CreateTrunc(A, NewType, A->getName()+".trunc");
   Value *TruncB = Builder->CreateTrunc(B, NewType, B->getName()+".trunc");
-  CallInst *Call = Builder->CreateCall2(F, TruncA, TruncB, "sadd");
+  CallInst *Call = Builder->CreateCall(F, {TruncA, TruncB}, "sadd");
   Value *Add = Builder->CreateExtractValue(Call, 0, "sadd.result");
   Value *ZExt = Builder->CreateZExt(Add, OrigAdd->getType());
 
@@ -2139,15 +2139,9 @@ bool InstCombiner::OptimizeOverflowCheck(OverflowCheckFlavor OCF, Value *LHS,
   }
   // FALL THROUGH uadd into sadd
   case OCF_SIGNED_ADD: {
-    // X + undef -> undef
-    if (isa<UndefValue>(RHS))
-      return SetResult(UndefValue::get(RHS->getType()),
-                       UndefValue::get(Builder->getInt1Ty()), false);
-
-    if (ConstantInt *ConstRHS = dyn_cast<ConstantInt>(RHS))
-      // X + 0 -> {X, false}
-      if (ConstRHS->isZero())
-        return SetResult(LHS, Builder->getFalse(), false);
+    // X + 0 -> {X, false}
+    if (match(RHS, m_Zero()))
+      return SetResult(LHS, Builder->getFalse(), false);
 
     // We can strength reduce this signed add into a regular add if we can prove
     // that it will never overflow.
@@ -2159,17 +2153,9 @@ bool InstCombiner::OptimizeOverflowCheck(OverflowCheckFlavor OCF, Value *LHS,
 
   case OCF_UNSIGNED_SUB:
   case OCF_SIGNED_SUB: {
-    // undef - X -> undef
-    // X - undef -> undef
-    if (isa<UndefValue>(LHS) || isa<UndefValue>(RHS))
-      return SetResult(UndefValue::get(LHS->getType()),
-                       UndefValue::get(Builder->getInt1Ty()), false);
-
-    if (ConstantInt *ConstRHS = dyn_cast<ConstantInt>(RHS))
-      // X - 0 -> {X, false}
-      if (ConstRHS->isZero())
-        return SetResult(UndefValue::get(LHS->getType()), Builder->getFalse(),
-                         false);
+    // X - 0 -> {X, false}
+    if (match(RHS, m_Zero()))
+      return SetResult(LHS, Builder->getFalse(), false);
 
     if (OCF == OCF_SIGNED_SUB) {
       if (WillNotOverflowSignedSub(LHS, RHS, OrigI))
@@ -2194,19 +2180,15 @@ bool InstCombiner::OptimizeOverflowCheck(OverflowCheckFlavor OCF, Value *LHS,
   case OCF_SIGNED_MUL:
     // X * undef -> undef
     if (isa<UndefValue>(RHS))
-      return SetResult(UndefValue::get(LHS->getType()),
-                       UndefValue::get(Builder->getInt1Ty()), false);
+      return SetResult(RHS, UndefValue::get(Builder->getInt1Ty()), false);
 
-    if (ConstantInt *RHSI = dyn_cast<ConstantInt>(RHS)) {
-      // X * 0 -> {0, false}
-      if (RHSI->isZero())
-        return SetResult(Constant::getNullValue(RHS->getType()),
-                         Builder->getFalse(), false);
+    // X * 0 -> {0, false}
+    if (match(RHS, m_Zero()))
+      return SetResult(RHS, Builder->getFalse(), false);
 
-      // X * 1 -> {X, false}
-      if (RHSI->equalsInt(1))
-        return SetResult(LHS, Builder->getFalse(), false);
-    }
+    // X * 1 -> {X, false}
+    if (match(RHS, m_One()))
+      return SetResult(LHS, Builder->getFalse(), false);
 
     if (OCF == OCF_SIGNED_MUL)
       if (WillNotOverflowSignedMul(LHS, RHS, OrigI))
@@ -2384,7 +2366,7 @@ static Instruction *ProcessUMulZExtIdiom(ICmpInst &I, Value *MulVal,
     MulB = Builder->CreateZExt(B, MulType);
   Value *F =
       Intrinsic::getDeclaration(M, Intrinsic::umul_with_overflow, MulType);
-  CallInst *Call = Builder->CreateCall2(F, MulA, MulB, "umul");
+  CallInst *Call = Builder->CreateCall(F, {MulA, MulB}, "umul");
   IC.Worklist.Add(MulInstr);
 
   // If there are uses of mul result other than the comparison, we know that

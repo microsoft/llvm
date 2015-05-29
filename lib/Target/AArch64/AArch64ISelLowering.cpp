@@ -25,6 +25,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/CommandLine.h"
@@ -9101,7 +9102,7 @@ Value *AArch64TargetLowering::emitStoreConditional(IRBuilder<> &Builder,
     Value *Lo = Builder.CreateTrunc(Val, Int64Ty, "lo");
     Value *Hi = Builder.CreateTrunc(Builder.CreateLShr(Val, 64), Int64Ty, "hi");
     Addr = Builder.CreateBitCast(Addr, Type::getInt8PtrTy(M->getContext()));
-    return Builder.CreateCall3(Stxr, Lo, Hi, Addr);
+    return Builder.CreateCall(Stxr, {Lo, Hi, Addr});
   }
 
   Intrinsic::ID Int =
@@ -9109,10 +9110,10 @@ Value *AArch64TargetLowering::emitStoreConditional(IRBuilder<> &Builder,
   Type *Tys[] = { Addr->getType() };
   Function *Stxr = Intrinsic::getDeclaration(M, Int, Tys);
 
-  return Builder.CreateCall2(
-      Stxr, Builder.CreateZExtOrBitCast(
-                Val, Stxr->getFunctionType()->getParamType(0)),
-      Addr);
+  return Builder.CreateCall(Stxr,
+                            {Builder.CreateZExtOrBitCast(
+                                 Val, Stxr->getFunctionType()->getParamType(0)),
+                             Addr});
 }
 
 bool AArch64TargetLowering::functionArgumentNeedsConsecutiveRegisters(

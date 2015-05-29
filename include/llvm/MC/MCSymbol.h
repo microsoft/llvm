@@ -15,7 +15,7 @@
 #define LLVM_MC_MCSYMBOL_H
 
 #include "llvm/ADT/PointerIntPair.h"
-#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/Support/Compiler.h"
 
@@ -29,8 +29,6 @@ class raw_ostream;
 
 // TODO: Merge completely with MCSymbol.
 class MCSymbolData {
-  const MCSymbol *Symbol;
-
   /// Fragment - The fragment this symbol's value is relative to, if any. Also
   /// stores if this symbol is visible outside this translation unit (bit 0) or
   /// if it is private extern (bit 1).
@@ -47,31 +45,19 @@ class MCSymbolData {
 
   /// SymbolSize - An expression describing how to calculate the size of
   /// a symbol. If a symbol has no size this field will be NULL.
-  const MCExpr *SymbolSize;
+  const MCExpr *SymbolSize = nullptr;
 
   /// CommonAlign - The alignment of the symbol, if it is 'common', or -1.
   //
   // FIXME: Pack this in with other fields?
-  unsigned CommonAlign;
+  unsigned CommonAlign = -1U;
 
   /// Flags - The Flags field is used by object file implementations to store
   /// additional per symbol information which is not easily classified.
-  uint32_t Flags;
-
-  /// Index - Index field, for use by the object file implementation.
-  uint64_t Index;
+  uint32_t Flags = 0;
 
 public:
-  // Only for use as sentinel.
-  MCSymbolData();
-  void initialize(const MCSymbol &Symbol, MCFragment *Fragment,
-                  uint64_t Offset);
-
-  /// \name Accessors
-  /// @{
-  bool isInitialized() const { return Symbol; }
-
-  const MCSymbol &getSymbol() const { return *Symbol; }
+  MCSymbolData() { Offset = 0; }
 
   MCFragment *getFragment() const { return Fragment.getPointer(); }
   void setFragment(MCFragment *Value) { Fragment.setPointer(Value); }
@@ -139,12 +125,6 @@ public:
     Flags = (Flags & ~Mask) | Value;
   }
 
-  /// getIndex - Get the (implementation defined) index.
-  uint64_t getIndex() const { return Index; }
-
-  /// setIndex - Set the (implementation defined) index.
-  void setIndex(uint64_t Value) { Index = Value; }
-
   /// @}
 
   void dump() const;
@@ -161,17 +141,16 @@ class MCSymbol {
   // Special sentinal value for the absolute pseudo section.
   //
   // FIXME: Use a PointerInt wrapper for this?
-  static const MCSection *AbsolutePseudoSection;
+  static MCSection *AbsolutePseudoSection;
 
   /// Name - The name of the symbol.  The referred-to string data is actually
   /// held by the StringMap that lives in MCContext.
-  StringRef Name;
+  const StringMapEntry<bool> *Name;
 
-  /// Section - The section the symbol is defined in. This is null for
-  /// undefined symbols, and the special AbsolutePseudoSection value for
-  /// absolute symbols. If this is a variable symbol, this caches the
-  /// variable value's section.
-  mutable const MCSection *Section;
+  /// The section the symbol is defined in. This is null for undefined symbols,
+  /// and the special AbsolutePseudoSection value for absolute symbols. If this
+  /// is a variable symbol, this caches the variable value's section.
+  mutable MCSection *Section;
 
   /// Value - If non-null, the value for a variable symbol.
   const MCExpr *Value;
@@ -187,18 +166,23 @@ class MCSymbol {
   /// IsUsed - True if this symbol has been used.
   mutable unsigned IsUsed : 1;
 
+  mutable bool HasData : 1;
+
+  /// Index field, for use by the object file implementation.
+  mutable uint64_t Index : 60;
+
   mutable MCSymbolData Data;
 
 private: // MCContext creates and uniques these.
   friend class MCExpr;
   friend class MCContext;
-  MCSymbol(StringRef name, bool isTemporary)
-      : Name(name), Section(nullptr), Value(nullptr), IsTemporary(isTemporary),
-        IsRedefinable(false), IsUsed(false) {}
+  MCSymbol(const StringMapEntry<bool> *Name, bool isTemporary)
+      : Name(Name), Section(nullptr), Value(nullptr), IsTemporary(isTemporary),
+        IsRedefinable(false), IsUsed(false), HasData(false), Index(0) {}
 
   MCSymbol(const MCSymbol &) = delete;
   void operator=(const MCSymbol &) = delete;
-  const MCSection *getSectionPtr() const {
+  MCSection *getSectionPtr() const {
     if (Section || !Value)
       return Section;
     return Section = Value->FindAssociatedSection();
@@ -206,18 +190,22 @@ private: // MCContext creates and uniques these.
 
 public:
   /// getName - Get the symbol name.
-  StringRef getName() const { return Name; }
+  StringRef getName() const { return Name ? Name->first() : ""; }
+
+  bool hasData() const { return HasData; }
 
   /// Get associated symbol data.
   MCSymbolData &getData() const {
-    assert(Data.isInitialized() && "Missing symbol data!");
+    assert(HasData && "Missing symbol data!");
     return Data;
   }
 
-  /// Get unsafe symbol data (even if uninitialized).
+  /// Initialize symbol data.
   ///
-  /// Don't assert on uninitialized data; just return it.
-  MCSymbolData &getUnsafeData() const { return Data; }
+  /// Nothing really to do here, but this is enables an assertion that \a
+  /// MCAssembler::getOrCreateSymbolData() has actually been called before
+  /// anyone calls \a getData().
+  void initializeData() const { HasData = true; }
 
   /// \name Accessors
   /// @{
@@ -261,15 +249,14 @@ public:
   /// isAbsolute - Check if this is an absolute symbol.
   bool isAbsolute() const { return getSectionPtr() == AbsolutePseudoSection; }
 
-  /// getSection - Get the section associated with a defined, non-absolute
-  /// symbol.
-  const MCSection &getSection() const {
+  /// Get the section associated with a defined, non-absolute symbol.
+  MCSection &getSection() const {
     assert(isInSection() && "Invalid accessor!");
     return *getSectionPtr();
   }
 
-  /// setSection - Mark the symbol as defined in the section \p S.
-  void setSection(const MCSection &S) {
+  /// Mark the symbol as defined in the section \p S.
+  void setSection(MCSection &S) {
     assert(!isVariable() && "Cannot set section of variable");
     Section = &S;
   }
@@ -294,6 +281,19 @@ public:
   void setVariableValue(const MCExpr *Value);
 
   /// @}
+
+  /// Get the (implementation defined) index.
+  uint64_t getIndex() const {
+    assert(HasData && "Uninitialized symbol data");
+    return Index;
+  }
+
+  /// Set the (implementation defined) index.
+  void setIndex(uint64_t Value) const {
+    assert(HasData && "Uninitialized symbol data");
+    assert(!(Value >> 60) && "Not enough bits for value");
+    Index = Value;
+  }
 
   /// print - Print the value to the stream \p OS.
   void print(raw_ostream &OS) const;

@@ -9,6 +9,7 @@
 
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64MCExpr.h"
+#include "MCTargetDesc/AArch64TargetStreamer.h"
 #include "Utils/AArch64BaseInfo.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
@@ -1690,12 +1691,12 @@ void AArch64Operand::print(raw_ostream &OS) const {
     break;
   }
   case k_Immediate:
-    getImm()->print(OS);
+    OS << *getImm();
     break;
   case k_ShiftedImm: {
     unsigned Shift = getShiftedImmShift();
     OS << "<shiftedimm ";
-    getShiftedImmVal()->print(OS);
+    OS << *getShiftedImmVal();
     OS << ", lsl #" << AArch64_AM::getShiftValue(Shift) << ">";
     break;
   }
@@ -4020,7 +4021,7 @@ bool AArch64AsmParser::ParseDirective(AsmToken DirectiveID) {
   if (IDVal == ".ltorg" || IDVal == ".pool")
     return parseDirectiveLtorg(Loc);
   if (IDVal == ".unreq")
-    return parseDirectiveUnreq(DirectiveID.getLoc());
+    return parseDirectiveUnreq(Loc);
 
   if (!IsMachO && !IsCOFF) {
     if (IDVal == ".inst")
@@ -4104,7 +4105,7 @@ bool AArch64AsmParser::parseDirectiveTLSDescCall(SMLoc L) {
   if (getParser().parseIdentifier(Name))
     return Error(L, "expected symbol after directive");
 
-  MCSymbol *Sym = getContext().GetOrCreateSymbol(Name);
+  MCSymbol *Sym = getContext().getOrCreateSymbol(Name);
   const MCExpr *Expr = MCSymbolRefExpr::Create(Sym, getContext());
   Expr = AArch64MCExpr::Create(Expr, AArch64MCExpr::VK_TLSDESC, getContext());
 
@@ -4153,7 +4154,7 @@ bool AArch64AsmParser::parseDirectiveLOH(StringRef IDVal, SMLoc Loc) {
     StringRef Name;
     if (getParser().parseIdentifier(Name))
       return TokError("expected identifier in directive");
-    Args.push_back(getContext().GetOrCreateSymbol(Name));
+    Args.push_back(getContext().getOrCreateSymbol(Name));
 
     if (Idx + 1 == NbArgs)
       break;

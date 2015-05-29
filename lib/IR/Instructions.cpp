@@ -227,7 +227,7 @@ void LandingPadInst::init(Value *PersFn, unsigned NumReservedValues,
   ReservedSpace = NumReservedValues;
   NumOperands = 1;
   OperandList = allocHungoffUses(ReservedSpace);
-  OperandList[0] = PersFn;
+  Op<0>() = PersFn;
   setName(NameStr);
   setCleanup(false);
 }
@@ -931,9 +931,9 @@ LoadInst::LoadInst(Value *Ptr, const Twine &Name, Instruction *InsertBef)
 LoadInst::LoadInst(Value *Ptr, const Twine &Name, BasicBlock *InsertAE)
     : LoadInst(Ptr, Name, /*isVolatile=*/false, InsertAE) {}
 
-LoadInst::LoadInst(Value *Ptr, const Twine &Name, bool isVolatile,
+LoadInst::LoadInst(Type *Ty, Value *Ptr, const Twine &Name, bool isVolatile,
                    Instruction *InsertBef)
-    : LoadInst(Ptr, Name, isVolatile, /*Align=*/0, InsertBef) {}
+    : LoadInst(Ty, Ptr, Name, isVolatile, /*Align=*/0, InsertBef) {}
 
 LoadInst::LoadInst(Value *Ptr, const Twine &Name, bool isVolatile,
                    BasicBlock *InsertAE)
@@ -953,6 +953,7 @@ LoadInst::LoadInst(Type *Ty, Value *Ptr, const Twine &Name, bool isVolatile,
                    unsigned Align, AtomicOrdering Order,
                    SynchronizationScope SynchScope, Instruction *InsertBef)
     : UnaryInstruction(Ty, Load, Ptr, InsertBef) {
+  assert(Ty == cast<PointerType>(Ptr->getType())->getElementType());
   setVolatile(isVolatile);
   setAlignment(Align);
   setAtomic(Order, SynchScope);
@@ -993,10 +994,10 @@ LoadInst::LoadInst(Value *Ptr, const char *Name, BasicBlock *InsertAE)
   if (Name && Name[0]) setName(Name);
 }
 
-LoadInst::LoadInst(Value *Ptr, const char *Name, bool isVolatile,
+LoadInst::LoadInst(Type *Ty, Value *Ptr, const char *Name, bool isVolatile,
                    Instruction *InsertBef)
-: UnaryInstruction(cast<PointerType>(Ptr->getType())->getElementType(),
-                   Load, Ptr, InsertBef) {
+    : UnaryInstruction(Ty, Load, Ptr, InsertBef) {
+  assert(Ty == cast<PointerType>(Ptr->getType())->getElementType());
   setVolatile(isVolatile);
   setAlignment(0);
   setAtomic(NotAtomic);
@@ -1238,7 +1239,7 @@ FenceInst::FenceInst(LLVMContext &C, AtomicOrdering Ordering,
 void GetElementPtrInst::init(Value *Ptr, ArrayRef<Value *> IdxList,
                              const Twine &Name) {
   assert(NumOperands == 1 + IdxList.size() && "NumOperands not initialized?");
-  OperandList[0] = Ptr;
+  Op<0>() = Ptr;
   std::copy(IdxList.begin(), IdxList.end(), op_begin() + 1);
   setName(Name);
 }
@@ -2119,7 +2120,7 @@ unsigned CastInst::isEliminableCastPair(
     {  0, 0, 0,99,99, 0, 0,99,99,99, 0, 3, 0}, // FPToSI         |
     { 99,99,99, 0, 0,99,99, 0, 0,99,99, 4, 0}, // UIToFP         +- firstOp
     { 99,99,99, 0, 0,99,99, 0, 0,99,99, 4, 0}, // SIToFP         |
-    { 99,99,99, 0, 0,99,99, 1, 0,99,99, 4, 0}, // FPTrunc        |
+    { 99,99,99, 0, 0,99,99, 0, 0,99,99, 4, 0}, // FPTrunc        |
     { 99,99,99, 2, 2,99,99,10, 2,99,99, 4, 0}, // FPExt          |
     {  1, 0, 0,99,99, 0, 0,99,99,99, 7, 3, 0}, // PtrToInt       |
     { 99,99,99,99,99,99,99,99,99,11,99,15, 0}, // IntToPtr       |
@@ -3297,8 +3298,8 @@ void SwitchInst::init(Value *Value, BasicBlock *Default, unsigned NumReserved) {
   NumOperands = 2;
   OperandList = allocHungoffUses(ReservedSpace);
 
-  OperandList[0] = Value;
-  OperandList[1] = Default;
+  Op<0>() = Value;
+  Op<1>() = Default;
 }
 
 /// SwitchInst ctor - Create a new switch instruction, specifying a value to
@@ -3416,7 +3417,7 @@ void IndirectBrInst::init(Value *Address, unsigned NumDests) {
   NumOperands = 1;
   OperandList = allocHungoffUses(ReservedSpace);
   
-  OperandList[0] = Address;
+  Op<0>() = Address;
 }
 
 

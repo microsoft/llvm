@@ -14,7 +14,7 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "DwarfDebug.h"
 #include "DwarfException.h"
-#include "Win64Exception.h"
+#include "WinException.h"
 #include "WinCodeViewLineTables.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Statistic.h"
@@ -269,7 +269,7 @@ bool AsmPrinter::doInitialization(Module &M) {
     case WinEH::EncodingType::Invalid:
       break;
     case WinEH::EncodingType::Itanium:
-      ES = new Win64Exception(this);
+      ES = new WinException(this);
       break;
     }
     break;
@@ -405,8 +405,8 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
 
     // Handle local BSS symbols.
     if (MAI->hasMachoZeroFillDirective()) {
-      const MCSection *TheSection =
-        getObjFileLowering().SectionForGlobal(GV, GVKind, *Mang, TM);
+      MCSection *TheSection =
+          getObjFileLowering().SectionForGlobal(GV, GVKind, *Mang, TM);
       // .zerofill __DATA, __bss, _foo, 400, 5
       OutStreamer->EmitZerofill(TheSection, GVSym, Size, Align);
       return;
@@ -434,8 +434,8 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
     return;
   }
 
-  const MCSection *TheSection =
-    getObjFileLowering().SectionForGlobal(GV, GVKind, *Mang, TM);
+  MCSection *TheSection =
+      getObjFileLowering().SectionForGlobal(GV, GVKind, *Mang, TM);
 
   // Handle the zerofill directive on darwin, which is a special form of BSS
   // emission.
@@ -462,7 +462,7 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
   if (GVKind.isThreadLocal() && MAI->hasMachoTBSSDirective()) {
     // Emit the .tbss symbol
     MCSymbol *MangSym =
-      OutContext.GetOrCreateSymbol(GVSym->getName() + Twine("$tlv$init"));
+      OutContext.getOrCreateSymbol(GVSym->getName() + Twine("$tlv$init"));
 
     if (GVKind.isThreadBSS()) {
       TheSection = getObjFileLowering().getTLSBSSSection();
@@ -479,8 +479,7 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
     OutStreamer->AddBlankLine();
 
     // Emit the variable struct for the runtime.
-    const MCSection *TLVSect
-      = getObjFileLowering().getTLSExtraDataSection();
+    MCSection *TLVSect = getObjFileLowering().getTLSExtraDataSection();
 
     OutStreamer->SwitchSection(TLVSect);
     // Emit the linkage here.
@@ -563,7 +562,7 @@ void AsmPrinter::EmitFunctionHeader() {
 
   if (CurrentFnBegin) {
     if (MAI->useAssignmentForEHBegin()) {
-      MCSymbol *CurPos = OutContext.CreateTempSymbol();
+      MCSymbol *CurPos = OutContext.createTempSymbol();
       OutStreamer->EmitLabel(CurPos);
       OutStreamer->EmitAssignment(CurrentFnBegin,
                                  MCSymbolRefExpr::Create(CurPos, OutContext));
@@ -1122,13 +1121,13 @@ bool AsmPrinter::doFinalization(Module &M) {
 
   // Emit __morestack address if needed for indirect calls.
   if (MMI->usesMorestackAddr()) {
-    const MCSection *ReadOnlySection =
+    MCSection *ReadOnlySection =
         getObjFileLowering().getSectionForConstant(SectionKind::getReadOnly(),
                                                    /*C=*/nullptr);
     OutStreamer->SwitchSection(ReadOnlySection);
 
     MCSymbol *AddrSymbol =
-        OutContext.GetOrCreateSymbol(StringRef("__morestack_addr"));
+        OutContext.getOrCreateSymbol(StringRef("__morestack_addr"));
     OutStreamer->EmitLabel(AddrSymbol);
 
     unsigned PtrSize = TM.getDataLayout()->getPointerSize(0);
@@ -1140,7 +1139,7 @@ bool AsmPrinter::doFinalization(Module &M) {
   // to be executable. Some targets have a directive to declare this.
   Function *InitTrampolineIntrinsic = M.getFunction("llvm.init.trampoline");
   if (!InitTrampolineIntrinsic || InitTrampolineIntrinsic->use_empty())
-    if (const MCSection *S = MAI->getNonexecutableStackSection(OutContext))
+    if (MCSection *S = MAI->getNonexecutableStackSection(OutContext))
       OutStreamer->SwitchSection(S);
 
   // Allow the target to emit any magic that it wants at the end of the file,
@@ -1182,12 +1181,12 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
 }
 
 namespace {
-  // SectionCPs - Keep track the alignment, constpool entries per Section.
+// Keep track the alignment, constpool entries per Section.
   struct SectionCPs {
-    const MCSection *S;
+    MCSection *S;
     unsigned Alignment;
     SmallVector<unsigned, 4> CPEs;
-    SectionCPs(const MCSection *s, unsigned a) : S(s), Alignment(a) {}
+    SectionCPs(MCSection *s, unsigned a) : S(s), Alignment(a) {}
   };
 }
 
@@ -1215,7 +1214,7 @@ void AsmPrinter::EmitConstantPool() {
     if (!CPE.isMachineConstantPoolEntry())
       C = CPE.Val.ConstVal;
 
-    const MCSection *S = getObjFileLowering().getSectionForConstant(Kind, C);
+    MCSection *S = getObjFileLowering().getSectionForConstant(Kind, C);
 
     // The number of sections are small, just do a linear search from the
     // last section to the first.
@@ -1294,8 +1293,7 @@ void AsmPrinter::EmitJumpTableInfo() {
       *F);
   if (JTInDiffSection) {
     // Drop it in the readonly section.
-    const MCSection *ReadOnlySection =
-        TLOF.getSectionForJumpTable(*F, *Mang, TM);
+    MCSection *ReadOnlySection = TLOF.getSectionForJumpTable(*F, *Mang, TM);
     OutStreamer->SwitchSection(ReadOnlySection);
   }
 
@@ -1443,7 +1441,7 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
     if (TM.getRelocationModel() == Reloc::Static &&
         MAI->hasStaticCtorDtorReferenceInStaticMode()) {
       StringRef Sym(".constructors_used");
-      OutStreamer->EmitSymbolAttribute(OutContext.GetOrCreateSymbol(Sym),
+      OutStreamer->EmitSymbolAttribute(OutContext.getOrCreateSymbol(Sym),
                                        MCSA_Reference);
     }
     return true;
@@ -1455,7 +1453,7 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
     if (TM.getRelocationModel() == Reloc::Static &&
         MAI->hasStaticCtorDtorReferenceInStaticMode()) {
       StringRef Sym(".destructors_used");
-      OutStreamer->EmitSymbolAttribute(OutContext.GetOrCreateSymbol(Sym),
+      OutStreamer->EmitSymbolAttribute(OutContext.getOrCreateSymbol(Sym),
                                        MCSA_Reference);
     }
     return true;
@@ -1539,7 +1537,7 @@ void AsmPrinter::EmitXXStructorList(const Constant *List, bool isCtor) {
 
       KeySym = getSymbol(GV);
     }
-    const MCSection *OutputSection =
+    MCSection *OutputSection =
         (isCtor ? Obj.getStaticCtorSection(S.Priority, KeySym)
                 : Obj.getStaticDtorSection(S.Priority, KeySym));
     OutStreamer->SwitchSection(OutputSection);
@@ -1591,6 +1589,10 @@ void AsmPrinter::EmitInt32(int Value) const {
 /// .set if it avoids relocations.
 void AsmPrinter::EmitLabelDifference(const MCSymbol *Hi, const MCSymbol *Lo,
                                      unsigned Size) const {
+  if (!MAI->doesDwarfUseRelocationsAcrossSections())
+    if (OutStreamer->emitAbsoluteSymbolDiff(Hi, Lo, Size))
+      return;
+
   // Get the Hi-Lo expression.
   const MCExpr *Diff =
     MCBinaryExpr::CreateSub(MCSymbolRefExpr::Create(Hi, OutContext),
@@ -2293,7 +2295,7 @@ MCSymbol *AsmPrinter::GetBlockAddressSymbol(const BasicBlock *BB) const {
 /// GetCPISymbol - Return the symbol for the specified constant pool entry.
 MCSymbol *AsmPrinter::GetCPISymbol(unsigned CPID) const {
   const DataLayout *DL = TM.getDataLayout();
-  return OutContext.GetOrCreateSymbol
+  return OutContext.getOrCreateSymbol
     (Twine(DL->getPrivateGlobalPrefix()) + "CPI" + Twine(getFunctionNumber())
      + "_" + Twine(CPID));
 }
@@ -2307,7 +2309,7 @@ MCSymbol *AsmPrinter::GetJTISymbol(unsigned JTID, bool isLinkerPrivate) const {
 /// FIXME: privatize to AsmPrinter.
 MCSymbol *AsmPrinter::GetJTSetSymbol(unsigned UID, unsigned MBBID) const {
   const DataLayout *DL = TM.getDataLayout();
-  return OutContext.GetOrCreateSymbol
+  return OutContext.getOrCreateSymbol
   (Twine(DL->getPrivateGlobalPrefix()) + Twine(getFunctionNumber()) + "_" +
    Twine(UID) + "_set_" + Twine(MBBID));
 }
@@ -2323,7 +2325,7 @@ MCSymbol *AsmPrinter::getSymbolWithGlobalValueBase(const GlobalValue *GV,
 MCSymbol *AsmPrinter::GetExternalSymbolSymbol(StringRef Sym) const {
   SmallString<60> NameStr;
   Mang->getNameWithPrefix(NameStr, Sym);
-  return OutContext.GetOrCreateSymbol(NameStr);
+  return OutContext.getOrCreateSymbol(NameStr);
 }
 
 

@@ -321,7 +321,7 @@ public:
       : MCTargetAsmParser(), STI(STI), MII(MII), Parser(_Parser),
         ForcedEncodingSize(0){
 
-    if (!STI.getFeatureBits()) {
+    if (STI.getFeatureBits().none()) {
       // Set default features.
       STI.ToggleFeature("SOUTHERN_ISLANDS");
     }
@@ -1084,7 +1084,7 @@ AMDGPUAsmParser::parseSOppBrTarget(OperandVector &Operands) {
 
     case AsmToken::Identifier:
       Operands.push_back(AMDGPUOperand::CreateExpr(
-          MCSymbolRefExpr::Create(getContext().GetOrCreateSymbol(
+          MCSymbolRefExpr::Create(getContext().getOrCreateSymbol(
                                   Parser.getTok().getString()), getContext()), S));
       Parser.Lex();
       return MatchOperand_Success;

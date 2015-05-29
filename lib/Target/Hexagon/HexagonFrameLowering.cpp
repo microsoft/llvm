@@ -201,17 +201,17 @@ namespace {
           break;
       }
       // Check individual operands.
-      for (ConstMIOperands Mo(MI); Mo.isValid(); ++Mo) {
+      for (const MachineOperand &MO : MI->operands()) {
         // While the presence of a frame index does not prove that a stack
         // frame will be required, all frame indexes should be within alloc-
         // frame/deallocframe. Otherwise, the code that translates a frame
         // index into an offset would have to be aware of the placement of
         // the frame creation/destruction instructions.
-        if (Mo->isFI())
+        if (MO.isFI())
           return true;
-        if (!Mo->isReg())
+        if (!MO.isReg())
           continue;
-        unsigned R = Mo->getReg();
+        unsigned R = MO.getReg();
         // Virtual registers will need scavenging, which then may require
         // a stack slot.
         if (TargetRegisterInfo::isVirtualRegister(R))
@@ -472,7 +472,7 @@ void HexagonFrameLowering::insertPrologueInBlock(MachineBasicBlock &MBB) const {
 
   if (needsFrameMoves) {
     std::vector<MCCFIInstruction> Instructions = MMI.getFrameInstructions();
-    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+    MCSymbol *FrameLabel = MMI.getContext().createTempSymbol();
 
     // Advance CFA. DW_CFA_def_cfa
     unsigned DwFPReg = HRI.getDwarfRegNum(HRI.getFrameRegister(), true);

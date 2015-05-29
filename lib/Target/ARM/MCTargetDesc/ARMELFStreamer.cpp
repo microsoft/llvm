@@ -223,7 +223,7 @@ void ARMTargetAsmStreamer::emitInst(uint32_t Inst, char Suffix) {
   OS << "\t.inst";
   if (Suffix)
     OS << "." << Suffix;
-  OS << "\t0x" << utohexstr(Inst) << "\n";
+  OS << "\t0x" << Twine::utohexstr(Inst) << "\n";
 }
 
 void ARMTargetAsmStreamer::emitUnwindRaw(int64_t Offset,
@@ -232,7 +232,7 @@ void ARMTargetAsmStreamer::emitUnwindRaw(int64_t Offset,
   for (SmallVectorImpl<uint8_t>::const_iterator OCI = Opcodes.begin(),
                                                 OCE = Opcodes.end();
        OCI != OCE; ++OCI)
-    OS << ", 0x" << utohexstr(*OCI);
+    OS << ", 0x" << Twine::utohexstr(*OCI);
   OS << '\n';
 }
 
@@ -275,7 +275,7 @@ private:
   unsigned EmittedArch;
   SmallVector<AttributeItem, 64> Contents;
 
-  const MCSection *AttributeSection;
+  MCSection *AttributeSection;
 
   AttributeItem *getAttributeItem(unsigned Attribute) {
     for (size_t i = 0; i < Contents.size(); ++i)
@@ -431,8 +431,7 @@ public:
   void emitRegSave(const SmallVectorImpl<unsigned> &RegList, bool isVector);
   void emitUnwindRaw(int64_t Offset, const SmallVectorImpl<uint8_t> &Opcodes);
 
-  void ChangeSection(const MCSection *Section,
-                     const MCExpr *Subsection) override {
+  void ChangeSection(MCSection *Section, const MCExpr *Subsection) override {
     // We have to keep track of the mapping symbol state of any sections we
     // use. Each one should start off as EMS_None, which is provided as the
     // default constructor by DenseMap::lookup.
@@ -508,7 +507,7 @@ public:
                      const SMLoc &Loc) override {
     if (const MCSymbolRefExpr *SRE = dyn_cast_or_null<MCSymbolRefExpr>(Value))
       if (SRE->getKind() == MCSymbolRefExpr::VK_ARM_SBREL && !(Size == 4))
-        getContext().FatalError(Loc, "relocated expression must be 32-bit");
+        getContext().reportFatalError(Loc, "relocated expression must be 32-bit");
 
     EmitDataMappingSymbol();
     MCELFStreamer::EmitValueImpl(Value, Size);
@@ -560,11 +559,11 @@ private:
   }
 
   void EmitMappingSymbol(StringRef Name) {
-    MCSymbol *Start = getContext().CreateTempSymbol();
+    MCSymbol *Start = getContext().createTempSymbol();
     EmitLabel(Start);
 
     MCSymbol *Symbol =
-      getContext().GetOrCreateSymbol(Name + "." +
+      getContext().getOrCreateSymbol(Name + "." +
                                      Twine(MappingSymbolCounter++));
 
     MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
@@ -689,16 +688,16 @@ void ARMTargetELFStreamer::emitArchDefaultAttributes() {
   using namespace ARMBuildAttrs;
 
   setAttributeItem(CPU_name,
-                   ARMTargetParser::getArchDefaultCPUName(Arch),
+                   ARMTargetParser::getCPUAttr(Arch),
                    false);
 
   if (EmittedArch == ARM::AK_INVALID)
     setAttributeItem(CPU_arch,
-                     ARMTargetParser::getArchDefaultCPUArch(Arch),
+                     ARMTargetParser::getArchAttr(Arch),
                      false);
   else
     setAttributeItem(CPU_arch,
-                     ARMTargetParser::getArchDefaultCPUArch(EmittedArch),
+                     ARMTargetParser::getArchAttr(EmittedArch),
                      false);
 
   switch (Arch) {
@@ -1028,7 +1027,7 @@ inline void ARMELFStreamer::SwitchToEHSection(const char *Prefix,
   const MCSymbol *Group = FnSection.getGroup();
   if (Group)
     Flags |= ELF::SHF_GROUP;
-  const MCSectionELF *EHSection =
+  MCSectionELF *EHSection =
       getContext().getELFSection(EHSecName, Type, Flags, 0, Group,
                                  FnSection.getUniqueID(), nullptr, &FnSection);
 
@@ -1078,7 +1077,7 @@ void ARMELFStreamer::Reset() {
 
 void ARMELFStreamer::emitFnStart() {
   assert(FnStart == nullptr);
-  FnStart = getContext().CreateTempSymbol();
+  FnStart = getContext().createTempSymbol();
   EmitLabel(FnStart);
 }
 
@@ -1137,7 +1136,7 @@ void ARMELFStreamer::emitCantUnwind() { CantUnwind = true; }
 
 // Add the R_ARM_NONE fixup at the same position
 void ARMELFStreamer::EmitPersonalityFixup(StringRef Name) {
-  const MCSymbol *PersonalitySym = getContext().GetOrCreateSymbol(Name);
+  const MCSymbol *PersonalitySym = getContext().getOrCreateSymbol(Name);
 
   const MCSymbolRefExpr *PersonalityRef = MCSymbolRefExpr::Create(
       PersonalitySym, MCSymbolRefExpr::VK_ARM_NONE, getContext());
@@ -1181,7 +1180,7 @@ void ARMELFStreamer::FlushUnwindOpcodes(bool NoHandlerData) {
 
   // Create .ARM.extab label for offset in .ARM.exidx
   assert(!ExTab);
-  ExTab = getContext().CreateTempSymbol();
+  ExTab = getContext().createTempSymbol();
   EmitLabel(ExTab);
 
   // Emit personality
