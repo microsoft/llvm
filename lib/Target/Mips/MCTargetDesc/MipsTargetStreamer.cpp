@@ -358,7 +358,6 @@ void MipsTargetAsmStreamer::emitDirectiveModuleFP(
     MipsABIFlagsSection::FpABIKind Value, bool Is32BitABI) {
   MipsTargetStreamer::emitDirectiveModuleFP(Value, Is32BitABI);
 
-  StringRef ModuleValue;
   OS << "\t.module\tfp=";
   OS << ABIFlagsSection.getFpABIString(Value) << "\n";
 }
@@ -367,7 +366,6 @@ void MipsTargetAsmStreamer::emitDirectiveSetFp(
     MipsABIFlagsSection::FpABIKind Value) {
   MipsTargetStreamer::emitDirectiveSetFp(Value);
 
-  StringRef ModuleValue;
   OS << "\t.set\tfp=";
   OS << ABIFlagsSection.getFpABIString(Value) << "\n";
 }
@@ -443,15 +441,15 @@ MipsTargetELFStreamer::MipsTargetELFStreamer(MCStreamer &S,
 void MipsTargetELFStreamer::emitLabel(MCSymbol *Symbol) {
   if (!isMicroMipsEnabled())
     return;
-  MCSymbolData &Data = getStreamer().getOrCreateSymbolData(Symbol);
-  uint8_t Type = MCELF::GetType(Data);
+  getStreamer().getOrCreateSymbolData(Symbol);
+  uint8_t Type = MCELF::GetType(*Symbol);
   if (Type != ELF::STT_FUNC)
     return;
 
   // The "other" values are stored in the last 6 bits of the second byte
   // The traditional defines for STO values assume the full byte and thus
   // the shift to pack it.
-  MCELF::setOther(Data, ELF::STO_MIPS_MICROMIPS >> 2);
+  MCELF::setOther(*Symbol, ELF::STO_MIPS_MICROMIPS >> 2);
 }
 
 void MipsTargetELFStreamer::finish() {
@@ -512,16 +510,14 @@ void MipsTargetELFStreamer::emitAssignment(MCSymbol *Symbol,
     return;
   const MCSymbol &RhsSym =
       static_cast<const MCSymbolRefExpr *>(Value)->getSymbol();
-  MCSymbolData &Data = getStreamer().getOrCreateSymbolData(&RhsSym);
 
-  if (!(MCELF::getOther(Data) & (ELF::STO_MIPS_MICROMIPS >> 2)))
+  if (!(MCELF::getOther(RhsSym) & (ELF::STO_MIPS_MICROMIPS >> 2)))
     return;
 
-  MCSymbolData &SymbolData = getStreamer().getOrCreateSymbolData(Symbol);
   // The "other" values are stored in the last 6 bits of the second byte.
   // The traditional defines for STO values assume the full byte and thus
   // the shift to pack it.
-  MCELF::setOther(SymbolData, ELF::STO_MIPS_MICROMIPS >> 2);
+  MCELF::setOther(*Symbol, ELF::STO_MIPS_MICROMIPS >> 2);
 }
 
 MCELFStreamer &MipsTargetELFStreamer::getStreamer() {
@@ -568,7 +564,7 @@ void MipsTargetELFStreamer::emitDirectiveEnd(StringRef Name) {
                                             ELF::SHF_ALLOC | ELF::SHT_REL);
 
   const MCSymbolRefExpr *ExprRef =
-      MCSymbolRefExpr::Create(Name, MCSymbolRefExpr::VK_None, Context);
+      MCSymbolRefExpr::create(Name, MCSymbolRefExpr::VK_None, Context);
 
   MCA.registerSection(*Sec);
   Sec->setAlignment(4);
@@ -693,12 +689,12 @@ void MipsTargetELFStreamer::emitDirectiveCpLoad(unsigned RegNo) {
   StringRef SymName("_gp_disp");
   MCAssembler &MCA = getStreamer().getAssembler();
   MCSymbol *GP_Disp = MCA.getContext().getOrCreateSymbol(SymName);
-  MCA.getOrCreateSymbolData(*GP_Disp);
+  MCA.registerSymbol(*GP_Disp);
 
   MCInst TmpInst;
   TmpInst.setOpcode(Mips::LUi);
   TmpInst.addOperand(MCOperand::createReg(Mips::GP));
-  const MCSymbolRefExpr *HiSym = MCSymbolRefExpr::Create(
+  const MCSymbolRefExpr *HiSym = MCSymbolRefExpr::create(
       "_gp_disp", MCSymbolRefExpr::VK_Mips_ABS_HI, MCA.getContext());
   TmpInst.addOperand(MCOperand::createExpr(HiSym));
   getStreamer().EmitInstruction(TmpInst, STI);
@@ -708,7 +704,7 @@ void MipsTargetELFStreamer::emitDirectiveCpLoad(unsigned RegNo) {
   TmpInst.setOpcode(Mips::ADDiu);
   TmpInst.addOperand(MCOperand::createReg(Mips::GP));
   TmpInst.addOperand(MCOperand::createReg(Mips::GP));
-  const MCSymbolRefExpr *LoSym = MCSymbolRefExpr::Create(
+  const MCSymbolRefExpr *LoSym = MCSymbolRefExpr::create(
       "_gp_disp", MCSymbolRefExpr::VK_Mips_ABS_LO, MCA.getContext());
   TmpInst.addOperand(MCOperand::createExpr(LoSym));
   getStreamer().EmitInstruction(TmpInst, STI);
@@ -752,9 +748,9 @@ void MipsTargetELFStreamer::emitDirectiveCpsetup(unsigned RegNo,
   getStreamer().EmitInstruction(Inst, STI);
   Inst.clear();
 
-  const MCSymbolRefExpr *HiExpr = MCSymbolRefExpr::Create(
+  const MCSymbolRefExpr *HiExpr = MCSymbolRefExpr::create(
       &Sym, MCSymbolRefExpr::VK_Mips_GPOFF_HI, MCA.getContext());
-  const MCSymbolRefExpr *LoExpr = MCSymbolRefExpr::Create(
+  const MCSymbolRefExpr *LoExpr = MCSymbolRefExpr::create(
       &Sym, MCSymbolRefExpr::VK_Mips_GPOFF_LO, MCA.getContext());
 
   // lui $gp, %hi(%neg(%gp_rel(funcSym)))

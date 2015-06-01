@@ -136,6 +136,7 @@ public:
   void EmitCOFFSymbolStorageClass(int StorageClass) override;
   void EmitCOFFSymbolType(int Type) override;
   void EndCOFFSymbolDef() override;
+  void EmitCOFFSafeSEH(MCSymbol const *Symbol) override;
   void EmitCOFFSectionIndex(MCSymbol const *Symbol) override;
   void EmitCOFFSecRel32(MCSymbol const *Symbol) override;
   void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) override;
@@ -486,6 +487,11 @@ void MCAsmStreamer::EndCOFFSymbolDef() {
   EmitEOL();
 }
 
+void MCAsmStreamer::EmitCOFFSafeSEH(MCSymbol const *Symbol) {
+  OS << "\t.safeseh\t" << *Symbol;
+  EmitEOL();
+}
+
 void MCAsmStreamer::EmitCOFFSectionIndex(MCSymbol const *Symbol) {
   OS << "\t.secidx\t" << *Symbol;
   EmitEOL();
@@ -643,7 +649,7 @@ void MCAsmStreamer::EmitBytes(StringRef Data) {
 }
 
 void MCAsmStreamer::EmitIntValue(uint64_t Value, unsigned Size) {
-  EmitValue(MCConstantExpr::Create(Value, getContext()), Size);
+  EmitValue(MCConstantExpr::create(Value, getContext()), Size);
 }
 
 void MCAsmStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
@@ -662,7 +668,7 @@ void MCAsmStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
 
   if (!Directive) {
     int64_t IntValue;
-    if (!Value->EvaluateAsAbsolute(IntValue))
+    if (!Value->evaluateAsAbsolute(IntValue))
       report_fatal_error("Don't know how to emit this value.");
 
     // We couldn't handle the requested integer size so we fallback by breaking
@@ -703,7 +709,7 @@ void MCAsmStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
 
 void MCAsmStreamer::EmitULEB128Value(const MCExpr *Value) {
   int64_t IntValue;
-  if (Value->EvaluateAsAbsolute(IntValue)) {
+  if (Value->evaluateAsAbsolute(IntValue)) {
     EmitULEB128IntValue(IntValue);
     return;
   }
@@ -713,7 +719,7 @@ void MCAsmStreamer::EmitULEB128Value(const MCExpr *Value) {
 
 void MCAsmStreamer::EmitSLEB128Value(const MCExpr *Value) {
   int64_t IntValue;
-  if (Value->EvaluateAsAbsolute(IntValue)) {
+  if (Value->evaluateAsAbsolute(IntValue)) {
     EmitSLEB128IntValue(IntValue);
     return;
   }
@@ -1102,9 +1108,9 @@ void MCAsmStreamer::EmitWinEHHandlerData() {
   // We only do this so the section switch that terminates the handler
   // data block is visible.
   WinEH::FrameInfo *CurFrame = getCurrentWinFrameInfo();
-  if (MCSection *XData = WinEH::UnwindEmitter::getXDataSection(
-          CurFrame->Function, getContext()))
-    SwitchSectionNoChange(XData);
+  MCSection *XData =
+      WinEH::UnwindEmitter::getXDataSection(CurFrame->Function, getContext());
+  SwitchSectionNoChange(XData);
 
   OS << "\t.seh_handlerdata";
   EmitEOL();

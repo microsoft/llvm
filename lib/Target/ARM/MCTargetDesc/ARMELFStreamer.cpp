@@ -566,13 +566,13 @@ private:
       getContext().getOrCreateSymbol(Name + "." +
                                      Twine(MappingSymbolCounter++));
 
-    MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
-    MCELF::SetType(SD, ELF::STT_NOTYPE);
-    MCELF::SetBinding(SD, ELF::STB_LOCAL);
-    SD.setExternal(false);
+    getAssembler().registerSymbol(*Symbol);
+    MCELF::SetType(*Symbol, ELF::STT_NOTYPE);
+    MCELF::SetBinding(*Symbol, ELF::STB_LOCAL);
+    Symbol->setExternal(false);
     AssignSection(Symbol, getCurrentSection().first);
 
-    const MCExpr *Value = MCSymbolRefExpr::Create(Start, getContext());
+    const MCExpr *Value = MCSymbolRefExpr::create(Start, getContext());
     Symbol->setVariableValue(Value);
   }
 
@@ -972,8 +972,8 @@ void ARMTargetELFStreamer::emitLabel(MCSymbol *Symbol) {
   if (!Streamer.IsThumb)
     return;
 
-  const MCSymbolData &SD = Streamer.getOrCreateSymbolData(Symbol);
-  unsigned Type = MCELF::GetType(SD);
+  Streamer.getOrCreateSymbolData(Symbol);
+  unsigned Type = MCELF::GetType(*Symbol);
   if (Type == ELF_STT_Func || Type == ELF_STT_GnuIFunc)
     Streamer.EmitThumbFunc(Symbol);
 }
@@ -1095,7 +1095,7 @@ void ARMELFStreamer::emitFnEnd() {
     EmitPersonalityFixup(GetAEABIUnwindPersonalityName(PersonalityIndex));
 
   const MCSymbolRefExpr *FnStartRef =
-    MCSymbolRefExpr::Create(FnStart,
+    MCSymbolRefExpr::create(FnStart,
                             MCSymbolRefExpr::VK_ARM_PREL31,
                             getContext());
 
@@ -1106,7 +1106,7 @@ void ARMELFStreamer::emitFnEnd() {
   } else if (ExTab) {
     // Emit a reference to the unwind opcodes in the ".ARM.extab" section.
     const MCSymbolRefExpr *ExTabEntryRef =
-      MCSymbolRefExpr::Create(ExTab,
+      MCSymbolRefExpr::create(ExTab,
                               MCSymbolRefExpr::VK_ARM_PREL31,
                               getContext());
     EmitValue(ExTabEntryRef, 4);
@@ -1138,7 +1138,7 @@ void ARMELFStreamer::emitCantUnwind() { CantUnwind = true; }
 void ARMELFStreamer::EmitPersonalityFixup(StringRef Name) {
   const MCSymbol *PersonalitySym = getContext().getOrCreateSymbol(Name);
 
-  const MCSymbolRefExpr *PersonalityRef = MCSymbolRefExpr::Create(
+  const MCSymbolRefExpr *PersonalityRef = MCSymbolRefExpr::create(
       PersonalitySym, MCSymbolRefExpr::VK_ARM_NONE, getContext());
 
   visitUsedExpr(*PersonalityRef);
@@ -1186,7 +1186,7 @@ void ARMELFStreamer::FlushUnwindOpcodes(bool NoHandlerData) {
   // Emit personality
   if (Personality) {
     const MCSymbolRefExpr *PersonalityRef =
-      MCSymbolRefExpr::Create(Personality,
+      MCSymbolRefExpr::create(Personality,
                               MCSymbolRefExpr::VK_ARM_PREL31,
                               getContext());
 

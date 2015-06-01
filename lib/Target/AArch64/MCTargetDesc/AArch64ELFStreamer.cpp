@@ -164,15 +164,15 @@ private:
     MCSymbol *Symbol = getContext().getOrCreateSymbol(
         Name + "." + Twine(MappingSymbolCounter++));
 
-    MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
-    MCELF::SetType(SD, ELF::STT_NOTYPE);
-    MCELF::SetBinding(SD, ELF::STB_LOCAL);
-    SD.setExternal(false);
+    getAssembler().registerSymbol(*Symbol);
+    MCELF::SetType(*Symbol, ELF::STT_NOTYPE);
+    MCELF::SetBinding(*Symbol, ELF::STB_LOCAL);
+    Symbol->setExternal(false);
     auto Sec = getCurrentSection().first;
     assert(Sec && "need a section");
     Symbol->setSection(*Sec);
 
-    const MCExpr *Value = MCSymbolRefExpr::Create(Start, getContext());
+    const MCExpr *Value = MCSymbolRefExpr::create(Start, getContext());
     Symbol->setVariableValue(Value);
   }
 

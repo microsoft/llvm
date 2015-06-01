@@ -79,9 +79,8 @@ protected:
                                 StringRef &Res) const override;
   std::error_code getSymbolAddress(DataRefImpl Symb,
                                    uint64_t &Res) const override;
-  std::error_code getSymbolAlignment(DataRefImpl Symb,
-                                     uint32_t &Res) const override;
-  std::error_code getSymbolSize(DataRefImpl Symb, uint64_t &Res) const override;
+  uint32_t getSymbolAlignment(DataRefImpl Symb) const override;
+  uint64_t getSymbolSize(DataRefImpl Symb) const override;
   uint32_t getSymbolFlags(DataRefImpl Symb) const override;
   std::error_code getSymbolOther(DataRefImpl Symb, uint8_t &Res) const override;
   std::error_code getSymbolType(DataRefImpl Symb,
@@ -326,21 +325,16 @@ std::error_code ELFObjectFile<ELFT>::getSymbolAddress(DataRefImpl Symb,
 }
 
 template <class ELFT>
-std::error_code ELFObjectFile<ELFT>::getSymbolAlignment(DataRefImpl Symb,
-                                                        uint32_t &Res) const {
+uint32_t ELFObjectFile<ELFT>::getSymbolAlignment(DataRefImpl Symb) const {
   Elf_Sym_Iter Sym = toELFSymIter(Symb);
   if (Sym->st_shndx == ELF::SHN_COMMON)
-    Res = Sym->st_value;
-  else
-    Res = 0;
-  return object_error::success;
+    return Sym->st_value;
+  return 0;
 }
 
 template <class ELFT>
-std::error_code ELFObjectFile<ELFT>::getSymbolSize(DataRefImpl Symb,
-                                                   uint64_t &Result) const {
-  Result = toELFSymIter(Symb)->st_size;
-  return object_error::success;
+uint64_t ELFObjectFile<ELFT>::getSymbolSize(DataRefImpl Symb) const {
+  return toELFSymIter(Symb)->st_size;
 }
 
 template <class ELFT>
