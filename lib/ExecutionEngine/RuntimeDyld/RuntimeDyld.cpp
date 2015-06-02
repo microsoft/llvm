@@ -387,8 +387,7 @@ void RuntimeDyldImpl::computeTotalAllocSize(const ObjectFile &Obj,
     uint32_t Flags = I->getFlags();
     if (Flags & SymbolRef::SF_Common) {
       // Add the common symbols to a list.  We'll allocate them all below.
-      uint64_t Size = 0;
-      Check(I->getSize(Size));
+      uint64_t Size = I->getSize();
       CommonSize += Size;
     }
   }
@@ -494,10 +493,8 @@ void RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
       continue;
     }
 
-    uint32_t Align = 0;
-    uint64_t Size = 0;
-    Check(Sym.getAlignment(Align));
-    Check(Sym.getSize(Size));
+    uint32_t Align = Sym.getAlignment();
+    uint64_t Size = Sym.getSize();
 
     CommonSize += Align + Size;
     SymbolsToAllocate.push_back(Sym);
@@ -518,11 +515,9 @@ void RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
 
   // Assign the address of each symbol
   for (auto &Sym : SymbolsToAllocate) {
-    uint32_t Align;
-    uint64_t Size;
+    uint32_t Align = Sym.getAlignment();
     StringRef Name;
-    Check(Sym.getAlignment(Align));
-    Check(Sym.getSize(Size));
+    uint64_t Size = Sym.getSize();
     Check(Sym.getName(Name));
     if (Align) {
       // This symbol has an alignment requirement.

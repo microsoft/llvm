@@ -148,9 +148,8 @@ bool TGParser::SetValue(Record *CurRec, SMLoc Loc, Init *ValName,
 bool TGParser::AddSubClass(Record *CurRec, SubClassReference &SubClass) {
   Record *SC = SubClass.Rec;
   // Add all of the values in the subclass into the current class.
-  const std::vector<RecordVal> &Vals = SC->getValues();
-  for (unsigned i = 0, e = Vals.size(); i != e; ++i)
-    if (AddValue(CurRec, SubClass.RefRange.Start, Vals[i]))
+  for (const RecordVal &Val : SC->getValues())
+    if (AddValue(CurRec, SubClass.RefRange.Start, Val))
       return true;
 
   const std::vector<Init *> &TArgs = SC->getTemplateArgs();
@@ -309,7 +308,7 @@ bool TGParser::ProcessForeachDefs(Record *CurRec, SMLoc Loc, IterSet &IterVals){
     }
 
     // Process each value.
-    for (int64_t i = 0; i < List->getSize(); ++i) {
+    for (unsigned i = 0; i < List->size(); ++i) {
       Init *ItemVal = List->resolveListElementReference(*CurRec, nullptr, i);
       IterVals.push_back(IterRecord(CurLoop.IterVar, ItemVal));
       if (ProcessForeachDefs(CurRec, Loc, IterVals))
@@ -325,9 +324,9 @@ bool TGParser::ProcessForeachDefs(Record *CurRec, SMLoc Loc, IterSet &IterVals){
   auto IterRec = make_unique<Record>(*CurRec);
 
   // Set the iterator values now.
-  for (unsigned i = 0, e = IterVals.size(); i != e; ++i) {
-    VarInit *IterVar = IterVals[i].IterVar;
-    TypedInit *IVal = dyn_cast<TypedInit>(IterVals[i].IterValue);
+  for (IterRecord &IR : IterVals) {
+    VarInit *IterVar = IR.IterVar;
+    TypedInit *IVal = dyn_cast<TypedInit>(IR.IterValue);
     if (!IVal)
       return Error(Loc, "foreach iterator value is untyped");
 
@@ -1601,7 +1600,7 @@ TGParser::ParseDagArgList(Record *CurRec) {
     // DagArg ::= VARNAME
     if (Lex.getCode() == tgtok::VarName) {
       // A missing value is treated like '?'.
-      Result.push_back(std::make_pair(UnsetInit::get(), Lex.getCurStrVal()));
+      Result.emplace_back(UnsetInit::get(), Lex.getCurStrVal());
       Lex.Lex();
     } else {
       // DagArg ::= Value (':' VARNAME)?
@@ -1807,8 +1806,8 @@ VarInit *TGParser::ParseForeachDeclaration(ListInit *&ForeachListValue) {
     assert(!IterType && "Type already initialized?");
     IterType = IntRecTy::get();
     std::vector<Init*> Values;
-    for (unsigned i = 0, e = Ranges.size(); i != e; ++i)
-      Values.push_back(IntInit::get(Ranges[i]));
+    for (unsigned R : Ranges)
+      Values.push_back(IntInit::get(R));
     ForeachListValue = ListInit::get(Values, IterType);
   }
 
@@ -1934,10 +1933,9 @@ bool TGParser::ParseBody(Record *CurRec) {
 /// \brief Apply the current let bindings to \a CurRec.
 /// \returns true on error, false otherwise.
 bool TGParser::ApplyLetStack(Record *CurRec) {
-  for (unsigned i = 0, e = LetStack.size(); i != e; ++i)
-    for (unsigned j = 0, e = LetStack[i].size(); j != e; ++j)
-      if (SetValue(CurRec, LetStack[i][j].Loc, LetStack[i][j].Name,
-                   LetStack[i][j].Bits, LetStack[i][j].Value))
+  for (std::vector<LetRecord> &LetInfo : LetStack)
+    for (LetRecord &LR : LetInfo)
+      if (SetValue(CurRec, LR.Loc, LR.Name, LR.Bits, LR.Value))
         return true;
   return false;
 }
@@ -2174,7 +2172,7 @@ std::vector<LetRecord> TGParser::ParseLetList() {
     if (!Val) return std::vector<LetRecord>();
 
     // Now that we have everything, add the record.
-    Result.push_back(LetRecord(Name, Bits, Val, NameLoc));
+    Result.emplace_back(std::move(Name), std::move(Bits), Val, NameLoc);
 
     if (Lex.getCode() != tgtok::comma)
       return Result;

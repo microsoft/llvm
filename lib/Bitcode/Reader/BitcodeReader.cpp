@@ -63,9 +63,7 @@ public:
   // vector compatibility methods
   unsigned size() const { return ValuePtrs.size(); }
   void resize(unsigned N) { ValuePtrs.resize(N); }
-  void push_back(Value *V) {
-    ValuePtrs.push_back(V);
-  }
+  void push_back(Value *V) { ValuePtrs.emplace_back(V); }
 
   void clear() {
     assert(ResolveConstants.empty() && "Constants not resolved?");
@@ -1636,9 +1634,9 @@ std::error_code BitcodeReader::ParseMetadata() {
       Record.clear();
       Code = Stream.ReadCode();
 
-      // METADATA_NAME is always followed by METADATA_NAMED_NODE.
       unsigned NextBitCode = Stream.readRecord(Code, Record);
-      assert(NextBitCode == bitc::METADATA_NAMED_NODE); (void)NextBitCode;
+      if (NextBitCode != bitc::METADATA_NAMED_NODE)
+        return Error("METADATA_NAME not followed by METADATA_NAMED_NODE");
 
       // Read named metadata elements.
       unsigned Size = Record.size();

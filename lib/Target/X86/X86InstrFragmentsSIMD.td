@@ -78,6 +78,9 @@ def X86cmps    : SDNode<"X86ISD::FSETCC",     SDTX86Cmps>;
 def X86pshufb  : SDNode<"X86ISD::PSHUFB",
                  SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
                                       SDTCisSameAs<0,2>]>>;
+def X86psadbw  : SDNode<"X86ISD::PSADBW",
+                 SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
+                                      SDTCisSameAs<0,2>]>>;
 def X86andnp   : SDNode<"X86ISD::ANDNP",
                  SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
                                       SDTCisSameAs<0,2>]>>;
@@ -219,6 +222,8 @@ def SDTShuff2OpI : SDTypeProfile<1, 2, [SDTCisVec<0>,
                                  SDTCisSameAs<0,1>, SDTCisInt<2>]>;
 def SDTShuff3OpI : SDTypeProfile<1, 3, [SDTCisVec<0>, SDTCisSameAs<0,1>,
                                  SDTCisSameAs<0,2>, SDTCisInt<3>]>;
+def SDTFPBinOpImmRound: SDTypeProfile<1, 4, [SDTCisVec<0>, SDTCisSameAs<0,1>,
+                             SDTCisSameAs<0,2>, SDTCisInt<3>, SDTCisInt<4>]>;
 
 def SDTVBroadcast  : SDTypeProfile<1, 1, [SDTCisVec<0>]>;
 def SDTVBroadcastm : SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisVec<1>]>;
@@ -278,6 +283,9 @@ def X86VPermv3    : SDNode<"X86ISD::VPERMV3",   SDTShuff3Op>;
 def X86VPermiv3   : SDNode<"X86ISD::VPERMIV3",  SDTShuff3Op>;
 
 def X86VPerm2x128 : SDNode<"X86ISD::VPERM2X128", SDTShuff3OpI>;
+
+def X86VFixupimm       : SDNode<"X86ISD::VFIXUPIMM", SDTFPBinOpImmRound>;
+def X86VRange          : SDNode<"X86ISD::VRANGE", SDTFPBinOpImmRound>;
 
 def X86SubVBroadcast : SDNode<"X86ISD::SUBV_BROADCAST",
                     SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>,

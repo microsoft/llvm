@@ -23,7 +23,6 @@
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCELF.h"
 #include "llvm/MC/MCELFStreamer.h"
 #include "llvm/MC/MCELFSymbolFlags.h"
 #include "llvm/MC/MCExpr.h"
@@ -32,7 +31,7 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ELF.h"
@@ -161,18 +160,18 @@ private:
     MCSymbol *Start = getContext().createTempSymbol();
     EmitLabel(Start);
 
-    MCSymbol *Symbol = getContext().getOrCreateSymbol(
-        Name + "." + Twine(MappingSymbolCounter++));
+    auto *Symbol = cast<MCSymbolELF>(getContext().getOrCreateSymbol(
+        Name + "." + Twine(MappingSymbolCounter++)));
 
-    MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
-    MCELF::SetType(SD, ELF::STT_NOTYPE);
-    MCELF::SetBinding(SD, ELF::STB_LOCAL);
-    SD.setExternal(false);
+    getAssembler().registerSymbol(*Symbol);
+    Symbol->setType(ELF::STT_NOTYPE);
+    Symbol->setBinding(ELF::STB_LOCAL);
+    Symbol->setExternal(false);
     auto Sec = getCurrentSection().first;
     assert(Sec && "need a section");
     Symbol->setSection(*Sec);
 
-    const MCExpr *Value = MCSymbolRefExpr::Create(Start, getContext());
+    const MCExpr *Value = MCSymbolRefExpr::create(Start, getContext());
     Symbol->setVariableValue(Value);
   }
 
