@@ -35,8 +35,6 @@ def bc_mmx  : PatFrag<(ops node:$in), (x86mmx  (bitconvert node:$in))>;
 // SSE specific DAG Nodes.
 //===----------------------------------------------------------------------===//
 
-def SDTX86FPShiftOp : SDTypeProfile<1, 2, [ SDTCisSameAs<0, 1>,
-                                            SDTCisFP<0>, SDTCisInt<2> ]>;
 def SDTX86VFCMP : SDTypeProfile<1, 3, [SDTCisInt<0>, SDTCisSameAs<1, 2>,
                                        SDTCisFP<1>, SDTCisVT<3, i8>,
                                        SDTCisVec<1>]>;
@@ -65,7 +63,6 @@ def X86fandn   : SDNode<"X86ISD::FANDN",     SDTFPBinOp,
                         [SDNPCommutative, SDNPAssociative]>;
 def X86frsqrt  : SDNode<"X86ISD::FRSQRT",    SDTFPUnaryOp>;
 def X86frcp    : SDNode<"X86ISD::FRCP",      SDTFPUnaryOp>;
-def X86fsrl    : SDNode<"X86ISD::FSRL",      SDTX86FPShiftOp>;
 def X86fgetsign: SDNode<"X86ISD::FGETSIGNx86",SDTFPToIntOp>;
 def X86fhadd   : SDNode<"X86ISD::FHADD",     SDTFPBinOp>;
 def X86fhsub   : SDNode<"X86ISD::FHSUB",     SDTFPBinOp>;
@@ -234,6 +231,9 @@ def SDTBlend : SDTypeProfile<1, 3, [SDTCisVec<0>, SDTCisSameAs<0,1>,
 def SDTFPBinOpRound : SDTypeProfile<1, 3, [      // fadd_round, fmul_round, etc.
   SDTCisSameAs<0, 1>, SDTCisSameAs<0, 2>, SDTCisFP<0>, SDTCisInt<3>]>;
 
+def SDTFPUnaryOpRound : SDTypeProfile<1, 2, [      // fsqrt_round, fgetexp_round, etc.
+  SDTCisSameAs<0, 1>, SDTCisFP<0>, SDTCisInt<2>]>;
+
 def SDTFma : SDTypeProfile<1, 3, [SDTCisSameAs<0,1>,
                            SDTCisSameAs<1,2>, SDTCisSameAs<1,3>]>;
 def SDTFmaRound : SDTypeProfile<1, 4, [SDTCisSameAs<0,1>,
@@ -252,7 +252,8 @@ def X86PShufd  : SDNode<"X86ISD::PSHUFD", SDTShuff2OpI>;
 def X86PShufhw : SDNode<"X86ISD::PSHUFHW", SDTShuff2OpI>;
 def X86PShuflw : SDNode<"X86ISD::PSHUFLW", SDTShuff2OpI>;
 
-def X86Shufp : SDNode<"X86ISD::SHUFP", SDTShuff3OpI>;
+def X86Shufp   : SDNode<"X86ISD::SHUFP", SDTShuff3OpI>;
+def X86Shuf128 : SDNode<"X86ISD::SHUF128", SDTShuff3OpI>;
 
 def X86Movddup  : SDNode<"X86ISD::MOVDDUP", SDTShuff1Op>;
 def X86Movshdup : SDNode<"X86ISD::MOVSHDUP", SDTShuff1Op>;
@@ -306,6 +307,8 @@ def X86fmulRnd   : SDNode<"X86ISD::FMUL_RND",  SDTFPBinOpRound>;
 def X86fdivRnd   : SDNode<"X86ISD::FDIV_RND",  SDTFPBinOpRound>;
 def X86fmaxRnd   : SDNode<"X86ISD::FMAX_RND",      SDTFPBinOpRound>;
 def X86fminRnd   : SDNode<"X86ISD::FMIN_RND",      SDTFPBinOpRound>;
+def X86fsqrtRnd     : SDNode<"X86ISD::FSQRT_RND",  SDTFPUnaryOpRound>;
+def X86fgetexpRnd   : SDNode<"X86ISD::FGETEXP_RND",  SDTFPUnaryOpRound>;
 
 def X86Fmadd     : SDNode<"X86ISD::FMADD",     SDTFma>;
 def X86Fnmadd    : SDNode<"X86ISD::FNMADD",    SDTFma>;

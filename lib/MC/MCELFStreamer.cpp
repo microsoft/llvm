@@ -20,7 +20,6 @@
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCELFSymbolFlags.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCObjectFileInfo.h"
@@ -241,26 +240,22 @@ bool MCELFStreamer::EmitSymbolAttribute(MCSymbol *S, MCSymbolAttr Attribute) {
     Symbol->setType(CombineSymbolTypes(Symbol->getType(), ELF::STT_OBJECT));
     Symbol->setBinding(ELF::STB_GNU_UNIQUE);
     Symbol->setExternal(true);
-    BindingExplicitlySet.insert(Symbol);
     break;
 
   case MCSA_Global:
     Symbol->setBinding(ELF::STB_GLOBAL);
     Symbol->setExternal(true);
-    BindingExplicitlySet.insert(Symbol);
     break;
 
   case MCSA_WeakReference:
   case MCSA_Weak:
     Symbol->setBinding(ELF::STB_WEAK);
     Symbol->setExternal(true);
-    BindingExplicitlySet.insert(Symbol);
     break;
 
   case MCSA_Local:
     Symbol->setBinding(ELF::STB_LOCAL);
     Symbol->setExternal(false);
-    BindingExplicitlySet.insert(Symbol);
     break;
 
   case MCSA_ELF_TypeFunction:
@@ -309,14 +304,14 @@ void MCELFStreamer::EmitCommonSymbol(MCSymbol *S, uint64_t Size,
   auto *Symbol = cast<MCSymbolELF>(S);
   getAssembler().registerSymbol(*Symbol);
 
-  if (!BindingExplicitlySet.count(Symbol)) {
+  if (!Symbol->isBindingSet()) {
     Symbol->setBinding(ELF::STB_GLOBAL);
     Symbol->setExternal(true);
   }
 
   Symbol->setType(ELF::STT_OBJECT);
 
-  if (Symbol->getBinding() == ELF_STB_Local) {
+  if (Symbol->getBinding() == ELF::STB_LOCAL) {
     MCSection *Section = getAssembler().getContext().getELFSection(
         ".bss", ELF::SHT_NOBITS, ELF::SHF_WRITE | ELF::SHF_ALLOC);
 
@@ -343,7 +338,6 @@ void MCELFStreamer::EmitLocalCommonSymbol(MCSymbol *S, uint64_t Size,
   getAssembler().registerSymbol(*Symbol);
   Symbol->setBinding(ELF::STB_LOCAL);
   Symbol->setExternal(false);
-  BindingExplicitlySet.insert(Symbol);
   EmitCommonSymbol(Symbol, Size, ByteAlignment);
 }
 

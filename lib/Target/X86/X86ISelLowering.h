@@ -56,10 +56,6 @@ namespace llvm {
       /// corresponds to X86::ANDNPS or X86::ANDNPD.
       FANDN,
 
-      /// Bitwise logical right shift of floating point values. This
-      /// corresponds to X86::PSRLDQ.
-      FSRL,
-
       /// These operations represent an abstract X86 call
       /// instruction, which includes a bunch of information.  In particular the
       /// operands of these node are:
@@ -203,6 +199,7 @@ namespace llvm {
 
       /// Combined add and sub on an FP vector.
       ADDSUB,
+
       //  FP vector ops with rounding mode.
       FADD_RND,
       FSUB_RND,
@@ -210,7 +207,11 @@ namespace llvm {
       FDIV_RND,
       FMAX_RND,
       FMIN_RND,
-      
+      FSQRT_RND,
+
+      // FP vector get exponent 
+      FGETEXP_RND,
+
       // Integer add/sub with unsigned saturation.
       ADDUS,
       SUBUS,
@@ -358,6 +359,8 @@ namespace llvm {
       PSHUFHW,
       PSHUFLW,
       SHUFP,
+      //Shuffle Packed Values at 128-bit granularity
+      SHUF128,
       MOVDDUP,
       MOVSHDUP,
       MOVSLDUP,

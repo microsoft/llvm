@@ -21,7 +21,6 @@
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCELFSymbolFlags.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCFixupKindInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
@@ -74,8 +73,6 @@ class ELFObjectWriter : public MCObjectWriter {
     static uint64_t SymbolValue(const MCSymbol &Sym, const MCAsmLayout &Layout);
     static bool isInSymtab(const MCAsmLayout &Layout, const MCSymbolELF &Symbol,
                            bool Used, bool Renamed);
-    static bool isLocal(const MCSymbol &Symbol, bool IsUsedInReloc,
-                        bool IsSignature);
 
     /// Helper struct for containing some precomputed information on symbols.
     struct ELFSymbolData {
@@ -100,8 +97,6 @@ class ELFObjectWriter : public MCObjectWriter {
     /// The target specific ELF writer instance.
     std::unique_ptr<MCELFObjectTargetWriter> TargetObjectWriter;
 
-    SmallPtrSet<const MCSymbol *, 16> UsedInReloc;
-    SmallPtrSet<const MCSymbol *, 16> WeakrefUsedInReloc;
     DenseMap<const MCSymbolELF *, const MCSymbolELF *> Renames;
 
     llvm::DenseMap<const MCSectionELF *, std::vector<ELFRelocationEntry>>
@@ -144,8 +139,6 @@ class ELFObjectWriter : public MCObjectWriter {
         : MCObjectWriter(OS, IsLittleEndian), TargetObjectWriter(MOTW) {}
 
     void reset() override {
-      UsedInReloc.clear();
-      WeakrefUsedInReloc.clear();
       Renames.clear();
       Relocations.clear();
       StrTabBuilder.clear();
@@ -465,13 +458,12 @@ void ELFObjectWriter::writeSymbol(SymbolTableWriter &Writer,
   if (Base) {
     Type = mergeTypeForSet(Type, Base->getType());
   }
-  uint8_t Info = (Binding << ELF_STB_Shift) | (Type << ELF_STT_Shift);
+  uint8_t Info = (Binding << 4) | Type;
 
   // Other and Visibility share the same byte with Visibility using the lower
   // 2 bits
   uint8_t Visibility = Symbol.getVisibility();
-  uint8_t Other = Symbol.getOther() << (ELF_STO_Shift - ELF_STV_Shift);
-  Other |= Visibility;
+  uint8_t Other = Symbol.getOther() | Visibility;
 
   uint64_t Value = SymbolValue(*MSD.Symbol, Layout);
   uint64_t Size = 0;
@@ -593,25 +585,6 @@ bool ELFObjectWriter::shouldRelocateWithSymbol(const MCAssembler &Asm,
   return false;
 }
 
-static const MCSymbol *getWeakRef(const MCSymbolRefExpr &Ref) {
-  const MCSymbol &Sym = Ref.getSymbol();
-
-  if (Ref.getKind() == MCSymbolRefExpr::VK_WEAKREF)
-    return &Sym;
-
-  if (!Sym.isVariable())
-    return nullptr;
-
-  const MCExpr *Expr = Sym.getVariableValue();
-  const auto *Inner = dyn_cast<MCSymbolRefExpr>(Expr);
-  if (!Inner)
-    return nullptr;
-
-  if (Inner->getKind() == MCSymbolRefExpr::VK_WEAKREF)
-    return &Inner->getSymbol();
-  return nullptr;
-}
-
 // True if the assembler knows nothing about the final value of the symbol.
 // This doesn't cover the comdat issues, since in those cases the assembler
 // can at least know that all symbols in the section will move together.
@@ -685,6 +658,17 @@ void ELFObjectWriter::RecordRelocation(MCAssembler &Asm,
   const MCSymbolRefExpr *RefA = Target.getSymA();
   const auto *SymA = RefA ? cast<MCSymbolELF>(&RefA->getSymbol()) : nullptr;
 
+  bool ViaWeakRef = false;
+  if (SymA && SymA->isVariable()) {
+    const MCExpr *Expr = SymA->getVariableValue();
+    if (const auto *Inner = dyn_cast<MCSymbolRefExpr>(Expr)) {
+      if (Inner->getKind() == MCSymbolRefExpr::VK_WEAKREF) {
+        SymA = cast<MCSymbolELF>(&Inner->getSymbol());
+        ViaWeakRef = true;
+      }
+    }
+  }
+
   unsigned Type = GetRelocType(Target, Fixup, IsPCRel);
   bool RelocateWithSymbol = shouldRelocateWithSymbol(Asm, RefA, SymA, C, Type);
   if (!RelocateWithSymbol && SymA && !SymA->isUndefined())
@@ -713,10 +697,10 @@ void ELFObjectWriter::RecordRelocation(MCAssembler &Asm,
     if (const MCSymbolELF *R = Renames.lookup(SymA))
       SymA = R;
 
-    if (const MCSymbol *WeakRef = getWeakRef(*RefA))
-      WeakrefUsedInReloc.insert(WeakRef);
+    if (ViaWeakRef)
+      SymA->setIsWeakrefUsedInReloc();
     else
-      UsedInReloc.insert(SymA);
+      SymA->setUsedInReloc();
   }
   ELFRelocationEntry Rec(FixupOffset, SymA, Type, Addend);
   Relocations[&FixupSection].push_back(Rec);
@@ -740,17 +724,13 @@ bool ELFObjectWriter::isInSymtab(const MCAsmLayout &Layout,
   if (Renamed)
     return false;
 
-  if (Symbol.getName() == "_GLOBAL_OFFSET_TABLE_")
-    return true;
-
-  if (Symbol.isVariable()) {
-    const MCSymbol *Base = Layout.getBaseSymbol(Symbol);
-    if (Base && Base->isUndefined())
-      return false;
+  if (Symbol.isVariable() && Symbol.isUndefined()) {
+    // FIXME: this is here just to diagnose the case of a var = commmon_sym.
+    Layout.getBaseSymbol(Symbol);
+    return false;
   }
 
-  bool IsGlobal = Symbol.getBinding() == ELF::STB_GLOBAL;
-  if (!Symbol.isVariable() && Symbol.isUndefined() && !IsGlobal)
+  if (Symbol.isUndefined() && !Symbol.isBindingSet())
     return false;
 
   if (Symbol.getType() == ELF::STT_SECTION)
@@ -760,20 +740,6 @@ bool ELFObjectWriter::isInSymtab(const MCAsmLayout &Layout,
     return false;
 
   return true;
-}
-
-bool ELFObjectWriter::isLocal(const MCSymbol &Symbol, bool IsUsedInReloc,
-                              bool IsSignature) {
-  if (Symbol.isExternal())
-    return false;
-
-  if (Symbol.isDefined())
-    return true;
-
-  if (IsUsedInReloc)
-    return false;
-
-  return IsSignature;
 }
 
 void ELFObjectWriter::computeSymbolTable(
@@ -806,9 +772,9 @@ void ELFObjectWriter::computeSymbolTable(
   bool HasLargeSectionIndex = false;
   for (const MCSymbol &S : Asm.symbols()) {
     const auto &Symbol = cast<MCSymbolELF>(S);
-    bool Used = UsedInReloc.count(&Symbol);
-    bool WeakrefUsed = WeakrefUsedInReloc.count(&Symbol);
-    bool isSignature = RevGroupMap.count(&Symbol);
+    bool Used = Symbol.isUsedInReloc();
+    bool WeakrefUsed = Symbol.isWeakrefUsedInReloc();
+    bool isSignature = Symbol.isSignature();
 
     if (!isInSymtab(Layout, Symbol, Used || WeakrefUsed || isSignature,
                     Renames.count(&Symbol)))
@@ -817,12 +783,7 @@ void ELFObjectWriter::computeSymbolTable(
     ELFSymbolData MSD;
     MSD.Symbol = cast<MCSymbolELF>(&Symbol);
 
-    // Undefined symbols are global, but this is the first place we
-    // are able to set it.
-    bool Local = isLocal(Symbol, Used, isSignature);
-    if (!Local && Symbol.getBinding() == ELF::STB_LOCAL)
-      Symbol.setBinding(ELF::STB_GLOBAL);
-
+    bool Local = Symbol.getBinding() == ELF::STB_LOCAL;
     if (Symbol.isAbsolute()) {
       MSD.SectionIndex = ELF::SHN_ABS;
     } else if (Symbol.isCommon()) {
@@ -836,8 +797,6 @@ void ELFObjectWriter::computeSymbolTable(
       } else {
         MSD.SectionIndex = ELF::SHN_UNDEF;
       }
-      if (!Used && WeakrefUsed)
-        Symbol.setBinding(ELF::STB_WEAK);
     } else {
       const MCSectionELF &Section =
           static_cast<const MCSectionELF &>(Symbol.getSection());

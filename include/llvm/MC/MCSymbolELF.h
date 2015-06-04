@@ -36,7 +36,21 @@ public:
   void setBinding(unsigned Binding) const;
   unsigned getBinding() const;
 
+  bool isBindingSet() const;
+
+  void setUsedInReloc() const;
+  bool isUsedInReloc() const;
+
+  void setIsWeakrefUsedInReloc() const;
+  bool isWeakrefUsedInReloc() const;
+
+  void setIsSignature() const;
+  bool isSignature() const;
+
   static bool classof(const MCSymbol *S) { return S->isELF(); }
+
+private:
+  void setIsBindingSet() const;
 };
 }
 
