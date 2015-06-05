@@ -1532,20 +1532,20 @@ std::string DagInit::getAsString() const {
 //    Other implementations
 //===----------------------------------------------------------------------===//
 
-RecordVal::RecordVal(Init *N, RecTy *T, unsigned P)
-  : Name(N), Ty(T), Prefix(P) {
+RecordVal::RecordVal(Init *N, RecTy *T, bool P)
+  : NameAndPrefix(N, P), Ty(T) {
   Value = UnsetInit::get()->convertInitializerTo(Ty);
   assert(Value && "Cannot create unset value for current type!");
 }
 
-RecordVal::RecordVal(const std::string &N, RecTy *T, unsigned P)
-  : Name(StringInit::get(N)), Ty(T), Prefix(P) {
+RecordVal::RecordVal(const std::string &N, RecTy *T, bool P)
+  : NameAndPrefix(StringInit::get(N), P), Ty(T) {
   Value = UnsetInit::get()->convertInitializerTo(Ty);
   assert(Value && "Cannot create unset value for current type!");
 }
 
 const std::string &RecordVal::getName() const {
-  return cast<StringInit>(Name)->getValue();
+  return cast<StringInit>(getNameInit())->getValue();
 }
 
 void RecordVal::dump() const { errs() << *this; }
@@ -1646,9 +1646,11 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const Record &R) {
   const std::vector<Init *> &TArgs = R.getTemplateArgs();
   if (!TArgs.empty()) {
     OS << "<";
-    for (unsigned i = 0, e = TArgs.size(); i != e; ++i) {
-      if (i) OS << ", ";
-      const RecordVal *RV = R.getValue(TArgs[i]);
+    bool NeedComma = false;
+    for (const Init *TA : TArgs) {
+      if (NeedComma) OS << ", ";
+      NeedComma = true;
+      const RecordVal *RV = R.getValue(TA);
       assert(RV && "Template argument record not found??");
       RV->print(OS, false);
     }
@@ -1659,18 +1661,17 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const Record &R) {
   const std::vector<Record*> &SC = R.getSuperClasses();
   if (!SC.empty()) {
     OS << "\t//";
-    for (unsigned i = 0, e = SC.size(); i != e; ++i)
-      OS << " " << SC[i]->getNameInitAsString();
+    for (const Record *Super : SC)
+      OS << " " << Super->getNameInitAsString();
   }
   OS << "\n";
 
-  const std::vector<RecordVal> &Vals = R.getValues();
-  for (unsigned i = 0, e = Vals.size(); i != e; ++i)
-    if (Vals[i].getPrefix() && !R.isTemplateArg(Vals[i].getName()))
-      OS << Vals[i];
-  for (unsigned i = 0, e = Vals.size(); i != e; ++i)
-    if (!Vals[i].getPrefix() && !R.isTemplateArg(Vals[i].getName()))
-      OS << Vals[i];
+  for (const RecordVal &Val : R.getValues())
+    if (Val.getPrefix() && !R.isTemplateArg(Val.getName()))
+      OS << Val;
+  for (const RecordVal &Val : R.getValues())
+    if (!Val.getPrefix() && !R.isTemplateArg(Val.getName()))
+      OS << Val;
 
   return OS << "}\n";
 }

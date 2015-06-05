@@ -1587,6 +1587,11 @@ static bool isNullConstant(SDValue V) {
   return Const != nullptr && Const->isNullValue();
 }
 
+static bool isNullFPConstant(SDValue V) {
+  ConstantFPSDNode *Const = dyn_cast<ConstantFPSDNode>(V);
+  return Const != nullptr && Const->isZero() && !Const->isNegative();
+}
+
 static bool isAllOnesConstant(SDValue V) {
   ConstantSDNode *Const = dyn_cast<ConstantSDNode>(V);
   return Const != nullptr && Const->isAllOnesValue();
@@ -9061,14 +9066,18 @@ static bool canFoldInAddressingMode(SDNode *N, SDNode *Use,
                                     SelectionDAG &DAG,
                                     const TargetLowering &TLI) {
   EVT VT;
+  unsigned AS;
+
   if (LoadSDNode *LD  = dyn_cast<LoadSDNode>(Use)) {
     if (LD->isIndexed() || LD->getBasePtr().getNode() != N)
       return false;
     VT = LD->getMemoryVT();
+    AS = LD->getAddressSpace();
   } else if (StoreSDNode *ST  = dyn_cast<StoreSDNode>(Use)) {
     if (ST->isIndexed() || ST->getBasePtr().getNode() != N)
       return false;
     VT = ST->getMemoryVT();
+    AS = ST->getAddressSpace();
   } else
     return false;
 
@@ -9092,7 +9101,7 @@ static bool canFoldInAddressingMode(SDNode *N, SDNode *Use,
   } else
     return false;
 
-  return TLI.isLegalAddressingMode(AM, VT.getTypeForEVT(*DAG.getContext()));
+  return TLI.isLegalAddressingMode(AM, VT.getTypeForEVT(*DAG.getContext()), AS);
 }
 
 /// Try turning a load/store into a pre-indexed load/store when the base
@@ -11908,9 +11917,7 @@ SDValue DAGCombiner::visitBUILD_VECTOR(SDNode *N) {
     if (Op.getOpcode() == ISD::UNDEF) continue;
 
     // See if we can combine this build_vector into a blend with a zero vector.
-    if (!VecIn2.getNode() && (isNullConstant(Op) ||
-        (Op.getOpcode() == ISD::ConstantFP &&
-        cast<ConstantFPSDNode>(Op.getNode())->getValueAPF().isZero()))) {
+    if (!VecIn2.getNode() && (isNullConstant(Op) || isNullFPConstant(Op))) {
       UsesZeroVector = true;
       continue;
     }

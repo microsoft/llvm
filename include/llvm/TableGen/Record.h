@@ -752,11 +752,10 @@ public:
 
   int getNumOperands() const override { return 2; }
   Init *getOperand(int i) const override {
-    assert((i == 0 || i == 1) && "Invalid operand id for binary operator");
-    if (i == 0) {
-      return getLHS();
-    } else {
-      return getRHS();
+    switch (i) {
+    default: llvm_unreachable("Invalid operand id for binary operator");
+    case 0: return getLHS();
+    case 1: return getRHS();
     }
   }
 
@@ -808,14 +807,11 @@ public:
 
   int getNumOperands() const override { return 3; }
   Init *getOperand(int i) const override {
-    assert((i == 0 || i == 1 || i == 2) &&
-           "Invalid operand id for ternary operator");
-    if (i == 0) {
-      return getLHS();
-    } else if (i == 1) {
-      return getMHS();
-    } else {
-      return getRHS();
+    switch (i) {
+    default: llvm_unreachable("Invalid operand id for ternary operator");
+    case 0: return getLHS();
+    case 1: return getMHS();
+    case 2: return getRHS();
     }
   }
 
@@ -1113,22 +1109,21 @@ public:
 //===----------------------------------------------------------------------===//
 
 class RecordVal {
-  Init *Name;
+  PointerIntPair<Init *, 1, bool> NameAndPrefix;
   RecTy *Ty;
-  unsigned Prefix;
   Init *Value;
 
 public:
-  RecordVal(Init *N, RecTy *T, unsigned P);
-  RecordVal(const std::string &N, RecTy *T, unsigned P);
+  RecordVal(Init *N, RecTy *T, bool P);
+  RecordVal(const std::string &N, RecTy *T, bool P);
 
   const std::string &getName() const;
-  const Init *getNameInit() const { return Name; }
+  const Init *getNameInit() const { return NameAndPrefix.getPointer(); }
   std::string getNameInitAsString() const {
     return getNameInit()->getAsUnquotedString();
   }
 
-  unsigned getPrefix() const { return Prefix; }
+  bool getPrefix() const { return NameAndPrefix.getInt(); }
   RecTy *getType() const { return Ty; }
   Init *getValue() const { return Value; }
 
