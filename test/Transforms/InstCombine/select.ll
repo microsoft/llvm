@@ -1533,10 +1533,13 @@ define i32 @test_max_of_min(i32 %a) {
   ret i32 %s1
 }
 
+
 define i32 @PR23757(i32 %x) {
 ; CHECK-LABEL: @PR23757
-; CHECK:      %[[add:.*]] = add i32 %x, 1
-; CHECK-NEXT: ret i32 %[[add]]
+; CHECK:      %[[cmp:.*]] = icmp eq i32 %x, 2147483647
+; CHECK-NEXT: %[[add:.*]] = add nsw i32 %x, 1
+; CHECK-NEXT: %[[sel:.*]] = select i1 %[[cmp]], i32 -2147483648, i32 %[[add]]
+; CHECK-NEXT: ret i32 %[[sel]]
   %cmp = icmp eq i32 %x, 2147483647
   %add = add nsw i32 %x, 1
   %sel = select i1 %cmp, i32 -2147483648, i32 %add
