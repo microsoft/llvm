@@ -17,7 +17,6 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/FoldingSet.h"
-#include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -1182,13 +1181,6 @@ class Record {
 
 public:
   // Constructs a record.
-  explicit Record(const std::string &N, ArrayRef<SMLoc> locs,
-                  RecordKeeper &records, bool Anonymous = false) :
-    ID(LastID++), Name(StringInit::get(N)), Locs(locs.begin(), locs.end()),
-    TrackedRecords(records), TheInit(nullptr), IsAnonymous(Anonymous),
-    ResolveFirst(false) {
-    init();
-  }
   explicit Record(Init *N, ArrayRef<SMLoc> locs, RecordKeeper &records,
                   bool Anonymous = false) :
     ID(LastID++), Name(N), Locs(locs.begin(), locs.end()),
@@ -1196,6 +1188,10 @@ public:
     ResolveFirst(false) {
     init();
   }
+  explicit Record(const std::string &N, ArrayRef<SMLoc> locs,
+                  RecordKeeper &records, bool Anonymous = false)
+    : Record(StringInit::get(N), locs, records, Anonymous) {}
+
 
   // When copy-constructing a Record, we must still guarantee a globally unique
   // ID number.  All other fields can be copied normally.
@@ -1351,7 +1347,7 @@ public:
 
   /// Return true if the named field is unset.
   bool isValueUnset(StringRef FieldName) const {
-    return getValueInit(FieldName) == UnsetInit::get();
+    return isa<UnsetInit>(getValueInit(FieldName));
   }
 
   /// getValueAsString - This method looks up the specified field and returns
@@ -1503,7 +1499,6 @@ struct LessRecordFieldName {
 };
 
 struct LessRecordRegister {
-  static size_t min(size_t a, size_t b) { return a < b ? a : b; }
   static bool ascii_isdigit(char x) { return x >= '0' && x <= '9'; }
 
   struct RecordParts {
