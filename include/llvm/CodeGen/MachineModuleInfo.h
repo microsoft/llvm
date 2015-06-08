@@ -69,6 +69,29 @@ struct SEHHandler {
   const BlockAddress *RecoverBA;
 };
 
+// Tree node indicating handler nesting relationship
+// FIXME: stop leaking this memory
+struct HandlerTreeNode {
+  HandlerTreeNode *Parent;
+  const Function *Handler;
+  uint32_t CatchType;
+};
+
+// Information used per protected region in CoreCLR EH table generation
+struct ClrEHClause {
+  MCSymbol *Begin;
+  MCSymbol *End;
+  const Function *Handler;
+  uint32_t CatchType;
+};
+
+// Function-wide EH info for CoreCLR
+struct ClrEHFuncInfo {
+  SmallPtrSet<const Function *, 4> Handlers;
+  DenseMap<const Function *, std::pair<MCSymbol *, MCSymbol *>> StartEndLabelMap;
+  std::vector<ClrEHClause> Clauses;
+};
+
 //===----------------------------------------------------------------------===//
 /// LandingPadInfo - This structure is used to retain landing pad info for
 /// the current function.
@@ -79,6 +102,7 @@ struct LandingPadInfo {
   SmallVector<MCSymbol *, 1> EndLabels;    // Labels after invoke.
   SmallVector<SEHHandler, 1> SEHHandlers;  // SEH handlers active at this lpad.
   MCSymbol *LandingPadLabel;               // Label at beginning of landing pad.
+  HandlerTreeNode *TreeNode;               // Place in handler nesting tree (for CLR).
   const Function *Personality;             // Personality function.
   std::vector<int> TypeIds;               // List of type ids (filters negative).
   int WinEHState;                         // WinEH specific state number.
@@ -188,6 +212,7 @@ class MachineModuleInfo : public ImmutablePass {
   EHPersonality PersonalityTypeCache;
 
   DenseMap<const Function *, std::unique_ptr<WinEHFuncInfo>> FuncInfoMap;
+  DenseMap<const Function *, std::unique_ptr<ClrEHFuncInfo>> ClrEHFuncInfoMap;
 
 public:
   static char ID; // Pass identification, replacement for typeid
@@ -227,6 +252,7 @@ public:
 
   const Function *getWinEHParent(const Function *F) const;
   WinEHFuncInfo &getWinEHFuncInfo(const Function *F);
+  ClrEHFuncInfo &getClrEHFuncInfo(const Function *F);
   bool hasWinEHFuncInfo(const Function *F) const {
     return FuncInfoMap.count(getWinEHParent(F)) > 0;
   }
@@ -365,6 +391,9 @@ public:
 
   void addSEHCleanupHandler(MachineBasicBlock *LandingPad,
                             const Function *Cleanup);
+
+  void addHandlerTreeNode(MachineBasicBlock *LandingPad,
+                          HandlerTreeNode *TreeNode);
 
   /// getTypeIDFor - Return the type id for the specified typeinfo.  This is
   /// function wide.

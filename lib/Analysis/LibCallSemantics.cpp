@@ -68,7 +68,11 @@ EHPersonality llvm::classifyEHPersonality(const Value *Pers) {
   const Function *F = dyn_cast<Function>(Pers->stripPointerCasts());
   if (!F)
     return EHPersonality::Unknown;
-  return StringSwitch<EHPersonality>(F->getName())
+  return classifyEHPersonality(F->getName());
+}
+
+EHPersonality llvm::classifyEHPersonality(StringRef PersName) {
+  return StringSwitch<EHPersonality>(PersName)
     .Case("__gnat_eh_personality", EHPersonality::GNU_Ada)
     .Case("__gxx_personality_v0",  EHPersonality::GNU_CXX)
     .Case("__gcc_personality_v0",  EHPersonality::GNU_C)
@@ -77,6 +81,7 @@ EHPersonality llvm::classifyEHPersonality(const Value *Pers) {
     .Case("_except_handler4",      EHPersonality::MSVC_X86SEH)
     .Case("__C_specific_handler",  EHPersonality::MSVC_Win64SEH)
     .Case("__CxxFrameHandler3",    EHPersonality::MSVC_CXX)
+    .Case("ProcessCLRException",   EHPersonality::CoreCLR)
     .Default(EHPersonality::Unknown);
 }
 

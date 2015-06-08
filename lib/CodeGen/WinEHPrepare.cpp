@@ -554,7 +554,8 @@ void WinEHPrepare::identifyEHBlocks(Function &F,
   //   not follow llvm.eh.endcatch blocks, which mark a transition from
   //   exceptional to normal control.
 
-  if (Personality == EHPersonality::MSVC_CXX)
+  if ((Personality == EHPersonality::MSVC_CXX)
+      || (Personality == EHPersonality::CoreCLR))
     findCXXEHReturnPoints(F, EHReturnBlocks);
   else
     findSEHEHReturnPoints(F, EHReturnBlocks);
@@ -2068,7 +2069,8 @@ void WinEHPrepare::mapLandingPadBlocks(LandingPadInst *LPad,
           // rethrow exceptions but code called from catches can. For SEH, it
           // isn't important if some finally code before a catch-all is executed
           // out of line or after recovering from the exception.
-          if (Personality == EHPersonality::MSVC_CXX)
+          if ((Personality == EHPersonality::MSVC_CXX) ||
+              (Personality == EHPersonality::CoreCLR))
             findCleanupHandlers(Actions, BB, BB);
         } else {
           // If an action was not found, it means that the control flows

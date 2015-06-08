@@ -172,12 +172,14 @@ class InvokeInst;
     MSVC_X86SEH,
     MSVC_Win64SEH,
     MSVC_CXX,
+    CoreCLR
   };
 
   /// \brief See if the given exception handling personality function is one
   /// that we understand.  If so, return a description of it; otherwise return
   /// Unknown.
   EHPersonality classifyEHPersonality(const Value *Pers);
+  EHPersonality classifyEHPersonality(StringRef PersName);
 
   /// \brief Returns true if this personality function catches asynchronous
   /// exceptions.
@@ -194,6 +196,7 @@ class InvokeInst;
   }
 
   /// \brief Returns true if this is an MSVC personality function.
+  // TODO: rename this and/or CoreCLR enum value
   inline bool isMSVCEHPersonality(EHPersonality Pers) {
     // The two SEH personality functions can catch asynch exceptions. We assume
     // unknown personalities don't catch asynch exceptions.
@@ -201,6 +204,7 @@ class InvokeInst;
     case EHPersonality::MSVC_CXX:
     case EHPersonality::MSVC_X86SEH:
     case EHPersonality::MSVC_Win64SEH:
+    case EHPersonality::CoreCLR:
       return true;
     default: return false;
     }

@@ -147,6 +147,8 @@ void WinException::endFunction(const MachineFunction *MF) {
       emitCSpecificHandlerTable(); // FIXME
     else if (Per == EHPersonality::MSVC_CXX)
       emitCXXFrameHandler3Table(MF);
+    else if (Per == EHPersonality::CoreCLR)
+      emitCLRExceptionTable(MF);
     else
       emitExceptionTable();
 
@@ -538,6 +540,173 @@ void WinException::extendIP2StateTable(const MachineFunction *MF,
             std::make_pair(BeginLabel, LandingPad->WinEHState));
       LastEHState = LandingPad->WinEHState;
       LastLabel = LandingPad->EndLabels[P.RangeIndex];
+    }
+  }
+}
+
+static int getRank(HandlerTreeNode *Node) {
+  int Rank = 0;
+  while (Node != nullptr) {
+    ++Rank;
+    Node = Node->Parent;
+  }
+  return Rank;
+}
+static HandlerTreeNode *getAncestor(HandlerTreeNode *Left, HandlerTreeNode *Right) {
+  int LeftRank = getRank(Left);
+  int RightRank = getRank(Right);
+
+  while (LeftRank < RightRank) {
+    Right = Right->Parent;
+  }
+
+  while (RightRank < LeftRank) {
+    Left = Left->Parent;
+  }
+
+  while (Left != Right) {
+    Left = Left->Parent;
+    Right = Right->Parent;
+  }
+
+  return Left;
+}
+
+const MCExpr *WinException::getOffset(MCSymbol *OffsetOf, MCSymbol *OffsetFrom) {
+  return  MCBinaryExpr::createSub(create32bitRef(OffsetOf), create32bitRef(OffsetFrom),
+                                  Asm->OutContext);
+}
+
+void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
+  const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
+  const Function *Fn = MF->getFunction();
+  ClrEHFuncInfo &Info = MMI->getClrEHFuncInfo(Fn);
+
+  SmallVector<const LandingPadInfo *, 64> LandingPads;
+  LandingPads.reserve(PadInfos.size());
+  for (const auto &LP : PadInfos)
+    LandingPads.push_back(&LP);
+
+  // Compute label ranges for call sites as we would for the Itanium LSDA, but
+  // use an all zero action table because we aren't using these actions.
+  SmallVector<unsigned, 64> FirstActions;
+  FirstActions.resize(LandingPads.size());
+  SmallVector<CallSiteEntry, 64> CallSites;
+  computeCallSiteTable(CallSites, LandingPads, FirstActions);
+
+  MCSymbol *EHFuncBeginSym = Asm->getFunctionBegin();
+  MCSymbol *EHFuncEndSym = Asm->getFunctionEnd();
+
+  auto &StartEndLabelMap = Info.StartEndLabelMap;
+  StartEndLabelMap[Fn] = { EHFuncBeginSym, EHFuncEndSym };
+  bool IsLast = (StartEndLabelMap.size() == Info.Handlers.size() + 1);
+
+  SmallVector<std::pair<MCSymbol *, HandlerTreeNode *>, 4> HandlerStack;
+  MCSymbol *LastLabel = nullptr;
+
+  for (const CallSiteEntry &CSE : CallSites) {
+    const LandingPadInfo *LFI = CSE.LPad;
+    if (LFI == nullptr) {
+      // Win EH Prepare inserts these stubs in handlers that don't contain
+      // inner try blocks so there will be somewhere to record the personality
+      // routine.  Ignore these.
+      continue;
+    }
+    HandlerTreeNode *TreeNode = LFI->TreeNode;
+
+    if (!HandlerStack.empty()) {
+      // Close any try regions we're not still under
+      auto &Pair = HandlerStack.back();
+      MCSymbol *BeginLabel = Pair.first;
+      HandlerTreeNode *PopNode = Pair.second;
+      HandlerTreeNode *Ancestor = getAncestor(PopNode, TreeNode);
+      while (PopNode != Ancestor) {
+        Info.Clauses.push_back({ BeginLabel, LastLabel, PopNode->Handler, PopNode->CatchType });
+        if (HandlerStack.back().second == PopNode) {
+          HandlerStack.pop_back();
+        }
+        PopNode = PopNode->Parent;
+      }
+      assert((Ancestor == nullptr && HandlerStack.empty()) ||
+             (Ancestor == HandlerStack.back().second));
+    }
+
+    if (TreeNode != nullptr) {
+      // Enter a new region
+      HandlerStack.push_back({ CSE.BeginLabel, TreeNode });
+      LastLabel = CSE.EndLabel;
+    }
+  }
+
+  if (!HandlerStack.empty()) {
+    // Close any trailing regions
+    auto &Pair = HandlerStack.back();
+    MCSymbol *BeginLabel = Pair.first;
+    HandlerTreeNode *PopNode = Pair.second;
+    while (PopNode != nullptr) {
+      Info.Clauses.push_back({ BeginLabel, LastLabel, PopNode->Handler, PopNode->CatchType });
+      PopNode = PopNode->Parent;
+    }
+  }
+
+  // Write out a sentinel indicating whether this is the last function.
+  uint64_t Sentinel = (IsLast ? 0xffffffff : 0);
+  Asm->OutStreamer->EmitIntValue(Sentinel, 4);
+
+  // Write out the offset of the start and end of the just-described function.
+  MCSymbol *RootBegin = StartEndLabelMap[MMI->getWinEHParent(Fn)].first;
+  Asm->OutStreamer->EmitValue(getOffset(EHFuncBeginSym, RootBegin), 4);
+  Asm->OutStreamer->EmitValue(getOffset(EHFuncEndSym, RootBegin), 4);
+
+  if (IsLast && !Info.Clauses.empty()) {
+    // Now write out the clauses into a dummy section.
+    Asm->OutStreamer->EmitIntValue(Info.Clauses.size(), 4);
+    for (ClrEHClause &Clause : Info.Clauses) {
+      auto &HandlerLabels = StartEndLabelMap[Clause.Handler];
+      /*
+        struct CORINFO_EH_CLAUSE
+        {
+            CORINFO_EH_CLAUSE_FLAGS     Flags;
+            DWORD                       TryOffset;
+            DWORD                       TryLength; // actually pass TryEndOffset
+            DWORD                       HandlerOffset;
+            DWORD                       HandlerLength; // actually pass HandlerEndOffset
+            union
+            {
+                DWORD                   ClassToken;       // use for type-based exception handlers
+                DWORD                   FilterOffset;     // use for filter-based exception handlers (COR_ILEXCEPTION_FILTER is set)
+            };
+        };
+      */
+      const MCExpr *RealClauseBegin = getOffset(Clause.Begin, RootBegin);
+      const MCExpr *RealClauseEnd = getOffset(Clause.End, RootBegin);
+      // Add 1 to the start/end of the EH clause; the IP associated with a
+      // call when the runtime does its scan is the IP of the next instruction
+      // (the one to which control will return after the call), so we need
+      // to add 1 to the end of the clause to cover that offset.  We also add
+      // 1 to the start of the clause to make sure that the ranges reported
+      // for all clauses are disjoint.  Note that we'll need some additional
+      // logic when machine traps are supported, since in that case the IP
+      // that the runtime uses is the offset of the faulting instruction
+      // itself; if such an instruction immediately follows a call but the
+      // two belong to different clauses, we'll need to insert a nop between
+      // them so the runtime can distinguish the point to which the call will
+      // return from the point at which the fault occurs.
+      const MCConstantExpr *MCOne = MCConstantExpr::create(1, Asm->OutContext);
+      const MCExpr *ClauseBegin =
+        MCBinaryExpr::createAdd(RealClauseBegin, MCOne, Asm->OutContext);
+      const MCExpr *ClauseEnd =
+        MCBinaryExpr::createAdd(RealClauseEnd, MCOne, Asm->OutContext);
+      if (Clause.CatchType == 0) {
+        Asm->OutStreamer->EmitIntValue(2, 4); // flags 2 means finally clause
+      } else {
+        Asm->OutStreamer->EmitIntValue(0, 4); // flags 0 means catch clause
+      }
+      Asm->OutStreamer->EmitValue(ClauseBegin, 4);
+      Asm->OutStreamer->EmitValue(ClauseEnd, 4);
+      Asm->OutStreamer->EmitValue(getOffset(HandlerLabels.first, RootBegin), 4);
+      Asm->OutStreamer->EmitValue(getOffset(HandlerLabels.second, RootBegin), 4);
+      Asm->OutStreamer->EmitIntValue(Clause.CatchType, 4);
     }
   }
 }
