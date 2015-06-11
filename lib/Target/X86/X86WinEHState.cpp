@@ -60,12 +60,15 @@ public:
 private:
   void emitExceptionRegistrationRecord(Function *F);
 
-  void linkExceptionRegistration(IRBuilder<> &Builder, Value *Handler);
+  void linkExceptionRegistration(IRBuilder<> &Builder, Function *Handler);
   void unlinkExceptionRegistration(IRBuilder<> &Builder);
   void addCXXStateStores(Function &F, MachineModuleInfo &MMI);
+  void addSEHStateStores(Function &F, MachineModuleInfo &MMI);
   void addCXXStateStoresToFunclet(Value *ParentRegNode, WinEHFuncInfo &FuncInfo,
                                   Function &F, int BaseState);
   void insertStateNumberStore(Value *ParentRegNode, Instruction *IP, int State);
+  iplist<Instruction>::iterator
+  rewriteExceptionInfoIntrinsics(IntrinsicInst *Intrin);
 
   Value *emitEHLSDA(IRBuilder<> &Builder, Function *F);
 
@@ -171,8 +174,10 @@ bool WinEHStatePass::runOnFunction(Function &F) {
   auto *MMIPtr = getAnalysisIfAvailable<MachineModuleInfo>();
   assert(MMIPtr && "MachineModuleInfo should always be available");
   MachineModuleInfo &MMI = *MMIPtr;
-  if (Personality == EHPersonality::MSVC_CXX) {
-    addCXXStateStores(F, MMI);
+  switch (Personality) {
+  default: llvm_unreachable("unexpected personality function");
+  case EHPersonality::MSVC_CXX:    addCXXStateStores(F, MMI); break;
+  case EHPersonality::MSVC_X86SEH: addSEHStateStores(F, MMI); break;
   }
 
   // Reset per-function state.
@@ -258,7 +263,6 @@ void WinEHStatePass::emitExceptionRegistrationRecord(Function *F) {
   if (Personality == EHPersonality::MSVC_CXX) {
     RegNodeTy = getCXXEHRegistrationType();
     RegNode = Builder.CreateAlloca(RegNodeTy);
-    // FIXME: We can skip this in -GS- mode, when we figure that out.
     // SavedESP = llvm.stacksave()
     Value *SP = Builder.CreateCall(
         Intrinsic::getDeclaration(TheModule, Intrinsic::stacksave), {});
@@ -360,11 +364,14 @@ Function *WinEHStatePass::generateLSDAInEAXThunk(Function *ParentFunc) {
 }
 
 void WinEHStatePass::linkExceptionRegistration(IRBuilder<> &Builder,
-                                               Value *Handler) {
+                                               Function *Handler) {
+  // Emit the .safeseh directive for this function.
+  Handler->addFnAttr("safeseh");
+
   Type *LinkTy = getEHLinkRegistrationType();
   // Handler = Handler
-  Handler = Builder.CreateBitCast(Handler, Builder.getInt8PtrTy());
-  Builder.CreateStore(Handler, Builder.CreateStructGEP(LinkTy, Link, 1));
+  Value *HandlerI8 = Builder.CreateBitCast(Handler, Builder.getInt8PtrTy());
+  Builder.CreateStore(HandlerI8, Builder.CreateStructGEP(LinkTy, Link, 1));
   // Next = [fs:00]
   Constant *FSZero =
       Constant::getNullValue(LinkTy->getPointerTo()->getPointerTo(257));
@@ -470,6 +477,95 @@ void WinEHStatePass::addCXXStateStoresToFunclet(Value *ParentRegNode,
       }
     }
   }
+}
+
+/// Assign every distinct landingpad a unique state number for SEH. Unlike C++
+/// EH, we can use this very simple algorithm while C++ EH cannot because catch
+/// handlers aren't outlined and the runtime doesn't have to figure out which
+/// catch handler frame to unwind to.
+/// FIXME: __finally blocks are outlined, so this approach may break down there.
+void WinEHStatePass::addSEHStateStores(Function &F, MachineModuleInfo &MMI) {
+  WinEHFuncInfo &FuncInfo = MMI.getWinEHFuncInfo(&F);
+
+  // Iterate all the instructions and emit state number stores.
+  int CurState = 0;
+  SmallPtrSet<BasicBlock *, 4> ExceptBlocks;
+  for (BasicBlock &BB : F) {
+    for (auto I = BB.begin(), E = BB.end(); I != E; ++I) {
+      if (auto *CI = dyn_cast<CallInst>(I)) {
+        auto *Intrin = dyn_cast<IntrinsicInst>(CI);
+        if (Intrin) {
+          I = rewriteExceptionInfoIntrinsics(Intrin);
+          // Calls that "don't throw" are considered to be able to throw asynch
+          // exceptions, but intrinsics cannot.
+          continue;
+        }
+        insertStateNumberStore(RegNode, CI, -1);
+      } else if (auto *II = dyn_cast<InvokeInst>(I)) {
+        // Look up the state number of the landingpad this unwinds to.
+        LandingPadInst *LPI = II->getUnwindDest()->getLandingPadInst();
+        auto InsertionPair =
+            FuncInfo.LandingPadStateMap.insert(std::make_pair(LPI, 0));
+        auto Iter = InsertionPair.first;
+        int &State = Iter->second;
+        bool Inserted = InsertionPair.second;
+        if (Inserted) {
+          // Each action consumes a state number.
+          auto *EHActions = cast<IntrinsicInst>(LPI->getNextNode());
+          SmallVector<std::unique_ptr<ActionHandler>, 4> ActionList;
+          parseEHActions(EHActions, ActionList);
+          assert(!ActionList.empty());
+          CurState += ActionList.size();
+          State += ActionList.size() - 1;
+
+          // Remember all the __except block targets.
+          for (auto &Handler : ActionList) {
+            if (auto *CH = dyn_cast<CatchHandler>(Handler.get())) {
+              auto *BA = cast<BlockAddress>(CH->getHandlerBlockOrFunc());
+              ExceptBlocks.insert(BA->getBasicBlock());
+            }
+          }
+        }
+        insertStateNumberStore(RegNode, II, State);
+      }
+    }
+  }
+
+  // Insert llvm.stackrestore into each __except block.
+  Function *StackRestore =
+      Intrinsic::getDeclaration(TheModule, Intrinsic::stackrestore);
+  for (BasicBlock *ExceptBB : ExceptBlocks) {
+    IRBuilder<> Builder(ExceptBB->begin());
+    Value *SP =
+        Builder.CreateLoad(Builder.CreateStructGEP(RegNodeTy, RegNode, 0));
+    Builder.CreateCall(StackRestore, {SP});
+  }
+}
+
+/// Rewrite llvm.eh.exceptioncode and llvm.eh.exceptioninfo to memory loads in
+/// IR.
+iplist<Instruction>::iterator
+WinEHStatePass::rewriteExceptionInfoIntrinsics(IntrinsicInst *Intrin) {
+  Intrinsic::ID ID = Intrin->getIntrinsicID();
+  if (ID != Intrinsic::eh_exceptioncode && ID != Intrinsic::eh_exceptioninfo)
+    return Intrin;
+
+  // RegNode->ExceptionPointers
+  IRBuilder<> Builder(Intrin);
+  Value *Ptrs =
+      Builder.CreateLoad(Builder.CreateStructGEP(RegNodeTy, RegNode, 1));
+  Value *Res;
+  if (ID == Intrinsic::eh_exceptioncode) {
+    // Ptrs->ExceptionRecord->Code
+    Ptrs = Builder.CreateBitCast(
+        Ptrs, Builder.getInt32Ty()->getPointerTo()->getPointerTo());
+    Value *Rec = Builder.CreateLoad(Ptrs);
+    Res = Builder.CreateLoad(Rec);
+  } else {
+    Res = Ptrs;
+  }
+  Intrin->replaceAllUsesWith(Res);
+  return Intrin->eraseFromParent();
 }
 
 void WinEHStatePass::insertStateNumberStore(Value *ParentRegNode,

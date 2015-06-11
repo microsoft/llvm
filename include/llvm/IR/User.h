@@ -52,15 +52,27 @@ protected:
       : Value(ty, vty), OperandList(OpList) {
     NumOperands = NumOps;
   }
-  Use *allocHungoffUses(unsigned) const;
-  void dropHungoffUses() {
-    Use::zap(OperandList, OperandList + NumOperands, true);
-    OperandList = nullptr;
-    // Reset NumOperands so User::operator delete() does the right thing.
-    NumOperands = 0;
-  }
+
+  /// \brief Allocate the array of Uses, followed by a pointer
+  /// (with bottom bit set) to the User.
+  /// \param IsPhi identifies callers which are phi nodes and which need
+  /// N BasicBlock* allocated along with N
+  void allocHungoffUses(unsigned N, bool IsPhi = false);
+
+  /// \brief Grow the number of hung off uses.  Note that allocHungoffUses
+  /// should be called if there are no uses.
+  void growHungoffUses(unsigned N, bool IsPhi = false);
+
 public:
-  ~User() override { Use::zap(OperandList, OperandList + NumOperands); }
+  ~User() override {
+    // drop the hung off uses.
+    Use::zap(OperandList, OperandList + NumOperands, HasHungOffUses);
+    if (HasHungOffUses) {
+      OperandList = nullptr;
+      // Reset NumOperands so User::operator delete() does the right thing.
+      NumOperands = 0;
+    }
+  }
   /// \brief Free memory allocated for User and Use objects.
   void operator delete(void *Usr);
   /// \brief Placement delete - required by std, but never called.

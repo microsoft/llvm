@@ -13,6 +13,7 @@
 #include "llvm/IR/Operator.h"
 
 namespace llvm {
+class BasicBlock;
 
 //===----------------------------------------------------------------------===//
 //                                 User Class
@@ -39,14 +40,45 @@ void User::replaceUsesOfWith(Value *From, Value *To) {
 //                         User allocHungoffUses Implementation
 //===----------------------------------------------------------------------===//
 
-Use *User::allocHungoffUses(unsigned N) const {
+void User::allocHungoffUses(unsigned N, bool IsPhi) {
   // Allocate the array of Uses, followed by a pointer (with bottom bit set) to
   // the User.
   size_t size = N * sizeof(Use) + sizeof(Use::UserRef);
+  if (IsPhi)
+    size += N * sizeof(BasicBlock *);
   Use *Begin = static_cast<Use*>(::operator new(size));
   Use *End = Begin + N;
   (void) new(End) Use::UserRef(const_cast<User*>(this), 1);
-  return Use::initTags(Begin, End);
+  OperandList = Use::initTags(Begin, End);
+  // Tag this operand list as being a hung off.
+  HasHungOffUses = true;
+}
+
+void User::growHungoffUses(unsigned NewNumUses, bool IsPhi) {
+  assert(HasHungOffUses && "realloc must have hung off uses");
+
+  unsigned OldNumUses = getNumOperands();
+
+  // We don't support shrinking the number of uses.  We wouldn't have enough
+  // space to copy the old uses in to the new space.
+  assert(NewNumUses > OldNumUses && "realloc must grow num uses");
+
+  Use *OldOps = OperandList;
+  allocHungoffUses(NewNumUses, IsPhi);
+  Use *NewOps = OperandList;
+
+  // Now copy from the old operands list to the new one.
+  std::copy(OldOps, OldOps + OldNumUses, NewOps);
+
+  // If this is a Phi, then we need to copy the BB pointers too.
+  if (IsPhi) {
+    auto *OldPtr =
+        reinterpret_cast<char *>(OldOps + OldNumUses) + sizeof(Use::UserRef);
+    auto *NewPtr =
+        reinterpret_cast<char *>(NewOps + NewNumUses) + sizeof(Use::UserRef);
+    std::copy(OldPtr, OldPtr + (OldNumUses * sizeof(BasicBlock *)), NewPtr);
+  }
+  Use::zap(OldOps, OldOps + OldNumUses, true);
 }
 
 //===----------------------------------------------------------------------===//
@@ -59,6 +91,7 @@ void *User::operator new(size_t s, unsigned Us) {
   Use *End = Start + Us;
   User *Obj = reinterpret_cast<User*>(End);
   Obj->OperandList = Start;
+  Obj->HasHungOffUses = false;
   Obj->NumOperands = Us;
   Use::initTags(Start, End);
   return Obj;

@@ -24,6 +24,10 @@
 #include "llvm/Target/TargetOptions.h"
 using namespace llvm;
 
+static cl::opt<bool> EnableMachineCombinerPass("x86-machine-combiner",
+                               cl::desc("Enable the machine combiner pass"),
+                               cl::init(true), cl::Hidden);
+
 extern "C" void LLVMInitializeX86Target() {
   // Register the target.
   RegisterTargetMachine<X86TargetMachine> X(TheX86_32Target);
@@ -97,7 +101,7 @@ X86TargetMachine::X86TargetMachine(const Target &T, StringRef TT, StringRef CPU,
     : LLVMTargetMachine(T, computeDataLayout(Triple(TT)), TT, CPU, FS, Options,
                         RM, CM, OL),
       TLOF(createTLOF(Triple(getTargetTriple()))),
-      Subtarget(TT, CPU, FS, *this, Options.StackAlignmentOverride) {
+      Subtarget(Triple(TT), CPU, FS, *this, Options.StackAlignmentOverride) {
   // Windows stack unwinder gets confused when execution flow "falls through"
   // after a call to 'noreturn' function.
   // To prevent that, we emit a trap for 'unreachable' IR instructions.
@@ -148,7 +152,7 @@ X86TargetMachine::getSubtargetImpl(const Function &F) const {
     // creation will depend on the TM and the code generation flags on the
     // function that reside in TargetOptions.
     resetTargetOptions(F);
-    I = llvm::make_unique<X86Subtarget>(TargetTriple, CPU, FS, *this,
+    I = llvm::make_unique<X86Subtarget>(Triple(TargetTriple), CPU, FS, *this,
                                         Options.StackAlignmentOverride);
   }
   return I.get();
@@ -224,6 +228,8 @@ bool X86PassConfig::addInstSelector() {
 
 bool X86PassConfig::addILPOpts() {
   addPass(&EarlyIfConverterID);
+  if (EnableMachineCombinerPass)
+    addPass(&MachineCombinerID);
   return true;
 }
 

@@ -2234,7 +2234,7 @@ class PHINode : public Instruction {
     : Instruction(Ty, Instruction::PHI, nullptr, 0, InsertBefore),
       ReservedSpace(NumReservedValues) {
     setName(NameStr);
-    OperandList = allocHungoffUses(ReservedSpace);
+    allocHungoffUses(ReservedSpace);
   }
 
   PHINode(Type *Ty, unsigned NumReservedValues, const Twine &NameStr,
@@ -2242,13 +2242,15 @@ class PHINode : public Instruction {
     : Instruction(Ty, Instruction::PHI, nullptr, 0, InsertAtEnd),
       ReservedSpace(NumReservedValues) {
     setName(NameStr);
-    OperandList = allocHungoffUses(ReservedSpace);
+    allocHungoffUses(ReservedSpace);
   }
 protected:
   // allocHungoffUses - this is more complicated than the generic
   // User::allocHungoffUses, because we have to allocate Uses for the incoming
   // values and pointers to the incoming blocks, all in one allocation.
-  Use *allocHungoffUses(unsigned) const;
+  void allocHungoffUses(unsigned N) {
+    User::allocHungoffUses(N, /* IsPhi */ true);
+  }
 
   PHINode *clone_impl() const override;
 public:
@@ -2263,7 +2265,6 @@ public:
                          const Twine &NameStr, BasicBlock *InsertAtEnd) {
     return new PHINode(Ty, NumReservedValues, NameStr, InsertAtEnd);
   }
-  ~PHINode() override;
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -2456,7 +2457,6 @@ public:
   static LandingPadInst *Create(Type *RetTy, Value *PersonalityFn,
                                 unsigned NumReservedClauses,
                                 const Twine &NameStr, BasicBlock *InsertAtEnd);
-  ~LandingPadInst() override;
 
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -2855,8 +2855,6 @@ public:
     return new SwitchInst(Value, Default, NumCases, InsertAtEnd);
   }
 
-  ~SwitchInst() override;
-
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
@@ -3041,7 +3039,6 @@ public:
                                 BasicBlock *InsertAtEnd) {
     return new IndirectBrInst(Address, NumDests, InsertAtEnd);
   }
-  ~IndirectBrInst() override;
 
   /// Provide fast operand accessors.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);

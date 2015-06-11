@@ -2230,7 +2230,9 @@ static bool IsCCallConvention(CallingConv::ID CC) {
 }
 
 bool X86TargetLowering::mayBeEmittedAsTailCall(CallInst *CI) const {
-  if (!CI->isTailCall() || getTargetMachine().Options.DisableTailCalls)
+  auto Attr =
+      CI->getParent()->getParent()->getFnAttribute("disable-tail-calls");
+  if (!CI->isTailCall() || Attr.getValueAsString() == "true")
     return false;
 
   CallSite CS(CI);
@@ -2759,8 +2761,9 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   StructReturnType SR = callIsStructReturn(Outs);
   bool IsSibcall      = false;
   X86MachineFunctionInfo *X86Info = MF.getInfo<X86MachineFunctionInfo>();
+  auto Attr = MF.getFunction()->getFnAttribute("disable-tail-calls");
 
-  if (MF.getTarget().Options.DisableTailCalls)
+  if (Attr.getValueAsString() == "true")
     isTailCall = false;
 
   if (Subtarget->isPICStyleGOT() &&
@@ -13233,13 +13236,13 @@ static SDValue LowerBoolVSETCC_AVX512(SDValue Op, SelectionDAG &DAG) {
                                DAG.getConstant(-1, dl, VT));
   switch (SetCCOpcode) {
   default: llvm_unreachable("Unexpected SETCC condition");
-  case ISD::SETNE:
-    // (x != y) -> ~(x ^ y)
+  case ISD::SETEQ:
+    // (x == y) -> ~(x ^ y)
     return DAG.getNode(ISD::XOR, dl, VT,
                        DAG.getNode(ISD::XOR, dl, VT, Op0, Op1),
                        DAG.getConstant(-1, dl, VT));
-  case ISD::SETEQ:
-    // (x == y) -> (x ^ y)
+  case ISD::SETNE:
+    // (x != y) -> (x ^ y)
     return DAG.getNode(ISD::XOR, dl, VT, Op0, Op1);
   case ISD::SETUGT:
   case ISD::SETGT:
@@ -15485,6 +15488,23 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
   }
 
   case Intrinsic::x86_seh_lsda: {
+    // Compute the symbol for the LSDA. We know it'll get emitted later.
+    MachineFunction &MF = DAG.getMachineFunction();
+    SDValue Op1 = Op.getOperand(1);
+    auto *Fn = cast<Function>(cast<GlobalAddressSDNode>(Op1)->getGlobal());
+    MCSymbol *LSDASym = MF.getMMI().getContext().getOrCreateLSDASymbol(
+        GlobalValue::getRealLinkageName(Fn->getName()));
+    StringRef Name = LSDASym->getName();
+    assert(Name.data()[Name.size()] == '\0' && "not null terminated");
+
+    // Generate a simple absolute symbol reference. This intrinsic is only
+    // supported on 32-bit Windows, which isn't PIC.
+    SDValue Result =
+        DAG.getTargetExternalSymbol(Name.data(), VT, X86II::MO_NOPREFIX);
+    return DAG.getNode(X86ISD::Wrapper, dl, VT, Result);
+  }
+
+  case Intrinsic::eh_exceptioninfo: {
     // Compute the symbol for the LSDA. We know it'll get emitted later.
     MachineFunction &MF = DAG.getMachineFunction();
     SDValue Op1 = Op.getOperand(1);

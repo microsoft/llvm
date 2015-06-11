@@ -17,8 +17,8 @@
 
 [common]
 subdirectories = Analysis AsmParser Bitcode CodeGen DebugInfo ExecutionEngine
- LineEditor Linker IR IRReader LTO MC Object Option Passes ProfileData Support
- TableGen Target Transforms
+ LibDriver LineEditor Linker IR IRReader LTO MC Object Option Passes ProfileData
+ Support TableGen Target Transforms
 
 [component_0]
 type = Group
