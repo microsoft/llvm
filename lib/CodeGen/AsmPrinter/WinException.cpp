@@ -449,7 +449,7 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
               Asm->OutContext.getOrCreateParentFrameOffsetSymbol(
                   GlobalValue::getRealLinkageName(HT.Handler->getName()));
           const MCSymbolRefExpr *ParentFrameOffsetRef = MCSymbolRefExpr::create(
-              ParentFrameOffset, MCSymbolRefExpr::VK_None, Asm->OutContext);
+              ParentFrameOffset, Asm->OutContext);
           OS.EmitValue(ParentFrameOffsetRef, 4); // ParentFrameOffset
         }
       }
@@ -551,11 +551,26 @@ void WinException::extendIP2StateTable(const MachineFunction *MF,
 /// functionally equivalent to the __C_specific_handler table, except it is
 /// indexed by state number instead of IP.
 void WinException::emitExceptHandlerTable(const MachineFunction *MF) {
-  auto &OS = *Asm->OutStreamer;
+  MCStreamer &OS = *Asm->OutStreamer;
+
+  // Define the EH registration node offset label in terms of its frameescape
+  // label. The WinEHStatePass ensures that the registration node is passed to
+  // frameescape. This allows SEH filter functions to access the
+  // EXCEPTION_POINTERS field, which is filled in by the _except_handlerN.
+  const Function *F = MF->getFunction();
+  WinEHFuncInfo &FuncInfo = MMI->getWinEHFuncInfo(F);
+  assert(FuncInfo.EHRegNodeEscapeIndex != INT_MAX &&
+         "no EH reg node frameescape index");
+  StringRef FLinkageName = GlobalValue::getRealLinkageName(F->getName());
+  MCSymbol *ParentFrameOffset =
+      Asm->OutContext.getOrCreateParentFrameOffsetSymbol(FLinkageName);
+  MCSymbol *FrameAllocSym = Asm->OutContext.getOrCreateFrameAllocSymbol(
+      FLinkageName, FuncInfo.EHRegNodeEscapeIndex);
+  const MCSymbolRefExpr *FrameAllocSymRef =
+      MCSymbolRefExpr::create(FrameAllocSym, Asm->OutContext);
+  OS.EmitAssignment(ParentFrameOffset, FrameAllocSymRef);
 
   // Emit the __ehtable label that we use for llvm.x86.seh.lsda.
-  const Function *F = MF->getFunction();
-  StringRef FLinkageName = GlobalValue::getRealLinkageName(F->getName());
   MCSymbol *LSDALabel = Asm->OutContext.getOrCreateLSDASymbol(FLinkageName);
   OS.EmitLabel(LSDALabel);
 
@@ -598,8 +613,8 @@ void WinException::emitExceptHandlerTable(const MachineFunction *MF) {
   // For each action in each lpad, emit one of these:
   // struct ScopeTableEntry {
   //   int32_t EnclosingLevel;
-  //   int32_t (__cdecl *FilterOrFinally)();
-  //   void *HandlerLabel;
+  //   int32_t (__cdecl *Filter)();
+  //   void *HandlerOrFinally;
   // };
   //
   // The "outermost" action will use BaseState as its enclosing level. Each
@@ -610,21 +625,20 @@ void WinException::emitExceptHandlerTable(const MachineFunction *MF) {
     assert(CurState + int(LPInfo->SEHHandlers.size()) - 1 ==
                LPInfo->WinEHState &&
            "gaps in the SEH scope table");
-    for (const SEHHandler &Handler : LPInfo->SEHHandlers) {
-      // Emit the filter or finally function pointer, if present. Otherwise,
-      // emit '0' to indicate a catch-all.
-      const Function *F = Handler.FilterOrFinally;
-      const MCExpr *FilterOrFinally =
-          create32bitRef(F ? Asm->getSymbol(F) : nullptr);
-
-      // Compute the recovery address, which is a block address or null.
+    for (auto I = LPInfo->SEHHandlers.rbegin(), E = LPInfo->SEHHandlers.rend();
+         I != E; ++I) {
+      const SEHHandler &Handler = *I;
       const BlockAddress *BA = Handler.RecoverBA;
-      const MCExpr *RecoverBBOrNull =
-          create32bitRef(BA ? Asm->GetBlockAddressSymbol(BA) : nullptr);
+      const Function *F = Handler.FilterOrFinally;
+      assert(F && "cannot catch all in 32-bit SEH without filter function");
+      const MCExpr *FilterOrNull =
+          create32bitRef(BA ? Asm->getSymbol(F) : nullptr);
+      const MCExpr *ExceptOrFinally = create32bitRef(
+          BA ? Asm->GetBlockAddressSymbol(BA) : Asm->getSymbol(F));
 
       OS.EmitIntValue(EnclosingLevel, 4);
-      OS.EmitValue(FilterOrFinally, 4);
-      OS.EmitValue(RecoverBBOrNull, 4);
+      OS.EmitValue(FilterOrNull, 4);
+      OS.EmitValue(ExceptOrFinally, 4);
 
       // The next state unwinds to this state.
       EnclosingLevel = CurState;

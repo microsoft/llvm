@@ -90,13 +90,13 @@ __try.cont:
 ; CHECK: jmp [[cont_bb]]
 
 ; CHECK: .section .xdata,"dr"
-; CHECK-NEXT: L__ehtable$safe_div:
+; CHECK: L__ehtable$safe_div:
 ; CHECK-NEXT: .long -1
-; CHECK-NEXT: .long _safe_div_filt0
-; CHECK-NEXT: .long [[handler0]]
-; CHECK-NEXT: .long 0
 ; CHECK-NEXT: .long _safe_div_filt1
 ; CHECK-NEXT: .long [[handler1]]
+; CHECK-NEXT: .long 0
+; CHECK-NEXT: .long _safe_div_filt0
+; CHECK-NEXT: .long [[handler0]]
 
 define void @try_body(i32* %r, i32* %n, i32* %d) {
 entry:

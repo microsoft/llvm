@@ -115,11 +115,10 @@ computeTargetABI(const Triple &TT, StringRef CPU,
   return TargetABI;
 }
 
-static std::string computeDataLayout(StringRef TT, StringRef CPU,
+static std::string computeDataLayout(const Triple &TT, StringRef CPU,
                                      const TargetOptions &Options,
                                      bool isLittle) {
-  const Triple Triple(TT);
-  auto ABI = computeTargetABI(Triple, CPU, Options);
+  auto ABI = computeTargetABI(TT, CPU, Options);
   std::string Ret = "";
 
   if (isLittle)
@@ -129,7 +128,7 @@ static std::string computeDataLayout(StringRef TT, StringRef CPU,
     // Big endian.
     Ret += "E";
 
-  Ret += DataLayout::getManglingComponent(Triple);
+  Ret += DataLayout::getManglingComponent(TT);
 
   // Pointers are 32 bits and aligned to 32 bits.
   Ret += "-p:32:32";
@@ -159,7 +158,7 @@ static std::string computeDataLayout(StringRef TT, StringRef CPU,
 
   // The stack is 128 bit aligned on NaCl, 64 bit aligned on AAPCS and 32 bit
   // aligned everywhere else.
-  if (Triple.isOSNaCl())
+  if (TT.isOSNaCl())
     Ret += "-S128";
   else if (ABI == ARMBaseTargetMachine::ARM_ABI_AAPCS)
     Ret += "-S64";
@@ -171,16 +170,16 @@ static std::string computeDataLayout(StringRef TT, StringRef CPU,
 
 /// TargetMachine ctor - Create an ARM architecture model.
 ///
-ARMBaseTargetMachine::ARMBaseTargetMachine(const Target &T, StringRef TT,
+ARMBaseTargetMachine::ARMBaseTargetMachine(const Target &T, const Triple &TT,
                                            StringRef CPU, StringRef FS,
                                            const TargetOptions &Options,
                                            Reloc::Model RM, CodeModel::Model CM,
                                            CodeGenOpt::Level OL, bool isLittle)
     : LLVMTargetMachine(T, computeDataLayout(TT, CPU, Options, isLittle), TT,
                         CPU, FS, Options, RM, CM, OL),
-      TargetABI(computeTargetABI(Triple(TT), CPU, Options)),
+      TargetABI(computeTargetABI(TT, CPU, Options)),
       TLOF(createTLOF(Triple(getTargetTriple()))),
-      Subtarget(Triple(TT), CPU, FS, *this, isLittle), isLittle(isLittle) {
+      Subtarget(TT, CPU, FS, *this, isLittle), isLittle(isLittle) {
 
   // Default to triple-appropriate float ABI
   if (Options.FloatABIType == FloatABI::Default)
@@ -235,8 +234,9 @@ TargetIRAnalysis ARMBaseTargetMachine::getTargetIRAnalysis() {
 
 void ARMTargetMachine::anchor() { }
 
-ARMTargetMachine::ARMTargetMachine(const Target &T, StringRef TT, StringRef CPU,
-                                   StringRef FS, const TargetOptions &Options,
+ARMTargetMachine::ARMTargetMachine(const Target &T, const Triple &TT,
+                                   StringRef CPU, StringRef FS,
+                                   const TargetOptions &Options,
                                    Reloc::Model RM, CodeModel::Model CM,
                                    CodeGenOpt::Level OL, bool isLittle)
     : ARMBaseTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, isLittle) {
@@ -248,7 +248,7 @@ ARMTargetMachine::ARMTargetMachine(const Target &T, StringRef TT, StringRef CPU,
 
 void ARMLETargetMachine::anchor() { }
 
-ARMLETargetMachine::ARMLETargetMachine(const Target &T, StringRef TT,
+ARMLETargetMachine::ARMLETargetMachine(const Target &T, const Triple &TT,
                                        StringRef CPU, StringRef FS,
                                        const TargetOptions &Options,
                                        Reloc::Model RM, CodeModel::Model CM,
@@ -257,7 +257,7 @@ ARMLETargetMachine::ARMLETargetMachine(const Target &T, StringRef TT,
 
 void ARMBETargetMachine::anchor() { }
 
-ARMBETargetMachine::ARMBETargetMachine(const Target &T, StringRef TT,
+ARMBETargetMachine::ARMBETargetMachine(const Target &T, const Triple &TT,
                                        StringRef CPU, StringRef FS,
                                        const TargetOptions &Options,
                                        Reloc::Model RM, CodeModel::Model CM,
@@ -266,19 +266,18 @@ ARMBETargetMachine::ARMBETargetMachine(const Target &T, StringRef TT,
 
 void ThumbTargetMachine::anchor() { }
 
-ThumbTargetMachine::ThumbTargetMachine(const Target &T, StringRef TT,
+ThumbTargetMachine::ThumbTargetMachine(const Target &T, const Triple &TT,
                                        StringRef CPU, StringRef FS,
                                        const TargetOptions &Options,
                                        Reloc::Model RM, CodeModel::Model CM,
                                        CodeGenOpt::Level OL, bool isLittle)
-    : ARMBaseTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL,
-                           isLittle) {
+    : ARMBaseTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, isLittle) {
   initAsmInfo();
 }
 
 void ThumbLETargetMachine::anchor() { }
 
-ThumbLETargetMachine::ThumbLETargetMachine(const Target &T, StringRef TT,
+ThumbLETargetMachine::ThumbLETargetMachine(const Target &T, const Triple &TT,
                                            StringRef CPU, StringRef FS,
                                            const TargetOptions &Options,
                                            Reloc::Model RM, CodeModel::Model CM,
@@ -287,7 +286,7 @@ ThumbLETargetMachine::ThumbLETargetMachine(const Target &T, StringRef TT,
 
 void ThumbBETargetMachine::anchor() { }
 
-ThumbBETargetMachine::ThumbBETargetMachine(const Target &T, StringRef TT,
+ThumbBETargetMachine::ThumbBETargetMachine(const Target &T, const Triple &TT,
                                            StringRef CPU, StringRef FS,
                                            const TargetOptions &Options,
                                            Reloc::Model RM, CodeModel::Model CM,

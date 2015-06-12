@@ -15503,23 +15503,6 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
         DAG.getTargetExternalSymbol(Name.data(), VT, X86II::MO_NOPREFIX);
     return DAG.getNode(X86ISD::Wrapper, dl, VT, Result);
   }
-
-  case Intrinsic::eh_exceptioninfo: {
-    // Compute the symbol for the LSDA. We know it'll get emitted later.
-    MachineFunction &MF = DAG.getMachineFunction();
-    SDValue Op1 = Op.getOperand(1);
-    auto *Fn = cast<Function>(cast<GlobalAddressSDNode>(Op1)->getGlobal());
-    MCSymbol *LSDASym = MF.getMMI().getContext().getOrCreateLSDASymbol(
-        GlobalValue::getRealLinkageName(Fn->getName()));
-    StringRef Name = LSDASym->getName();
-    assert(Name.data()[Name.size()] == '\0' && "not null terminated");
-
-    // Generate a simple absolute symbol reference. This intrinsic is only
-    // supported on 32-bit Windows, which isn't PIC.
-    SDValue Result =
-        DAG.getTargetExternalSymbol(Name.data(), VT, X86II::MO_NOPREFIX);
-    return DAG.getNode(X86ISD::Wrapper, dl, VT, Result);
-  }
   }
 }
 
@@ -15704,14 +15687,49 @@ static SDValue LowerREADCYCLECOUNTER(SDValue Op, const X86Subtarget *Subtarget,
   return DAG.getMergeValues(Results, DL);
 }
 
+static SDValue LowerEXCEPTIONINFO(SDValue Op, const X86Subtarget *Subtarget,
+                                  SelectionDAG &DAG) {
+  MachineFunction &MF = DAG.getMachineFunction();
+  SDLoc dl(Op);
+  SDValue FnOp = Op.getOperand(2);
+  SDValue FPOp = Op.getOperand(3);
+
+  // Compute the symbol for the parent EH registration. We know it'll get
+  // emitted later.
+  auto *Fn = cast<Function>(cast<GlobalAddressSDNode>(FnOp)->getGlobal());
+  MCSymbol *ParentFrameSym =
+      MF.getMMI().getContext().getOrCreateParentFrameOffsetSymbol(
+          GlobalValue::getRealLinkageName(Fn->getName()));
+  StringRef Name = ParentFrameSym->getName();
+  assert(Name.data()[Name.size()] == '\0' && "not null terminated");
+
+  // Create a TargetExternalSymbol for the label to avoid any target lowering
+  // that would make this PC relative.
+  MVT PtrVT = Op.getSimpleValueType();
+  SDValue OffsetSym = DAG.getTargetExternalSymbol(Name.data(), PtrVT);
+  SDValue OffsetVal =
+      DAG.getNode(ISD::FRAME_ALLOC_RECOVER, dl, PtrVT, OffsetSym);
+
+  // Add the offset to the FP.
+  SDValue Add = DAG.getNode(ISD::ADD, dl, PtrVT, FPOp, OffsetVal);
+
+  // Load the second field of the struct, which is 4 bytes in. See
+  // WinEHStatePass for more info.
+  Add = DAG.getNode(ISD::ADD, dl, PtrVT, Add, DAG.getConstant(4, dl, PtrVT));
+  return DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), Add, MachinePointerInfo(),
+                     false, false, false, 0);
+}
 
 static SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, const X86Subtarget *Subtarget,
                                       SelectionDAG &DAG) {
   unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
 
   const IntrinsicData* IntrData = getIntrinsicWithChain(IntNo);
-  if (!IntrData)
+  if (!IntrData) {
+    if (IntNo == Intrinsic::x86_seh_exceptioninfo)
+      return LowerEXCEPTIONINFO(Op, Subtarget, DAG);
     return SDValue();
+  }
 
   SDLoc dl(Op);
   switch(IntrData->Type) {
@@ -17011,36 +17029,111 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget* Subtarget,
     }
   }
 
-  if (VT == MVT::v16i8 && Op->getOpcode() == ISD::SHL) {
+  if (VT == MVT::v16i8 || (VT == MVT::v32i8 && Subtarget->hasInt256())) {
+    MVT ExtVT = MVT::getVectorVT(MVT::i16, VT.getVectorNumElements() / 2);
+    unsigned ShiftOpcode = Op->getOpcode();
+
+    auto SignBitSelect = [&](MVT SelVT, SDValue Sel, SDValue V0, SDValue V1) {
+      // On SSE41 targets we make use of the fact that VSELECT lowers
+      // to PBLENDVB which selects bytes based just on the sign bit.
+      if (Subtarget->hasSSE41()) {
+        V0 = DAG.getBitcast(VT, V0);
+        V1 = DAG.getBitcast(VT, V1);
+        Sel = DAG.getBitcast(VT, Sel);
+        return DAG.getBitcast(SelVT,
+                              DAG.getNode(ISD::VSELECT, dl, VT, Sel, V0, V1));
+      }
+      // On pre-SSE41 targets we test for the sign bit by comparing to
+      // zero - a negative value will set all bits of the lanes to true
+      // and VSELECT uses that in its OR(AND(V0,C),AND(V1,~C)) lowering.
+      SDValue Z = getZeroVector(SelVT, Subtarget, DAG, dl);
+      SDValue C = DAG.getNode(X86ISD::PCMPGT, dl, SelVT, Z, Sel);
+      return DAG.getNode(ISD::VSELECT, dl, SelVT, C, V0, V1);
+    };
+
     // Turn 'a' into a mask suitable for VSELECT: a = a << 5;
-    Op = DAG.getNode(ISD::SHL, dl, VT, Amt, DAG.getConstant(5, dl, VT));
+    // We can safely do this using i16 shifts as we're only interested in
+    // the 3 lower bits of each byte.
+    Amt = DAG.getBitcast(ExtVT, Amt);
+    Amt = DAG.getNode(ISD::SHL, dl, ExtVT, Amt, DAG.getConstant(5, dl, ExtVT));
+    Amt = DAG.getBitcast(VT, Amt);
 
-    SDValue VSelM = DAG.getConstant(0x80, dl, VT);
-    SDValue OpVSel = DAG.getNode(ISD::AND, dl, VT, VSelM, Op);
-    OpVSel = DAG.getNode(X86ISD::PCMPEQ, dl, VT, OpVSel, VSelM);
+    if (Op->getOpcode() == ISD::SHL || Op->getOpcode() == ISD::SRL) {
+      // r = VSELECT(r, shift(r, 4), a);
+      SDValue M =
+          DAG.getNode(ShiftOpcode, dl, VT, R, DAG.getConstant(4, dl, VT));
+      R = SignBitSelect(VT, Amt, M, R);
 
-    // r = VSELECT(r, shl(r, 4), a);
-    SDValue M = DAG.getNode(ISD::SHL, dl, VT, R, DAG.getConstant(4, dl, VT));
-    R = DAG.getNode(ISD::VSELECT, dl, VT, OpVSel, M, R);
+      // a += a
+      Amt = DAG.getNode(ISD::ADD, dl, VT, Amt, Amt);
 
-    // a += a
-    Op = DAG.getNode(ISD::ADD, dl, VT, Op, Op);
-    OpVSel = DAG.getNode(ISD::AND, dl, VT, VSelM, Op);
-    OpVSel = DAG.getNode(X86ISD::PCMPEQ, dl, VT, OpVSel, VSelM);
+      // r = VSELECT(r, shift(r, 2), a);
+      M = DAG.getNode(ShiftOpcode, dl, VT, R, DAG.getConstant(2, dl, VT));
+      R = SignBitSelect(VT, Amt, M, R);
 
-    // r = VSELECT(r, shl(r, 2), a);
-    M = DAG.getNode(ISD::SHL, dl, VT, R, DAG.getConstant(2, dl, VT));
-    R = DAG.getNode(ISD::VSELECT, dl, VT, OpVSel, M, R);
+      // a += a
+      Amt = DAG.getNode(ISD::ADD, dl, VT, Amt, Amt);
 
-    // a += a
-    Op = DAG.getNode(ISD::ADD, dl, VT, Op, Op);
-    OpVSel = DAG.getNode(ISD::AND, dl, VT, VSelM, Op);
-    OpVSel = DAG.getNode(X86ISD::PCMPEQ, dl, VT, OpVSel, VSelM);
+      // return VSELECT(r, shift(r, 1), a);
+      M = DAG.getNode(ShiftOpcode, dl, VT, R, DAG.getConstant(1, dl, VT));
+      R = SignBitSelect(VT, Amt, M, R);
+      return R;
+    }
 
-    // return VSELECT(r, r+r, a);
-    R = DAG.getNode(ISD::VSELECT, dl, VT, OpVSel,
-                    DAG.getNode(ISD::ADD, dl, VT, R, R), R);
-    return R;
+    if (Op->getOpcode() == ISD::SRA) {
+      // For SRA we need to unpack each byte to the higher byte of a i16 vector
+      // so we can correctly sign extend. We don't care what happens to the
+      // lower byte.
+      SDValue ALo = DAG.getNode(X86ISD::UNPCKL, dl, VT, DAG.getUNDEF(VT), Amt);
+      SDValue AHi = DAG.getNode(X86ISD::UNPCKH, dl, VT, DAG.getUNDEF(VT), Amt);
+      SDValue RLo = DAG.getNode(X86ISD::UNPCKL, dl, VT, DAG.getUNDEF(VT), R);
+      SDValue RHi = DAG.getNode(X86ISD::UNPCKH, dl, VT, DAG.getUNDEF(VT), R);
+      ALo = DAG.getBitcast(ExtVT, ALo);
+      AHi = DAG.getBitcast(ExtVT, AHi);
+      RLo = DAG.getBitcast(ExtVT, RLo);
+      RHi = DAG.getBitcast(ExtVT, RHi);
+
+      // r = VSELECT(r, shift(r, 4), a);
+      SDValue MLo = DAG.getNode(ShiftOpcode, dl, ExtVT, RLo,
+                                DAG.getConstant(4, dl, ExtVT));
+      SDValue MHi = DAG.getNode(ShiftOpcode, dl, ExtVT, RHi,
+                                DAG.getConstant(4, dl, ExtVT));
+      RLo = SignBitSelect(ExtVT, ALo, MLo, RLo);
+      RHi = SignBitSelect(ExtVT, AHi, MHi, RHi);
+
+      // a += a
+      ALo = DAG.getNode(ISD::ADD, dl, ExtVT, ALo, ALo);
+      AHi = DAG.getNode(ISD::ADD, dl, ExtVT, AHi, AHi);
+
+      // r = VSELECT(r, shift(r, 2), a);
+      MLo = DAG.getNode(ShiftOpcode, dl, ExtVT, RLo,
+                        DAG.getConstant(2, dl, ExtVT));
+      MHi = DAG.getNode(ShiftOpcode, dl, ExtVT, RHi,
+                        DAG.getConstant(2, dl, ExtVT));
+      RLo = SignBitSelect(ExtVT, ALo, MLo, RLo);
+      RHi = SignBitSelect(ExtVT, AHi, MHi, RHi);
+
+      // a += a
+      ALo = DAG.getNode(ISD::ADD, dl, ExtVT, ALo, ALo);
+      AHi = DAG.getNode(ISD::ADD, dl, ExtVT, AHi, AHi);
+
+      // r = VSELECT(r, shift(r, 1), a);
+      MLo = DAG.getNode(ShiftOpcode, dl, ExtVT, RLo,
+                        DAG.getConstant(1, dl, ExtVT));
+      MHi = DAG.getNode(ShiftOpcode, dl, ExtVT, RHi,
+                        DAG.getConstant(1, dl, ExtVT));
+      RLo = SignBitSelect(ExtVT, ALo, MLo, RLo);
+      RHi = SignBitSelect(ExtVT, AHi, MHi, RHi);
+
+      // Logical shift the result back to the lower byte, leaving a zero upper
+      // byte
+      // meaning that we can safely pack with PACKUSWB.
+      RLo =
+          DAG.getNode(ISD::SRL, dl, ExtVT, RLo, DAG.getConstant(8, dl, ExtVT));
+      RHi =
+          DAG.getNode(ISD::SRL, dl, ExtVT, RHi, DAG.getConstant(8, dl, ExtVT));
+      return DAG.getNode(X86ISD::PACKUS, dl, VT, RLo, RHi);
+    }
   }
 
   // It's worth extending once and using the v8i32 shifts for 16-bit types, but
@@ -17072,6 +17165,67 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget* Subtarget,
     Lo = DAG.getNode(ISD::SRL, dl, ExtVT, Lo, DAG.getConstant(16, dl, ExtVT));
     Hi = DAG.getNode(ISD::SRL, dl, ExtVT, Hi, DAG.getConstant(16, dl, ExtVT));
     return DAG.getNode(X86ISD::PACKUS, dl, VT, Lo, Hi);
+  }
+
+  if (VT == MVT::v8i16) {
+    unsigned ShiftOpcode = Op->getOpcode();
+
+    auto SignBitSelect = [&](SDValue Sel, SDValue V0, SDValue V1) {
+      // On SSE41 targets we make use of the fact that VSELECT lowers
+      // to PBLENDVB which selects bytes based just on the sign bit.
+      if (Subtarget->hasSSE41()) {
+        MVT ExtVT = MVT::getVectorVT(MVT::i8, VT.getVectorNumElements() * 2);
+        V0 = DAG.getBitcast(ExtVT, V0);
+        V1 = DAG.getBitcast(ExtVT, V1);
+        Sel = DAG.getBitcast(ExtVT, Sel);
+        return DAG.getBitcast(
+            VT, DAG.getNode(ISD::VSELECT, dl, ExtVT, Sel, V0, V1));
+      }
+      // On pre-SSE41 targets we splat the sign bit - a negative value will
+      // set all bits of the lanes to true and VSELECT uses that in
+      // its OR(AND(V0,C),AND(V1,~C)) lowering.
+      SDValue C =
+          DAG.getNode(ISD::SRA, dl, VT, Sel, DAG.getConstant(15, dl, VT));
+      return DAG.getNode(ISD::VSELECT, dl, VT, C, V0, V1);
+    };
+
+    // Turn 'a' into a mask suitable for VSELECT: a = a << 12;
+    if (Subtarget->hasSSE41()) {
+      // On SSE41 targets we need to replicate the shift mask in both
+      // bytes for PBLENDVB.
+      Amt = DAG.getNode(
+          ISD::OR, dl, VT,
+          DAG.getNode(ISD::SHL, dl, VT, Amt, DAG.getConstant(4, dl, VT)),
+          DAG.getNode(ISD::SHL, dl, VT, Amt, DAG.getConstant(12, dl, VT)));
+    } else {
+      Amt = DAG.getNode(ISD::SHL, dl, VT, Amt, DAG.getConstant(12, dl, VT));
+    }
+
+    // r = VSELECT(r, shift(r, 8), a);
+    SDValue M = DAG.getNode(ShiftOpcode, dl, VT, R, DAG.getConstant(8, dl, VT));
+    R = SignBitSelect(Amt, M, R);
+
+    // a += a
+    Amt = DAG.getNode(ISD::ADD, dl, VT, Amt, Amt);
+
+    // r = VSELECT(r, shift(r, 4), a);
+    M = DAG.getNode(ShiftOpcode, dl, VT, R, DAG.getConstant(4, dl, VT));
+    R = SignBitSelect(Amt, M, R);
+
+    // a += a
+    Amt = DAG.getNode(ISD::ADD, dl, VT, Amt, Amt);
+
+    // r = VSELECT(r, shift(r, 2), a);
+    M = DAG.getNode(ShiftOpcode, dl, VT, R, DAG.getConstant(2, dl, VT));
+    R = SignBitSelect(Amt, M, R);
+
+    // a += a
+    Amt = DAG.getNode(ISD::ADD, dl, VT, Amt, Amt);
+
+    // return VSELECT(r, shift(r, 1), a);
+    M = DAG.getNode(ShiftOpcode, dl, VT, R, DAG.getConstant(1, dl, VT));
+    R = SignBitSelect(Amt, M, R);
+    return R;
   }
 
   // Decompose 256-bit shifts into smaller 128-bit shifts.
