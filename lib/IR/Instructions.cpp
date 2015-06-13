@@ -108,7 +108,7 @@ Value *PHINode::removeIncomingValue(unsigned Idx, bool DeletePHIIfEmpty) {
 
   // Nuke the last value.
   Op<-1>().set(nullptr);
-  --NumOperands;
+  setNumHungOffUseOperands(getNumOperands() - 1);
 
   // If the PHI node is dead, because it has zero entries, nuke it now.
   if (getNumOperands() == 0 && DeletePHIIfEmpty) {
@@ -172,7 +172,8 @@ LandingPadInst::LandingPadInst(const LandingPadInst &LP)
                   LP.getNumOperands()),
       ReservedSpace(LP.getNumOperands()) {
   allocHungoffUses(LP.getNumOperands());
-  Use *OL = OperandList, *InOL = LP.OperandList;
+  Use *OL = getOperandList();
+  const Use *InOL = LP.getOperandList();
   for (unsigned I = 0, E = ReservedSpace; I != E; ++I)
     OL[I] = InOL[I];
 
@@ -198,7 +199,7 @@ LandingPadInst *LandingPadInst::Create(Type *RetTy, Value *PersonalityFn,
 void LandingPadInst::init(Value *PersFn, unsigned NumReservedValues,
                           const Twine &NameStr) {
   ReservedSpace = NumReservedValues;
-  NumOperands = 1;
+  setNumHungOffUseOperands(1);
   allocHungoffUses(ReservedSpace);
   Op<0>() = PersFn;
   setName(NameStr);
@@ -218,8 +219,8 @@ void LandingPadInst::addClause(Constant *Val) {
   unsigned OpNo = getNumOperands();
   growOperands(1);
   assert(OpNo < ReservedSpace && "Growing didn't work!");
-  ++NumOperands;
-  OperandList[OpNo] = Val;
+  setNumHungOffUseOperands(getNumOperands() + 1);
+  getOperandList()[OpNo] = Val;
 }
 
 //===----------------------------------------------------------------------===//
@@ -232,7 +233,7 @@ CallInst::~CallInst() {
 void CallInst::init(FunctionType *FTy, Value *Func, ArrayRef<Value *> Args,
                     const Twine &NameStr) {
   this->FTy = FTy;
-  assert(NumOperands == Args.size() + 1 && "NumOperands not set up?");
+  assert(getNumOperands() == Args.size() + 1 && "NumOperands not set up?");
   Op<-1>() = Func;
 
 #ifndef NDEBUG
@@ -253,7 +254,7 @@ void CallInst::init(FunctionType *FTy, Value *Func, ArrayRef<Value *> Args,
 void CallInst::init(Value *Func, const Twine &NameStr) {
   FTy =
       cast<FunctionType>(cast<PointerType>(Func->getType())->getElementType());
-  assert(NumOperands == 1 && "NumOperands not set up?");
+  assert(getNumOperands() == 1 && "NumOperands not set up?");
   Op<-1>() = Func;
 
   assert(FTy->getNumParams() == 0 && "Calling a function with bad signature");
@@ -508,7 +509,7 @@ void InvokeInst::init(FunctionType *FTy, Value *Fn, BasicBlock *IfNormal,
                       const Twine &NameStr) {
   this->FTy = FTy;
 
-  assert(NumOperands == 3 + Args.size() && "NumOperands not set up?");
+  assert(getNumOperands() == 3 + Args.size() && "NumOperands not set up?");
   Op<-3>() = Fn;
   Op<-2>() = IfNormal;
   Op<-1>() = IfException;
@@ -1204,7 +1205,8 @@ FenceInst::FenceInst(LLVMContext &C, AtomicOrdering Ordering,
 
 void GetElementPtrInst::init(Value *Ptr, ArrayRef<Value *> IdxList,
                              const Twine &Name) {
-  assert(NumOperands == 1 + IdxList.size() && "NumOperands not initialized?");
+  assert(getNumOperands() == 1 + IdxList.size() &&
+         "NumOperands not initialized?");
   Op<0>() = Ptr;
   std::copy(IdxList.begin(), IdxList.end(), op_begin() + 1);
   setName(Name);
@@ -1517,7 +1519,7 @@ void ShuffleVectorInst::getShuffleMask(Constant *Mask,
 
 void InsertValueInst::init(Value *Agg, Value *Val, ArrayRef<unsigned> Idxs, 
                            const Twine &Name) {
-  assert(NumOperands == 2 && "NumOperands not initialized?");
+  assert(getNumOperands() == 2 && "NumOperands not initialized?");
 
   // There's no fundamental reason why we require at least one index
   // (other than weirdness with &*IdxBegin being invalid; see
@@ -1548,7 +1550,7 @@ InsertValueInst::InsertValueInst(const InsertValueInst &IVI)
 //===----------------------------------------------------------------------===//
 
 void ExtractValueInst::init(ArrayRef<unsigned> Idxs, const Twine &Name) {
-  assert(NumOperands == 1 && "NumOperands not initialized?");
+  assert(getNumOperands() == 1 && "NumOperands not initialized?");
 
   // There's no fundamental reason why we require at least one index.
   // But there's no present need to support it.
@@ -3262,7 +3264,7 @@ bool CmpInst::isFalseWhenEqual(unsigned short predicate) {
 void SwitchInst::init(Value *Value, BasicBlock *Default, unsigned NumReserved) {
   assert(Value && Default && NumReserved);
   ReservedSpace = NumReserved;
-  NumOperands = 2;
+  setNumHungOffUseOperands(2);
   allocHungoffUses(ReservedSpace);
 
   Op<0>() = Value;
@@ -3294,8 +3296,9 @@ SwitchInst::SwitchInst(Value *Value, BasicBlock *Default, unsigned NumCases,
 SwitchInst::SwitchInst(const SwitchInst &SI)
   : TerminatorInst(SI.getType(), Instruction::Switch, nullptr, 0) {
   init(SI.getCondition(), SI.getDefaultDest(), SI.getNumOperands());
-  NumOperands = SI.getNumOperands();
-  Use *OL = OperandList, *InOL = SI.OperandList;
+  setNumHungOffUseOperands(SI.getNumOperands());
+  Use *OL = getOperandList();
+  const Use *InOL = SI.getOperandList();
   for (unsigned i = 2, E = SI.getNumOperands(); i != E; i += 2) {
     OL[i] = InOL[i];
     OL[i+1] = InOL[i+1];
@@ -3307,13 +3310,13 @@ SwitchInst::SwitchInst(const SwitchInst &SI)
 /// addCase - Add an entry to the switch instruction...
 ///
 void SwitchInst::addCase(ConstantInt *OnVal, BasicBlock *Dest) {
-  unsigned NewCaseIdx = getNumCases(); 
-  unsigned OpNo = NumOperands;
+  unsigned NewCaseIdx = getNumCases();
+  unsigned OpNo = getNumOperands();
   if (OpNo+2 > ReservedSpace)
     growOperands();  // Get more space!
   // Initialize some new operands.
   assert(OpNo+1 < ReservedSpace && "Growing didn't work!");
-  NumOperands = OpNo+2;
+  setNumHungOffUseOperands(OpNo+2);
   CaseIt Case(this, NewCaseIdx);
   Case.setValue(OnVal);
   Case.setSuccessor(Dest);
@@ -3327,7 +3330,7 @@ void SwitchInst::removeCase(CaseIt i) {
   assert(2 + idx*2 < getNumOperands() && "Case index out of range!!!");
 
   unsigned NumOps = getNumOperands();
-  Use *OL = OperandList;
+  Use *OL = getOperandList();
 
   // Overwrite this case with the end of the list.
   if (2 + (idx + 1) * 2 != NumOps) {
@@ -3338,7 +3341,7 @@ void SwitchInst::removeCase(CaseIt i) {
   // Nuke the last value.
   OL[NumOps-2].set(nullptr);
   OL[NumOps-2+1].set(nullptr);
-  NumOperands = NumOps-2;
+  setNumHungOffUseOperands(NumOps-2);
 }
 
 /// growOperands - grow operands - This grows the operand list in response
@@ -3371,7 +3374,7 @@ void IndirectBrInst::init(Value *Address, unsigned NumDests) {
   assert(Address && Address->getType()->isPointerTy() &&
          "Address of indirectbr must be a pointer");
   ReservedSpace = 1+NumDests;
-  NumOperands = 1;
+  setNumHungOffUseOperands(1);
   allocHungoffUses(ReservedSpace);
 
   Op<0>() = Address;
@@ -3407,7 +3410,8 @@ IndirectBrInst::IndirectBrInst(const IndirectBrInst &IBI)
     : TerminatorInst(Type::getVoidTy(IBI.getContext()), Instruction::IndirectBr,
                      nullptr, IBI.getNumOperands()) {
   allocHungoffUses(IBI.getNumOperands());
-  Use *OL = OperandList, *InOL = IBI.OperandList;
+  Use *OL = getOperandList();
+  const Use *InOL = IBI.getOperandList();
   for (unsigned i = 0, E = IBI.getNumOperands(); i != E; ++i)
     OL[i] = InOL[i];
   SubclassOptionalData = IBI.SubclassOptionalData;
@@ -3416,13 +3420,13 @@ IndirectBrInst::IndirectBrInst(const IndirectBrInst &IBI)
 /// addDestination - Add a destination.
 ///
 void IndirectBrInst::addDestination(BasicBlock *DestBB) {
-  unsigned OpNo = NumOperands;
+  unsigned OpNo = getNumOperands();
   if (OpNo+1 > ReservedSpace)
     growOperands();  // Get more space!
   // Initialize some new operands.
   assert(OpNo < ReservedSpace && "Growing didn't work!");
-  NumOperands = OpNo+1;
-  OperandList[OpNo] = DestBB;
+  setNumHungOffUseOperands(OpNo+1);
+  getOperandList()[OpNo] = DestBB;
 }
 
 /// removeDestination - This method removes the specified successor from the
@@ -3431,14 +3435,14 @@ void IndirectBrInst::removeDestination(unsigned idx) {
   assert(idx < getNumOperands()-1 && "Successor index out of range!");
   
   unsigned NumOps = getNumOperands();
-  Use *OL = OperandList;
+  Use *OL = getOperandList();
 
   // Replace this value with the last one.
   OL[idx+1] = OL[NumOps-1];
   
   // Nuke the last value.
   OL[NumOps-1].set(nullptr);
-  NumOperands = NumOps-1;
+  setNumHungOffUseOperands(NumOps-1);
 }
 
 BasicBlock *IndirectBrInst::getSuccessorV(unsigned idx) const {

@@ -2226,7 +2226,7 @@ class PHINode : public Instruction {
   PHINode(const PHINode &PN);
   // allocate space for exactly zero operands
   void *operator new(size_t s) {
-    return User::operator new(s, 0);
+    return User::operator new(s);
   }
   explicit PHINode(Type *Ty, unsigned NumReservedValues,
                    const Twine &NameStr = "",
@@ -2350,12 +2350,12 @@ public:
     assert(BB && "PHI node got a null basic block!");
     assert(getType() == V->getType() &&
            "All operands to PHI node must be the same type as the PHI node!");
-    if (NumOperands == ReservedSpace)
+    if (getNumOperands() == ReservedSpace)
       growOperands();  // Get more space!
     // Initialize some new operands.
-    ++NumOperands;
-    setIncomingValue(NumOperands - 1, V);
-    setIncomingBlock(NumOperands - 1, BB);
+    setNumHungOffUseOperands(getNumOperands() + 1);
+    setIncomingValue(getNumOperands() - 1, V);
+    setIncomingBlock(getNumOperands() - 1, BB);
   }
 
   /// removeIncomingValue - Remove an incoming value.  This is useful if a
@@ -2434,7 +2434,7 @@ private:
   void *operator new(size_t, unsigned) = delete;
   // Allocate space for exactly zero operands.
   void *operator new(size_t s) {
-    return User::operator new(s, 0);
+    return User::operator new(s);
   }
   void growOperands(unsigned Size);
   void init(Value *PersFn, unsigned NumReservedValues, const Twine &NameStr);
@@ -2482,17 +2482,17 @@ public:
   /// Get the value of the clause at index Idx. Use isCatch/isFilter to
   /// determine what type of clause this is.
   Constant *getClause(unsigned Idx) const {
-    return cast<Constant>(OperandList[Idx + 1]);
+    return cast<Constant>(getOperandList()[Idx + 1]);
   }
 
   /// isCatch - Return 'true' if the clause and index Idx is a catch clause.
   bool isCatch(unsigned Idx) const {
-    return !isa<ArrayType>(OperandList[Idx + 1]->getType());
+    return !isa<ArrayType>(getOperandList()[Idx + 1]->getType());
   }
 
   /// isFilter - Return 'true' if the clause and index Idx is a filter clause.
   bool isFilter(unsigned Idx) const {
-    return isa<ArrayType>(OperandList[Idx + 1]->getType());
+    return isa<ArrayType>(getOperandList()[Idx + 1]->getType());
   }
 
   /// getNumClauses - Get the number of clauses for this landing pad.
@@ -2708,7 +2708,7 @@ class SwitchInst : public TerminatorInst {
   void growOperands();
   // allocate space for exactly zero operands
   void *operator new(size_t s) {
-    return User::operator new(s, 0);
+    return User::operator new(s);
   }
   /// SwitchInst ctor - Create a new switch instruction, specifying a value to
   /// switch on and a default destination.  The number of additional cases can
@@ -3015,7 +3015,7 @@ class IndirectBrInst : public TerminatorInst {
   void growOperands();
   // allocate space for exactly zero operands
   void *operator new(size_t s) {
-    return User::operator new(s, 0);
+    return User::operator new(s);
   }
   /// IndirectBrInst ctor - Create a new indirectbr instruction, specifying an
   /// Address to jump to.  The number of expected destinations can be specified
