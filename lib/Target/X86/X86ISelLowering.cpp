@@ -6353,7 +6353,7 @@ static SDValue getV4X86ShuffleImm8ForMask(ArrayRef<int> Mask, SDLoc DL,
 ///
 /// This helper function produces an 8-bit shuffle immediate corresponding to
 /// the ubiquitous shuffle encoding scheme used in x86 instructions for
-/// shuffling 8 lanes. 
+/// shuffling 8 lanes.
 static SDValue get1bitLaneShuffleImm8ForMask(ArrayRef<int> Mask, SDLoc DL,
                                              SelectionDAG &DAG) {
   assert(Mask.size() <= 8 &&
@@ -13018,11 +13018,11 @@ SDValue X86TargetLowering::getRsqrtEstimate(SDValue Op,
     RecipOp = "vec-sqrtf";
   else
     return SDValue();
-  
+
   TargetRecip Recips = DCI.DAG.getTarget().Options.Reciprocals;
   if (!Recips.isEnabled(RecipOp))
     return SDValue();
-  
+
   RefinementSteps = Recips.getRefinementSteps(RecipOp);
   UseOneConstNR = false;
   return DCI.DAG.getNode(X86ISD::FRSQRT, SDLoc(Op), VT, Op);
@@ -13035,7 +13035,7 @@ SDValue X86TargetLowering::getRecipEstimate(SDValue Op,
                                             unsigned &RefinementSteps) const {
   EVT VT = Op.getValueType();
   const char *RecipOp;
-  
+
   // SSE1 has rcpss and rcpps. AVX adds a 256-bit variant for rcpps.
   // TODO: Add support for AVX512 (v16f32).
   // It is likely not profitable to do this for f64 because a double-precision
@@ -13050,7 +13050,7 @@ SDValue X86TargetLowering::getRecipEstimate(SDValue Op,
     RecipOp = "vec-divf";
   else
     return SDValue();
-  
+
   TargetRecip Recips = DCI.DAG.getTarget().Options.Reciprocals;
   if (!Recips.isEnabled(RecipOp))
     return SDValue();
@@ -15107,7 +15107,7 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
       unsigned IntrWithRoundingModeOpcode = IntrData->Opc1;
       if (IntrWithRoundingModeOpcode != 0) {
         unsigned Round = cast<ConstantSDNode>(RoundingMode)->getZExtValue();
-        if (Round != X86::STATIC_ROUNDING::CUR_DIRECTION) 
+        if (Round != X86::STATIC_ROUNDING::CUR_DIRECTION)
           return getVectorMaskingNode(DAG.getNode(IntrWithRoundingModeOpcode,
                                       dl, Op.getValueType(), Src, RoundingMode),
                                       Mask, PassThru, Subtarget, DAG);

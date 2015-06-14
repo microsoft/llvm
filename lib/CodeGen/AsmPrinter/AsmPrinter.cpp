@@ -899,12 +899,11 @@ void AsmPrinter::EmitFunctionBody() {
   if (MAI->hasDotTypeDotSizeDirective()) {
     // We can get the size as difference between the function label and the
     // temp label.
-    const MCExpr *SizeExp =
-      MCBinaryExpr::createSub(MCSymbolRefExpr::create(CurrentFnEnd, OutContext),
-                              MCSymbolRefExpr::create(CurrentFnSymForSize,
-                                                      OutContext),
-                              OutContext);
-    OutStreamer->emitELFSize(cast<MCSymbolELF>(CurrentFnSym), SizeExp);
+    const MCExpr *SizeExp = MCBinaryExpr::createSub(
+        MCSymbolRefExpr::create(CurrentFnEnd, OutContext),
+        MCSymbolRefExpr::create(CurrentFnSymForSize, OutContext), OutContext);
+    if (auto Sym = dyn_cast<MCSymbolELF>(CurrentFnSym))
+      OutStreamer->emitELFSize(Sym, SizeExp);
   }
 
   for (const HandlerInfo &HI : Handlers) {

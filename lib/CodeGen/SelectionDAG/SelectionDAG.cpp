@@ -2932,6 +2932,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, SDLoc DL,
       case ISD::TRUNCATE:
       case ISD::UINT_TO_FP:
       case ISD::SINT_TO_FP:
+      case ISD::BSWAP:
       case ISD::CTLZ:
       case ISD::CTLZ_ZERO_UNDEF:
       case ISD::CTTZ:
@@ -3078,6 +3079,14 @@ SDValue SelectionDAG::getNode(unsigned Opcode, SDLoc DL,
         return getNode(ISD::TRUNCATE, DL, VT, Operand.getNode()->getOperand(0));
       return Operand.getNode()->getOperand(0);
     }
+    if (OpOpcode == ISD::UNDEF)
+      return getUNDEF(VT);
+    break;
+  case ISD::BSWAP:
+    assert(VT.isInteger() && VT == Operand.getValueType() &&
+           "Invalid BSWAP!");
+    assert((VT.getScalarSizeInBits() % 16 == 0) &&
+           "BSWAP types must be a multiple of 16 bits!");
     if (OpOpcode == ISD::UNDEF)
       return getUNDEF(VT);
     break;
