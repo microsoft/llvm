@@ -255,6 +255,7 @@ namespace {
     SDValue visitSRA(SDNode *N);
     SDValue visitSRL(SDNode *N);
     SDValue visitRotate(SDNode *N);
+    SDValue visitBSWAP(SDNode *N);
     SDValue visitCTLZ(SDNode *N);
     SDValue visitCTLZ_ZERO_UNDEF(SDNode *N);
     SDValue visitCTTZ(SDNode *N);
@@ -1335,6 +1336,7 @@ SDValue DAGCombiner::visit(SDNode *N) {
   case ISD::SRL:                return visitSRL(N);
   case ISD::ROTR:
   case ISD::ROTL:               return visitRotate(N);
+  case ISD::BSWAP:              return visitBSWAP(N);
   case ISD::CTLZ:               return visitCTLZ(N);
   case ISD::CTLZ_ZERO_UNDEF:    return visitCTLZ_ZERO_UNDEF(N);
   case ISD::CTTZ:               return visitCTTZ(N);
@@ -4764,12 +4766,25 @@ SDValue DAGCombiner::visitSRL(SDNode *N) {
   return SDValue();
 }
 
+SDValue DAGCombiner::visitBSWAP(SDNode *N) {
+  SDValue N0 = N->getOperand(0);
+  EVT VT = N->getValueType(0);
+
+  // fold (bswap c1) -> c2
+  if (isConstantIntBuildVectorOrConstantInt(N0))
+    return DAG.getNode(ISD::BSWAP, SDLoc(N), VT, N0);
+  // fold (bswap (bswap x)) -> x
+  if (N0.getOpcode() == ISD::BSWAP)
+    return N0->getOperand(0);
+  return SDValue();
+}
+
 SDValue DAGCombiner::visitCTLZ(SDNode *N) {
   SDValue N0 = N->getOperand(0);
   EVT VT = N->getValueType(0);
 
   // fold (ctlz c1) -> c2
-  if (isa<ConstantSDNode>(N0))
+  if (isConstantIntBuildVectorOrConstantInt(N0))
     return DAG.getNode(ISD::CTLZ, SDLoc(N), VT, N0);
   return SDValue();
 }
@@ -4779,7 +4794,7 @@ SDValue DAGCombiner::visitCTLZ_ZERO_UNDEF(SDNode *N) {
   EVT VT = N->getValueType(0);
 
   // fold (ctlz_zero_undef c1) -> c2
-  if (isa<ConstantSDNode>(N0))
+  if (isConstantIntBuildVectorOrConstantInt(N0))
     return DAG.getNode(ISD::CTLZ_ZERO_UNDEF, SDLoc(N), VT, N0);
   return SDValue();
 }
@@ -4789,7 +4804,7 @@ SDValue DAGCombiner::visitCTTZ(SDNode *N) {
   EVT VT = N->getValueType(0);
 
   // fold (cttz c1) -> c2
-  if (isa<ConstantSDNode>(N0))
+  if (isConstantIntBuildVectorOrConstantInt(N0))
     return DAG.getNode(ISD::CTTZ, SDLoc(N), VT, N0);
   return SDValue();
 }
@@ -4799,7 +4814,7 @@ SDValue DAGCombiner::visitCTTZ_ZERO_UNDEF(SDNode *N) {
   EVT VT = N->getValueType(0);
 
   // fold (cttz_zero_undef c1) -> c2
-  if (isa<ConstantSDNode>(N0))
+  if (isConstantIntBuildVectorOrConstantInt(N0))
     return DAG.getNode(ISD::CTTZ_ZERO_UNDEF, SDLoc(N), VT, N0);
   return SDValue();
 }
@@ -5141,7 +5156,7 @@ SDValue DAGCombiner::visitMSCATTER(SDNode *N) {
   std::tie(IndexLo, IndexHi) = DAG.SplitVector(MSC->getIndex(), DL);
 
   MachineMemOperand *MMO = DAG.getMachineFunction().
-    getMachineMemOperand(MSC->getPointerInfo(), 
+    getMachineMemOperand(MSC->getPointerInfo(),
                           MachineMemOperand::MOStore,  LoMemVT.getStoreSize(),
                           Alignment, MSC->getAAInfo(), MSC->getRanges());
 
@@ -5280,7 +5295,7 @@ SDValue DAGCombiner::visitMGATHER(SDNode *N) {
   std::tie(IndexLo, IndexHi) = DAG.SplitVector(Index, DL);
 
   MachineMemOperand *MMO = DAG.getMachineFunction().
-    getMachineMemOperand(MGT->getPointerInfo(), 
+    getMachineMemOperand(MGT->getPointerInfo(),
                           MachineMemOperand::MOLoad,  LoMemVT.getStoreSize(),
                           Alignment, MGT->getAAInfo(), MGT->getRanges());
 
@@ -8078,7 +8093,7 @@ SDValue DAGCombiner::visitFMUL(SDNode *N) {
       auto *BV1 = dyn_cast<BuildVectorSDNode>(N1);
       auto *BV00 = dyn_cast<BuildVectorSDNode>(N00);
       auto *BV01 = dyn_cast<BuildVectorSDNode>(N01);
-      
+
       // Check 1: Make sure that the first operand of the inner multiply is NOT
       // a constant. Otherwise, we may induce infinite looping.
       if (!(isConstOrConstSplatFP(N00) || (BV00 && BV00->isConstant()))) {
@@ -12093,7 +12108,7 @@ static SDValue combineConcatVectorOfScalars(SDNode *N, SelectionDAG &DAG) {
   }
 
   // If any of the operands is a floating point scalar bitcast to a vector,
-  // use floating point types throughout, and bitcast everything.  
+  // use floating point types throughout, and bitcast everything.
   // Replace UNDEFs by another scalar UNDEF node, of the final desired type.
   if (AnyFP) {
     SVT = EVT::getFloatingPointVT(OpVT.getSizeInBits());
@@ -12924,7 +12939,7 @@ SDValue DAGCombiner::XformToShuffleWithZero(SDNode *N) {
   SDValue RHS = N->getOperand(1);
   SDLoc dl(N);
 
-  // Make sure we're not running after operation legalization where it 
+  // Make sure we're not running after operation legalization where it
   // may have custom lowered the vector shuffles.
   if (LegalOperations)
     return SDValue();

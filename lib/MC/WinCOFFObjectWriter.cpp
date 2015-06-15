@@ -25,7 +25,7 @@
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionCOFF.h"
-#include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCSymbolCOFF.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/MC/StringTableBuilder.h"
 #include "llvm/Support/COFF.h"
@@ -228,7 +228,7 @@ bool COFFSymbol::should_keep() const {
   }
 
   // if this is a safeseh handler, keep it
-  if (MC && (MC->getFlags() & COFF::SF_SafeSEH))
+  if (MC && (cast<MCSymbolCOFF>(MC)->isSafeSEH()))
     return true;
 
   // if the section its in is being droped, drop it
@@ -394,7 +394,7 @@ void WinCOFFObjectWriter::DefineSymbol(const MCSymbol &Symbol,
   COFFSymbol *coff_symbol = GetOrCreateCOFFSymbol(&Symbol);
   SymbolMap[&Symbol] = coff_symbol;
 
-  if (Symbol.getFlags() & COFF::SF_WeakExternal) {
+  if (cast<MCSymbolCOFF>(Symbol).isWeakExternal()) {
     coff_symbol->Data.StorageClass = COFF::IMAGE_SYM_CLASS_WEAK_EXTERNAL;
 
     if (Symbol.isVariable()) {
@@ -428,10 +428,9 @@ void WinCOFFObjectWriter::DefineSymbol(const MCSymbol &Symbol,
     const MCSymbol *Base = Layout.getBaseSymbol(Symbol);
     coff_symbol->Data.Value = getSymbolValue(Symbol, Layout);
 
-    coff_symbol->Data.Type =
-        (Symbol.getFlags() & COFF::SF_TypeMask) >> COFF::SF_TypeShift;
-    coff_symbol->Data.StorageClass =
-        (Symbol.getFlags() & COFF::SF_ClassMask) >> COFF::SF_ClassShift;
+    const MCSymbolCOFF &SymbolCOFF = cast<MCSymbolCOFF>(Symbol);
+    coff_symbol->Data.Type = SymbolCOFF.getType();
+    coff_symbol->Data.StorageClass = SymbolCOFF.getClass();
 
     // If no storage class was specified in the streamer, define it here.
     if (coff_symbol->Data.StorageClass == COFF::IMAGE_SYM_CLASS_NULL) {
@@ -527,13 +526,12 @@ bool WinCOFFObjectWriter::ExportSymbol(const MCSymbol &Symbol,
   if (!Symbol.isTemporary())
     return true;
 
-  // Absolute temporary labels are never visible.
-  if (!Symbol.isInSection())
+  // Temporary variable symbols are invisible.
+  if (Symbol.isVariable())
     return false;
 
-  // For now, all non-variable symbols are exported,
-  // the linker will sort the rest out for us.
-  return !Symbol.isVariable();
+  // Absolute temporary labels are never visible.
+  return !Symbol.isAbsolute();
 }
 
 bool WinCOFFObjectWriter::IsPhysicalSection(COFFSection *S) {
@@ -675,8 +673,8 @@ bool WinCOFFObjectWriter::isSymbolRefDifferenceFullyResolvedImpl(
   // MS LINK expects to be able to replace all references to a function with a
   // thunk to implement their /INCREMENTAL feature.  Make sure we don't optimize
   // away any relocations to functions.
-  if ((((SymA.getFlags() & COFF::SF_TypeMask) >> COFF::SF_TypeShift) >>
-       COFF::SCT_COMPLEX_TYPE_SHIFT) == COFF::IMAGE_SYM_DTYPE_FUNCTION)
+  uint16_t Type = cast<MCSymbolCOFF>(SymA).getType();
+  if ((Type >> COFF::SCT_COMPLEX_TYPE_SHIFT) == COFF::IMAGE_SYM_DTYPE_FUNCTION)
     return false;
   return MCObjectWriter::isSymbolRefDifferenceFullyResolvedImpl(Asm, SymA, FB,
                                                                 InSet, IsPCRel);

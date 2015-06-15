@@ -83,7 +83,7 @@ static std::string computeDataLayout(bool is64Bit) {
   return Ret;
 }
 
-NVPTXTargetMachine::NVPTXTargetMachine(const Target &T, StringRef TT,
+NVPTXTargetMachine::NVPTXTargetMachine(const Target &T, const Triple &TT,
                                        StringRef CPU, StringRef FS,
                                        const TargetOptions &Options,
                                        Reloc::Model RM, CodeModel::Model CM,
@@ -92,7 +92,7 @@ NVPTXTargetMachine::NVPTXTargetMachine(const Target &T, StringRef TT,
                         CM, OL),
       is64bit(is64bit), TLOF(make_unique<NVPTXTargetObjectFile>()),
       Subtarget(TT, CPU, FS, *this) {
-  if (Triple(TT).getOS() == Triple::NVCL)
+  if (TT.getOS() == Triple::NVCL)
     drvInterface = NVPTX::NVCL;
   else
     drvInterface = NVPTX::CUDA;
@@ -103,18 +103,20 @@ NVPTXTargetMachine::~NVPTXTargetMachine() {}
 
 void NVPTXTargetMachine32::anchor() {}
 
-NVPTXTargetMachine32::NVPTXTargetMachine32(
-    const Target &T, StringRef TT, StringRef CPU, StringRef FS,
-    const TargetOptions &Options, Reloc::Model RM, CodeModel::Model CM,
-    CodeGenOpt::Level OL)
+NVPTXTargetMachine32::NVPTXTargetMachine32(const Target &T, const Triple &TT,
+                                           StringRef CPU, StringRef FS,
+                                           const TargetOptions &Options,
+                                           Reloc::Model RM, CodeModel::Model CM,
+                                           CodeGenOpt::Level OL)
     : NVPTXTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, false) {}
 
 void NVPTXTargetMachine64::anchor() {}
 
-NVPTXTargetMachine64::NVPTXTargetMachine64(
-    const Target &T, StringRef TT, StringRef CPU, StringRef FS,
-    const TargetOptions &Options, Reloc::Model RM, CodeModel::Model CM,
-    CodeGenOpt::Level OL)
+NVPTXTargetMachine64::NVPTXTargetMachine64(const Target &T, const Triple &TT,
+                                           StringRef CPU, StringRef FS,
+                                           const TargetOptions &Options,
+                                           Reloc::Model RM, CodeModel::Model CM,
+                                           CodeGenOpt::Level OL)
     : NVPTXTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, true) {}
 
 namespace {
@@ -165,6 +167,11 @@ void NVPTXPassConfig::addIRPasses() {
   addPass(createGenericToNVVMPass());
   addPass(createNVPTXLowerKernelArgsPass(&getNVPTXTargetMachine()));
   addPass(createNVPTXFavorNonGenericAddrSpacesPass());
+  // NVPTXLowerKernelArgs emits alloca for byval parameters which can often
+  // be eliminated by SROA. We do not run SROA right after NVPTXLowerKernelArgs
+  // because we plan to merge NVPTXLowerKernelArgs and
+  // NVPTXFavorNonGenericAddrSpaces into one pass.
+  addPass(createSROAPass());
   // FavorNonGenericAddrSpaces shortcuts unnecessary addrspacecasts, and leave
   // them unused. We could remove dead code in an ad-hoc manner, but that
   // requires manual work and might be error-prone.

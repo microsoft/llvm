@@ -173,7 +173,7 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     break;
   }
   case MachineOperand::MO_MachineBasicBlock:
-    O << *MO.getMBB()->getSymbol();
+    MO.getMBB()->getSymbol()->print(O, MAI);
     return;
   case MachineOperand::MO_GlobalAddress: {
     const GlobalValue *GV = MO.getGlobal();
@@ -181,7 +181,7 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
       O << ":lower16:";
     else if (TF & ARMII::MO_HI16)
       O << ":upper16:";
-    O << *GetARMGVSymbol(GV, TF);
+    GetARMGVSymbol(GV, TF)->print(O, MAI);
 
     printOffset(MO.getOffset(), O);
     if (TF == ARMII::MO_PLT)
@@ -189,7 +189,7 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     break;
   }
   case MachineOperand::MO_ConstantPoolIndex:
-    O << *GetCPISymbol(MO.getIndex());
+    GetCPISymbol(MO.getIndex())->print(O, MAI);
     break;
   }
 }
@@ -564,7 +564,7 @@ void ARMAsmPrinter::emitAttributes() {
   // anyhow.
   // FIXME: For ifunc related functions we could iterate over and look
   // for a feature string that doesn't match the default one.
-  StringRef TT = TM.getTargetTriple();
+  const Triple TT(TM.getTargetTriple());
   StringRef CPU = TM.getTargetCPU();
   StringRef FS = TM.getTargetFeatureString();
   std::string ArchFS = ARM_MC::ParseARMTriple(TT, CPU);
