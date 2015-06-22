@@ -79,8 +79,8 @@ static inline bool operator<(const OptTable::Info &A, const OptTable::Info &B) {
 static inline bool operator<(const OptTable::Info &I, const char *Name) {
   return StrCmpOptionNameIgnoreCase(I.Name, Name) < 0;
 }
-}
-}
+} // namespace opt
+} // namespace llvm
 
 OptSpecifier::OptSpecifier(const Option *Opt) : ID(Opt->getID()) {}
 
@@ -247,18 +247,17 @@ Arg *OptTable::ParseOneArg(const ArgList &Args, unsigned &Index,
   return new Arg(getOption(TheUnknownOptionID), Str, Index++, Str);
 }
 
-InputArgList *OptTable::ParseArgs(const char *const *ArgBegin,
-                                  const char *const *ArgEnd,
+InputArgList *OptTable::ParseArgs(ArrayRef<const char *> ArgArr,
                                   unsigned &MissingArgIndex,
                                   unsigned &MissingArgCount,
                                   unsigned FlagsToInclude,
                                   unsigned FlagsToExclude) const {
-  InputArgList *Args = new InputArgList(ArgBegin, ArgEnd);
+  InputArgList *Args = new InputArgList(ArgArr.begin(), ArgArr.end());
 
   // FIXME: Handle '@' args (or at least error on them).
 
   MissingArgIndex = MissingArgCount = 0;
-  unsigned Index = 0, End = ArgEnd - ArgBegin;
+  unsigned Index = 0, End = ArgArr.size();
   while (Index < End) {
     // Ingore nullptrs, they are response file's EOL markers
     if (Args->getArgString(Index) == nullptr) {

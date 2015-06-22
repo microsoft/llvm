@@ -52,7 +52,7 @@ inline bool hasCLRSecretParameterAttribute(unsigned ValNo, CCState &State) {
   return Func->getAttributes().hasAttribute(ValNo + 1, "CLR_SecretParameter");
 }
 
-} // End llvm namespace
+} // namespace llvm
 
 #endif
 

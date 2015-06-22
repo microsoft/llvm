@@ -54,7 +54,7 @@ namespace N86 {
 namespace X86_MC {
 std::string ParseX86Triple(const Triple &TT);
 
-unsigned getDwarfRegFlavour(Triple TT, bool isEH);
+unsigned getDwarfRegFlavour(const Triple &TT, bool isEH);
 
 void InitLLVM2SEHRegisterMapping(MCRegisterInfo *MRI);
 
@@ -62,7 +62,7 @@ void InitLLVM2SEHRegisterMapping(MCRegisterInfo *MRI);
 /// do not need to go through TargetRegistry.
 MCSubtargetInfo *createX86MCSubtargetInfo(const Triple &TT, StringRef CPU,
                                           StringRef FS);
-}
+} // namespace X86_MC
 
 MCCodeEmitter *createX86MCCodeEmitter(const MCInstrInfo &MCII,
                                       const MCRegisterInfo &MRI,
@@ -98,7 +98,7 @@ MCRelocationInfo *createX86_64MachORelocationInfo(MCContext &Ctx);
 
 /// Construct X86-64 ELF relocation info.
 MCRelocationInfo *createX86_64ELFRelocationInfo(MCContext &Ctx);
-} // End llvm namespace
+} // namespace llvm
 
 
 // Defines symbolic names for X86 registers.  This defines a mapping from

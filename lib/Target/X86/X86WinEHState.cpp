@@ -105,7 +105,7 @@ private:
   /// The linked list node subobject inside of RegNode.
   Value *Link = nullptr;
 };
-}
+} // namespace
 
 FunctionPass *llvm::createX86WinEHStatePass() { return new WinEHStatePass(); }
 
@@ -146,16 +146,10 @@ bool WinEHStatePass::runOnFunction(Function &F) {
     return false;
 
   // Check the personality. Do nothing if this is not an MSVC personality.
-  LandingPadInst *LP = nullptr;
-  for (BasicBlock &BB : F) {
-    LP = BB.getLandingPadInst();
-    if (LP)
-      break;
-  }
-  if (!LP)
+  if (!F.hasPersonalityFn())
     return false;
   PersonalityFn =
-      dyn_cast<Function>(LP->getPersonalityFn()->stripPointerCasts());
+      dyn_cast<Function>(F.getPersonalityFn()->stripPointerCasts());
   if (!PersonalityFn)
     return false;
   Personality = classifyEHPersonality(PersonalityFn);

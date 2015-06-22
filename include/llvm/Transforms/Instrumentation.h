@@ -84,8 +84,8 @@ ModulePass *createInstrProfilingPass(
     const InstrProfOptions &Options = InstrProfOptions());
 
 // Insert AddressSanitizer (address sanity checking) instrumentation
-FunctionPass *createAddressSanitizerFunctionPass();
-ModulePass *createAddressSanitizerModulePass();
+FunctionPass *createAddressSanitizerFunctionPass(bool CompileKernel = false);
+ModulePass *createAddressSanitizerModulePass(bool CompileKernel = false);
 
 // Insert MemorySanitizer instrumentation (detection of uninitialized reads)
 FunctionPass *createMemorySanitizerPass(int TrackOrigins = 0);
@@ -136,6 +136,6 @@ FunctionPass *createBoundsCheckingPass();
 /// protect against stack-based overflow vulnerabilities.
 FunctionPass *createSafeStackPass();
 
-} // End llvm namespace
+} // namespace llvm
 
 #endif
