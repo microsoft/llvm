@@ -493,6 +493,29 @@ struct coff_load_configuration32 {
   support::ulittle32_t SEHandlerCount;
 };
 
+struct coff_load_configuration64 {
+  support::ulittle32_t Characteristics;
+  support::ulittle32_t TimeDateStamp;
+  support::ulittle16_t MajorVersion;
+  support::ulittle16_t MinorVersion;
+  support::ulittle32_t GlobalFlagsClear;
+  support::ulittle32_t GlobalFlagsSet;
+  support::ulittle32_t CriticalSectionDefaultTimeout;
+  support::ulittle32_t DeCommitFreeBlockThreshold;
+  support::ulittle32_t DeCommitTotalFreeThreshold;
+  support::ulittle32_t LockPrefixTable;
+  support::ulittle32_t MaximumAllocationSize;
+  support::ulittle32_t VirtualMemoryThreshold;
+  support::ulittle32_t ProcessAffinityMask;
+  support::ulittle32_t ProcessHeapFlags;
+  support::ulittle16_t CSDVersion;
+  support::ulittle16_t Reserved;
+  support::ulittle32_t EditList;
+  support::ulittle64_t SecurityCookie;
+  support::ulittle64_t SEHandlerTable;
+  support::ulittle64_t SEHandlerCount;
+};
+
 struct coff_runtime_function_x64 {
   support::ulittle32_t BeginAddress;
   support::ulittle32_t EndAddress;
@@ -641,7 +664,6 @@ protected:
   std::error_code getRelocationOffset(DataRefImpl Rel,
                                       uint64_t &Res) const override;
   symbol_iterator getRelocationSymbol(DataRefImpl Rel) const override;
-  section_iterator getRelocationSection(DataRefImpl Rel) const override;
   std::error_code getRelocationType(DataRefImpl Rel,
                                     uint64_t &Res) const override;
   std::error_code

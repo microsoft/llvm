@@ -99,7 +99,7 @@ private:
 
   bool areTypesIsomorphic(Type *DstTy, Type *SrcTy);
 };
-}
+} // namespace
 
 void TypeMapTy::addTypeMapping(Type *DstTy, Type *SrcTy) {
   assert(SpeculativeTypes.empty());
@@ -507,7 +507,7 @@ private:
   void linkNamedMDNodes();
   void stripReplacedSubprograms();
 };
-}
+} // namespace
 
 /// The LLVM SymbolTable class autorenames globals that conflict in the symbol
 /// table. This is good for all clients except for us. Go through the trouble
@@ -1193,6 +1193,11 @@ bool ModuleLinker::linkFunctionBody(Function &Dst, Function &Src) {
   if (Src.hasPrologueData())
     Dst.setPrologueData(MapValue(Src.getPrologueData(), ValueMap, RF_None,
                                  &TypeMap, &ValMaterializer));
+
+  // Link in the personality function.
+  if (Src.hasPersonalityFn())
+    Dst.setPersonalityFn(MapValue(Src.getPersonalityFn(), ValueMap, RF_None,
+                                  &TypeMap, &ValMaterializer));
 
   // Go through and convert function arguments over, remembering the mapping.
   Function::arg_iterator DI = Dst.arg_begin();

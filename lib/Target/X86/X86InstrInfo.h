@@ -90,7 +90,7 @@ namespace X86 {
   /// GetOppositeBranchCondition - Return the inverse of the specified cond,
   /// e.g. turning COND_E to COND_NE.
   CondCode GetOppositeBranchCondition(CondCode CC);
-}  // end namespace X86;
+} // namespace X86
 
 
 /// isGlobalStubReference - Return true if the specified TargetFlag operand is
@@ -461,12 +461,12 @@ public:
   /// Return true when there is potentially a faster code sequence
   /// for an instruction chain ending in <Root>. All potential patterns are
   /// output in the <Pattern> array.
-  bool hasPattern(
+  bool getMachineCombinerPatterns(
       MachineInstr &Root,
       SmallVectorImpl<MachineCombinerPattern::MC_PATTERN> &P) const override;
   
-  /// When hasPattern() finds a pattern, this function generates the
-  /// instructions that could replace the original code sequence.
+  /// When getMachineCombinerPatterns() finds a pattern, this function generates
+  /// the instructions that could replace the original code sequence.
   void genAlternativeCodeSequence(
           MachineInstr &Root, MachineCombinerPattern::MC_PATTERN P,
           SmallVectorImpl<MachineInstr *> &InsInstrs,
@@ -512,6 +512,6 @@ private:
                       int &FrameIndex) const;
 };
 
-} // End llvm namespace
+} // namespace llvm
 
 #endif
