@@ -166,10 +166,6 @@ public:
   ///
   void eraseFromParent() override;
 
-  /// Override Constant's implementation of this method so we can
-  /// replace constant initializers.
-  void replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U) override;
-
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Value *V) {
     return V->getValueID() == Value::GlobalVariableVal;
@@ -183,6 +179,6 @@ struct OperandTraits<GlobalVariable> :
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(GlobalVariable, Value)
 
-} // namespace llvm
+} // End llvm namespace
 
 #endif

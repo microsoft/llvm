@@ -25,13 +25,52 @@
 namespace llvm {
 namespace yaml {
 
+/// A wrapper around std::string which contains a source range that's being
+/// set during parsing.
+struct StringValue {
+  std::string Value;
+  SMRange SourceRange;
+
+  StringValue() {}
+  StringValue(std::string Value) : Value(std::move(Value)) {}
+
+  bool operator==(const StringValue &Other) const {
+    return Value == Other.Value;
+  }
+};
+
+template <> struct ScalarTraits<StringValue> {
+  static void output(const StringValue &S, void *, llvm::raw_ostream &OS) {
+    OS << S.Value;
+  }
+
+  static StringRef input(StringRef Scalar, void *Ctx, StringValue &S) {
+    S.Value = Scalar.str();
+    if (const auto *Node =
+            reinterpret_cast<yaml::Input *>(Ctx)->getCurrentNode())
+      S.SourceRange = Node->getSourceRange();
+    return "";
+  }
+
+  static bool mustQuote(StringRef Scalar) { return needsQuotes(Scalar); }
+};
+
+} // end namespace yaml
+} // end namespace llvm
+
+LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::StringValue)
+
+namespace llvm {
+namespace yaml {
+
 struct MachineBasicBlock {
   std::string Name;
   unsigned Alignment = 0;
   bool IsLandingPad = false;
   bool AddressTaken = false;
   // TODO: Serialize the successors and liveins.
-  // TODO: Serialize machine instructions.
+
+  std::vector<StringValue> Instructions;
 };
 
 template <> struct MappingTraits<MachineBasicBlock> {
@@ -41,6 +80,7 @@ template <> struct MappingTraits<MachineBasicBlock> {
     YamlIO.mapOptional("alignment", MBB.Alignment);
     YamlIO.mapOptional("isLandingPad", MBB.IsLandingPad);
     YamlIO.mapOptional("addressTaken", MBB.AddressTaken);
+    YamlIO.mapOptional("instructions", MBB.Instructions);
   }
 };
 

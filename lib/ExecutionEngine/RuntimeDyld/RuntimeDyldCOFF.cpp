@@ -34,7 +34,7 @@ public:
   OwningBinary<ObjectFile>
   getObjectForDebug(const ObjectFile &Obj) const override;
 };
-} // namespace
+}
 
 namespace llvm {
 

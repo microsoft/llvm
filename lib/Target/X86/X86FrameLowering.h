@@ -166,6 +166,6 @@ private:
                                            bool InEpilogue) const;
 };
 
-} // namespace llvm
+} // End llvm namespace
 
 #endif

@@ -138,6 +138,6 @@ unsigned getX86SubSuperRegister(unsigned, MVT::SimpleValueType, bool High=false)
 //get512BitRegister - X86 utility - returns 512-bit super register
 unsigned get512BitSuperRegister(unsigned Reg);
 
-} // namespace llvm
+} // End llvm namespace
 
 #endif

@@ -803,4 +803,4 @@ unsigned get512BitSuperRegister(unsigned Reg) {
   llvm_unreachable("Unexpected SIMD register");
 }
 
-} // namespace llvm
+}
