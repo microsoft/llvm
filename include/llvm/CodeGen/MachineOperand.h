@@ -450,11 +450,12 @@ public:
     return Contents.CFIIndex;
   }
 
-  /// getOffset - Return the offset from the symbol in this operand. This always
-  /// returns 0 for ExternalSymbol operands.
+  /// Return the offset from the symbol in this operand. This always returns 0
+  /// for ExternalSymbol operands.
   int64_t getOffset() const {
-    assert((isGlobal() || isSymbol() || isCPI() || isTargetIndex() ||
-            isBlockAddress()) && "Wrong MachineOperand accessor");
+    assert((isGlobal() || isSymbol() || isMCSymbol() || isCPI() ||
+            isTargetIndex() || isBlockAddress()) &&
+           "Wrong MachineOperand accessor");
     return int64_t(uint64_t(Contents.OffsetedInfo.OffsetHi) << 32) |
            SmallContents.OffsetLo;
   }
@@ -512,8 +513,9 @@ public:
   }
 
   void setOffset(int64_t Offset) {
-    assert((isGlobal() || isSymbol() || isCPI() || isTargetIndex() ||
-            isBlockAddress()) && "Wrong MachineOperand accessor");
+    assert((isGlobal() || isSymbol() || isMCSymbol() || isCPI() ||
+            isTargetIndex() || isBlockAddress()) &&
+           "Wrong MachineOperand accessor");
     SmallContents.OffsetLo = unsigned(Offset);
     Contents.OffsetedInfo.OffsetHi = int(Offset >> 32);
   }
@@ -703,9 +705,12 @@ public:
     return Op;
   }
 
-  static MachineOperand CreateMCSymbol(MCSymbol *Sym) {
+  static MachineOperand CreateMCSymbol(MCSymbol *Sym,
+                                       unsigned char TargetFlags = 0) {
     MachineOperand Op(MachineOperand::MO_MCSymbol);
     Op.Contents.Sym = Sym;
+    Op.setOffset(0);
+    Op.setTargetFlags(TargetFlags);
     return Op;
   }
 
@@ -741,6 +746,6 @@ inline raw_ostream &operator<<(raw_ostream &OS, const MachineOperand& MO) {
   // See friend declaration above. This additional declaration is required in
   // order to compile LLVM with IBM xlC compiler.
   hash_code hash_value(const MachineOperand &MO);
-} // namespace llvm
+} // End llvm namespace
 
 #endif

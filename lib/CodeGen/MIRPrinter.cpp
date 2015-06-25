@@ -21,6 +21,8 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/YAMLTraits.h"
+#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 
 using namespace llvm;
 
@@ -37,6 +39,18 @@ public:
   void print(const MachineFunction &MF);
 
   void convert(yaml::MachineBasicBlock &YamlMBB, const MachineBasicBlock &MBB);
+};
+
+/// This class prints out the machine instructions using the MIR serialization
+/// format.
+class MIPrinter {
+  raw_ostream &OS;
+
+public:
+  MIPrinter(raw_ostream &OS) : OS(OS) {}
+
+  void print(const MachineInstr &MI);
+  void print(const MachineOperand &Op, const TargetRegisterInfo *TRI);
 };
 
 } // end anonymous namespace
@@ -83,6 +97,75 @@ void MIRPrinter::convert(yaml::MachineBasicBlock &YamlMBB,
   YamlMBB.Alignment = MBB.getAlignment();
   YamlMBB.AddressTaken = MBB.hasAddressTaken();
   YamlMBB.IsLandingPad = MBB.isLandingPad();
+
+  // Print the machine instructions.
+  YamlMBB.Instructions.reserve(MBB.size());
+  std::string Str;
+  for (const auto &MI : MBB) {
+    raw_string_ostream StrOS(Str);
+    MIPrinter(StrOS).print(MI);
+    YamlMBB.Instructions.push_back(StrOS.str());
+    Str.clear();
+  }
+}
+
+void MIPrinter::print(const MachineInstr &MI) {
+  const auto &SubTarget = MI.getParent()->getParent()->getSubtarget();
+  const auto *TRI = SubTarget.getRegisterInfo();
+  assert(TRI && "Expected target register info");
+  const auto *TII = SubTarget.getInstrInfo();
+  assert(TII && "Expected target instruction info");
+
+  unsigned I = 0, E = MI.getNumOperands();
+  for (; I < E && MI.getOperand(I).isReg() && MI.getOperand(I).isDef() &&
+         !MI.getOperand(I).isImplicit();
+       ++I) {
+    if (I)
+      OS << ", ";
+    print(MI.getOperand(I), TRI);
+  }
+
+  if (I)
+    OS << " = ";
+  OS << TII->getName(MI.getOpcode());
+  // TODO: Print the instruction flags, machine mem operands.
+  if (I < E)
+    OS << ' ';
+
+  bool NeedComma = false;
+  for (; I < E; ++I) {
+    if (NeedComma)
+      OS << ", ";
+    print(MI.getOperand(I), TRI);
+    NeedComma = true;
+  }
+}
+
+static void printReg(unsigned Reg, raw_ostream &OS,
+                     const TargetRegisterInfo *TRI) {
+  // TODO: Print Stack Slots.
+  // TODO: Print no register.
+  // TODO: Print virtual registers.
+  if (Reg < TRI->getNumRegs())
+    OS << '%' << StringRef(TRI->getName(Reg)).lower();
+  else
+    llvm_unreachable("Can't print this kind of register yet");
+}
+
+void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
+  switch (Op.getType()) {
+  case MachineOperand::MO_Register:
+    // TODO: Print register flags.
+    printReg(Op.getReg(), OS, TRI);
+    // TODO: Print sub register.
+    break;
+  case MachineOperand::MO_Immediate:
+    OS << Op.getImm();
+    break;
+  default:
+    // TODO: Print the other machine operands.
+    llvm_unreachable("Can't print this machine operand at the moment");
+  }
 }
 
 void llvm::printMIR(raw_ostream &OS, const Module &M) {
