@@ -134,14 +134,22 @@ public:
   };
 
   SymbolRef(DataRefImpl SymbolP, const ObjectFile *Owner);
+  SymbolRef(const BasicSymbolRef &B) : BasicSymbolRef(B) {
+    assert(isa<ObjectFile>(BasicSymbolRef::getObject()));
+  }
 
   std::error_code getName(StringRef &Result) const;
   /// Returns the symbol virtual address (i.e. address at which it will be
   /// mapped).
   std::error_code getAddress(uint64_t &Result) const;
+
+  /// Return the value of the symbol depending on the object this can be an
+  /// offset or a virtual address.
+  uint64_t getValue() const;
+
   /// @brief Get the alignment of this symbol as the actual value (not log 2).
   uint32_t getAlignment() const;
-  uint64_t getSize() const;
+  uint64_t getCommonSize() const;
   std::error_code getType(SymbolRef::Type &Result) const;
   std::error_code getOther(uint8_t &Result) const;
 
@@ -200,8 +208,9 @@ protected:
                                   DataRefImpl Symb) const override;
   virtual std::error_code getSymbolAddress(DataRefImpl Symb,
                                            uint64_t &Res) const = 0;
+  virtual uint64_t getSymbolValue(DataRefImpl Symb) const = 0;
   virtual uint32_t getSymbolAlignment(DataRefImpl Symb) const;
-  virtual uint64_t getSymbolSize(DataRefImpl Symb) const = 0;
+  virtual uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const = 0;
   virtual std::error_code getSymbolType(DataRefImpl Symb,
                                         SymbolRef::Type &Res) const = 0;
   virtual std::error_code getSymbolSection(DataRefImpl Symb,
@@ -252,6 +261,11 @@ protected:
   }
 
 public:
+  uint64_t getCommonSymbolSize(DataRefImpl Symb) const {
+    assert(getSymbolFlags(Symb) & SymbolRef::SF_Common);
+    return getCommonSymbolSizeImpl(Symb);
+  }
+
   typedef iterator_range<symbol_iterator> symbol_iterator_range;
   symbol_iterator_range symbols() const {
     return symbol_iterator_range(symbol_begin(), symbol_end());
@@ -322,12 +336,16 @@ inline std::error_code SymbolRef::getAddress(uint64_t &Result) const {
   return getObject()->getSymbolAddress(getRawDataRefImpl(), Result);
 }
 
+inline uint64_t SymbolRef::getValue() const {
+  return getObject()->getSymbolValue(getRawDataRefImpl());
+}
+
 inline uint32_t SymbolRef::getAlignment() const {
   return getObject()->getSymbolAlignment(getRawDataRefImpl());
 }
 
-inline uint64_t SymbolRef::getSize() const {
-  return getObject()->getSymbolSize(getRawDataRefImpl());
+inline uint64_t SymbolRef::getCommonSize() const {
+  return getObject()->getCommonSymbolSize(getRawDataRefImpl());
 }
 
 inline std::error_code SymbolRef::getSection(section_iterator &Result) const {

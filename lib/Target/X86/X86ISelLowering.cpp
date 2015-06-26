@@ -1108,7 +1108,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::CTPOP,             MVT::v8i32, Custom);
     setOperationAction(ISD::CTPOP,             MVT::v4i64, Custom);
 
-    if (Subtarget->hasFMA() || Subtarget->hasFMA4()) {
+    if (Subtarget->hasFMA() || Subtarget->hasFMA4() || Subtarget->hasAVX512()) {
       setOperationAction(ISD::FMA,             MVT::v8f32, Legal);
       setOperationAction(ISD::FMA,             MVT::v4f64, Legal);
       setOperationAction(ISD::FMA,             MVT::v4f32, Legal);
@@ -18590,7 +18590,7 @@ bool X86TargetLowering::isVectorLoadExtDesirable(SDValue) const { return true; }
 
 bool
 X86TargetLowering::isFMAFasterThanFMulAndFAdd(EVT VT) const {
-  if (!(Subtarget->hasFMA() || Subtarget->hasFMA4()))
+  if (!(Subtarget->hasFMA() || Subtarget->hasFMA4() || Subtarget->hasAVX512()))
     return false;
 
   VT = VT.getScalarType();
@@ -19985,6 +19985,7 @@ X86TargetLowering::emitEHSjLjLongJmp(MachineInstr *MI,
 // Replace 213-type (isel default) FMA3 instructions with 231-type for
 // accumulator loops. Writing back to the accumulator allows the coalescer
 // to remove extra copies in the loop.
+// FIXME: Do this on AVX512.  We don't support 231 variants yet (PR23937).
 MachineBasicBlock *
 X86TargetLowering::emitFMA3Instr(MachineInstr *MI,
                                  MachineBasicBlock *MBB) const {
@@ -24352,7 +24353,8 @@ static SDValue PerformFMACombine(SDNode *N, SelectionDAG &DAG,
 
   EVT ScalarVT = VT.getScalarType();
   if ((ScalarVT != MVT::f32 && ScalarVT != MVT::f64) ||
-      (!Subtarget->hasFMA() && !Subtarget->hasFMA4()))
+      (!Subtarget->hasFMA() && !Subtarget->hasFMA4() &&
+       !Subtarget->hasAVX512()))
     return SDValue();
 
   SDValue A = N->getOperand(0);
@@ -25751,10 +25753,6 @@ X86TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
         Res.first = DestReg;
         Res.second = &X86::GR64RegClass;
       }
-    } else if (VT != MVT::Other) {
-      // Type mismatch and not a clobber: Return an error;
-      Res.first = 0;
-      Res.second = nullptr;
     }
   } else if (Res.second == &X86::FR32RegClass ||
              Res.second == &X86::FR64RegClass ||
@@ -25780,15 +25778,6 @@ X86TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
       Res.second = &X86::VR256RegClass;
     else if (X86::VR512RegClass.hasType(VT))
       Res.second = &X86::VR512RegClass;
-    else if (VT != MVT::Other) {
-      // Type mismatch and not a clobber: Return an error;
-      Res.first = 0;
-      Res.second = nullptr;
-    }
-  } else if (VT != MVT::Other) {
-    // Type mismatch and not a clobber: Return an error;
-    Res.first = 0;
-    Res.second = nullptr;
   }
 
   return Res;

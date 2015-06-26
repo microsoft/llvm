@@ -10,6 +10,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "gtest/gtest.h"
+#include <array>
 #include <ostream>
 
 using namespace llvm;
@@ -213,6 +214,44 @@ TEST(APIntTest, i1) {
   EXPECT_EQ(four, q);
   EXPECT_EQ(-one, r);
   }
+}
+
+TEST(APIntTest, compare) {
+  std::array<APInt, 5> testVals{{
+    APInt{16, 2},
+    APInt{16, 1},
+    APInt{16, 0},
+    APInt{16, (uint64_t)-1, true},
+    APInt{16, (uint64_t)-2, true},
+  }};
+
+  for (auto &arg1 : testVals)
+    for (auto &arg2 : testVals) {
+      auto uv1 = arg1.getZExtValue();
+      auto uv2 = arg2.getZExtValue();
+      auto sv1 = arg1.getSExtValue();
+      auto sv2 = arg2.getSExtValue();
+
+      EXPECT_EQ(uv1 <  uv2, arg1.ult(arg2));
+      EXPECT_EQ(uv1 <= uv2, arg1.ule(arg2));
+      EXPECT_EQ(uv1 >  uv2, arg1.ugt(arg2));
+      EXPECT_EQ(uv1 >= uv2, arg1.uge(arg2));
+
+      EXPECT_EQ(sv1 <  sv2, arg1.slt(arg2));
+      EXPECT_EQ(sv1 <= sv2, arg1.sle(arg2));
+      EXPECT_EQ(sv1 >  sv2, arg1.sgt(arg2));
+      EXPECT_EQ(sv1 >= sv2, arg1.sge(arg2));
+
+      EXPECT_EQ(uv1 <  uv2, arg1.ult(uv2));
+      EXPECT_EQ(uv1 <= uv2, arg1.ule(uv2));
+      EXPECT_EQ(uv1 >  uv2, arg1.ugt(uv2));
+      EXPECT_EQ(uv1 >= uv2, arg1.uge(uv2));
+
+      EXPECT_EQ(sv1 <  sv2, arg1.slt(sv2));
+      EXPECT_EQ(sv1 <= sv2, arg1.sle(sv2));
+      EXPECT_EQ(sv1 >  sv2, arg1.sgt(sv2));
+      EXPECT_EQ(sv1 >= sv2, arg1.sge(sv2));
+    }
 }
 
 

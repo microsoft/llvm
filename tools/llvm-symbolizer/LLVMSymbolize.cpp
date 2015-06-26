@@ -19,6 +19,7 @@
 #include "llvm/DebugInfo/PDB/PDBContext.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/MachO.h"
+#include "llvm/Object/SymbolSize.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compression.h"
 #include "llvm/Support/DataExtractor.h"
@@ -71,22 +72,14 @@ ModuleInfo::ModuleInfo(ObjectFile *Obj, DIContext *DICtx)
       }
     }
   }
-  for (const SymbolRef &Symbol : Module->symbols()) {
-    addSymbol(Symbol, OpdExtractor.get(), OpdAddress);
-  }
-  bool NoSymbolTable = (Module->symbol_begin() == Module->symbol_end());
-  if (NoSymbolTable && Module->isELF()) {
-    // Fallback to dynamic symbol table, if regular symbol table is stripped.
-    std::pair<symbol_iterator, symbol_iterator> IDyn =
-        getELFDynamicSymbolIterators(Module);
-    for (symbol_iterator si = IDyn.first, se = IDyn.second; si != se; ++si) {
-      addSymbol(*si, OpdExtractor.get(), OpdAddress);
-    }
-  }
+  std::vector<std::pair<SymbolRef, uint64_t>> Symbols =
+      computeSymbolSizes(*Module);
+  for (auto &P : Symbols)
+    addSymbol(P.first, P.second, OpdExtractor.get(), OpdAddress);
 }
 
-void ModuleInfo::addSymbol(const SymbolRef &Symbol, DataExtractor *OpdExtractor,
-                           uint64_t OpdAddress) {
+void ModuleInfo::addSymbol(const SymbolRef &Symbol, uint64_t SymbolSize,
+                           DataExtractor *OpdExtractor, uint64_t OpdAddress) {
   SymbolRef::Type SymbolType;
   if (error(Symbol.getType(SymbolType)))
     return;
@@ -94,7 +87,7 @@ void ModuleInfo::addSymbol(const SymbolRef &Symbol, DataExtractor *OpdExtractor,
     return;
   uint64_t SymbolAddress;
   if (error(Symbol.getAddress(SymbolAddress)) ||
-      SymbolAddress == UnknownAddressOrSize)
+      SymbolAddress == UnknownAddress)
     return;
   if (OpdExtractor) {
     // For big-endian PowerPC64 ELF, symbols in the .opd section refer to
@@ -107,16 +100,6 @@ void ModuleInfo::addSymbol(const SymbolRef &Symbol, DataExtractor *OpdExtractor,
     if (OpdOffset == OpdOffset32 && 
         OpdExtractor->isValidOffsetForAddress(OpdOffset32))
       SymbolAddress = OpdExtractor->getAddress(&OpdOffset32);
-  }
-  uint64_t SymbolSize;
-  // Getting symbol size is linear for Mach-O files, so assume that symbol
-  // occupies the memory range up to the following symbol.
-  if (isa<MachOObjectFile>(Module))
-    SymbolSize = 0;
-  else {
-    SymbolSize = Symbol.getSize();
-    if (SymbolSize == UnknownAddressOrSize)
-      return;
   }
   StringRef SymbolName;
   if (error(Symbol.getName(SymbolName)))

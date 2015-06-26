@@ -197,6 +197,8 @@ public:
                   std::error_code &EC);
 
   void moveSymbolNext(DataRefImpl &Symb) const override;
+
+  uint64_t getNValue(DataRefImpl Sym) const;
   std::error_code getSymbolName(DataRefImpl Symb,
                                 StringRef &Res) const override;
 
@@ -206,13 +208,16 @@ public:
 
   std::error_code getSymbolAddress(DataRefImpl Symb,
                                    uint64_t &Res) const override;
+  uint64_t getSymbolValue(DataRefImpl Symb) const override;
   uint32_t getSymbolAlignment(DataRefImpl Symb) const override;
-  uint64_t getSymbolSize(DataRefImpl Symb) const override;
+  uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const override;
   std::error_code getSymbolType(DataRefImpl Symb,
                                 SymbolRef::Type &Res) const override;
   uint32_t getSymbolFlags(DataRefImpl Symb) const override;
   std::error_code getSymbolSection(DataRefImpl Symb,
                                    section_iterator &Res) const override;
+  unsigned getSymbolSectionID(SymbolRef Symb) const;
+  unsigned getSectionID(SectionRef Sec) const;
 
   void moveSectionNext(DataRefImpl &Sec) const override;
   std::error_code getSectionName(DataRefImpl Sec,

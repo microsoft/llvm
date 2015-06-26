@@ -345,23 +345,24 @@ unsigned MachOObjectFile::getSectionType(SectionRef Sec) const {
   return Flags & MachO::SECTION_TYPE;
 }
 
+uint64_t MachOObjectFile::getNValue(DataRefImpl Sym) const {
+  if (is64Bit()) {
+    MachO::nlist_64 Entry = getSymbol64TableEntry(Sym);
+    return Entry.n_value;
+  }
+  MachO::nlist Entry = getSymbolTableEntry(Sym);
+  return Entry.n_value;
+}
+
 // getIndirectName() returns the name of the alias'ed symbol who's string table
 // index is in the n_value field.
 std::error_code MachOObjectFile::getIndirectName(DataRefImpl Symb,
                                                  StringRef &Res) const {
   StringRef StringTable = getStringTableData();
-  uint64_t NValue;
-  if (is64Bit()) {
-    MachO::nlist_64 Entry = getSymbol64TableEntry(Symb);
-    NValue = Entry.n_value;
-    if ((Entry.n_type & MachO::N_TYPE) != MachO::N_INDR)
-      return object_error::parse_failed;
-  } else {
-    MachO::nlist Entry = getSymbolTableEntry(Symb);
-    NValue = Entry.n_value;
-    if ((Entry.n_type & MachO::N_TYPE) != MachO::N_INDR)
-      return object_error::parse_failed;
-  }
+  MachO::nlist_base Entry = getSymbolTableEntryBase(this, Symb);
+  if ((Entry.n_type & MachO::N_TYPE) != MachO::N_INDR)
+    return object_error::parse_failed;
+  uint64_t NValue = getNValue(Symb);
   if (NValue >= StringTable.size())
     return object_error::parse_failed;
   const char *Start = &StringTable.data()[NValue];
@@ -369,23 +370,17 @@ std::error_code MachOObjectFile::getIndirectName(DataRefImpl Symb,
   return std::error_code();
 }
 
-std::error_code MachOObjectFile::getSymbolAddress(DataRefImpl Symb,
+uint64_t MachOObjectFile::getSymbolValue(DataRefImpl Sym) const {
+  uint64_t NValue = getNValue(Sym);
+  MachO::nlist_base Entry = getSymbolTableEntryBase(this, Sym);
+  if ((Entry.n_type & MachO::N_TYPE) == MachO::N_UNDF && NValue == 0)
+    return UnknownAddress;
+  return NValue;
+}
+
+std::error_code MachOObjectFile::getSymbolAddress(DataRefImpl Sym,
                                                   uint64_t &Res) const {
-  if (is64Bit()) {
-    MachO::nlist_64 Entry = getSymbol64TableEntry(Symb);
-    if ((Entry.n_type & MachO::N_TYPE) == MachO::N_UNDF &&
-        Entry.n_value == 0)
-      Res = UnknownAddressOrSize;
-    else
-      Res = Entry.n_value;
-  } else {
-    MachO::nlist Entry = getSymbolTableEntry(Symb);
-    if ((Entry.n_type & MachO::N_TYPE) == MachO::N_UNDF &&
-        Entry.n_value == 0)
-      Res = UnknownAddressOrSize;
-    else
-      Res = Entry.n_value;
-  }
+  Res = getSymbolValue(Sym);
   return std::error_code();
 }
 
@@ -398,13 +393,10 @@ uint32_t MachOObjectFile::getSymbolAlignment(DataRefImpl DRI) const {
   return 0;
 }
 
-uint64_t MachOObjectFile::getSymbolSize(DataRefImpl DRI) const {
+uint64_t MachOObjectFile::getCommonSymbolSizeImpl(DataRefImpl DRI) const {
   uint64_t Value;
   getSymbolAddress(DRI, Value);
-  uint32_t flags = getSymbolFlags(DRI);
-  if (flags & SymbolRef::SF_Common)
-    return Value;
-  return UnknownAddressOrSize;
+  return Value;
 }
 
 std::error_code MachOObjectFile::getSymbolType(DataRefImpl Symb,
@@ -453,7 +445,7 @@ uint32_t MachOObjectFile::getSymbolFlags(DataRefImpl DRI) const {
     if ((MachOType & MachO::N_TYPE) == MachO::N_UNDF) {
       uint64_t Value;
       getSymbolAddress(DRI, Value);
-      if (Value && Value != UnknownAddressOrSize)
+      if (Value && Value != UnknownAddress)
         Result |= SymbolRef::SF_Common;
     }
 
@@ -489,6 +481,12 @@ std::error_code MachOObjectFile::getSymbolSection(DataRefImpl Symb,
   }
 
   return std::error_code();
+}
+
+unsigned MachOObjectFile::getSymbolSectionID(SymbolRef Sym) const {
+  MachO::nlist_base Entry =
+      getSymbolTableEntryBase(this, Sym.getRawDataRefImpl());
+  return Entry.n_sect - 1;
 }
 
 void MachOObjectFile::moveSectionNext(DataRefImpl &Sec) const {
@@ -565,6 +563,10 @@ bool MachOObjectFile::isSectionBSS(DataRefImpl Sec) const {
   return !(Flags & MachO::S_ATTR_PURE_INSTRUCTIONS) &&
          (SectionType == MachO::S_ZEROFILL ||
           SectionType == MachO::S_GB_ZEROFILL);
+}
+
+unsigned MachOObjectFile::getSectionID(SectionRef Sec) const {
+  return Sec.getRawDataRefImpl().d.a;
 }
 
 bool MachOObjectFile::isSectionVirtual(DataRefImpl Sec) const {
