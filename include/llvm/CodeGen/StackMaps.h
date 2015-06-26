@@ -1,5 +1,4 @@
 //===------------------- StackMaps.h - StackMaps ----------------*- C++ -*-===//
-
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -254,6 +253,89 @@ private:
   void print(raw_ostream &OS);
   void debug() { print(dbgs()); }
 };
+
+//===----------------------------------------------------------------------===
+// Start StaclMapSection Parser                                               
+//
+// The following code for StackMapSection is provided by Philip Reams.
+// The code is taken from diffs in http://reviews.llvm.org/D10377
+//
+// This code is a stop-gap solution until the alternate StackMap parser
+// proposed in http://reviews.llvm.org/D10434 is fully implemented.
+//===----------------------------------------------------------------------===
+
+struct LocationRecord {
+  enum Type {
+    Unprocessed = 0,
+    Register = 1,
+    Direct = 2,
+    Indirect = 3,
+    Constant = 4,
+    ConstantIndex = 5
+  };
+
+  uint8_t Type;
+  uint8_t SizeInBytes;
+  uint16_t DwarfRegNum;
+  int32_t Offset;
+
+  void parse(uint8_t* data, unsigned& offset, const unsigned len);
+};
+struct StackMapRecord {
+  uint64_t PatchPointID;
+  uint32_t InstructionOffset;
+  uint16_t ReservedFlags;
+  std::vector<LocationRecord> Locations;  //[NumLocations]
+  // LiveOuts omitted
+
+  void parse(uint8_t* data, unsigned& offset, const unsigned len);
+};
+
+struct StackMapSizeRecord {
+  StackMapSizeRecord(uint64_t offset, uint64_t size) 
+    : FunctionAddr(offset), StackSize(size) {}
+  uint64_t FunctionAddr;
+  uint64_t StackSize;
+
+  /// Does this function have a fixed size frame?  If not, the StackSize field
+  /// is undefined and meaningless.
+  bool isFixedSizeFrame() const;
+};
+
+struct StackMapSection {
+  uint8_t Version;
+  uint8_t Reserved8;   /* zero expected */
+  uint16_t Reserved16; /* zero expected */
+  std::vector<StackMapSizeRecord> FnSizeRecords;
+  std::vector<int64_t> Constants;         // [NumConstants]
+  std::vector<StackMapRecord> Records;  //[NumRecord]
+
+  void parse(uint8_t* data, unsigned& offset, const unsigned len);
+  void parse(uint8_t* data, const unsigned len)
+  {
+    unsigned offset = 0;
+    parse(data, offset, len);
+
+    // Note: We currently can not assert that offset is exactly len.  This is
+    // due to how we're recording the size of the sections.  We're getting some
+    // extra room included for relocations (6 bytes) which we shouldn't need.
+    // If we use NotifyObjectEmitted instead, we probably could make this exact
+    // NOTE to MSFT: You probably don't need this hack.
+    const unsigned RelocSize = 6 * FnSizeRecords.size();
+    assert((offset <= len && offset >= len - RelocSize) && 
+           "incomplete parsing!");
+  }
+  void verify() const;
+  void dump() const { print(dbgs()); }
+  void StackMapSection::print(raw_ostream &OS) const;
+  static const char* locationTypeToString(uint8_t Type);
+  StackMapRecord& findRecordForRelPC(uint32_t RelPC);
+  bool hasRecordForRelPC(uint32_t RelPC);
+};
+
+//===----------------------------------------------------------------------===
+// End StaclMapSection Parser                                               
+//===----------------------------------------------------------------------===
 
 }
 

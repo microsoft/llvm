@@ -24,6 +24,7 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <iterator>
+#include <limits>
 
 using namespace llvm;
 
@@ -543,3 +544,211 @@ void StackMaps::serializeToStackMapSection() {
   CSInfos.clear();
   ConstPool.clear();
 }
+
+//===----------------------------------------------------------------------===
+// Start StaclMapSection Parser                                               
+//
+// The following code for StackMapSection is provided by Philip Reams.
+// The code is taken from diffs in http://reviews.llvm.org/D10377
+//
+// This code is a stop-gap solution until the alternate StackMap parser
+// proposed in http://reviews.llvm.org/D10434 is fully implemented.
+//===----------------------------------------------------------------------===
+
+/// uint32 : Reserved (header)
+/// uint32 : NumFunctions
+/// StkSizeRecord[NumFunctions] {
+///   uint32 : Function Offset
+///   uint32 : Stack Size
+/// }
+/// uint32 : NumConstants
+/// int64  : Constants[NumConstants]
+/// uint32 : NumRecords
+/// StkMapRecord[NumRecords] {
+///   uint64 : PatchPoint ID
+///   uint32 : Instruction Offset
+///   uint16 : Reserved (record flags)
+///   uint16 : NumLocations
+///   Location[NumLocations] {
+///     uint8  : Register | Direct | Indirect | Constant | ConstantIndex
+///     uint8  : Size in Bytes
+///     uint16 : Dwarf RegNum
+///     int32  : Offset
+///   }
+///   uint16 : NumLiveOuts
+///   LiveOuts[NumLiveOuts]
+///     uint16 : Dwarf RegNum
+///     uint8  : Reserved
+///     uint8  : Size in Bytes
+/// }
+///
+
+template <typename Primitive>
+Primitive parse_primitive(uint8_t* data, unsigned& offset, const unsigned len)
+{
+  assert(data && offset >= 0 && len >= 0);
+  assert(offset < len);
+  Primitive rval = *(Primitive*)(data + offset);
+  offset += sizeof(rval);
+  assert(offset <= len);
+  return rval;
+}
+
+void LocationRecord::parse(uint8_t* data, unsigned& offset, const unsigned len)
+{
+  assert(offset + sizeof(LocationRecord) <= len);
+  memcpy(this, data + offset, sizeof(LocationRecord));
+  offset += sizeof(LocationRecord);
+  assert(Type <= 5);
+}
+void StackMapRecord::parse(uint8_t* data, unsigned& offset, const unsigned len)
+{
+  PatchPointID = parse_primitive<uint64_t>(data, offset, len);
+  InstructionOffset = parse_primitive<uint32_t>(data, offset, len);
+  ReservedFlags = parse_primitive<uint16_t>(data, offset, len);
+  uint16_t NumLocations = parse_primitive<uint16_t>(data, offset, len);
+  Locations.resize(NumLocations);
+  assert(0 == ReservedFlags);
+  for (uint16_t i = 0; i < NumLocations; i++) {
+    Locations[i].parse(data, offset, len);
+  }
+  uint16_t Padding16 = parse_primitive<uint16_t>(data, offset, len);
+  assert(Padding16 == 0);
+  uint16_t NumLiveOuts = parse_primitive<uint16_t>(data, offset, len);
+  assert(NumLiveOuts == 0 && "need to implement live out parsing");
+
+  // If the offset is not 8-byte aligned, skip the padding inserted to align it.
+  if (offset % 8 != 0) {
+    offset += 8 - (offset % 8);
+  }
+}
+
+bool StackMapSizeRecord::isFixedSizeFrame() const
+{
+  return StackSize != std::numeric_limits<uint64_t>::max();
+}
+
+void StackMapSection::parse(uint8_t* data, unsigned& offset, const unsigned len)
+{
+  Version = parse_primitive<uint8_t>(data, offset, len);
+  Reserved8 = parse_primitive<uint8_t>(data, offset, len);
+  Reserved16 = parse_primitive<uint16_t>(data, offset, len);
+  assert(Version == 1);
+  assert(Reserved8 == 0);
+  assert(Reserved16 == 0);
+
+  uint32_t NumFuncs = parse_primitive<uint32_t>(data, offset, len);
+  uint32_t NumConstants = parse_primitive<uint32_t>(data, offset, len);
+  uint32_t NumRecords = parse_primitive<uint32_t>(data, offset, len);
+  for (uint32_t i = 0; i < NumFuncs; i++) {
+    uint64_t Addr = parse_primitive<uint64_t>(data, offset, len);
+    uint64_t Size = parse_primitive<uint64_t>(data, offset, len);
+    FnSizeRecords.push_back(StackMapSizeRecord(Addr, Size));
+  }
+  for (uint32_t i = 0; i < NumConstants; i++) {
+    Constants.push_back(parse_primitive<uint64_t>(data, offset, len));
+  }
+
+  Records.resize(NumRecords);
+  for (uint32_t i = 0; i < NumRecords; i++) {
+    Records[i].parse(data, offset, len);
+  }
+}
+void StackMapSection::verify() const
+{
+  assert(Version == 1);
+  for (unsigned i = 0; i < Records.size(); i++) {
+    const StackMapRecord& Rec = Records[i];
+    assert(0 == Rec.ReservedFlags);
+    for (uint16_t j = 0; j < Rec.Locations.size(); j++) {
+      const LocationRecord& Loc = Rec.Locations[j];
+      assert(Loc.Type <= 5);
+    }
+  }
+}
+
+const char *StackMapSection::locationTypeToString(uint8_t Type) {
+  switch (Type) {
+  case LocationRecord::Unprocessed:
+    return "Unprocessed";
+  case LocationRecord::Register:
+    return "Register";
+  case LocationRecord::Direct:
+    return "Direct";
+  case LocationRecord::Indirect:
+    return "Indirect";
+  case LocationRecord::Constant:
+    return "Constant";
+  case LocationRecord::ConstantIndex:
+    return "ConstantIndex";
+  };
+
+  llvm_unreachable("Unknown Location Record Type");
+  return "ILLEGAL";
+}
+
+void StackMapSection::print(raw_ostream &OS) const {
+  OS << "Functions (" << static_cast<int>(FnSizeRecords.size()) << ") [\n";
+  for (uint16_t j = 0; j < FnSizeRecords.size(); j++) {
+    OS << "  addr = " << static_cast<unsigned>(FnSizeRecords[j].FunctionAddr);
+    OS << ", size = " << static_cast<unsigned>(FnSizeRecords[j].StackSize);
+    OS << "\n";
+  }
+  OS << "]\n";
+
+  OS << "Constants (" << static_cast<int>(Constants.size()) << ") [\n";
+  for (uint16_t j = 0; j < Constants.size(); j++) {
+    OS << "  value = " << static_cast<unsigned>(Constants[j]);
+  }
+  OS << "]\n";
+
+  OS << "Records (" << static_cast<int>(Records.size()) << ") [\n";
+  for (unsigned i = 0; i < Records.size(); i++) {
+    const StackMapRecord& Rec = Records[i];
+    OS << "  id = " << Rec.PatchPointID;
+    OS << ", offset" << Rec.InstructionOffset;
+    OS << ", flags=" << Rec.ReservedFlags;
+    OS << "\n";
+
+    OS << "  Locations (" << static_cast<int>(Rec.Locations.size()) << ") [\n";
+    for (uint16_t j = 0; j < Rec.Locations.size(); j++) {
+      const LocationRecord &Loc = Rec.Locations[j];
+      OS << "    type = " << locationTypeToString(Loc.Type);
+      OS << ", size = " << (size_t)Loc.SizeInBytes;
+      OS << ", dwarfreg = " << Loc.DwarfRegNum;
+      OS << ", offset = " << Loc.Offset;
+      OS << "\n";
+    }
+    OS << "  ]\n";
+  }
+  OS << "]\n";
+}
+
+StackMapRecord& StackMapSection::findRecordForRelPC(uint32_t RelPC)
+{
+  // brute force search for the moment, could be improved
+  for (unsigned i = 0; i < Records.size(); i++) {
+    StackMapRecord& Rec = Records[i];
+    if (Rec.InstructionOffset == RelPC) {
+      return Rec;
+    }
+  }
+
+  llvm_unreachable("Unreachable."); 
+  return *((StackMapRecord*)nullptr);
+}
+
+bool StackMapSection::hasRecordForRelPC(uint32_t RelPC)
+{
+  // brute force search for the moment, could be improved
+  for (unsigned i = 0; i < Records.size(); i++) {
+    StackMapRecord& Rec = Records[i];
+    if (Rec.InstructionOffset == RelPC) {
+      return true;
+    }
+  }
+  return false;
+}
+//===----------------------------------------------------------------------===
+// End StaclMapSection Parser                                               
+//===----------------------------------------------------------------------===
