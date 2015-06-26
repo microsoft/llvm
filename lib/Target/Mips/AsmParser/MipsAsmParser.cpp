@@ -3105,9 +3105,12 @@ bool MipsAsmParser::parseMemOffset(const MCExpr *&Res, bool isParenExpr) {
   MCAsmParser &Parser = getParser();
   SMLoc S;
   bool Result = true;
+  unsigned NumOfLParen = 0;
 
-  while (getLexer().getKind() == AsmToken::LParen)
+  while (getLexer().getKind() == AsmToken::LParen) {
     Parser.Lex();
+    ++NumOfLParen;
+  }
 
   switch (getLexer().getKind()) {
   default:
@@ -3118,7 +3121,7 @@ bool MipsAsmParser::parseMemOffset(const MCExpr *&Res, bool isParenExpr) {
   case AsmToken::Minus:
   case AsmToken::Plus:
     if (isParenExpr)
-      Result = getParser().parseParenExpression(Res, S);
+      Result = getParser().parseParenExprOfDepth(NumOfLParen, Res, S);
     else
       Result = (getParser().parseExpression(Res));
     while (getLexer().getKind() == AsmToken::RParen)
@@ -4579,8 +4582,16 @@ bool MipsAsmParser::parseDirectiveModule() {
   }
 
   if (Option == "oddspreg") {
-    getTargetStreamer().emitDirectiveModuleOddSPReg(true, isABI_O32());
     clearFeatureBits(Mips::FeatureNoOddSPReg, "nooddspreg");
+
+    // Synchronize the abiflags information with the FeatureBits information we
+    // changed above.
+    getTargetStreamer().updateABIInfo(*this);
+
+    // If printing assembly, use the recently updated abiflags information.
+    // If generating ELF, don't do anything (the .MIPS.abiflags section gets
+    // emitted at the end).
+    getTargetStreamer().emitDirectiveModuleOddSPReg();
 
     // If this is not the end of the statement, report an error.
     if (getLexer().isNot(AsmToken::EndOfStatement)) {
@@ -4595,8 +4606,16 @@ bool MipsAsmParser::parseDirectiveModule() {
       return false;
     }
 
-    getTargetStreamer().emitDirectiveModuleOddSPReg(false, isABI_O32());
     setFeatureBits(Mips::FeatureNoOddSPReg, "nooddspreg");
+
+    // Synchronize the abiflags information with the FeatureBits information we
+    // changed above.
+    getTargetStreamer().updateABIInfo(*this);
+
+    // If printing assembly, use the recently updated abiflags information.
+    // If generating ELF, don't do anything (the .MIPS.abiflags section gets
+    // emitted at the end).
+    getTargetStreamer().emitDirectiveModuleOddSPReg();
 
     // If this is not the end of the statement, report an error.
     if (getLexer().isNot(AsmToken::EndOfStatement)) {
@@ -4635,8 +4654,15 @@ bool MipsAsmParser::parseDirectiveModuleFP() {
     return false;
   }
 
-  // Emit appropriate flags.
-  getTargetStreamer().emitDirectiveModuleFP(FpABI, isABI_O32());
+  // Synchronize the abiflags information with the FeatureBits information we
+  // changed above.
+  getTargetStreamer().updateABIInfo(*this);
+
+  // If printing assembly, use the recently updated abiflags information.
+  // If generating ELF, don't do anything (the .MIPS.abiflags section gets
+  // emitted at the end).
+  getTargetStreamer().emitDirectiveModuleFP();
+
   Parser.Lex(); // Consume the EndOfStatement.
   return false;
 }
@@ -4661,6 +4687,8 @@ bool MipsAsmParser::parseFpABIValue(MipsABIFlagsSection::FpABIKind &FpABI,
     }
 
     FpABI = MipsABIFlagsSection::FpABIKind::XX;
+    setFeatureBits(Mips::FeatureFPXX, "fpxx");
+    clearFeatureBits(Mips::FeatureFP64Bit, "fp64");
     return true;
   }
 
@@ -4680,8 +4708,13 @@ bool MipsAsmParser::parseFpABIValue(MipsABIFlagsSection::FpABIKind &FpABI,
       }
 
       FpABI = MipsABIFlagsSection::FpABIKind::S32;
-    } else
+      clearFeatureBits(Mips::FeatureFPXX, "fpxx");
+      clearFeatureBits(Mips::FeatureFP64Bit, "fp64");
+    } else {
       FpABI = MipsABIFlagsSection::FpABIKind::S64;
+      clearFeatureBits(Mips::FeatureFPXX, "fpxx");
+      setFeatureBits(Mips::FeatureFP64Bit, "fp64");
+    }
 
     return true;
   }

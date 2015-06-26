@@ -16,6 +16,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/COFF.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -150,29 +151,29 @@ std::error_code COFFObjectFile::getSymbolName(DataRefImpl Ref,
   return getSymbolName(Symb, Result);
 }
 
+uint64_t COFFObjectFile::getSymbolValue(DataRefImpl Ref) const {
+  COFFSymbolRef Sym = getCOFFSymbol(Ref);
+
+  if (Sym.isAnyUndefined() || Sym.isCommon())
+    return UnknownAddress;
+
+  return Sym.getValue();
+}
+
 std::error_code COFFObjectFile::getSymbolAddress(DataRefImpl Ref,
                                                  uint64_t &Result) const {
+  Result = getSymbolValue(Ref);
   COFFSymbolRef Symb = getCOFFSymbol(Ref);
-
-  if (Symb.isAnyUndefined()) {
-    Result = UnknownAddressOrSize;
-    return std::error_code();
-  }
-  if (Symb.isCommon()) {
-    Result = UnknownAddressOrSize;
-    return std::error_code();
-  }
   int32_t SectionNumber = Symb.getSectionNumber();
-  if (!COFF::isReservedSectionNumber(SectionNumber)) {
-    const coff_section *Section = nullptr;
-    if (std::error_code EC = getSection(SectionNumber, Section))
-      return EC;
 
-    Result = Section->VirtualAddress + Symb.getValue();
+  if (Symb.isAnyUndefined() || Symb.isCommon() ||
+      COFF::isReservedSectionNumber(SectionNumber))
     return std::error_code();
-  }
 
-  Result = Symb.getValue();
+  const coff_section *Section = nullptr;
+  if (std::error_code EC = getSection(SectionNumber, Section))
+    return EC;
+  Result += Section->VirtualAddress;
   return std::error_code();
 }
 
@@ -236,12 +237,9 @@ uint32_t COFFObjectFile::getSymbolFlags(DataRefImpl Ref) const {
   return Result;
 }
 
-uint64_t COFFObjectFile::getSymbolSize(DataRefImpl Ref) const {
+uint64_t COFFObjectFile::getCommonSymbolSizeImpl(DataRefImpl Ref) const {
   COFFSymbolRef Symb = getCOFFSymbol(Ref);
-
-  if (Symb.isCommon())
-    return Symb.getValue();
-  return UnknownAddressOrSize;
+  return Symb.getValue();
 }
 
 std::error_code
@@ -259,6 +257,11 @@ COFFObjectFile::getSymbolSection(DataRefImpl Ref,
     Result = section_iterator(SectionRef(Ref, this));
   }
   return std::error_code();
+}
+
+unsigned COFFObjectFile::getSymbolSectionID(SymbolRef Sym) const {
+  COFFSymbolRef Symb = getCOFFSymbol(Sym.getRawDataRefImpl());
+  return Symb.getSectionNumber();
 }
 
 void COFFObjectFile::moveSectionNext(DataRefImpl &Ref) const {
@@ -312,6 +315,13 @@ bool COFFObjectFile::isSectionBSS(DataRefImpl Ref) const {
                             COFF::IMAGE_SCN_MEM_READ |
                             COFF::IMAGE_SCN_MEM_WRITE;
   return (Sec->Characteristics & BssFlags) == BssFlags;
+}
+
+unsigned COFFObjectFile::getSectionID(SectionRef Sec) const {
+  uintptr_t Offset =
+      uintptr_t(Sec.getRawDataRefImpl().p) - uintptr_t(SectionTable);
+  assert((Offset % sizeof(coff_section)) == 0);
+  return (Offset / sizeof(coff_section)) + 1;
 }
 
 bool COFFObjectFile::isSectionVirtual(DataRefImpl Ref) const {
@@ -1018,6 +1028,15 @@ COFFSymbolRef COFFObjectFile::getCOFFSymbol(const SymbolRef &Symbol) const {
 const coff_relocation *
 COFFObjectFile::getCOFFRelocation(const RelocationRef &Reloc) const {
   return toRel(Reloc.getRawDataRefImpl());
+}
+
+iterator_range<const coff_relocation *>
+COFFObjectFile::getRelocations(const coff_section *Sec) const {
+  const coff_relocation *I = getFirstReloc(Sec, Data, base());
+  const coff_relocation *E = I;
+  if (I)
+    E += getNumberOfRelocations(Sec, Data, base());
+  return make_range(I, E);
 }
 
 #define LLVM_COFF_SWITCH_RELOC_TYPE_NAME(reloc_type)                           \

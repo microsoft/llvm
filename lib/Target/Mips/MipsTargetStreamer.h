@@ -80,16 +80,11 @@ public:
   virtual void emitDirectiveCpsetup(unsigned RegNo, int RegOrOffset,
                                     const MCSymbol &Sym, bool IsReg);
 
-  /// Emit a '.module fp=value' directive using the given values.
-  /// Updates the .MIPS.abiflags section
-  virtual void emitDirectiveModuleFP(MipsABIFlagsSection::FpABIKind Value,
-                                     bool Is32BitABI);
-  /// Emit a '.module fp=value' directive using the current values of the
-  /// .MIPS.abiflags section.
-  void emitDirectiveModuleFP();
-
-  virtual void emitDirectiveModuleOddSPReg(bool Enabled, bool IsO32ABI);
+  // FP abiflags directives
+  virtual void emitDirectiveModuleFP();
+  virtual void emitDirectiveModuleOddSPReg();
   virtual void emitDirectiveSetFp(MipsABIFlagsSection::FpABIKind Value);
+
   void forbidModuleDirective() { ModuleDirectiveAllowed = false; }
   void reallowModuleDirective() { ModuleDirectiveAllowed = true; }
   bool isModuleDirectiveAllowed() { return ModuleDirectiveAllowed; }
@@ -192,10 +187,9 @@ public:
   void emitDirectiveCpsetup(unsigned RegNo, int RegOrOffset,
                             const MCSymbol &Sym, bool IsReg) override;
 
-  // ABI Flags
-  void emitDirectiveModuleFP(MipsABIFlagsSection::FpABIKind Value,
-                             bool Is32BitABI) override;
-  void emitDirectiveModuleOddSPReg(bool Enabled, bool IsO32ABI) override;
+  // FP abiflags directives
+  void emitDirectiveModuleFP() override;
+  void emitDirectiveModuleOddSPReg() override;
   void emitDirectiveSetFp(MipsABIFlagsSection::FpABIKind Value) override;
 };
 
@@ -238,8 +232,6 @@ public:
   void emitDirectiveCpsetup(unsigned RegNo, int RegOrOffset,
                             const MCSymbol &Sym, bool IsReg) override;
 
-  // ABI Flags
-  void emitDirectiveModuleOddSPReg(bool Enabled, bool IsO32ABI) override;
   void emitMipsAbiFlags();
 };
 }
