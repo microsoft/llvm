@@ -90,13 +90,13 @@ public:
   /// Hint that pairing the given load or store is unprofitable.
   void suppressLdStPair(MachineInstr *MI) const;
 
-  bool getLdStBaseRegImmOfs(MachineInstr *LdSt, unsigned &BaseReg,
-                            unsigned &Offset,
-                            const TargetRegisterInfo *TRI) const override;
+  bool getMemOpBaseRegImmOfs(MachineInstr *LdSt, unsigned &BaseReg,
+                             unsigned &Offset,
+                             const TargetRegisterInfo *TRI) const override;
 
-  bool getLdStBaseRegImmOfsWidth(MachineInstr *LdSt, unsigned &BaseReg,
-                                 int &Offset, int &Width,
-                                 const TargetRegisterInfo *TRI) const;
+  bool getMemOpBaseRegImmOfsWidth(MachineInstr *LdSt, unsigned &BaseReg,
+                                  int &Offset, int &Width,
+                                  const TargetRegisterInfo *TRI) const;
 
   bool enableClusterLoads() const override { return true; }
 
@@ -163,19 +163,17 @@ public:
                             unsigned SrcReg2, int CmpMask, int CmpValue,
                             const MachineRegisterInfo *MRI) const override;
   bool optimizeCondBranch(MachineInstr *MI) const override;
-  /// hasPattern - return true when there is potentially a faster code sequence
+  /// Return true when there is potentially a faster code sequence
   /// for an instruction chain ending in <Root>. All potential patterns are
-  /// listed
-  /// in the <Pattern> array.
-  bool hasPattern(MachineInstr &Root,
-                  SmallVectorImpl<MachineCombinerPattern::MC_PATTERN> &Pattern)
+  /// listed in the <Patterns> array.
+  bool getMachineCombinerPatterns(MachineInstr &Root,
+                  SmallVectorImpl<MachineCombinerPattern::MC_PATTERN> &Patterns)
       const override;
 
-  /// genAlternativeCodeSequence - when hasPattern() finds a pattern
-  /// this function generates the instructions that could replace the
-  /// original code sequence
+  /// When getMachineCombinerPatterns() finds patterns, this function generates
+  /// the instructions that could replace the original code sequence
   void genAlternativeCodeSequence(
-      MachineInstr &Root, MachineCombinerPattern::MC_PATTERN P,
+      MachineInstr &Root, MachineCombinerPattern::MC_PATTERN Pattern,
       SmallVectorImpl<MachineInstr *> &InsInstrs,
       SmallVectorImpl<MachineInstr *> &DelInstrs,
       DenseMap<unsigned, unsigned> &InstrIdxForVirtReg) const override;

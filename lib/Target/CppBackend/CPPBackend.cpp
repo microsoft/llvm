@@ -513,6 +513,7 @@ void CppWriter::printAttributes(const AttributeSet &PAL,
       HANDLE_ATTR(StackProtect);
       HANDLE_ATTR(StackProtectReq);
       HANDLE_ATTR(StackProtectStrong);
+      HANDLE_ATTR(SafeStack);
       HANDLE_ATTR(NoCapture);
       HANDLE_ATTR(NoRedZone);
       HANDLE_ATTR(NoImplicitFloat);
@@ -1677,9 +1678,8 @@ void CppWriter::printFunctionUses(const Function* F) {
                 consts.insert(GVar->getInitializer());
         } else if (Constant* C = dyn_cast<Constant>(operand)) {
           consts.insert(C);
-          for (unsigned j = 0; j < C->getNumOperands(); ++j) {
+          for (Value* operand : C->operands()) {
             // If the operand references a GVal or Constant, make a note of it
-            Value* operand = C->getOperand(j);
             printType(operand->getType());
             if (GlobalValue* GV = dyn_cast<GlobalValue>(operand)) {
               gvs.insert(GV);
@@ -2148,7 +2148,8 @@ char CppWriter::ID = 0;
 
 bool CPPTargetMachine::addPassesToEmitFile(
     PassManagerBase &PM, raw_pwrite_stream &o, CodeGenFileType FileType,
-    bool DisableVerify, AnalysisID StartAfter, AnalysisID StopAfter) {
+    bool DisableVerify, AnalysisID StartAfter, AnalysisID StopAfter,
+    MachineFunctionInitializer *MFInitializer) {
   if (FileType != TargetMachine::CGFT_AssemblyFile)
     return true;
   auto FOut = llvm::make_unique<formatted_raw_ostream>(o);

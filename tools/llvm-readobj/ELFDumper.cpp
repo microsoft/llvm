@@ -47,6 +47,7 @@ public:
   void printFileHeaders() override;
   void printSections() override;
   void printRelocations() override;
+  void printDynamicRelocations() override;
   void printSymbols() override;
   void printDynamicSymbols() override;
   void printUnwindInfo() override;
@@ -58,6 +59,7 @@ public:
   void printAttributes() override;
   void printMipsPLTGOT() override;
   void printMipsABIFlags() override;
+  void printMipsReginfo() override;
 
 private:
   typedef ELFFile<ELFT> ELFO;
@@ -155,9 +157,7 @@ getSectionNameIndex(const ELFO &Obj, typename ELFO::Elf_Sym_Iter Symbol,
     SectionName = "Reserved";
   else {
     if (SectionIndex == SHN_XINDEX)
-      SectionIndex = Obj.getSymbolTableIndex(&*Symbol);
-    assert(SectionIndex != SHN_XINDEX &&
-           "getSymbolTableIndex should handle this");
+      SectionIndex = Obj.getExtendedSymbolTableIndex(&*Symbol);
     const typename ELFO::Elf_Shdr *Sec = Obj.getSection(SectionIndex);
     SectionName = errorOrDefault(Obj.getSectionName(Sec));
   }
@@ -233,7 +233,7 @@ static const EnumEntry<unsigned> ElfMachineType[] = {
   LLVM_READOBJ_ENUM_ENT(ELF, EM_386          ),
   LLVM_READOBJ_ENUM_ENT(ELF, EM_68K          ),
   LLVM_READOBJ_ENUM_ENT(ELF, EM_88K          ),
-  LLVM_READOBJ_ENUM_ENT(ELF, EM_486          ),
+  LLVM_READOBJ_ENUM_ENT(ELF, EM_IAMCU        ),
   LLVM_READOBJ_ENUM_ENT(ELF, EM_860          ),
   LLVM_READOBJ_ENUM_ENT(ELF, EM_MIPS         ),
   LLVM_READOBJ_ENUM_ENT(ELF, EM_S370         ),
@@ -381,7 +381,8 @@ static const EnumEntry<unsigned> ElfMachineType[] = {
   LLVM_READOBJ_ENUM_ENT(ELF, EM_RL78         ),
   LLVM_READOBJ_ENUM_ENT(ELF, EM_VIDEOCORE5   ),
   LLVM_READOBJ_ENUM_ENT(ELF, EM_78KOR        ),
-  LLVM_READOBJ_ENUM_ENT(ELF, EM_56800EX      )
+  LLVM_READOBJ_ENUM_ENT(ELF, EM_56800EX      ),
+  LLVM_READOBJ_ENUM_ENT(ELF, EM_AMDGPU       )
 };
 
 static const EnumEntry<unsigned> ElfSymbolBindings[] = {
@@ -674,6 +675,39 @@ void ELFDumper<ELFT>::printRelocations() {
     W.unindent();
     W.startLine() << "}\n";
   }
+}
+
+template<class ELFT>
+void ELFDumper<ELFT>::printDynamicRelocations() {
+  W.startLine() << "Dynamic Relocations {\n";
+  W.indent();
+  for (typename ELFO::Elf_Rela_Iter RelI = Obj->begin_dyn_rela(),
+    RelE = Obj->end_dyn_rela();
+    RelI != RelE; ++RelI) {
+    SmallString<32> RelocName;
+    Obj->getRelocationTypeName(RelI->getType(Obj->isMips64EL()), RelocName);
+    StringRef SymbolName;
+    uint32_t SymIndex = RelI->getSymbol(Obj->isMips64EL());
+    typename ELFO::Elf_Sym_Iter Sym = Obj->begin_dynamic_symbols() + SymIndex;
+    SymbolName = errorOrDefault(Obj->getSymbolName(Sym));
+    if (opts::ExpandRelocs) {
+      DictScope Group(W, "Relocation");
+      W.printHex("Offset", RelI->r_offset);
+      W.printNumber("Type", RelocName, (int)RelI->getType(Obj->isMips64EL()));
+      W.printString("Symbol", SymbolName.size() > 0 ? SymbolName : "-");
+      W.printHex("Addend", RelI->r_addend);
+    }
+    else {
+      raw_ostream& OS = W.startLine();
+      OS << W.hex(RelI->r_offset)
+        << " " << RelocName
+        << " " << (SymbolName.size() > 0 ? SymbolName : "-")
+        << " " << W.hex(RelI->r_addend)
+        << "\n";
+    }
+  }
+  W.unindent();
+  W.startLine() << "}\n";
 }
 
 template <class ELFT>
@@ -985,6 +1019,9 @@ static void printValue(const ELFFile<ELFT> *O, uint64_t Type, uint64_t Value,
     break;
   case DT_FLAGS_1:
     printFlags(Value, makeArrayRef(ElfDynamicDTFlags1), OS);
+    break;
+  default:
+    OS << format("0x%" PRIX64, Value);
     break;
   }
 }
@@ -1423,4 +1460,31 @@ template <class ELFT> void ELFDumper<ELFT>::printMipsABIFlags() {
   W.printNumber("CPR2 size", getMipsRegisterSize(Flags->cpr2_size));
   W.printFlags("Flags 1", Flags->flags1, makeArrayRef(ElfMipsFlags1));
   W.printHex("Flags 2", Flags->flags2);
+}
+
+template <class ELFT> void ELFDumper<ELFT>::printMipsReginfo() {
+  const Elf_Shdr *Shdr = findSectionByName(*Obj, ".reginfo");
+  if (!Shdr) {
+    W.startLine() << "There is no .reginfo section in the file.\n";
+    return;
+  }
+  ErrorOr<ArrayRef<uint8_t>> Sec = Obj->getSectionContents(Shdr);
+  if (!Sec) {
+    W.startLine() << "The .reginfo section is empty.\n";
+    return;
+  }
+  if (Sec->size() != sizeof(Elf_Mips_RegInfo<ELFT>)) {
+    W.startLine() << "The .reginfo section has a wrong size.\n";
+    return;
+  }
+
+  auto *Reginfo = reinterpret_cast<const Elf_Mips_RegInfo<ELFT> *>(Sec->data());
+
+  DictScope GS(W, "MIPS RegInfo");
+  W.printHex("GP", Reginfo->ri_gp_value);
+  W.printHex("General Mask", Reginfo->ri_gprmask);
+  W.printHex("Co-Proc Mask0", Reginfo->ri_cprmask[0]);
+  W.printHex("Co-Proc Mask1", Reginfo->ri_cprmask[1]);
+  W.printHex("Co-Proc Mask2", Reginfo->ri_cprmask[2]);
+  W.printHex("Co-Proc Mask3", Reginfo->ri_cprmask[3]);
 }

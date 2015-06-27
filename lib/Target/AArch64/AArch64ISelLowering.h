@@ -58,11 +58,6 @@ enum NodeType : unsigned {
   SBCS,
   ANDS,
 
-  // Conditional compares. Operands: left,right,falsecc,cc,flags
-  CCMP,
-  CCMN,
-  FCCMP,
-
   // Floating point comparison
   FCMP,
 
@@ -310,6 +305,15 @@ public:
                      unsigned &RequiredAligment) const override;
   bool hasPairedLoad(EVT LoadedType, unsigned &RequiredAligment) const override;
 
+  unsigned getMaxSupportedInterleaveFactor() const override { return 4; }
+
+  bool lowerInterleavedLoad(LoadInst *LI,
+                            ArrayRef<ShuffleVectorInst *> Shuffles,
+                            ArrayRef<unsigned> Indices,
+                            unsigned Factor) const override;
+  bool lowerInterleavedStore(StoreInst *SI, ShuffleVectorInst *SVI,
+                             unsigned Factor) const override;
+
   bool isLegalAddImmediate(int64_t) const override;
   bool isLegalICmpImmediate(int64_t) const override;
 
@@ -513,8 +517,6 @@ private:
   bool functionArgumentNeedsConsecutiveRegisters(Type *Ty,
                                                  CallingConv::ID CallConv,
                                                  bool isVarArg) const override;
-
-  bool shouldNormalizeToSelectSequence(LLVMContext &, EVT) const override;
 };
 
 namespace AArch64 {

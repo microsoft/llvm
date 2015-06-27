@@ -495,6 +495,8 @@ public:
   SDValue getExternalSymbol(const char *Sym, SDLoc dl, EVT VT);
   SDValue getTargetExternalSymbol(const char *Sym, EVT VT,
                                   unsigned char TargetFlags = 0);
+  SDValue getMCSymbol(MCSymbol *Sym, EVT VT);
+
   SDValue getValueType(EVT);
   SDValue getRegister(unsigned Reg, EVT VT);
   SDValue getRegisterMask(const uint32_t *RegMask);
@@ -669,7 +671,7 @@ public:
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
-                  bool nuw = false, bool nsw = false, bool exact = false);
+                  const SDNodeFlags *Flags = nullptr);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
                   SDValue N3);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
@@ -990,8 +992,7 @@ public:
 
   /// Get the specified node if it's already available, or else return NULL.
   SDNode *getNodeIfExists(unsigned Opcode, SDVTList VTs, ArrayRef<SDValue> Ops,
-                          bool nuw = false, bool nsw = false,
-                          bool exact = false);
+                          const SDNodeFlags *Flags = nullptr);
 
   /// Creates a SDDbgValue node.
   SDDbgValue *getDbgValue(MDNode *Var, MDNode *Expr, SDNode *N, unsigned R,
@@ -1253,8 +1254,8 @@ private:
   void allnodes_clear();
 
   BinarySDNode *GetBinarySDNode(unsigned Opcode, SDLoc DL, SDVTList VTs,
-                                SDValue N1, SDValue N2, bool nuw, bool nsw,
-                                bool exact);
+                                SDValue N1, SDValue N2,
+                                const SDNodeFlags *Flags = nullptr);
 
   /// Look up the node specified by ID in CSEMap.  If it exists, return it.  If
   /// not, return the insertion token that will make insertion faster.  This
@@ -1279,6 +1280,7 @@ private:
   StringMap<SDNode*> ExternalSymbols;
 
   std::map<std::pair<std::string, unsigned char>,SDNode*> TargetExternalSymbols;
+  DenseMap<MCSymbol *, SDNode *> MCSymbols;
 };
 
 template <> struct GraphTraits<SelectionDAG*> : public GraphTraits<SDNode*> {

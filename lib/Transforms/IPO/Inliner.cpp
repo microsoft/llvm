@@ -93,19 +93,26 @@ static void AdjustCallerSSPLevel(Function *Caller, Function *Callee) {
   // clutter to the IR.
   AttrBuilder B;
   B.addAttribute(Attribute::StackProtect)
-    .addAttribute(Attribute::StackProtectStrong);
+    .addAttribute(Attribute::StackProtectStrong)
+    .addAttribute(Attribute::StackProtectReq);
   AttributeSet OldSSPAttr = AttributeSet::get(Caller->getContext(),
                                               AttributeSet::FunctionIndex,
                                               B);
 
-  if (Callee->hasFnAttribute(Attribute::StackProtectReq)) {
+  if (Callee->hasFnAttribute(Attribute::SafeStack)) {
+    Caller->removeAttributes(AttributeSet::FunctionIndex, OldSSPAttr);
+    Caller->addFnAttr(Attribute::SafeStack);
+  } else if (Callee->hasFnAttribute(Attribute::StackProtectReq) &&
+             !Caller->hasFnAttribute(Attribute::SafeStack)) {
     Caller->removeAttributes(AttributeSet::FunctionIndex, OldSSPAttr);
     Caller->addFnAttr(Attribute::StackProtectReq);
   } else if (Callee->hasFnAttribute(Attribute::StackProtectStrong) &&
+             !Caller->hasFnAttribute(Attribute::SafeStack) &&
              !Caller->hasFnAttribute(Attribute::StackProtectReq)) {
     Caller->removeAttributes(AttributeSet::FunctionIndex, OldSSPAttr);
     Caller->addFnAttr(Attribute::StackProtectStrong);
   } else if (Callee->hasFnAttribute(Attribute::StackProtect) &&
+             !Caller->hasFnAttribute(Attribute::SafeStack) &&
              !Caller->hasFnAttribute(Attribute::StackProtectReq) &&
              !Caller->hasFnAttribute(Attribute::StackProtectStrong))
     Caller->addFnAttr(Attribute::StackProtect);
@@ -192,8 +199,7 @@ static bool InlineCallIfPossible(CallSite CS, InlineFunctionInfo &IFI,
     // set to keep track of which "available" allocas are being used by this
     // function.  Also, AllocasForType can be empty of course!
     bool MergedAwayAlloca = false;
-    for (unsigned i = 0, e = AllocasForType.size(); i != e; ++i) {
-      AllocaInst *AvailableAlloca = AllocasForType[i];
+    for (AllocaInst *AvailableAlloca : AllocasForType) {
 
       unsigned Align1 = AI->getAlignment(),
                Align2 = AvailableAlloca->getAlignment();
@@ -431,8 +437,8 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
 
   SmallPtrSet<Function*, 8> SCCFunctions;
   DEBUG(dbgs() << "Inliner visiting SCC:");
-  for (CallGraphSCC::iterator I = SCC.begin(), E = SCC.end(); I != E; ++I) {
-    Function *F = (*I)->getFunction();
+  for (CallGraphNode *Node : SCC) {
+    Function *F = Node->getFunction();
     if (F) SCCFunctions.insert(F);
     DEBUG(dbgs() << " " << (F ? F->getName() : "INDIRECTNODE"));
   }
@@ -448,13 +454,13 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
   // index into the InlineHistory vector.
   SmallVector<std::pair<Function*, int>, 8> InlineHistory;
 
-  for (CallGraphSCC::iterator I = SCC.begin(), E = SCC.end(); I != E; ++I) {
-    Function *F = (*I)->getFunction();
+  for (CallGraphNode *Node : SCC) {
+    Function *F = Node->getFunction();
     if (!F) continue;
     
-    for (Function::iterator BB = F->begin(), E = F->end(); BB != E; ++BB)
-      for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
-        CallSite CS(cast<Value>(I));
+    for (BasicBlock &BB : *F)
+      for (Instruction &I : BB) {
+        CallSite CS(cast<Value>(&I));
         // If this isn't a call, or it is a call to an intrinsic, it can
         // never be inlined.
         if (!CS || isa<IntrinsicInst>(I))
@@ -496,6 +502,7 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
     LocalChange = false;
     // Iterate over the outer loop because inlining functions can cause indirect
     // calls to become direct calls.
+    // CallSites may be modified inside so ranged for loop can not be used.
     for (unsigned CSi = 0; CSi != CallSites.size(); ++CSi) {
       CallSite CS = CallSites[CSi].first;
       
@@ -566,11 +573,8 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
           int NewHistoryID = InlineHistory.size();
           InlineHistory.push_back(std::make_pair(Callee, InlineHistoryID));
 
-          for (unsigned i = 0, e = InlineInfo.InlinedCalls.size();
-               i != e; ++i) {
-            Value *Ptr = InlineInfo.InlinedCalls[i];
+          for (Value *Ptr : InlineInfo.InlinedCalls)
             CallSites.push_back(std::make_pair(CallSite(Ptr), NewHistoryID));
-          }
         }
       }
       
@@ -643,8 +647,8 @@ bool Inliner::removeDeadFunctions(CallGraph &CG, bool AlwaysInlineOnly) {
 
   // Scan for all of the functions, looking for ones that should now be removed
   // from the program.  Insert the dead ones in the FunctionsToRemove set.
-  for (CallGraph::iterator I = CG.begin(), E = CG.end(); I != E; ++I) {
-    CallGraphNode *CGN = I->second;
+  for (auto I : CG) {
+    CallGraphNode *CGN = I.second;
     Function *F = CGN->getFunction();
     if (!F || F->isDeclaration())
       continue;
@@ -719,10 +723,8 @@ bool Inliner::removeDeadFunctions(CallGraph &CG, bool AlwaysInlineOnly) {
   FunctionsToRemove.erase(std::unique(FunctionsToRemove.begin(),
                                       FunctionsToRemove.end()),
                           FunctionsToRemove.end());
-  for (SmallVectorImpl<CallGraphNode *>::iterator I = FunctionsToRemove.begin(),
-                                                  E = FunctionsToRemove.end();
-       I != E; ++I) {
-    delete CG.removeFunctionFromModule(*I);
+  for (CallGraphNode *CGN : FunctionsToRemove) {
+    delete CG.removeFunctionFromModule(CGN);
     ++NumDeleted;
   }
   return true;

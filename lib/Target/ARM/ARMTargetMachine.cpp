@@ -178,7 +178,7 @@ ARMBaseTargetMachine::ARMBaseTargetMachine(const Target &T, const Triple &TT,
     : LLVMTargetMachine(T, computeDataLayout(TT, CPU, Options, isLittle), TT,
                         CPU, FS, Options, RM, CM, OL),
       TargetABI(computeTargetABI(TT, CPU, Options)),
-      TLOF(createTLOF(Triple(getTargetTriple()))),
+      TLOF(createTLOF(getTargetTriple())),
       Subtarget(TT, CPU, FS, *this, isLittle), isLittle(isLittle) {
 
   // Default to triple-appropriate float ABI
@@ -220,8 +220,7 @@ ARMBaseTargetMachine::getSubtargetImpl(const Function &F) const {
     // creation will depend on the TM and the code generation flags on the
     // function that reside in TargetOptions.
     resetTargetOptions(F);
-    I = llvm::make_unique<ARMSubtarget>(Triple(TargetTriple), CPU, FS, *this,
-                                        isLittle);
+    I = llvm::make_unique<ARMSubtarget>(TargetTriple, CPU, FS, *this, isLittle);
   }
   return I.get();
 }
@@ -333,6 +332,10 @@ void ARMPassConfig::addIRPasses() {
     }));
 
   TargetPassConfig::addIRPasses();
+
+  // Match interleaved memory accesses to ldN/stN intrinsics.
+  if (TM->getOptLevel() != CodeGenOpt::None)
+    addPass(createInterleavedAccessPass(TM));
 }
 
 bool ARMPassConfig::addPreISel() {
@@ -355,8 +358,7 @@ bool ARMPassConfig::addPreISel() {
 bool ARMPassConfig::addInstSelector() {
   addPass(createARMISelDag(getARMTargetMachine(), getOptLevel()));
 
-  if (Triple(TM->getTargetTriple()).isOSBinFormatELF() &&
-      TM->Options.EnableFastISel)
+  if (TM->getTargetTriple().isOSBinFormatELF() && TM->Options.EnableFastISel)
     addPass(createARMGlobalBaseRegPass());
   return false;
 }

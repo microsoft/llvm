@@ -85,9 +85,8 @@ EHPersonality llvm::classifyEHPersonality(StringRef PersName) {
     .Default(EHPersonality::Unknown);
 }
 
-bool llvm::canSimplifyInvokeNoUnwind(const InvokeInst *II) {
-  const LandingPadInst *LP = II->getLandingPadInst();
-  EHPersonality Personality = classifyEHPersonality(LP->getPersonalityFn());
+bool llvm::canSimplifyInvokeNoUnwind(const Function *F) {
+  EHPersonality Personality = classifyEHPersonality(F->getPersonalityFn());
   // We can't simplify any invokes to nounwind functions if the personality
   // function wants to catch asynch exceptions.  The nounwind attribute only
   // implies that the function does not throw synchronous exceptions.

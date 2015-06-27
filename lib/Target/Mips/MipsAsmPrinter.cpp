@@ -694,7 +694,7 @@ void MipsAsmPrinter::EmitStartOfAsmFile(Module &M) {
   // clean anyhow.
   // FIXME: For ifunc related functions we could iterate over and look
   // for a feature string that doesn't match the default one.
-  const Triple TT(TM.getTargetTriple());
+  const Triple &TT = TM.getTargetTriple();
   StringRef CPU = MIPS_MC::selectMipsCPU(TT, TM.getTargetCPU());
   StringRef FS = TM.getTargetFeatureString();
   const MipsTargetMachine &MTM = static_cast<const MipsTargetMachine &>(TM);
@@ -747,8 +747,7 @@ void MipsAsmPrinter::EmitStartOfAsmFile(Module &M) {
   // accept it. We therefore emit it when it contradicts the default or an
   // option has changed the default (i.e. FPXX) and omit it otherwise.
   if (ABI.IsO32() && (!STI.useOddSPReg() || STI.isABI_FPXX()))
-    getTargetStreamer().emitDirectiveModuleOddSPReg(STI.useOddSPReg(),
-                                                    ABI.IsO32());
+    getTargetStreamer().emitDirectiveModuleOddSPReg();
 }
 
 void MipsAsmPrinter::emitInlineAsmStart() const {
@@ -899,7 +898,8 @@ void MipsAsmPrinter::EmitFPCallStub(
   // freed) and since we're at the global level we can use the default
   // constructed subtarget.
   std::unique_ptr<MCSubtargetInfo> STI(TM.getTarget().createMCSubtargetInfo(
-      TM.getTargetTriple(), TM.getTargetCPU(), TM.getTargetFeatureString()));
+      TM.getTargetTriple().str(), TM.getTargetCPU(),
+      TM.getTargetFeatureString()));
 
   //
   // .global xxxx

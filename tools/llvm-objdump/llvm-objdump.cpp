@@ -17,9 +17,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-objdump.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/CodeGen/FaultMaps.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler.h"
@@ -152,6 +154,9 @@ PrivateHeadersShort("p", cl::desc("Alias for --private-headers"),
 cl::opt<bool>
     llvm::PrintImmHex("print-imm-hex",
                       cl::desc("Use hex format for immediate values"));
+
+cl::opt<bool> PrintFaultMaps("fault-map-section",
+                             cl::desc("Display contents of faultmap section"));
 
 static StringRef ToolName;
 static int ReturnValue = EXIT_SUCCESS;
@@ -779,7 +784,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
         uint64_t Address;
         if (error(Symbol.getAddress(Address)))
           break;
-        if (Address == UnknownAddressOrSize)
+        if (Address == UnknownAddress)
           continue;
         Address -= SectionAddr;
         if (Address >= SectSize)
@@ -1080,7 +1085,6 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
       continue;
     if (error(Symbol.getType(Type)))
       continue;
-    uint64_t Size = Symbol.getSize();
     if (error(Symbol.getSection(Section)))
       continue;
     StringRef Name;
@@ -1096,15 +1100,11 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
     bool Common = Flags & SymbolRef::SF_Common;
     bool Hidden = Flags & SymbolRef::SF_Hidden;
 
-    if (Common) {
-      uint32_t Alignment = Symbol.getAlignment();
-      Address = Size;
-      Size = Alignment;
-    }
-    if (Address == UnknownAddressOrSize)
+    if (Common)
+      Address = Symbol.getCommonSize();
+
+    if (Address == UnknownAddress)
       Address = 0;
-    if (Size == UnknownAddressOrSize)
-      Size = 0;
     char GlobLoc = ' ';
     if (Type != SymbolRef::ST_Unknown)
       GlobLoc = Global ? 'g' : 'l';
@@ -1146,8 +1146,14 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
         SectionName = "";
       outs() << SectionName;
     }
-    outs() << '\t'
-           << format("%08" PRIx64 " ", Size);
+
+    outs() << '\t';
+    if (Common || isa<ELFObjectFileBase>(o)) {
+      uint64_t Val =
+          Common ? Symbol.getAlignment() : ELFSymbolRef(Symbol).getSize();
+      outs() << format("\t %08" PRIx64 " ", Val);
+    }
+
     if (Hidden) {
       outs() << ".hidden ";
     }
@@ -1226,6 +1232,49 @@ void llvm::printWeakBindTable(const ObjectFile *o) {
   }
 }
 
+static void printFaultMaps(const ObjectFile *Obj) {
+  const char *FaultMapSectionName = nullptr;
+
+  if (isa<ELFObjectFileBase>(Obj)) {
+    FaultMapSectionName = ".llvm_faultmaps";
+  } else if (isa<MachOObjectFile>(Obj)) {
+    FaultMapSectionName = "__llvm_faultmaps";
+  } else {
+    errs() << "This operation is only currently supported "
+              "for ELF and Mach-O executable files.\n";
+    return;
+  }
+
+  Optional<object::SectionRef> FaultMapSection;
+
+  for (auto Sec : Obj->sections()) {
+    StringRef Name;
+    Sec.getName(Name);
+    if (Name == FaultMapSectionName) {
+      FaultMapSection = Sec;
+      break;
+    }
+  }
+
+  outs() << "FaultMap table:\n";
+
+  if (!FaultMapSection.hasValue()) {
+    outs() << "<not found>\n";
+    return;
+  }
+
+  StringRef FaultMapContents;
+  if (error(FaultMapSection.getValue().getContents(FaultMapContents))) {
+    errs() << "Could not read the " << FaultMapContents << " section!\n";
+    return;
+  }
+
+  FaultMapParser FMP(FaultMapContents.bytes_begin(),
+                     FaultMapContents.bytes_end());
+
+  outs() << FMP;
+}
+
 static void printPrivateFileHeader(const ObjectFile *o) {
   if (o->isELF()) {
     printELFFileHeader(o);
@@ -1265,6 +1314,8 @@ static void DumpObject(const ObjectFile *o) {
     printLazyBindTable(o);
   if (WeakBind)
     printWeakBindTable(o);
+  if (PrintFaultMaps)
+    printFaultMaps(o);
 }
 
 /// @brief Dump each object file in \a a;
@@ -1362,7 +1413,8 @@ int main(int argc, char **argv) {
       && !(DylibsUsed && MachOOpt)
       && !(DylibId && MachOOpt)
       && !(ObjcMetaData && MachOOpt)
-      && !(DumpSections.size() != 0 && MachOOpt)) {
+      && !(DumpSections.size() != 0 && MachOOpt)
+      && !PrintFaultMaps) {
     cl::PrintHelpMessage();
     return 2;
   }

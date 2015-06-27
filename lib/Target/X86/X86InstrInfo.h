@@ -179,6 +179,12 @@ class X86InstrInfo final : public X86GenInstrInfo {
 
   virtual void anchor();
 
+  bool AnalyzeBranchImpl(MachineBasicBlock &MBB, MachineBasicBlock *&TBB,
+                         MachineBasicBlock *&FBB,
+                         SmallVectorImpl<MachineOperand> &Cond,
+                         SmallVectorImpl<MachineInstr *> &CondBranches,
+                         bool AllowModify) const;
+
 public:
   explicit X86InstrInfo(X86Subtarget &STI);
 
@@ -267,6 +273,14 @@ public:
                      MachineBasicBlock *&FBB,
                      SmallVectorImpl<MachineOperand> &Cond,
                      bool AllowModify) const override;
+
+  bool getMemOpBaseRegImmOfs(MachineInstr *LdSt, unsigned &BaseReg,
+                             unsigned &Offset,
+                             const TargetRegisterInfo *TRI) const override;
+  bool AnalyzeBranchPredicate(MachineBasicBlock &MBB,
+                              TargetInstrInfo::MachineBranchPredicate &MBP,
+                              bool AllowModify = false) const override;
+
   unsigned RemoveBranch(MachineBasicBlock &MBB) const override;
   unsigned InsertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TBB,
                         MachineBasicBlock *FBB, ArrayRef<MachineOperand> Cond,
@@ -447,12 +461,12 @@ public:
   /// Return true when there is potentially a faster code sequence
   /// for an instruction chain ending in <Root>. All potential patterns are
   /// output in the <Pattern> array.
-  bool hasPattern(
+  bool getMachineCombinerPatterns(
       MachineInstr &Root,
       SmallVectorImpl<MachineCombinerPattern::MC_PATTERN> &P) const override;
   
-  /// When hasPattern() finds a pattern, this function generates the
-  /// instructions that could replace the original code sequence.
+  /// When getMachineCombinerPatterns() finds a pattern, this function generates
+  /// the instructions that could replace the original code sequence.
   void genAlternativeCodeSequence(
           MachineInstr &Root, MachineCombinerPattern::MC_PATTERN P,
           SmallVectorImpl<MachineInstr *> &InsInstrs,

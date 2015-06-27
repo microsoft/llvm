@@ -48,8 +48,7 @@ class InvokeInst;
     enum LocResult {
       Yes, No, Unknown
     };
-    LocResult (*isLocation)(ImmutableCallSite CS,
-                            const AliasAnalysis::Location &Loc);
+    LocResult (*isLocation)(ImmutableCallSite CS, const MemoryLocation &Loc);
   };
   
   /// LibCallFunctionInfo - Each record in the array of FunctionInfo structs
@@ -211,7 +210,7 @@ class InvokeInst;
     llvm_unreachable("invalid enum");
   }
 
-  bool canSimplifyInvokeNoUnwind(const InvokeInst *II);
+  bool canSimplifyInvokeNoUnwind(const Function *F);
 
 } // end namespace llvm
 

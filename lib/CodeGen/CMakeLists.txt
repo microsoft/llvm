@@ -20,14 +20,17 @@ add_llvm_library(LLVMCodeGen
   ExecutionDepsFix.cpp
   ExpandISelPseudos.cpp
   ExpandPostRAPseudos.cpp
+  FaultMaps.cpp
   GCMetadata.cpp
   GCMetadataPrinter.cpp
   GCRootLowering.cpp
   GCStrategy.cpp
   GlobalMerge.cpp
   IfConversion.cpp
+  ImplicitNullChecks.cpp
   InlineSpiller.cpp
   InterferenceCache.cpp
+  InterleavedAccessPass.cpp
   IntrinsicLowering.cpp
   LLVMTargetMachine.cpp
   LatencyPriorityQueue.cpp
@@ -71,6 +74,7 @@ add_llvm_library(LLVMCodeGen
   MachineSink.cpp
   MachineTraceMetrics.cpp
   MachineVerifier.cpp
+  MIRPrinter.cpp
   MIRPrintingPass.cpp
   OcamlGC.cpp
   OptimizePHIs.cpp

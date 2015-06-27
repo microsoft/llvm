@@ -238,6 +238,9 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(Triple T) {
   StackMapSection = Ctx->getMachOSection("__LLVM_STACKMAPS", "__llvm_stackmaps",
                                          0, SectionKind::getMetadata());
 
+  FaultMapSection = Ctx->getMachOSection("__LLVM_FAULTMAPS", "__llvm_faultmaps",
+                                         0, SectionKind::getMetadata());
+
   TLSExtraDataSection = TLSTLVSection;
 }
 
@@ -518,6 +521,9 @@ void MCObjectFileInfo::initELFMCObjectFileInfo(Triple T) {
 
   StackMapSection =
       Ctx->getELFSection(".llvm_stackmaps", ELF::SHT_PROGBITS, ELF::SHF_ALLOC);
+
+  FaultMapSection =
+      Ctx->getELFSection(".llvm_faultmaps", ELF::SHT_PROGBITS, ELF::SHF_ALLOC);
 }
 
 void MCObjectFileInfo::initCOFFMCObjectFileInfo(Triple T) {
@@ -727,9 +733,15 @@ void MCObjectFileInfo::initCOFFMCObjectFileInfo(Triple T) {
       ".tls$", COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
                    COFF::IMAGE_SCN_MEM_WRITE,
       SectionKind::getDataRel());
+	  
+  StackMapSection = Ctx->getCOFFSection(".llvm_stackmaps",
+                                        COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                            COFF::IMAGE_SCN_MEM_READ,
+                                        SectionKind::getReadOnly());	
 }
 
-void MCObjectFileInfo::InitMCObjectFileInfo(StringRef T, Reloc::Model relocm,
+void MCObjectFileInfo::InitMCObjectFileInfo(const Triple &TheTriple,
+                                            Reloc::Model relocm,
                                             CodeModel::Model cm,
                                             MCContext &ctx) {
   RelocM = relocm;
@@ -753,7 +765,7 @@ void MCObjectFileInfo::InitMCObjectFileInfo(StringRef T, Reloc::Model relocm,
   DwarfAccelNamespaceSection = nullptr; // Used only by selected targets.
   DwarfAccelTypesSection = nullptr;     // Used only by selected targets.
 
-  TT = Triple(T);
+  TT = TheTriple;
 
   Triple::ArchType Arch = TT.getArch();
   // FIXME: Checking for Arch here to filter out bogus triples such as
@@ -775,6 +787,12 @@ void MCObjectFileInfo::InitMCObjectFileInfo(StringRef T, Reloc::Model relocm,
     Env = IsELF;
     initELFMCObjectFileInfo(TT);
   }
+}
+
+void MCObjectFileInfo::InitMCObjectFileInfo(StringRef TT, Reloc::Model RM,
+                                            CodeModel::Model CM,
+                                            MCContext &ctx) {
+  InitMCObjectFileInfo(Triple(TT), RM, CM, ctx);
 }
 
 MCSection *MCObjectFileInfo::getDwarfTypesSection(uint64_t Hash) const {

@@ -24,6 +24,11 @@ template <endianness target_endianness, bool is64Bits> struct ELFType {
   static const bool Is64Bits = is64Bits;
 };
 
+typedef ELFType<support::little, false> ELF32LE;
+typedef ELFType<support::big, false> ELF32BE;
+typedef ELFType<support::little, true> ELF64LE;
+typedef ELFType<support::big, true> ELF64BE;
+
 // Use an alignment of 2 for the typedefs since that is the worst case for
 // ELF files in archives.
 
@@ -192,9 +197,14 @@ struct Elf_Sym_Impl : Elf_Sym_Base<ELFT> {
     return st_shndx >= ELF::SHN_LOOS && st_shndx <= ELF::SHN_HIOS;
   }
   bool isReserved() const {
-    return st_shndx >= ELF::SHN_LORESERVE && st_shndx <= ELF::SHN_HIRESERVE;
+    // ELF::SHN_HIRESERVE is 0xffff so st_shndx <= ELF::SHN_HIRESERVE is always
+    // true and some compilers warn about it.
+    return st_shndx >= ELF::SHN_LORESERVE;
   }
   bool isUndefined() const { return st_shndx == ELF::SHN_UNDEF; }
+  bool isExternal() const {
+    return getBinding() != ELF::STB_LOCAL;
+  }
 };
 
 /// Elf_Versym: This is the structure of entries in the SHT_GNU_versym section
@@ -291,7 +301,7 @@ struct Elf_Dyn_Impl : Elf_Dyn_Base<ELFT> {
   using Elf_Dyn_Base<ELFT>::d_un;
   int64_t getTag() const { return d_tag; }
   uint64_t getVal() const { return d_un.d_val; }
-  uint64_t getPtr() const { return d_un.ptr; }
+  uint64_t getPtr() const { return d_un.d_ptr; }
 };
 
 // Elf_Rel: Elf Relocation

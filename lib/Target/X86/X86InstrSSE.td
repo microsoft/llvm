@@ -2234,13 +2234,26 @@ def CVTDQ2PDrr  : S2SI<0xE6, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src),
                        [(set VR128:$dst, (int_x86_sse2_cvtdq2pd VR128:$src))],
                        IIC_SSE_CVT_PD_RM>, Sched<[WriteCvtI2F]>;
 
-// AVX 256-bit register conversion intrinsics
+// AVX register conversion intrinsics
 let Predicates = [HasAVX] in {
+  def : Pat<(v2f64 (X86cvtdq2pd (v4i32 VR128:$src))),
+            (VCVTDQ2PDrr VR128:$src)>;
+  def : Pat<(v2f64 (X86cvtdq2pd (bc_v4i32 (loadv2i64 addr:$src)))),
+            (VCVTDQ2PDrm addr:$src)>;
+
   def : Pat<(v4f64 (sint_to_fp (v4i32 VR128:$src))),
             (VCVTDQ2PDYrr VR128:$src)>;
   def : Pat<(v4f64 (sint_to_fp (bc_v4i32 (loadv2i64 addr:$src)))),
             (VCVTDQ2PDYrm addr:$src)>;
 } // Predicates = [HasAVX]
+
+// SSE2 register conversion intrinsics
+let Predicates = [HasSSE2] in {
+  def : Pat<(v2f64 (X86cvtdq2pd (v4i32 VR128:$src))),
+            (CVTDQ2PDrr VR128:$src)>;
+  def : Pat<(v2f64 (X86cvtdq2pd (bc_v4i32 (loadv2i64 addr:$src)))),
+            (CVTDQ2PDrm addr:$src)>;
+} // Predicates = [HasSSE2]
 
 // Convert packed double to packed single
 // The assembler can recognize rr 256-bit instructions by seeing a ymm
@@ -7847,10 +7860,11 @@ def VBROADCASTSDYrr  : avx2_broadcast_reg<0x19, "vbroadcastsd", VR256,
                                       int_x86_avx2_vbroadcast_sd_pd_256,
                                       WriteFShuffle256>, VEX_L;
 
-let Predicates = [HasAVX2] in
-def VBROADCASTI128 : avx_broadcast_no_int<0x5A, "vbroadcasti128", VR256,
-                                          i128mem, v4i64, loadv2i64,
-                                          WriteLoad>, VEX_L;
+let mayLoad = 1, Predicates = [HasAVX2] in
+def VBROADCASTI128 : AVX8I<0x5A, MRMSrcMem, (outs VR256:$dst),
+                           (ins i128mem:$src),
+                           "vbroadcasti128\t{$src, $dst|$dst, $src}", []>,
+                           Sched<[WriteLoad]>, VEX, VEX_L;
 
 let Predicates = [HasAVX] in
 def : Pat<(int_x86_avx_vbroadcastf128_ps_256 addr:$src),
