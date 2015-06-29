@@ -218,6 +218,9 @@ class MipsAsmParser : public MCTargetAsmParser {
   bool expandUlhu(MCInst &Inst, SMLoc IDLoc,
                   SmallVectorImpl<MCInst> &Instructions);
 
+  bool expandUlw(MCInst &Inst, SMLoc IDLoc,
+                 SmallVectorImpl<MCInst> &Instructions);
+
   void createNop(bool hasShortDelaySlot, SMLoc IDLoc,
                  SmallVectorImpl<MCInst> &Instructions);
 
@@ -499,11 +502,11 @@ public:
     RegKind_CCR = 128,    /// CCR
     RegKind_HWRegs = 256, /// HWRegs
     RegKind_COP3 = 512,   /// COP3
-
+    RegKind_COP0 = 1024,  /// COP0
     /// Potentially any (e.g. $1)
     RegKind_Numeric = RegKind_GPR | RegKind_FGR | RegKind_FCC | RegKind_MSA128 |
                       RegKind_MSACtrl | RegKind_COP2 | RegKind_ACC |
-                      RegKind_CCR | RegKind_HWRegs | RegKind_COP3
+                      RegKind_CCR | RegKind_HWRegs | RegKind_COP3 | RegKind_COP0
   };
 
 private:
@@ -665,6 +668,14 @@ private:
     return RegIdx.RegInfo->getRegClass(ClassID).getRegister(RegIdx.Index);
   }
 
+  /// Coerce the register to COP0 and return the real register for the
+  /// current target.
+  unsigned getCOP0Reg() const {
+    assert(isRegIdx() && (RegIdx.Kind & RegKind_COP0) && "Invalid access!");
+    unsigned ClassID = Mips::COP0RegClassID;
+    return RegIdx.RegInfo->getRegClass(ClassID).getRegister(RegIdx.Index);
+  }
+
   /// Coerce the register to COP2 and return the real register for the
   /// current target.
   unsigned getCOP2Reg() const {
@@ -804,6 +815,11 @@ public:
   void addMSACtrlAsmRegOperands(MCInst &Inst, unsigned N) const {
     assert(N == 1 && "Invalid number of operands!");
     Inst.addOperand(MCOperand::createReg(getMSACtrlReg()));
+  }
+
+  void addCOP0AsmRegOperands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands!");
+    Inst.addOperand(MCOperand::createReg(getCOP0Reg()));
   }
 
   void addCOP2AsmRegOperands(MCInst &Inst, unsigned N) const {
@@ -1180,6 +1196,9 @@ public:
   }
   bool isACCAsmReg() const {
     return isRegIdx() && RegIdx.Kind & RegKind_ACC && RegIdx.Index <= 3;
+  }
+  bool isCOP0AsmReg() const {
+    return isRegIdx() && RegIdx.Kind & RegKind_COP0 && RegIdx.Index <= 31;
   }
   bool isCOP2AsmReg() const {
     return isRegIdx() && RegIdx.Kind & RegKind_COP2 && RegIdx.Index <= 31;
@@ -1649,6 +1668,7 @@ bool MipsAsmParser::needsExpansion(MCInst &Inst) {
   case Mips::BGEU:
   case Mips::BGTU:
   case Mips::Ulhu:
+  case Mips::Ulw:
     return true;
   default:
     return false;
@@ -1689,6 +1709,8 @@ bool MipsAsmParser::expandInstruction(MCInst &Inst, SMLoc IDLoc,
     return expandCondBranches(Inst, IDLoc, Instructions);
   case Mips::Ulhu:
     return expandUlhu(Inst, IDLoc, Instructions);
+  case Mips::Ulw:
+    return expandUlw(Inst, IDLoc, Instructions);
   }
 }
 
@@ -2578,6 +2600,79 @@ bool MipsAsmParser::expandUlhu(MCInst &Inst, SMLoc IDLoc,
   TmpInst.addOperand(MCOperand::createReg(DstReg));
   TmpInst.addOperand(MCOperand::createReg(ATReg));
   Instructions.push_back(TmpInst);
+
+  return false;
+}
+
+bool MipsAsmParser::expandUlw(MCInst &Inst, SMLoc IDLoc,
+                              SmallVectorImpl<MCInst> &Instructions) {
+  if (hasMips32r6() || hasMips64r6()) {
+    Error(IDLoc, "instruction not supported on mips32r6 or mips64r6");
+    return false;
+  }
+
+  const MCOperand &DstRegOp = Inst.getOperand(0);
+  assert(DstRegOp.isReg() && "expected register operand kind");
+
+  const MCOperand &SrcRegOp = Inst.getOperand(1);
+  assert(SrcRegOp.isReg() && "expected register operand kind");
+
+  const MCOperand &OffsetImmOp = Inst.getOperand(2);
+  assert(OffsetImmOp.isImm() && "expected immediate operand kind");
+
+  unsigned SrcReg = SrcRegOp.getReg();
+  int64_t OffsetValue = OffsetImmOp.getImm();
+  unsigned ATReg = 0;
+
+  // When the value of offset+3 does not fit in 16 bits, we have to load the
+  // offset in AT, (D)ADDu the original source register (if there was one), and
+  // then use AT as the source register for the generated LWL and LWR.
+  bool LoadedOffsetInAT = false;
+  if (!isInt<16>(OffsetValue + 3) || !isInt<16>(OffsetValue)) {
+    ATReg = getATReg(IDLoc);
+    if (!ATReg)
+      return true;
+    LoadedOffsetInAT = true;
+
+    warnIfNoMacro(IDLoc);
+
+    if (loadImmediate(OffsetValue, ATReg, Mips::NoRegister, !ABI.ArePtrs64bit(),
+                      IDLoc, Instructions))
+      return true;
+
+    // NOTE: We do this (D)ADDu here instead of doing it in loadImmediate()
+    // because it will make our output more similar to GAS'. For example,
+    // generating an "ori $1, $zero, 32768" followed by an "addu $1, $1, $9",
+    // instead of just an "ori $1, $9, 32768".
+    // NOTE: If there is no source register specified in the ULW, the parser
+    // will interpret it as $0.
+    if (SrcReg != Mips::ZERO && SrcReg != Mips::ZERO_64)
+      createAddu(ATReg, ATReg, SrcReg, ABI.ArePtrs64bit(), Instructions);
+  }
+
+  unsigned FinalSrcReg = LoadedOffsetInAT ? ATReg : SrcReg;
+  int64_t LeftLoadOffset = 0, RightLoadOffset  = 0;
+  if (isLittle()) {
+    LeftLoadOffset = LoadedOffsetInAT ? 3 : (OffsetValue + 3);
+    RightLoadOffset  = LoadedOffsetInAT ? 0 : OffsetValue;
+  } else {
+    LeftLoadOffset = LoadedOffsetInAT ? 0 : OffsetValue;
+    RightLoadOffset  = LoadedOffsetInAT ? 3 : (OffsetValue + 3);
+  }
+
+  MCInst LeftLoadInst;
+  LeftLoadInst.setOpcode(Mips::LWL);
+  LeftLoadInst.addOperand(DstRegOp);
+  LeftLoadInst.addOperand(MCOperand::createReg(FinalSrcReg));
+  LeftLoadInst.addOperand(MCOperand::createImm(LeftLoadOffset));
+  Instructions.push_back(LeftLoadInst);
+
+  MCInst RightLoadInst;
+  RightLoadInst.setOpcode(Mips::LWR);
+  RightLoadInst.addOperand(DstRegOp);
+  RightLoadInst.addOperand(MCOperand::createReg(FinalSrcReg));
+  RightLoadInst.addOperand(MCOperand::createImm(RightLoadOffset ));
+  Instructions.push_back(RightLoadInst);
 
   return false;
 }

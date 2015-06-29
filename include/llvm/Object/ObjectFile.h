@@ -67,7 +67,7 @@ public:
 
 
   DataRefImpl getRawDataRefImpl() const;
-  const ObjectFile *getObjectFile() const;
+  const ObjectFile *getObject() const;
 };
 typedef content_iterator<RelocationRef> relocation_iterator;
 
@@ -150,8 +150,7 @@ public:
   /// @brief Get the alignment of this symbol as the actual value (not log 2).
   uint32_t getAlignment() const;
   uint64_t getCommonSize() const;
-  std::error_code getType(SymbolRef::Type &Result) const;
-  std::error_code getOther(uint8_t &Result) const;
+  SymbolRef::Type getType() const;
 
   /// @brief Get section this symbol is defined in reference to. Result is
   /// end_sections() if it is undefined or is an absolute symbol.
@@ -211,14 +210,9 @@ protected:
   virtual uint64_t getSymbolValue(DataRefImpl Symb) const = 0;
   virtual uint32_t getSymbolAlignment(DataRefImpl Symb) const;
   virtual uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const = 0;
-  virtual std::error_code getSymbolType(DataRefImpl Symb,
-                                        SymbolRef::Type &Res) const = 0;
+  virtual SymbolRef::Type getSymbolType(DataRefImpl Symb) const = 0;
   virtual std::error_code getSymbolSection(DataRefImpl Symb,
                                            section_iterator &Res) const = 0;
-  virtual std::error_code getSymbolOther(DataRefImpl Symb,
-                                         uint8_t &Res) const {
-    return object_error::invalid_file_type;
-  }
 
   // Same as above for SectionRef.
   friend class SectionRef;
@@ -352,12 +346,8 @@ inline std::error_code SymbolRef::getSection(section_iterator &Result) const {
   return getObject()->getSymbolSection(getRawDataRefImpl(), Result);
 }
 
-inline std::error_code SymbolRef::getType(SymbolRef::Type &Result) const {
-  return getObject()->getSymbolType(getRawDataRefImpl(), Result);
-}
-
-inline std::error_code SymbolRef::getOther(uint8_t &Result) const {
-  return getObject()->getSymbolOther(getRawDataRefImpl(), Result);
+inline SymbolRef::Type SymbolRef::getType() const {
+  return getObject()->getSymbolType(getRawDataRefImpl());
 }
 
 inline const ObjectFile *SymbolRef::getObject() const {
@@ -492,7 +482,7 @@ inline DataRefImpl RelocationRef::getRawDataRefImpl() const {
   return RelocationPimpl;
 }
 
-inline const ObjectFile *RelocationRef::getObjectFile() const {
+inline const ObjectFile *RelocationRef::getObject() const {
   return OwningObject;
 }
 

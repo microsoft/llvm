@@ -1049,7 +1049,7 @@
 ; CORTEX-R4F:  .eabi_attribute 23, 3
 ; CORTEX-R4F:  .eabi_attribute 24, 1
 ; CORTEX-R4F:  .eabi_attribute 25, 1
-; CORTEX-R4F:  .eabi_attribute 27, 1
+; CORTEX-R4F-NOT:  .eabi_attribute 27, 1
 ; CORTEX-R4F-NOT:  .eabi_attribute 28
 ; CORTEX-R4F-NOT:  .eabi_attribute 36
 ; CORTEX-R4F:  .eabi_attribute 38, 1
@@ -1071,7 +1071,7 @@
 ; CORTEX-R5:  .eabi_attribute 23, 3
 ; CORTEX-R5:  .eabi_attribute 24, 1
 ; CORTEX-R5:  .eabi_attribute 25, 1
-; CORTEX-R5:  .eabi_attribute 27, 1
+; CORTEX-R5-NOT:  .eabi_attribute 27, 1
 ; CORTEX-R5-NOT:  .eabi_attribute 28
 ; CORTEX-R5-NOT:  .eabi_attribute 36
 ; CORTEX-R5:  .eabi_attribute 38, 1

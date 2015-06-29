@@ -14,10 +14,12 @@
 
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "MIParser.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/AsmParser/SlotMapping.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
@@ -45,6 +47,7 @@ class MIRParserImpl {
   StringRef Filename;
   LLVMContext &Context;
   StringMap<std::unique_ptr<yaml::MachineFunction>> Functions;
+  SlotMapping IRSlots;
 
 public:
   MIRParserImpl(std::unique_ptr<MemoryBuffer> Contents, StringRef Filename,
@@ -81,8 +84,10 @@ public:
   /// Initialize the machine basic block using it's YAML representation.
   ///
   /// Return true if an error occurred.
-  bool initializeMachineBasicBlock(MachineFunction &MF, MachineBasicBlock &MBB,
-                                   const yaml::MachineBasicBlock &YamlMBB);
+  bool initializeMachineBasicBlock(
+      MachineFunction &MF, MachineBasicBlock &MBB,
+      const yaml::MachineBasicBlock &YamlMBB,
+      const DenseMap<unsigned, MachineBasicBlock *> &MBBSlots);
 
   bool initializeRegisterInfo(MachineRegisterInfo &RegInfo,
                               const yaml::MachineFunction &YamlMF);
@@ -154,7 +159,7 @@ std::unique_ptr<Module> MIRParserImpl::parse() {
           dyn_cast_or_null<yaml::BlockScalarNode>(In.getCurrentNode())) {
     SMDiagnostic Error;
     M = parseAssembly(MemoryBufferRef(BSN->getValue(), Filename), Error,
-                      Context);
+                      Context, &IRSlots);
     if (!M) {
       reportDiagnostic(diagFromLLVMAssemblyDiag(Error, BSN->getSourceRange()));
       return M;
@@ -220,6 +225,7 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
     return true;
 
   const auto &F = *MF.getFunction();
+  DenseMap<unsigned, MachineBasicBlock *> MBBSlots;
   for (const auto &YamlMBB : YamlMF.BasicBlocks) {
     const BasicBlock *BB = nullptr;
     if (!YamlMBB.Name.empty()) {
@@ -231,7 +237,18 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
     }
     auto *MBB = MF.CreateMachineBasicBlock(BB);
     MF.insert(MF.end(), MBB);
-    if (initializeMachineBasicBlock(MF, *MBB, YamlMBB))
+    bool WasInserted = MBBSlots.insert(std::make_pair(YamlMBB.ID, MBB)).second;
+    if (!WasInserted)
+      return error(Twine("redefinition of machine basic block with id #") +
+                   Twine(YamlMBB.ID));
+  }
+
+  // Initialize the machine basic blocks after creating them all so that the
+  // machine instructions parser can resolve the MBB references.
+  unsigned I = 0;
+  for (const auto &YamlMBB : YamlMF.BasicBlocks) {
+    if (initializeMachineBasicBlock(MF, *MF.getBlockNumbered(I++), YamlMBB,
+                                    MBBSlots))
       return true;
   }
   return false;
@@ -239,7 +256,8 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
 
 bool MIRParserImpl::initializeMachineBasicBlock(
     MachineFunction &MF, MachineBasicBlock &MBB,
-    const yaml::MachineBasicBlock &YamlMBB) {
+    const yaml::MachineBasicBlock &YamlMBB,
+    const DenseMap<unsigned, MachineBasicBlock *> &MBBSlots) {
   MBB.setAlignment(YamlMBB.Alignment);
   if (YamlMBB.AddressTaken)
     MBB.setHasAddressTaken();
@@ -247,7 +265,8 @@ bool MIRParserImpl::initializeMachineBasicBlock(
   // Parse the instructions.
   for (const auto &MISource : YamlMBB.Instructions) {
     SMDiagnostic Error;
-    if (auto *MI = parseMachineInstr(SM, MF, MISource.Value, Error)) {
+    if (auto *MI = parseMachineInstr(SM, MF, MISource.Value, MBBSlots, IRSlots,
+                                     Error)) {
       MBB.insert(MBB.end(), MI);
       continue;
     }

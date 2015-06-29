@@ -677,7 +677,7 @@ static std::error_code getRelocationValueString(const MachOObjectFile *Obj,
 
 static std::error_code getRelocationValueString(const RelocationRef &Rel,
                                                 SmallVectorImpl<char> &Result) {
-  const ObjectFile *Obj = Rel.getObjectFile();
+  const ObjectFile *Obj = Rel.getObject();
   if (auto *ELF = dyn_cast<ELFObjectFileBase>(Obj))
     return getRelocationValueString(ELF, Rel, Result);
   if (auto *COFF = dyn_cast<COFFObjectFile>(Obj))
@@ -1078,12 +1078,10 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
   }
   for (const SymbolRef &Symbol : o->symbols()) {
     uint64_t Address;
-    SymbolRef::Type Type;
+    SymbolRef::Type Type = Symbol.getType();
     uint32_t Flags = Symbol.getFlags();
     section_iterator Section = o->section_end();
     if (error(Symbol.getAddress(Address)))
-      continue;
-    if (error(Symbol.getType(Type)))
       continue;
     if (error(Symbol.getSection(Section)))
       continue;
