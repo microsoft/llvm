@@ -27,8 +27,11 @@
 #include <type_traits>
 
 namespace llvm {
+
 class LLVMContext;
 class Module;
+class ModuleSlotTracker;
+
 template<typename ValueSubClass, typename ItemParentClass>
   class SymbolTableListTraits;
 
@@ -121,7 +124,11 @@ public:
   ///
   /// If \c M is provided, metadata nodes will be numbered canonically;
   /// otherwise, pointer addresses are substituted.
+  /// @{
   void print(raw_ostream &OS, const Module *M = nullptr) const;
+  void print(raw_ostream &OS, ModuleSlotTracker &MST,
+             const Module *M = nullptr) const;
+  /// @}
 
   /// \brief Print as operand.
   ///
@@ -129,7 +136,11 @@ public:
   ///
   /// If \c M is provided, metadata nodes will be numbered canonically;
   /// otherwise, pointer addresses are substituted.
+  /// @{
   void printAsOperand(raw_ostream &OS, const Module *M = nullptr) const;
+  void printAsOperand(raw_ostream &OS, ModuleSlotTracker &MST,
+                      const Module *M = nullptr) const;
+  /// @}
 };
 
 #define HANDLE_METADATA(CLASS) class CLASS;

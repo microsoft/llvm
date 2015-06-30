@@ -1192,8 +1192,8 @@ bool DAGCombiner::recursivelyDeleteUnusedNodes(SDNode *N) {
       continue;
 
     if (N->use_empty()) {
-      for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i)
-        Nodes.insert(N->getOperand(i).getNode());
+      for (const SDValue &ChildN : N->op_values())
+        Nodes.insert(ChildN.getNode());
 
       removeFromWorklist(N);
       DAG.DeleteNode(N);
@@ -1266,9 +1266,9 @@ void DAGCombiner::Run(CombineLevel AtLevel) {
     // worklist as well. Because the worklist uniques things already, this
     // won't repeatedly process the same operand.
     CombinedNodes.insert(N);
-    for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i)
-      if (!CombinedNodes.count(N->getOperand(i).getNode()))
-        AddToWorklist(N->getOperand(i).getNode());
+    for (const SDValue &ChildN : N->op_values())
+      if (!CombinedNodes.count(ChildN.getNode()))
+        AddToWorklist(ChildN.getNode());
 
     SDValue RV = combine(N);
 
@@ -1523,8 +1523,7 @@ SDValue DAGCombiner::visitTokenFactor(SDNode *N) {
     SDNode *TF = TFs[i];
 
     // Check each of the operands.
-    for (unsigned i = 0, ie = TF->getNumOperands(); i != ie; ++i) {
-      SDValue Op = TF->getOperand(i);
+    for (const SDValue &Op : TF->op_values()) {
 
       switch (Op.getOpcode()) {
       case ISD::EntryToken:
@@ -2179,7 +2178,11 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
   }
 
   // fold (sdiv X, pow2) -> simple ops after legalize
+  // FIXME: We check for the exact bit here because the generic lowering gives
+  // better results in that case. The target-specific lowering should learn how
+  // to handle exact sdivs efficiently.
   if (N1C && !N1C->isNullValue() && !N1C->isOpaque() &&
+      !cast<BinaryWithFlagsSDNode>(N)->Flags.hasExact() &&
       (N1C->getAPIntValue().isPowerOf2() ||
        (-N1C->getAPIntValue()).isPowerOf2())) {
     // If dividing by powers of two is cheap, then don't perform the following
@@ -4359,6 +4362,22 @@ SDValue DAGCombiner::visitSHL(SDNode *N) {
           return DAG.getNode(ISD::ZERO_EXTEND, SDLoc(N0), VT, NewSHL);
         }
       }
+    }
+  }
+
+  // fold (shl (sr[la] exact X,  C1), C2) -> (shl    X, (C2-C1)) if C1 <= C2
+  // fold (shl (sr[la] exact X,  C1), C2) -> (sr[la] X, (C2-C1)) if C1  > C2
+  if (N1C && (N0.getOpcode() == ISD::SRL || N0.getOpcode() == ISD::SRA) &&
+      cast<BinaryWithFlagsSDNode>(N0)->Flags.hasExact()) {
+    if (ConstantSDNode *N0C1 = isConstOrConstSplat(N0.getOperand(1))) {
+      uint64_t C1 = N0C1->getZExtValue();
+      uint64_t C2 = N1C->getZExtValue();
+      SDLoc DL(N);
+      if (C1 <= C2)
+        return DAG.getNode(ISD::SHL, DL, VT, N0.getOperand(0),
+                           DAG.getConstant(C2 - C1, DL, N1.getValueType()));
+      return DAG.getNode(N0.getOpcode(), DL, VT, N0.getOperand(0),
+                         DAG.getConstant(C1 - C2, DL, N1.getValueType()));
     }
   }
 
@@ -7307,8 +7326,7 @@ ConstantFoldBITCASTofBUILD_VECTOR(SDNode *BV, EVT DstEltVT) {
                                      DstEltVT, BV->getOperand(0)));
 
     SmallVector<SDValue, 8> Ops;
-    for (unsigned i = 0, e = BV->getNumOperands(); i != e; ++i) {
-      SDValue Op = BV->getOperand(i);
+    for (SDValue Op : BV->op_values()) {
       // If the vector element type is not legal, the BUILD_VECTOR operands
       // are promoted and implicitly truncated.  Make that explicit here.
       if (Op.getValueType() != SrcEltVT)
@@ -7383,13 +7401,13 @@ ConstantFoldBITCASTofBUILD_VECTOR(SDNode *BV, EVT DstEltVT) {
                             NumOutputsPerInput*BV->getNumOperands());
   SmallVector<SDValue, 8> Ops;
 
-  for (unsigned i = 0, e = BV->getNumOperands(); i != e; ++i) {
-    if (BV->getOperand(i).getOpcode() == ISD::UNDEF) {
+  for (const SDValue &Op : BV->op_values()) {
+    if (Op.getOpcode() == ISD::UNDEF) {
       Ops.append(NumOutputsPerInput, DAG.getUNDEF(DstEltVT));
       continue;
     }
 
-    APInt OpVal = cast<ConstantSDNode>(BV->getOperand(i))->
+    APInt OpVal = cast<ConstantSDNode>(Op)->
                   getAPIntValue().zextOrTrunc(SrcBitSize);
 
     for (unsigned j = 0; j != NumOutputsPerInput; ++j) {
@@ -10218,8 +10236,8 @@ CheckForMaskedLoad(SDValue V, SDValue Ptr, SDValue Chain) {
     return Result; // Fail.
   else {
     bool isOk = false;
-    for (unsigned i = 0, e = Chain->getNumOperands(); i != e; ++i)
-      if (Chain->getOperand(i).getNode() == LD) {
+    for (const SDValue &ChainOp : Chain->op_values())
+      if (ChainOp.getNode() == LD) {
         isOk = true;
         break;
       }

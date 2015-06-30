@@ -139,13 +139,17 @@ static std::string scalarConstantToHexString(const Constant *C) {
     return APIntToHexString(CFP->getValueAPF().bitcastToAPInt());
   } else if (const auto *CI = dyn_cast<ConstantInt>(C)) {
     return APIntToHexString(CI->getValue());
-  } else if (const auto *VTy = dyn_cast<VectorType>(Ty)) {
+  } else {
+    unsigned NumElements;
+    if (isa<VectorType>(Ty))
+      NumElements = Ty->getVectorNumElements();
+    else
+      NumElements = Ty->getArrayNumElements();
     std::string HexString;
-    for (int I = VTy->getNumElements() - 1, E = -1; I != E; --I)
+    for (int I = NumElements - 1, E = -1; I != E; --I)
       HexString += scalarConstantToHexString(C->getAggregateElement(I));
     return HexString;
   }
-  llvm_unreachable("unexpected constant pool element type!");
 }
 
 MCSection *

@@ -17,6 +17,7 @@
 #include "ARMEHABIPrinter.h"
 #include "Error.h"
 #include "ObjDumper.h"
+#include "StackMapPrinter.h"
 #include "StreamWriter.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallString.h"
@@ -60,6 +61,8 @@ public:
   void printMipsPLTGOT() override;
   void printMipsABIFlags() override;
   void printMipsReginfo() override;
+
+  void printStackMap() const override;
 
 private:
   typedef ELFFile<ELFT> ELFO;
@@ -574,7 +577,13 @@ void ELFDumper<ELFT>::printFileHeaders() {
       W.printEnum  ("DataEncoding", Header->e_ident[ELF::EI_DATA],
                       makeArrayRef(ElfDataEncoding));
       W.printNumber("FileVersion", Header->e_ident[ELF::EI_VERSION]);
-      W.printEnum  ("OS/ABI", Header->e_ident[ELF::EI_OSABI],
+
+      // Handle architecture specific OS/ABI values.
+      if (Header->e_machine == ELF::EM_AMDGPU &&
+          Header->e_ident[ELF::EI_OSABI] == ELF::ELFOSABI_AMDGPU_HSA)
+        W.printHex("OS/ABI", "AMDGPU_HSA", ELF::ELFOSABI_AMDGPU_HSA);
+      else
+        W.printEnum  ("OS/ABI", Header->e_ident[ELF::EI_OSABI],
                       makeArrayRef(ElfOSABI));
       W.printNumber("ABIVersion", Header->e_ident[ELF::EI_ABIVERSION]);
       W.printBinary("Unused", makeArrayRef(Header->e_ident).slice(ELF::EI_PAD));
@@ -1487,4 +1496,26 @@ template <class ELFT> void ELFDumper<ELFT>::printMipsReginfo() {
   W.printHex("Co-Proc Mask1", Reginfo->ri_cprmask[1]);
   W.printHex("Co-Proc Mask2", Reginfo->ri_cprmask[2]);
   W.printHex("Co-Proc Mask3", Reginfo->ri_cprmask[3]);
+}
+
+template <class ELFT> void ELFDumper<ELFT>::printStackMap() const {
+  const typename ELFFile<ELFT>::Elf_Shdr *StackMapSection = nullptr;
+  for (const auto &Sec : Obj->sections()) {
+    ErrorOr<StringRef> Name = Obj->getSectionName(&Sec);
+    if (*Name == ".llvm_stackmaps") {
+      StackMapSection = &Sec;
+      break;
+    }
+  }
+
+  if (!StackMapSection)
+    return;
+
+  StringRef StackMapContents;
+  ErrorOr<ArrayRef<uint8_t>> StackMapContentsArray =
+    Obj->getSectionContents(StackMapSection);
+
+  prettyPrintStackMap(
+              llvm::outs(),
+              StackMapV1Parser<ELFT::TargetEndianness>(*StackMapContentsArray));
 }

@@ -250,15 +250,7 @@ static char isSymbolList64Bit(SymbolicFile &Obj) {
     return false;
   if (MachOObjectFile *MachO = dyn_cast<MachOObjectFile>(&Obj))
     return MachO->is64Bit();
-  if (isa<ELF32LEObjectFile>(Obj))
-    return false;
-  if (isa<ELF64LEObjectFile>(Obj))
-    return true;
-  if (isa<ELF32BEObjectFile>(Obj))
-    return false;
-  if (isa<ELF64BEObjectFile>(Obj))
-    return true;
-  return false;
+  return cast<ELFObjectFileBase>(Obj).getBytesInAddress() == 8;
 }
 
 static StringRef CurrentFilename;
@@ -630,25 +622,20 @@ static void sortAndPrintSymbolList(SymbolicFile &Obj, bool printName,
   SymbolList.clear();
 }
 
-template <class ELFT>
-static char getSymbolNMTypeChar(ELFObjectFile<ELFT> &Obj,
+static char getSymbolNMTypeChar(ELFObjectFileBase &Obj,
                                 basic_symbol_iterator I) {
-  typedef typename ELFObjectFile<ELFT>::Elf_Sym Elf_Sym;
-  typedef typename ELFObjectFile<ELFT>::Elf_Shdr Elf_Shdr;
-
   // OK, this is ELF
-  symbol_iterator SymI(I);
+  elf_symbol_iterator SymI(I);
 
-  DataRefImpl Symb = I->getRawDataRefImpl();
-  const Elf_Sym *ESym = Obj.getSymbol(Symb);
-  const ELFFile<ELFT> &EF = *Obj.getELFFile();
-  const Elf_Shdr *ESec = EF.getSection(ESym);
+  elf_section_iterator SecI = Obj.section_end();
+  if (error(SymI->getSection(SecI)))
+    return '?';
 
-  if (ESec) {
-    switch (ESec->sh_type) {
+  if (SecI != Obj.section_end()) {
+    switch (SecI->getType()) {
     case ELF::SHT_PROGBITS:
     case ELF::SHT_DYNAMIC:
-      switch (ESec->sh_flags) {
+      switch (SecI->getFlags()) {
       case (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR):
         return 't';
       case (ELF::SHF_TLS | ELF::SHF_ALLOC | ELF::SHF_WRITE):
@@ -665,7 +652,7 @@ static char getSymbolNMTypeChar(ELFObjectFile<ELFT> &Obj,
     }
   }
 
-  if (ESym->getType() == ELF::STT_SECTION) {
+  if (SymI->getELFType() == ELF::STT_SECTION) {
     StringRef Name;
     if (error(SymI->getName(Name)))
       return '?';
@@ -782,26 +769,12 @@ static char getSymbolNMTypeChar(IRObjectFile &Obj, basic_symbol_iterator I) {
   return getSymbolNMTypeChar(*GV);
 }
 
-template <class ELFT>
-static bool isELFObject(ELFObjectFile<ELFT> &Obj, symbol_iterator I) {
-  typedef typename ELFObjectFile<ELFT>::Elf_Sym Elf_Sym;
-
-  DataRefImpl Symb = I->getRawDataRefImpl();
-  const Elf_Sym *ESym = Obj.getSymbol(Symb);
-
-  return ESym->getType() == ELF::STT_OBJECT;
-}
-
 static bool isObject(SymbolicFile &Obj, basic_symbol_iterator I) {
-  if (ELF32LEObjectFile *ELF = dyn_cast<ELF32LEObjectFile>(&Obj))
-    return isELFObject(*ELF, I);
-  if (ELF64LEObjectFile *ELF = dyn_cast<ELF64LEObjectFile>(&Obj))
-    return isELFObject(*ELF, I);
-  if (ELF32BEObjectFile *ELF = dyn_cast<ELF32BEObjectFile>(&Obj))
-    return isELFObject(*ELF, I);
-  if (ELF64BEObjectFile *ELF = dyn_cast<ELF64BEObjectFile>(&Obj))
-    return isELFObject(*ELF, I);
-  return false;
+  auto *ELF = dyn_cast<ELFObjectFileBase>(&Obj);
+  if (!ELF)
+    return false;
+
+  return elf_symbol_iterator(I)->getELFType() == ELF::STT_OBJECT;
 }
 
 static char getNMTypeChar(SymbolicFile &Obj, basic_symbol_iterator I) {
@@ -828,14 +801,8 @@ static char getNMTypeChar(SymbolicFile &Obj, basic_symbol_iterator I) {
     Ret = getSymbolNMTypeChar(*COFF, I);
   else if (MachOObjectFile *MachO = dyn_cast<MachOObjectFile>(&Obj))
     Ret = getSymbolNMTypeChar(*MachO, I);
-  else if (ELF32LEObjectFile *ELF = dyn_cast<ELF32LEObjectFile>(&Obj))
-    Ret = getSymbolNMTypeChar(*ELF, I);
-  else if (ELF64LEObjectFile *ELF = dyn_cast<ELF64LEObjectFile>(&Obj))
-    Ret = getSymbolNMTypeChar(*ELF, I);
-  else if (ELF32BEObjectFile *ELF = dyn_cast<ELF32BEObjectFile>(&Obj))
-    Ret = getSymbolNMTypeChar(*ELF, I);
   else
-    Ret = getSymbolNMTypeChar(cast<ELF64BEObjectFile>(Obj), I);
+    Ret = getSymbolNMTypeChar(cast<ELFObjectFileBase>(Obj), I);
 
   if (Symflags & object::SymbolRef::SF_Global)
     Ret = toupper(Ret);
