@@ -51,20 +51,14 @@ public:
   void moveNext();
 
   std::error_code getAddress(uint64_t &Result) const;
-  std::error_code getOffset(uint64_t &Result) const;
+  uint64_t getOffset() const;
   symbol_iterator getSymbol() const;
-  std::error_code getType(uint64_t &Result) const;
-
-  /// @brief Indicates whether this relocation should hidden when listing
-  /// relocations, usually because it is the trailing part of a multipart
-  /// relocation that will be printed as part of the leading relocation.
-  std::error_code getHidden(bool &Result) const;
+  uint64_t getType() const;
 
   /// @brief Get a string that represents the type of this relocation.
   ///
   /// This is for display purposes only.
-  std::error_code getTypeName(SmallVectorImpl<char> &Result) const;
-
+  void getTypeName(SmallVectorImpl<char> &Result) const;
 
   DataRefImpl getRawDataRefImpl() const;
   const ObjectFile *getObject() const;
@@ -240,19 +234,11 @@ protected:
   virtual void moveRelocationNext(DataRefImpl &Rel) const = 0;
   virtual std::error_code getRelocationAddress(DataRefImpl Rel,
                                                uint64_t &Res) const = 0;
-  virtual std::error_code getRelocationOffset(DataRefImpl Rel,
-                                              uint64_t &Res) const = 0;
+  virtual uint64_t getRelocationOffset(DataRefImpl Rel) const = 0;
   virtual symbol_iterator getRelocationSymbol(DataRefImpl Rel) const = 0;
-  virtual std::error_code getRelocationType(DataRefImpl Rel,
-                                            uint64_t &Res) const = 0;
-  virtual std::error_code
-  getRelocationTypeName(DataRefImpl Rel,
-                        SmallVectorImpl<char> &Result) const = 0;
-  virtual std::error_code getRelocationHidden(DataRefImpl Rel,
-                                              bool &Result) const {
-    Result = false;
-    return std::error_code();
-  }
+  virtual uint64_t getRelocationType(DataRefImpl Rel) const = 0;
+  virtual void getRelocationTypeName(DataRefImpl Rel,
+                                     SmallVectorImpl<char> &Result) const = 0;
 
 public:
   uint64_t getCommonSymbolSize(DataRefImpl Symb) const {
@@ -457,25 +443,20 @@ inline std::error_code RelocationRef::getAddress(uint64_t &Result) const {
   return OwningObject->getRelocationAddress(RelocationPimpl, Result);
 }
 
-inline std::error_code RelocationRef::getOffset(uint64_t &Result) const {
-  return OwningObject->getRelocationOffset(RelocationPimpl, Result);
+inline uint64_t RelocationRef::getOffset() const {
+  return OwningObject->getRelocationOffset(RelocationPimpl);
 }
 
 inline symbol_iterator RelocationRef::getSymbol() const {
   return OwningObject->getRelocationSymbol(RelocationPimpl);
 }
 
-inline std::error_code RelocationRef::getType(uint64_t &Result) const {
-  return OwningObject->getRelocationType(RelocationPimpl, Result);
+inline uint64_t RelocationRef::getType() const {
+  return OwningObject->getRelocationType(RelocationPimpl);
 }
 
-inline std::error_code
-RelocationRef::getTypeName(SmallVectorImpl<char> &Result) const {
+inline void RelocationRef::getTypeName(SmallVectorImpl<char> &Result) const {
   return OwningObject->getRelocationTypeName(RelocationPimpl, Result);
-}
-
-inline std::error_code RelocationRef::getHidden(bool &Result) const {
-  return OwningObject->getRelocationHidden(RelocationPimpl, Result);
 }
 
 inline DataRefImpl RelocationRef::getRawDataRefImpl() const {

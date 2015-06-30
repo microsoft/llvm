@@ -212,9 +212,8 @@ static const Target *getTarget(const ObjectFile *Obj = nullptr) {
 }
 
 bool llvm::RelocAddressLess(RelocationRef a, RelocationRef b) {
-  uint64_t a_addr, b_addr;
-  if (error(a.getOffset(a_addr))) return false;
-  if (error(b.getOffset(b_addr))) return false;
+  uint64_t a_addr = a.getOffset();
+  uint64_t b_addr = b.getOffset();
   return a_addr < b_addr;
 }
 
@@ -321,6 +320,14 @@ static std::error_code getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
   const ELFFile<ELFT> &EF = *Obj->getELFFile();
 
   const Elf_Shdr *sec = EF.getSection(Rel.d.a);
+  const Elf_Shdr *SymTab = EF.getSection(sec->sh_link);
+  assert(SymTab->sh_type == ELF::SHT_SYMTAB ||
+         SymTab->sh_type == ELF::SHT_DYNSYM);
+  const Elf_Shdr *StrTabSec = EF.getSection(SymTab->sh_link);
+  ErrorOr<StringRef> StrTabOrErr = EF.getStringTable(StrTabSec);
+  if (std::error_code EC = StrTabOrErr.getError())
+    return EC;
+  StringRef StrTab = *StrTabOrErr;
   uint8_t type;
   StringRef res;
   int64_t addend = 0;
@@ -351,8 +358,7 @@ static std::error_code getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
       return EC;
     Target = *SecName;
   } else {
-    ErrorOr<StringRef> SymName =
-        EF.getSymbolName(EF.getSection(sec->sh_link), symb);
+    ErrorOr<StringRef> SymName = symb->getName(StrTab);
     if (!SymName)
       return SymName.getError();
     Target = *SymName;
@@ -686,6 +692,39 @@ static std::error_code getRelocationValueString(const RelocationRef &Rel,
   return getRelocationValueString(MachO, Rel, Result);
 }
 
+/// @brief Indicates whether this relocation should hidden when listing
+/// relocations, usually because it is the trailing part of a multipart
+/// relocation that will be printed as part of the leading relocation.
+static bool getHidden(RelocationRef RelRef) {
+  const ObjectFile *Obj = RelRef.getObject();
+  auto *MachO = dyn_cast<MachOObjectFile>(Obj);
+  if (!MachO)
+    return false;
+
+  unsigned Arch = MachO->getArch();
+  DataRefImpl Rel = RelRef.getRawDataRefImpl();
+  uint64_t Type = MachO->getRelocationType(Rel);
+
+  // On arches that use the generic relocations, GENERIC_RELOC_PAIR
+  // is always hidden.
+  if (Arch == Triple::x86 || Arch == Triple::arm || Arch == Triple::ppc) {
+    if (Type == MachO::GENERIC_RELOC_PAIR)
+      return true;
+  } else if (Arch == Triple::x86_64) {
+    // On x86_64, X86_64_RELOC_UNSIGNED is hidden only when it follows
+    // an X86_64_RELOC_SUBTRACTOR.
+    if (Type == MachO::X86_64_RELOC_UNSIGNED && Rel.d.a > 0) {
+      DataRefImpl RelPrev = Rel;
+      RelPrev.d.a--;
+      uint64_t PrevType = MachO->getRelocationType(RelPrev);
+      if (PrevType == MachO::X86_64_RELOC_SUBTRACTOR)
+        return true;
+    }
+  }
+
+  return false;
+}
+
 static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
   const Target *TheTarget = getTarget(Obj);
   // getTarget() will have already issued a diagnostic if necessary, so
@@ -882,19 +921,17 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
 
         // Print relocation for instruction.
         while (rel_cur != rel_end) {
-          bool hidden = false;
-          uint64_t addr;
+          bool hidden = getHidden(*rel_cur);
+          uint64_t addr = rel_cur->getOffset();
           SmallString<16> name;
           SmallString<32> val;
 
           // If this relocation is hidden, skip it.
-          if (error(rel_cur->getHidden(hidden))) goto skip_print_rel;
           if (hidden) goto skip_print_rel;
 
-          if (error(rel_cur->getOffset(addr))) goto skip_print_rel;
           // Stop when rel_cur's address is past the current instruction.
           if (addr >= Index + Size) break;
-          if (error(rel_cur->getTypeName(name))) goto skip_print_rel;
+          rel_cur->getTypeName(name);
           if (error(getRelocationValueString(*rel_cur, val)))
             goto skip_print_rel;
           outs() << format(Fmt.data(), SectionAddr + addr) << name
@@ -924,18 +961,13 @@ void llvm::PrintRelocations(const ObjectFile *Obj) {
       continue;
     outs() << "RELOCATION RECORDS FOR [" << secname << "]:\n";
     for (const RelocationRef &Reloc : Section.relocations()) {
-      bool hidden;
-      uint64_t address;
+      bool hidden = getHidden(Reloc);
+      uint64_t address = Reloc.getOffset();
       SmallString<32> relocname;
       SmallString<32> valuestr;
-      if (error(Reloc.getHidden(hidden)))
-        continue;
       if (hidden)
         continue;
-      if (error(Reloc.getTypeName(relocname)))
-        continue;
-      if (error(Reloc.getOffset(address)))
-        continue;
+      Reloc.getTypeName(relocname);
       if (error(getRelocationValueString(Reloc, valuestr)))
         continue;
       outs() << format(Fmt.data(), address) << " " << relocname << " "

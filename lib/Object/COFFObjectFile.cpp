@@ -847,20 +847,24 @@ std::error_code COFFObjectFile::getString(uint32_t Offset,
 
 std::error_code COFFObjectFile::getSymbolName(COFFSymbolRef Symbol,
                                               StringRef &Res) const {
+  return getSymbolName(Symbol.getGeneric(), Res);
+}
+
+std::error_code COFFObjectFile::getSymbolName(const coff_symbol_generic *Symbol,
+                                              StringRef &Res) const {
   // Check for string table entry. First 4 bytes are 0.
-  if (Symbol.getStringTableOffset().Zeroes == 0) {
-    uint32_t Offset = Symbol.getStringTableOffset().Offset;
-    if (std::error_code EC = getString(Offset, Res))
+  if (Symbol->Name.Offset.Zeroes == 0) {
+    if (std::error_code EC = getString(Symbol->Name.Offset.Offset, Res))
       return EC;
     return std::error_code();
   }
 
-  if (Symbol.getShortName()[COFF::NameSize - 1] == 0)
+  if (Symbol->Name.ShortName[COFF::NameSize - 1] == 0)
     // Null terminated, let ::strlen figure out the length.
-    Res = StringRef(Symbol.getShortName());
+    Res = StringRef(Symbol->Name.ShortName);
   else
     // Not null terminated, use all 8 bytes.
-    Res = StringRef(Symbol.getShortName(), COFF::NameSize);
+    Res = StringRef(Symbol->Name.ShortName, COFF::NameSize);
   return std::error_code();
 }
 
@@ -967,15 +971,9 @@ std::error_code COFFObjectFile::getRelocationAddress(DataRefImpl Rel,
   report_fatal_error("getRelocationAddress not implemented in COFFObjectFile");
 }
 
-std::error_code COFFObjectFile::getRelocationOffset(DataRefImpl Rel,
-                                                    uint64_t &Res) const {
+uint64_t COFFObjectFile::getRelocationOffset(DataRefImpl Rel) const {
   const coff_relocation *R = toRel(Rel);
-  const support::ulittle32_t *VirtualAddressPtr;
-  if (std::error_code EC =
-          getObject(VirtualAddressPtr, Data, &R->VirtualAddress))
-    return EC;
-  Res = *VirtualAddressPtr;
-  return std::error_code();
+  return R->VirtualAddress;
 }
 
 symbol_iterator COFFObjectFile::getRelocationSymbol(DataRefImpl Rel) const {
@@ -992,11 +990,9 @@ symbol_iterator COFFObjectFile::getRelocationSymbol(DataRefImpl Rel) const {
   return symbol_iterator(SymbolRef(Ref, this));
 }
 
-std::error_code COFFObjectFile::getRelocationType(DataRefImpl Rel,
-                                                  uint64_t &Res) const {
+uint64_t COFFObjectFile::getRelocationType(DataRefImpl Rel) const {
   const coff_relocation* R = toRel(Rel);
-  Res = R->Type;
-  return std::error_code();
+  return R->Type;
 }
 
 const coff_section *
@@ -1035,9 +1031,8 @@ COFFObjectFile::getRelocations(const coff_section *Sec) const {
     Res = #reloc_type;                                                         \
     break;
 
-std::error_code
-COFFObjectFile::getRelocationTypeName(DataRefImpl Rel,
-                                      SmallVectorImpl<char> &Result) const {
+void COFFObjectFile::getRelocationTypeName(
+    DataRefImpl Rel, SmallVectorImpl<char> &Result) const {
   const coff_relocation *Reloc = toRel(Rel);
   StringRef Res;
   switch (getMachine()) {
@@ -1106,7 +1101,6 @@ COFFObjectFile::getRelocationTypeName(DataRefImpl Rel,
     Res = "Unknown";
   }
   Result.append(Res.begin(), Res.end());
-  return std::error_code();
 }
 
 #undef LLVM_COFF_SWITCH_RELOC_TYPE_NAME

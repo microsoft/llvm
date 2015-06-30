@@ -15123,7 +15123,8 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
                                   Mask, PassThru, Subtarget, DAG);
     }
     case VPERM_3OP_MASKZ: 
-    case VPERM_3OP_MASK: 
+    case VPERM_3OP_MASK:
+    case FMA_OP_MASK3:
     case FMA_OP_MASKZ:
     case FMA_OP_MASK: {
       SDValue Src1 = Op.getOperand(1);
@@ -15131,9 +15132,16 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
       SDValue Src3 = Op.getOperand(3);
       SDValue Mask = Op.getOperand(4);
       EVT VT = Op.getValueType();
-      SDValue PassThru =
-        (IntrData->Type == VPERM_3OP_MASKZ || IntrData->Type == FMA_OP_MASKZ) ?
-        getZeroVector(VT, Subtarget, DAG, dl) : Src1;
+      SDValue PassThru = SDValue();
+
+      // set PassThru element
+      if (IntrData->Type == VPERM_3OP_MASKZ || IntrData->Type == FMA_OP_MASKZ)
+        PassThru = getZeroVector(VT, Subtarget, DAG, dl);
+      else if (IntrData->Type == FMA_OP_MASK3)
+        PassThru = Src3;
+      else
+        PassThru = Src1;
+
       // We specify 2 possible opcodes for intrinsics with rounding modes.
       // First, we check if the intrinsic may have non-default rounding mode,
       // (IntrData->Opc1 != 0), then we check the rounding mode operand.
@@ -15477,7 +15485,12 @@ static SDValue getScatterNode(unsigned Opc, SDValue Op, SelectionDAG &DAG,
                                SDValue Index, SDValue ScaleOp, SDValue Chain) {
   SDLoc dl(Op);
   ConstantSDNode *C = dyn_cast<ConstantSDNode>(ScaleOp);
-  assert(C && "Invalid scale type");
+  if (!C)
+    llvm_unreachable("Invalid scale type");
+  unsigned ScaleVal = C->getZExtValue();
+  if (ScaleVal > 2 && ScaleVal != 4 && ScaleVal != 8)
+    llvm_unreachable("Valid scale values are 1, 2, 4, 8");
+
   SDValue Scale = DAG.getTargetConstant(C->getZExtValue(), dl, MVT::i8);
   SDValue Disp = DAG.getTargetConstant(0, dl, MVT::i32);
   SDValue Segment = DAG.getRegister(0, MVT::i32);
@@ -15487,8 +15500,16 @@ static SDValue getScatterNode(unsigned Opc, SDValue Op, SelectionDAG &DAG,
   ConstantSDNode *MaskC = dyn_cast<ConstantSDNode>(Mask);
   if (MaskC)
     MaskInReg = DAG.getTargetConstant(MaskC->getSExtValue(), dl, MaskVT);
-  else
-    MaskInReg = DAG.getBitcast(MaskVT, Mask);
+  else {
+    EVT BitcastVT = EVT::getVectorVT(*DAG.getContext(), MVT::i1,
+                                     Mask.getValueType().getSizeInBits());
+
+    // In case when MaskVT equals v2i1 or v4i1, low 2 or 4 elements
+    // are extracted by EXTRACT_SUBVECTOR.
+    MaskInReg = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, MaskVT,
+                            DAG.getBitcast(BitcastVT, Mask),
+                            DAG.getIntPtrConstant(0, dl));
+  }
   SDVTList VTs = DAG.getVTList(MaskVT, MVT::Other);
   SDValue Ops[] = {Base, Scale, Index, Disp, Segment, MaskInReg, Src, Chain};
   SDNode *Res = DAG.getMachineNode(Opc, dl, VTs, Ops);
@@ -25729,71 +25750,40 @@ X86TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
   // Otherwise, check to see if this is a register class of the wrong value
   // type.  For example, we want to map "{ax},i32" -> {eax}, we don't want it to
   // turn into {ax},{dx}.
-  if (Res.second->hasType(VT))
+  // MVT::Other is used to specify clobber names.
+  if (Res.second->hasType(VT) || VT == MVT::Other)
     return Res;   // Correct type already, nothing to do.
 
-  // All of the single-register GCC register classes map their values onto
-  // 16-bit register pieces "ax","dx","cx","bx","si","di","bp","sp".  If we
-  // really want an 8-bit or 32-bit register, map to the appropriate register
-  // class and return the appropriate register.
-  if (Res.second == &X86::GR16RegClass) {
-    if (VT == MVT::i8 || VT == MVT::i1) {
-      unsigned DestReg = 0;
-      switch (Res.first) {
-      default: break;
-      case X86::AX: DestReg = X86::AL; break;
-      case X86::DX: DestReg = X86::DL; break;
-      case X86::CX: DestReg = X86::CL; break;
-      case X86::BX: DestReg = X86::BL; break;
-      }
-      if (DestReg) {
-        Res.first = DestReg;
-        Res.second = &X86::GR8RegClass;
-      }
-    } else if (VT == MVT::i32 || VT == MVT::f32) {
-      unsigned DestReg = 0;
-      switch (Res.first) {
-      default: break;
-      case X86::AX: DestReg = X86::EAX; break;
-      case X86::DX: DestReg = X86::EDX; break;
-      case X86::CX: DestReg = X86::ECX; break;
-      case X86::BX: DestReg = X86::EBX; break;
-      case X86::SI: DestReg = X86::ESI; break;
-      case X86::DI: DestReg = X86::EDI; break;
-      case X86::BP: DestReg = X86::EBP; break;
-      case X86::SP: DestReg = X86::ESP; break;
-      }
-      if (DestReg) {
-        Res.first = DestReg;
-        Res.second = &X86::GR32RegClass;
-      }
-    } else if (VT == MVT::i64 || VT == MVT::f64) {
-      unsigned DestReg = 0;
-      switch (Res.first) {
-      default: break;
-      case X86::AX: DestReg = X86::RAX; break;
-      case X86::DX: DestReg = X86::RDX; break;
-      case X86::CX: DestReg = X86::RCX; break;
-      case X86::BX: DestReg = X86::RBX; break;
-      case X86::SI: DestReg = X86::RSI; break;
-      case X86::DI: DestReg = X86::RDI; break;
-      case X86::BP: DestReg = X86::RBP; break;
-      case X86::SP: DestReg = X86::RSP; break;
-      }
-      if (DestReg) {
-        Res.first = DestReg;
-        Res.second = &X86::GR64RegClass;
-      }
+  // Get a matching integer of the correct size. i.e. "ax" with MVT::32 should
+  // return "eax". This should even work for things like getting 64bit integer
+  // registers when given an f64 type.
+  const TargetRegisterClass *Class = Res.second;
+  if (Class == &X86::GR8RegClass || Class == &X86::GR16RegClass ||
+      Class == &X86::GR32RegClass || Class == &X86::GR64RegClass) {
+    unsigned Size = VT.getSizeInBits();
+    MVT::SimpleValueType SimpleTy = Size == 1 || Size == 8 ? MVT::i8
+                                  : Size == 16 ? MVT::i16
+                                  : Size == 32 ? MVT::i32
+                                  : Size == 64 ? MVT::i64
+                                  : MVT::Other;
+    unsigned DestReg = getX86SubSuperRegisterOrZero(Res.first, SimpleTy);
+    if (DestReg > 0) {
+      Res.first = DestReg;
+      Res.second = SimpleTy == MVT::i8 ? &X86::GR8RegClass
+                 : SimpleTy == MVT::i16 ? &X86::GR16RegClass
+                 : SimpleTy == MVT::i32 ? &X86::GR32RegClass
+                 : &X86::GR64RegClass;
+      assert(Res.second->contains(Res.first) && "Register in register class");
+    } else {
+      // No register found/type mismatch.
+      Res.first = 0;
+      Res.second = nullptr;
     }
-  } else if (Res.second == &X86::FR32RegClass ||
-             Res.second == &X86::FR64RegClass ||
-             Res.second == &X86::VR128RegClass ||
-             Res.second == &X86::VR256RegClass ||
-             Res.second == &X86::FR32XRegClass ||
-             Res.second == &X86::FR64XRegClass ||
-             Res.second == &X86::VR128XRegClass ||
-             Res.second == &X86::VR256XRegClass ||
-             Res.second == &X86::VR512RegClass) {
+  } else if (Class == &X86::FR32RegClass || Class == &X86::FR64RegClass ||
+             Class == &X86::VR128RegClass || Class == &X86::VR256RegClass ||
+             Class == &X86::FR32XRegClass || Class == &X86::FR64XRegClass ||
+             Class == &X86::VR128XRegClass || Class == &X86::VR256XRegClass ||
+             Class == &X86::VR512RegClass) {
     // Handle references to XMM physical registers that got mapped into the
     // wrong class.  This can happen with constraints like {xmm0} where the
     // target independent register mapper will just pick the first match it can
@@ -25809,6 +25799,11 @@ X86TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
       Res.second = &X86::VR256RegClass;
     else if (X86::VR512RegClass.hasType(VT))
       Res.second = &X86::VR512RegClass;
+    else {
+      // Type mismatch and not a clobber: Return an error;
+      Res.first = 0;
+      Res.second = nullptr;
+    }
   }
 
   return Res;

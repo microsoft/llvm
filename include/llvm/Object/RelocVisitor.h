@@ -240,9 +240,7 @@ private:
   }
 
   int64_t getELFAddend(RelocationRef R) {
-    const auto *Obj = cast<ELFObjectFileBase>(R.getObject());
-    DataRefImpl DRI = R.getRawDataRefImpl();
-    ErrorOr<int64_t> AddendOrErr = Obj->getRelocationAddend(DRI);
+    ErrorOr<int64_t> AddendOrErr = ELFRelocationRef(R).getAddend();
     if (std::error_code EC = AddendOrErr.getError())
       report_fatal_error(EC.message());
     return *AddendOrErr;
@@ -267,8 +265,7 @@ private:
   }
 
   RelocToApply visitELF_386_PC32(RelocationRef R, uint64_t Value) {
-    uint64_t Address;
-    R.getOffset(Address);
+    uint64_t Address = R.getOffset();
     return RelocToApply(Value - Address, 4);
   }
 
@@ -282,8 +279,7 @@ private:
   }
   RelocToApply visitELF_X86_64_PC32(RelocationRef R, uint64_t Value) {
     int64_t Addend = getELFAddend(R);
-    uint64_t Address;
-    R.getOffset(Address);
+    uint64_t Address = R.getOffset();
     return RelocToApply(Value + Addend - Address, 4);
   }
   RelocToApply visitELF_X86_64_32(RelocationRef R, uint64_t Value) {

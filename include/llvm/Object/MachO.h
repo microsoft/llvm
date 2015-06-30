@@ -237,17 +237,12 @@ public:
   void moveRelocationNext(DataRefImpl &Rel) const override;
   std::error_code getRelocationAddress(DataRefImpl Rel,
                                        uint64_t &Res) const override;
-  std::error_code getRelocationOffset(DataRefImpl Rel,
-                                      uint64_t &Res) const override;
+  uint64_t getRelocationOffset(DataRefImpl Rel) const override;
   symbol_iterator getRelocationSymbol(DataRefImpl Rel) const override;
   section_iterator getRelocationSection(DataRefImpl Rel) const;
-  std::error_code getRelocationType(DataRefImpl Rel,
-                                    uint64_t &Res) const override;
-  std::error_code
-  getRelocationTypeName(DataRefImpl Rel,
-                        SmallVectorImpl<char> &Result) const override;
-  std::error_code getRelocationHidden(DataRefImpl Rel,
-                                      bool &Result) const override;
+  uint64_t getRelocationType(DataRefImpl Rel) const override;
+  void getRelocationTypeName(DataRefImpl Rel,
+                             SmallVectorImpl<char> &Result) const override;
   uint8_t getRelocationLength(DataRefImpl Rel) const;
 
   // MachO specific.

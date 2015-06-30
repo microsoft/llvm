@@ -121,9 +121,7 @@ std::error_code COFFDumper::resolveSymbol(const coff_section *Section,
                                           uint64_t Offset, SymbolRef &Sym) {
   const auto &Relocations = RelocMap[Section];
   for (const auto &Relocation : Relocations) {
-    uint64_t RelocationOffset;
-    if (std::error_code EC = Relocation.getOffset(RelocationOffset))
-      return EC;
+    uint64_t RelocationOffset = Relocation.getOffset();
 
     if (RelocationOffset == Offset) {
       Sym = *Relocation.getSymbol();
@@ -805,16 +803,11 @@ void COFFDumper::printRelocations() {
 
 void COFFDumper::printRelocation(const SectionRef &Section,
                                  const RelocationRef &Reloc) {
-  uint64_t Offset;
-  uint64_t RelocType;
+  uint64_t Offset = Reloc.getOffset();
+  uint64_t RelocType = Reloc.getType();
   SmallString<32> RelocName;
   StringRef SymbolName;
-  if (error(Reloc.getOffset(Offset)))
-    return;
-  if (error(Reloc.getType(RelocType)))
-    return;
-  if (error(Reloc.getTypeName(RelocName)))
-    return;
+  Reloc.getTypeName(RelocName);
   symbol_iterator Symbol = Reloc.getSymbol();
   if (Symbol != Obj->symbol_end() && error(Symbol->getName(SymbolName)))
     return;
