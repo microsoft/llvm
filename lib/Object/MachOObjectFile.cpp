@@ -567,21 +567,6 @@ bool MachOObjectFile::isSectionVirtual(DataRefImpl Sec) const {
   return false;
 }
 
-bool MachOObjectFile::sectionContainsSymbol(DataRefImpl Sec,
-                                            DataRefImpl Symb) const {
-  SymbolRef::Type ST = getSymbolType(Symb);
-  if (ST == SymbolRef::ST_Unknown)
-    return false;
-
-  uint64_t SectBegin = getSectionAddress(Sec);
-  uint64_t SectEnd = getSectionSize(Sec);
-  SectEnd += SectBegin;
-
-  uint64_t SymAddr;
-  getSymbolAddress(Symb, SymAddr);
-  return (SymAddr >= SectBegin) && (SymAddr < SectEnd);
-}
-
 relocation_iterator MachOObjectFile::section_rel_begin(DataRefImpl Sec) const {
   DataRefImpl Ret;
   Ret.d.a = Sec.d.a;
@@ -610,15 +595,13 @@ void MachOObjectFile::moveRelocationNext(DataRefImpl &Rel) const {
   ++Rel.d.b;
 }
 
-std::error_code MachOObjectFile::getRelocationAddress(DataRefImpl Rel,
-                                                      uint64_t &Res) const {
+ErrorOr<uint64_t> MachOObjectFile::getRelocationAddress(DataRefImpl Rel) const {
   uint64_t Offset = getRelocationOffset(Rel);
 
   DataRefImpl Sec;
   Sec.d.a = Rel.d.a;
   uint64_t SecAddress = getSectionAddress(Sec);
-  Res = SecAddress + Offset;
-  return std::error_code();
+  return SecAddress + Offset;
 }
 
 uint64_t MachOObjectFile::getRelocationOffset(DataRefImpl Rel) const {

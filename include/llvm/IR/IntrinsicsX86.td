@@ -21,9 +21,17 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
 // SEH intrinsics for Windows
 let TargetPrefix = "x86" in {
   def int_x86_seh_lsda : Intrinsic<[llvm_ptr_ty], [llvm_ptr_ty], [IntrNoMem]>;
-  def int_x86_seh_exceptioninfo : Intrinsic<[llvm_ptr_ty],
-                                            [llvm_ptr_ty, llvm_ptr_ty],
-					    [IntrReadMem]>;
+
+  // Restores the frame, base, and stack pointers as necessary after recovering
+  // from an exception. Any block resuming control flow in the parent function
+  // should call this before accessing any stack memory.
+  def int_x86_seh_restoreframe : Intrinsic<[], [], []>;
+
+  // Given a pointer to the end of an EH registration object, returns the true
+  // parent frame address that can be used with llvm.framerecover.
+  def int_x86_seh_recoverfp : Intrinsic<[llvm_ptr_ty],
+                                        [llvm_ptr_ty, llvm_ptr_ty],
+                                        [IntrNoMem]>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -3512,6 +3520,19 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
               Intrinsic<[], [llvm_i64_ty]>;
   def int_x86_wrgsbase_64 : GCCBuiltin<"__builtin_ia32_wrgsbase64">,
               Intrinsic<[], [llvm_i64_ty]>;
+}
+
+//===----------------------------------------------------------------------===//
+// FXSR
+let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
+  def int_x86_fxrstor : GCCBuiltin<"__builtin_ia32_fxrstor">,
+              Intrinsic<[], [llvm_ptr_ty], []>;
+  def int_x86_fxrstor64 : GCCBuiltin<"__builtin_ia32_fxrstor64">,
+              Intrinsic<[], [llvm_ptr_ty], []>;
+  def int_x86_fxsave : GCCBuiltin<"__builtin_ia32_fxsave">,
+              Intrinsic<[], [llvm_ptr_ty], []>;
+  def int_x86_fxsave64 : GCCBuiltin<"__builtin_ia32_fxsave64">,
+              Intrinsic<[], [llvm_ptr_ty], []>;
 }
 
 //===----------------------------------------------------------------------===//

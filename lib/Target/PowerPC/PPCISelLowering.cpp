@@ -9960,7 +9960,9 @@ SDValue PPCTargetLowering::expandVSXLoadForLE(SDNode *N,
   case ISD::INTRINSIC_W_CHAIN: {
     MemIntrinsicSDNode *Intrin = cast<MemIntrinsicSDNode>(N);
     Chain = Intrin->getChain();
-    Base = Intrin->getBasePtr();
+    // Similarly to the store case below, Intrin->getBasePtr() doesn't get
+    // us what we want. Get operand 2 instead.
+    Base = Intrin->getOperand(2);
     MMO = Intrin->getMemOperand();
     break;
   }

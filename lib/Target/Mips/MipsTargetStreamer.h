@@ -83,7 +83,11 @@ public:
   // FP abiflags directives
   virtual void emitDirectiveModuleFP();
   virtual void emitDirectiveModuleOddSPReg();
+  virtual void emitDirectiveModuleSoftFloat();
+  virtual void emitDirectiveModuleHardFloat();
   virtual void emitDirectiveSetFp(MipsABIFlagsSection::FpABIKind Value);
+  virtual void emitDirectiveSetOddSPReg();
+  virtual void emitDirectiveSetNoOddSPReg();
 
   void forbidModuleDirective() { ModuleDirectiveAllowed = false; }
   void reallowModuleDirective() { ModuleDirectiveAllowed = true; }
@@ -190,7 +194,11 @@ public:
   // FP abiflags directives
   void emitDirectiveModuleFP() override;
   void emitDirectiveModuleOddSPReg() override;
+  void emitDirectiveModuleSoftFloat() override;
+  void emitDirectiveModuleHardFloat() override;
   void emitDirectiveSetFp(MipsABIFlagsSection::FpABIKind Value) override;
+  void emitDirectiveSetOddSPReg() override;
+  void emitDirectiveSetNoOddSPReg() override;
 };
 
 // This part is for ELF object output
