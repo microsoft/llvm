@@ -1085,11 +1085,20 @@ public:
   /// deleted on a uniquing collision.  In practice, uniquing collisions on \a
   /// DICompileUnit should be fairly rare.
   /// @{
+  void replaceEnumTypes(DISubprogramArray N) {
+    replaceOperandWith(4, N.get());
+  }
+  void replaceRetainedTypes(DISubprogramArray N) {
+    replaceOperandWith(5, N.get());
+  }
   void replaceSubprograms(DISubprogramArray N) {
     replaceOperandWith(6, N.get());
   }
   void replaceGlobalVariables(DIGlobalVariableArray N) {
     replaceOperandWith(7, N.get());
+  }
+  void replaceImportedEntities(DIGlobalVariableArray N) {
+    replaceOperandWith(8, N.get());
   }
   /// @}
 
@@ -1641,14 +1650,14 @@ class DIModule : public DIScope {
                            StorageType Storage, bool ShouldCreate = true) {
     return getImpl(Context, Scope, getCanonicalMDString(Context, Name),
                    getCanonicalMDString(Context, ConfigurationMacros),
-		   getCanonicalMDString(Context, IncludePath),
-		   getCanonicalMDString(Context, ISysRoot),
+                   getCanonicalMDString(Context, IncludePath),
+                   getCanonicalMDString(Context, ISysRoot),
                    Storage, ShouldCreate);
   }
   static DIModule *getImpl(LLVMContext &Context, Metadata *Scope,
                            MDString *Name, MDString *ConfigurationMacros,
-			   MDString *IncludePath, MDString *ISysRoot,
-			   StorageType Storage, bool ShouldCreate = true);
+                           MDString *IncludePath, MDString *ISysRoot,
+                           StorageType Storage, bool ShouldCreate = true);
 
   TempDIModule cloneImpl() const {
     return getTemporary(getContext(), getScope(), getName(),
@@ -1658,12 +1667,12 @@ class DIModule : public DIScope {
 
 public:
   DEFINE_MDNODE_GET(DIModule, (DIScope *Scope, StringRef Name,
-			       StringRef ConfigurationMacros, StringRef IncludePath,
-			       StringRef ISysRoot),
+                               StringRef ConfigurationMacros, StringRef IncludePath,
+                               StringRef ISysRoot),
                     (Scope, Name, ConfigurationMacros, IncludePath, ISysRoot))
   DEFINE_MDNODE_GET(DIModule,
                     (Metadata *Scope, MDString *Name, MDString *ConfigurationMacros,
-		     MDString *IncludePath, MDString *ISysRoot),
+                     MDString *IncludePath, MDString *ISysRoot),
                     (Scope, Name, ConfigurationMacros, IncludePath, ISysRoot))
 
   TempDIModule clone() const { return cloneImpl(); }

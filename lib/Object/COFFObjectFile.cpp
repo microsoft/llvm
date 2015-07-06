@@ -145,10 +145,13 @@ void COFFObjectFile::moveSymbolNext(DataRefImpl &Ref) const {
   }
 }
 
-std::error_code COFFObjectFile::getSymbolName(DataRefImpl Ref,
-                                              StringRef &Result) const {
+ErrorOr<StringRef> COFFObjectFile::getSymbolName(DataRefImpl Ref) const {
   COFFSymbolRef Symb = getCOFFSymbol(Ref);
-  return getSymbolName(Symb, Result);
+  StringRef Result;
+  std::error_code EC = getSymbolName(Symb, Result);
+  if (EC)
+    return EC;
+  return Result;
 }
 
 uint64_t COFFObjectFile::getSymbolValue(DataRefImpl Ref) const {
@@ -160,21 +163,20 @@ uint64_t COFFObjectFile::getSymbolValue(DataRefImpl Ref) const {
   return Sym.getValue();
 }
 
-std::error_code COFFObjectFile::getSymbolAddress(DataRefImpl Ref,
-                                                 uint64_t &Result) const {
-  Result = getSymbolValue(Ref);
+ErrorOr<uint64_t> COFFObjectFile::getSymbolAddress(DataRefImpl Ref) const {
+  uint64_t Result = getSymbolValue(Ref);
   COFFSymbolRef Symb = getCOFFSymbol(Ref);
   int32_t SectionNumber = Symb.getSectionNumber();
 
   if (Symb.isAnyUndefined() || Symb.isCommon() ||
       COFF::isReservedSectionNumber(SectionNumber))
-    return std::error_code();
+    return Result;
 
   const coff_section *Section = nullptr;
   if (std::error_code EC = getSection(SectionNumber, Section))
     return EC;
   Result += Section->VirtualAddress;
-  return std::error_code();
+  return Result;
 }
 
 SymbolRef::Type COFFObjectFile::getSymbolType(DataRefImpl Ref) const {
@@ -916,19 +918,15 @@ uint64_t COFFObjectFile::getSectionSize(const coff_section *Sec) const {
   // whether or not we have an executable image.
   //
   // For object files, SizeOfRawData contains the size of section's data;
-  // VirtualSize is always zero.
+  // VirtualSize should be zero but isn't due to buggy COFF writers.
   //
   // For executables, SizeOfRawData *must* be a multiple of FileAlignment; the
   // actual section size is in VirtualSize.  It is possible for VirtualSize to
   // be greater than SizeOfRawData; the contents past that point should be
   // considered to be zero.
-  uint32_t SectionSize;
-  if (Sec->VirtualSize)
-    SectionSize = std::min(Sec->VirtualSize, Sec->SizeOfRawData);
-  else
-    SectionSize = Sec->SizeOfRawData;
-
-  return SectionSize;
+  if (getDOSHeader())
+    return std::min(Sec->VirtualSize, Sec->SizeOfRawData);
+  return Sec->SizeOfRawData;
 }
 
 std::error_code

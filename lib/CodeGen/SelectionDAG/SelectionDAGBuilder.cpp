@@ -261,8 +261,9 @@ static SDValue getCopyFromPartsVector(SelectionDAG &DAG, SDLoc DL,
     assert(NumRegs == NumParts && "Part count doesn't match vector breakdown!");
     NumParts = NumRegs; // Silence a compiler warning.
     assert(RegisterVT == PartVT && "Part type doesn't match vector breakdown!");
-    assert(RegisterVT == Parts[0].getSimpleValueType() &&
-           "Part type doesn't match part!");
+    assert(RegisterVT.getSizeInBits() ==
+           Parts[0].getSimpleValueType().getSizeInBits() &&
+           "Part type sizes don't match!");
 
     // Assemble the parts into intermediate operands.
     SmallVector<SDValue, 8> Ops(NumIntermediates);
@@ -4780,7 +4781,10 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
 
   case Intrinsic::debugtrap:
   case Intrinsic::trap: {
-    StringRef TrapFuncName = TM.Options.getTrapFunctionName();
+    StringRef TrapFuncName =
+        I.getAttributes()
+            .getAttribute(AttributeSet::FunctionIndex, "trap-func-name")
+            .getValueAsString();
     if (TrapFuncName.empty()) {
       ISD::NodeType Op = (Intrinsic == Intrinsic::trap) ?
         ISD::TRAP : ISD::DEBUGTRAP;

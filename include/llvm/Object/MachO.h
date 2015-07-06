@@ -199,15 +199,13 @@ public:
   void moveSymbolNext(DataRefImpl &Symb) const override;
 
   uint64_t getNValue(DataRefImpl Sym) const;
-  std::error_code getSymbolName(DataRefImpl Symb,
-                                StringRef &Res) const override;
+  ErrorOr<StringRef> getSymbolName(DataRefImpl Symb) const override;
 
   // MachO specific.
   std::error_code getIndirectName(DataRefImpl Symb, StringRef &Res) const;
   unsigned getSectionType(SectionRef Sec) const;
 
-  std::error_code getSymbolAddress(DataRefImpl Symb,
-                                   uint64_t &Res) const override;
+  ErrorOr<uint64_t> getSymbolAddress(DataRefImpl Symb) const override;
   uint64_t getSymbolValue(DataRefImpl Symb) const override;
   uint32_t getSymbolAlignment(DataRefImpl Symb) const override;
   uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const override;

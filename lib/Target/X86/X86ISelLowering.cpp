@@ -1470,6 +1470,8 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::SUB,                MVT::v32i16, Legal);
     setOperationAction(ISD::SUB,                MVT::v64i8, Legal);
     setOperationAction(ISD::MUL,                MVT::v32i16, Legal);
+    setOperationAction(ISD::MULHS,              MVT::v32i16, Legal);
+    setOperationAction(ISD::MULHU,              MVT::v32i16, Legal);
     setOperationAction(ISD::CONCAT_VECTORS,     MVT::v32i1, Custom);
     setOperationAction(ISD::CONCAT_VECTORS,     MVT::v64i1, Custom);
     setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v32i1, Custom);
@@ -1608,6 +1610,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
   setTargetDAGCombine(ISD::SIGN_EXTEND);
   setTargetDAGCombine(ISD::SIGN_EXTEND_INREG);
   setTargetDAGCombine(ISD::SINT_TO_FP);
+  setTargetDAGCombine(ISD::UINT_TO_FP);
   setTargetDAGCombine(ISD::SETCC);
   setTargetDAGCombine(ISD::INTRINSIC_WO_CHAIN);
   setTargetDAGCombine(ISD::BUILD_VECTOR);
@@ -3103,7 +3106,7 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
           GV->hasDefaultVisibility() && !GV->hasLocalLinkage()) {
         OpFlags = X86II::MO_PLT;
       } else if (Subtarget->isPICStyleStubAny() &&
-                 (GV->isDeclaration() || GV->isWeakForLinker()) &&
+                 !GV->isStrongDefinitionForLinker() &&
                  (!Subtarget->getTargetTriple().isMacOSX() ||
                   Subtarget->getTargetTriple().isMacOSXVersionLT(10, 5))) {
         // PC-relative references to external symbols should go through $stub,
@@ -24403,23 +24406,37 @@ static SDValue PerformSExtCombine(SDNode *N, SelectionDAG &DAG,
     return SDValue();
   }
 
-  if (VT.isVector()) {
-    auto ExtendToVec128 = [&DAG](SDLoc DL, SDValue N) {
+  if (VT.isVector() && Subtarget->hasSSE2()) {
+    auto ExtendVecSize = [&DAG](SDLoc DL, SDValue N, unsigned Size) {
       EVT InVT = N.getValueType();
       EVT OutVT = EVT::getVectorVT(*DAG.getContext(), InVT.getScalarType(),
-                                   128 / InVT.getScalarSizeInBits());
-      SmallVector<SDValue, 8> Opnds(128 / InVT.getSizeInBits(),
+                                   Size / InVT.getScalarSizeInBits());
+      SmallVector<SDValue, 8> Opnds(Size / InVT.getSizeInBits(),
                                     DAG.getUNDEF(InVT));
       Opnds[0] = N;
       return DAG.getNode(ISD::CONCAT_VECTORS, DL, OutVT, Opnds);
     };
+
+    // If target-size is less than 128-bits, extend to a type that would extend
+    // to 128 bits, extend that and extract the original target vector.
+    if (VT.getSizeInBits() < 128 && !(128 % VT.getSizeInBits()) &&
+        (SVT == MVT::i64 || SVT == MVT::i32 || SVT == MVT::i16) &&
+        (InSVT == MVT::i32 || InSVT == MVT::i16 || InSVT == MVT::i8)) {
+      unsigned Scale = 128 / VT.getSizeInBits();
+      EVT ExVT =
+          EVT::getVectorVT(*DAG.getContext(), SVT, 128 / SVT.getSizeInBits());
+      SDValue Ex = ExtendVecSize(DL, N0, Scale * InVT.getSizeInBits());
+      SDValue SExt = DAG.getNode(ISD::SIGN_EXTEND, DL, ExVT, Ex);
+      return DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, VT, SExt,
+                         DAG.getIntPtrConstant(0, DL));
+    }
 
     // If target-size is 128-bits, then convert to ISD::SIGN_EXTEND_VECTOR_INREG
     // which ensures lowering to X86ISD::VSEXT (pmovsx*).
     if (VT.getSizeInBits() == 128 &&
         (SVT == MVT::i64 || SVT == MVT::i32 || SVT == MVT::i16) &&
         (InSVT == MVT::i32 || InSVT == MVT::i16 || InSVT == MVT::i8)) {
-      SDValue ExOp = ExtendToVec128(DL, N0);
+      SDValue ExOp = ExtendVecSize(DL, N0, 128);
       return DAG.getSignExtendVectorInReg(ExOp, DL, VT);
     }
 
@@ -24438,7 +24455,7 @@ static SDValue PerformSExtCombine(SDNode *N, SelectionDAG &DAG,
            ++i, Offset += NumSubElts) {
         SDValue SrcVec = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, InSubVT, N0,
                                      DAG.getIntPtrConstant(Offset, DL));
-        SrcVec = ExtendToVec128(DL, SrcVec);
+        SrcVec = ExtendVecSize(DL, SrcVec, 128);
         SrcVec = DAG.getSignExtendVectorInReg(SrcVec, DL, SubVT);
         Opnds.push_back(SrcVec);
       }
@@ -24815,6 +24832,31 @@ static SDValue performVectorCompareAndMaskUnaryOpCombine(SDNode *N,
   return SDValue();
 }
 
+static SDValue PerformUINT_TO_FPCombine(SDNode *N, SelectionDAG &DAG,
+                                        const X86Subtarget *Subtarget) {
+  SDValue Op0 = N->getOperand(0);
+  EVT VT = N->getValueType(0);
+  EVT InVT = Op0.getValueType();
+  EVT InSVT = InVT.getScalarType();
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+
+  // UINT_TO_FP(vXi8) -> SINT_TO_FP(ZEXT(vXi8 to vXi32))
+  // UINT_TO_FP(vXi16) -> SINT_TO_FP(ZEXT(vXi16 to vXi32))
+  if (InVT.isVector() && (InSVT == MVT::i8 || InSVT == MVT::i16)) {
+    SDLoc dl(N);
+    EVT DstVT = EVT::getVectorVT(*DAG.getContext(), MVT::i32,
+                                 InVT.getVectorNumElements());
+    SDValue P = DAG.getNode(ISD::ZERO_EXTEND, dl, DstVT, Op0);
+
+    if (TLI.isOperationLegal(ISD::UINT_TO_FP, DstVT))
+      return DAG.getNode(ISD::UINT_TO_FP, dl, VT, P);
+
+    return DAG.getNode(ISD::SINT_TO_FP, dl, VT, P);
+  }
+
+  return SDValue();
+}
+
 static SDValue PerformSINT_TO_FPCombine(SDNode *N, SelectionDAG &DAG,
                                         const X86Subtarget *Subtarget) {
   // First try to optimize away the conversion entirely when it's
@@ -24824,16 +24866,18 @@ static SDValue PerformSINT_TO_FPCombine(SDNode *N, SelectionDAG &DAG,
 
   // Now move on to more general possibilities.
   SDValue Op0 = N->getOperand(0);
-  EVT InVT = Op0->getValueType(0);
+  EVT VT = N->getValueType(0);
+  EVT InVT = Op0.getValueType();
+  EVT InSVT = InVT.getScalarType();
 
   // SINT_TO_FP(vXi8) -> SINT_TO_FP(SEXT(vXi8 to vXi32))
   // SINT_TO_FP(vXi16) -> SINT_TO_FP(SEXT(vXi16 to vXi32))
-  if (InVT == MVT::v8i8 || InVT == MVT::v4i8 ||
-      InVT == MVT::v8i16 || InVT == MVT::v4i16) {
+  if (InVT.isVector() && (InSVT == MVT::i8 || InSVT == MVT::i16)) {
     SDLoc dl(N);
-    MVT DstVT = MVT::getVectorVT(MVT::i32, InVT.getVectorNumElements());
+    EVT DstVT = EVT::getVectorVT(*DAG.getContext(), MVT::i32,
+                                 InVT.getVectorNumElements());
     SDValue P = DAG.getNode(ISD::SIGN_EXTEND, dl, DstVT, Op0);
-    return DAG.getNode(ISD::SINT_TO_FP, dl, N->getValueType(0), P);
+    return DAG.getNode(ISD::SINT_TO_FP, dl, VT, P);
   }
 
   // Transform (SINT_TO_FP (i64 ...)) into an x87 operation if we have
@@ -24843,10 +24887,10 @@ static SDValue PerformSINT_TO_FPCombine(SDNode *N, SelectionDAG &DAG,
     EVT LdVT = Ld->getValueType(0);
 
     // This transformation is not supported if the result type is f16
-    if (N->getValueType(0) == MVT::f16)
+    if (VT == MVT::f16)
       return SDValue();
 
-    if (!Ld->isVolatile() && !N->getValueType(0).isVector() &&
+    if (!Ld->isVolatile() && !VT.isVector() &&
         ISD::isNON_EXTLoad(Op0.getNode()) && Op0.hasOneUse() &&
         !Subtarget->is64Bit() && LdVT == MVT::i64) {
       SDValue FILDChain = Subtarget->getTargetLowering()->BuildFILD(
@@ -25067,6 +25111,7 @@ SDValue X86TargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::STORE:          return PerformSTORECombine(N, DAG, Subtarget);
   case ISD::MSTORE:         return PerformMSTORECombine(N, DAG, Subtarget);
   case ISD::SINT_TO_FP:     return PerformSINT_TO_FPCombine(N, DAG, Subtarget);
+  case ISD::UINT_TO_FP:     return PerformUINT_TO_FPCombine(N, DAG, Subtarget);
   case ISD::FADD:           return PerformFADDCombine(N, DAG, Subtarget);
   case ISD::FSUB:           return PerformFSUBCombine(N, DAG, Subtarget);
   case X86ISD::FXOR:
@@ -25289,7 +25334,7 @@ bool X86TargetLowering::ExpandInlineAsm(CallInst *CI) const {
         (matchAsm(AsmPieces[0], {"rorw", "$$8,", "${0:w}"}) ||
          matchAsm(AsmPieces[0], {"rolw", "$$8,", "${0:w}"}))) {
       AsmPieces.clear();
-      const std::string &ConstraintsStr = IA->getConstraintString();
+      StringRef ConstraintsStr = IA->getConstraintString();
       SplitString(StringRef(ConstraintsStr).substr(5), AsmPieces, ",");
       array_pod_sort(AsmPieces.begin(), AsmPieces.end());
       if (clobbersFlagRegisters(AsmPieces))
@@ -25303,7 +25348,7 @@ bool X86TargetLowering::ExpandInlineAsm(CallInst *CI) const {
         matchAsm(AsmPieces[1], {"rorl", "$$16,", "$0"}) &&
         matchAsm(AsmPieces[2], {"rorw", "$$8,", "${0:w}"})) {
       AsmPieces.clear();
-      const std::string &ConstraintsStr = IA->getConstraintString();
+      StringRef ConstraintsStr = IA->getConstraintString();
       SplitString(StringRef(ConstraintsStr).substr(5), AsmPieces, ",");
       array_pod_sort(AsmPieces.begin(), AsmPieces.end());
       if (clobbersFlagRegisters(AsmPieces))
@@ -25330,7 +25375,7 @@ bool X86TargetLowering::ExpandInlineAsm(CallInst *CI) const {
 /// getConstraintType - Given a constraint letter, return the type of
 /// constraint it is for this target.
 X86TargetLowering::ConstraintType
-X86TargetLowering::getConstraintType(const std::string &Constraint) const {
+X86TargetLowering::getConstraintType(StringRef Constraint) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     case 'R':
@@ -25662,7 +25707,7 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
 
 std::pair<unsigned, const TargetRegisterClass *>
 X86TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
-                                                const std::string &Constraint,
+                                                StringRef Constraint,
                                                 MVT VT) const {
   // First, see if this is a constraint that directly corresponds to an LLVM
   // register class.
