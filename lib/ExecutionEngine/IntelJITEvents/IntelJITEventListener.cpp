@@ -113,64 +113,59 @@ void IntelJITEventListener::NotifyObjectEmitted(
     std::vector<LineNumberInfo> LineInfo;
     std::string SourceFileName;
 
-    if (Sym.getType() == SymbolRef::ST_Function) {
-      StringRef  Name;
-      uint64_t   Addr;
-      if (Sym.getName(Name))
-        continue;
-      if (Sym.getAddress(Addr))
-        continue;
-      uint64_t Size = P.second;
+    if (Sym.getType() != SymbolRef::ST_Function)
+      continue;
 
-      // Record this address in a local vector
-      Functions.push_back((void*)Addr);
+    ErrorOr<StringRef> Name = Sym.getName();
+    if (!Name)
+      continue;
 
-      // Build the function loaded notification message
-      iJIT_Method_Load FunctionMessage = FunctionDescToIntelJITFormat(*Wrapper,
-                                           Name.data(),
-                                           Addr,
-                                           Size);
-      if (Context) {
-        DILineInfoTable  Lines = Context->getLineInfoForAddressRange(Addr, Size);
-        DILineInfoTable::iterator  Begin = Lines.begin();
-        DILineInfoTable::iterator  End = Lines.end();
-        for (DILineInfoTable::iterator It = Begin; It != End; ++It) {
-          LineInfo.push_back(DILineInfoToIntelJITFormat((uintptr_t)Addr,
-                                                        It->first,
-                                                        It->second));
-        }
-        if (LineInfo.size() == 0) {
-          FunctionMessage.source_file_name = 0;
-          FunctionMessage.line_number_size = 0;
-          FunctionMessage.line_number_table = 0;
-        } else {
-          // Source line information for the address range is provided as 
-          // a code offset for the start of the corresponding sub-range and
-          // a source line. JIT API treats offsets in LineNumberInfo structures
-          // as the end of the corresponding code region. The start of the code
-          // is taken from the previous element. Need to shift the elements.
+    ErrorOr<uint64_t> AddrOrErr = Sym.getAddress();
+    if (AddrOrErr.getError())
+      continue;
+    uint64_t Addr = *AddrOrErr;
+    uint64_t Size = P.second;
 
-          LineNumberInfo last = LineInfo.back();
-          last.Offset = FunctionMessage.method_size;
-          LineInfo.push_back(last);
-          for (size_t i = LineInfo.size() - 2; i > 0; --i)
-            LineInfo[i].LineNumber = LineInfo[i - 1].LineNumber;
+    // Record this address in a local vector
+    Functions.push_back((void*)Addr);
 
-          SourceFileName = Lines.front().second.FileName;
-          FunctionMessage.source_file_name = const_cast<char *>(SourceFileName.c_str());
-          FunctionMessage.line_number_size = LineInfo.size();
-          FunctionMessage.line_number_table = &*LineInfo.begin();
-        }
-      } else {
-        FunctionMessage.source_file_name = 0;
-        FunctionMessage.line_number_size = 0;
-        FunctionMessage.line_number_table = 0;
-      }
-
-      Wrapper->iJIT_NotifyEvent(iJVM_EVENT_TYPE_METHOD_LOAD_FINISHED,
-                                &FunctionMessage);
-      MethodIDs[(void*)Addr] = FunctionMessage.method_id;
+    // Build the function loaded notification message
+    iJIT_Method_Load FunctionMessage =
+      FunctionDescToIntelJITFormat(*Wrapper, Name->data(), Addr, Size);
+    DILineInfoTable Lines = Context->getLineInfoForAddressRange(Addr, Size);
+    DILineInfoTable::iterator Begin = Lines.begin();
+    DILineInfoTable::iterator End = Lines.end();
+    for (DILineInfoTable::iterator It = Begin; It != End; ++It) {
+      LineInfo.push_back(
+          DILineInfoToIntelJITFormat((uintptr_t)Addr, It->first, It->second));
     }
+    if (LineInfo.size() == 0) {
+      FunctionMessage.source_file_name = 0;
+      FunctionMessage.line_number_size = 0;
+      FunctionMessage.line_number_table = 0;
+    } else {
+      // Source line information for the address range is provided as
+      // a code offset for the start of the corresponding sub-range and
+      // a source line. JIT API treats offsets in LineNumberInfo structures
+      // as the end of the corresponding code region. The start of the code
+      // is taken from the previous element. Need to shift the elements.
+
+      LineNumberInfo last = LineInfo.back();
+      last.Offset = FunctionMessage.method_size;
+      LineInfo.push_back(last);
+      for (size_t i = LineInfo.size() - 2; i > 0; --i)
+        LineInfo[i].LineNumber = LineInfo[i - 1].LineNumber;
+
+      SourceFileName = Lines.front().second.FileName;
+      FunctionMessage.source_file_name =
+        const_cast<char *>(SourceFileName.c_str());
+      FunctionMessage.line_number_size = LineInfo.size();
+      FunctionMessage.line_number_table = &*LineInfo.begin();
+    }
+
+    Wrapper->iJIT_NotifyEvent(iJVM_EVENT_TYPE_METHOD_LOAD_FINISHED,
+                              &FunctionMessage);
+    MethodIDs[(void*)Addr] = FunctionMessage.method_id;
   }
 
   // To support object unload notification, we need to keep a list of

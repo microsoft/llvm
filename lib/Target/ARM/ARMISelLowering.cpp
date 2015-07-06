@@ -1734,12 +1734,12 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   } else if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
     const GlobalValue *GV = G->getGlobal();
     isDirect = true;
-    bool isExt = GV->isDeclaration() || GV->isWeakForLinker();
-    bool isStub = (isExt && Subtarget->isTargetMachO()) &&
+    bool isDef = GV->isStrongDefinitionForLinker();
+    bool isStub = (!isDef && Subtarget->isTargetMachO()) &&
                    getTargetMachine().getRelocationModel() != Reloc::Static;
     isARMFunc = !Subtarget->isThumb() || (isStub && !Subtarget->isMClass());
     // ARM call to a local ARM function is predicable.
-    isLocalARMFunc = !Subtarget->isThumb() && (!isExt || !ARMInterworking);
+    isLocalARMFunc = !Subtarget->isThumb() && (isDef || !ARMInterworking);
     // tBX takes a register source operand.
     if (isStub && Subtarget->isThumb1Only() && !Subtarget->hasV5TOps()) {
       assert(Subtarget->isTargetMachO() && "WrapperPIC use on non-MachO?");
@@ -10664,7 +10664,7 @@ bool ARMTargetLowering::ExpandInlineAsm(CallInst *CI) const {
 /// getConstraintType - Given a constraint letter, return the type of
 /// constraint it is for this target.
 ARMTargetLowering::ConstraintType
-ARMTargetLowering::getConstraintType(const std::string &Constraint) const {
+ARMTargetLowering::getConstraintType(StringRef Constraint) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     default:  break;
@@ -10723,10 +10723,8 @@ ARMTargetLowering::getSingleConstraintMatchWeight(
 }
 
 typedef std::pair<unsigned, const TargetRegisterClass*> RCPair;
-RCPair
-ARMTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
-                                                const std::string &Constraint,
-                                                MVT VT) const {
+RCPair ARMTargetLowering::getRegForInlineAsmConstraint(
+    const TargetRegisterInfo *TRI, StringRef Constraint, MVT VT) const {
   if (Constraint.size() == 1) {
     // GCC ARM Constraint Letters
     switch (Constraint[0]) {

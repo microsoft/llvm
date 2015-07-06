@@ -114,9 +114,10 @@ void RuntimeDyldImpl::mapSectionAddress(const void *LocalAddress,
 }
 
 static std::error_code getOffset(const SymbolRef &Sym, uint64_t &Result) {
-  uint64_t Address;
-  if (std::error_code EC = Sym.getAddress(Address))
+  ErrorOr<uint64_t> AddressOrErr = Sym.getAddress();
+  if (std::error_code EC = AddressOrErr.getError())
     return EC;
+  uint64_t Address = *AddressOrErr;
 
   if (Address == UnknownAddress) {
     Result = UnknownAddress;
@@ -181,9 +182,10 @@ RuntimeDyldImpl::loadObjectImpl(const object::ObjectFile &Obj) {
           SymType == object::SymbolRef::ST_Data ||
           SymType == object::SymbolRef::ST_Unknown) {
 
-        StringRef Name;
+        ErrorOr<StringRef> NameOrErr = I->getName();
+        Check(NameOrErr.getError());
+        StringRef Name = *NameOrErr;
         uint64_t SectOffset;
-        Check(I->getName(Name));
         Check(getOffset(*I, SectOffset));
         section_iterator SI = Obj.section_end();
         Check(I->getSection(SI));
@@ -481,8 +483,9 @@ void RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
   DEBUG(dbgs() << "Processing common symbols...\n");
 
   for (const auto &Sym : CommonSymbols) {
-    StringRef Name;
-    Check(Sym.getName(Name));
+    ErrorOr<StringRef> NameOrErr = Sym.getName();
+    Check(NameOrErr.getError());
+    StringRef Name = *NameOrErr;
 
     // Skip common symbols already elsewhere.
     if (GlobalSymbolTable.count(Name) ||
@@ -515,9 +518,10 @@ void RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
   // Assign the address of each symbol
   for (auto &Sym : SymbolsToAllocate) {
     uint32_t Align = Sym.getAlignment();
-    StringRef Name;
     uint64_t Size = Sym.getCommonSize();
-    Check(Sym.getName(Name));
+    ErrorOr<StringRef> NameOrErr = Sym.getName();
+    Check(NameOrErr.getError());
+    StringRef Name = *NameOrErr;
     if (Align) {
       // This symbol has an alignment requirement.
       uint64_t AlignOffset = OffsetToAlignment((uint64_t)Addr, Align);
@@ -815,7 +819,7 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
       // manually and we shouldn't resolve its relocations.
       if (Addr != UINT64_MAX) {
         DEBUG(dbgs() << "Resolving relocations Name: " << Name << "\t"
-          << format("0x%lx", Addr) << "\n");
+                     << format("0x%lx", Addr) << "\n");
         // This list may have been updated when we called getSymbolAddress, so
         // don't change this code to get the list earlier.
         RelocationList &Relocs = i->second;

@@ -653,10 +653,10 @@ static char getSymbolNMTypeChar(ELFObjectFileBase &Obj,
   }
 
   if (SymI->getELFType() == ELF::STT_SECTION) {
-    StringRef Name;
-    if (error(SymI->getName(Name)))
+    ErrorOr<StringRef> Name = SymI->getName();
+    if (error(Name.getError()))
       return '?';
-    return StringSwitch<char>(Name)
+    return StringSwitch<char>(*Name)
         .StartsWith(".debug", 'N')
         .StartsWith(".note", 'n')
         .Default('?');
@@ -670,11 +670,11 @@ static char getSymbolNMTypeChar(COFFObjectFile &Obj, symbol_iterator I) {
   // OK, this is COFF.
   symbol_iterator SymI(I);
 
-  StringRef Name;
-  if (error(SymI->getName(Name)))
+  ErrorOr<StringRef> Name = SymI->getName();
+  if (error(Name.getError()))
     return '?';
 
-  char Ret = StringSwitch<char>(Name)
+  char Ret = StringSwitch<char>(*Name)
                  .StartsWith(".debug", 'N')
                  .StartsWith(".sxdata", 'N')
                  .Default('?');
@@ -901,8 +901,10 @@ static void dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
         S.Size = ELFSymbolRef(Sym).getSize();
     }
     if (PrintAddress && isa<ObjectFile>(Obj)) {
-      if (error(SymbolRef(Sym).getAddress(S.Address)))
+      ErrorOr<uint64_t> AddressOrErr = SymbolRef(Sym).getAddress();
+      if (error(AddressOrErr.getError()))
         break;
+      S.Address = *AddressOrErr;
     }
     S.TypeChar = getNMTypeChar(Obj, Sym);
     if (error(Sym.printName(OS)))
