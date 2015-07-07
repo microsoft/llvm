@@ -4084,8 +4084,7 @@ unsigned PrepareCall(SelectionDAG &DAG, SDValue &Callee, SDValue &InFlag,
     if ((DAG.getTarget().getRelocationModel() != Reloc::Static &&
          (Subtarget.getTargetTriple().isMacOSX() &&
           Subtarget.getTargetTriple().isMacOSXVersionLT(10, 5)) &&
-         (G->getGlobal()->isDeclaration() ||
-          G->getGlobal()->isWeakForLinker())) ||
+         !G->getGlobal()->isStrongDefinitionForLinker()) ||
         (Subtarget.isTargetELF() && !isPPC64 &&
          !G->getGlobal()->hasLocalLinkage() &&
          DAG.getTarget().getRelocationModel() == Reloc::PIC_)) {
@@ -4254,8 +4253,7 @@ static
 bool isLocalCall(const SDValue &Callee)
 {
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
-    return !G->getGlobal()->isDeclaration() &&
-           !G->getGlobal()->isWeakForLinker();
+    return G->getGlobal()->isStrongDefinitionForLinker();
   return false;
 }
 
@@ -9960,7 +9958,9 @@ SDValue PPCTargetLowering::expandVSXLoadForLE(SDNode *N,
   case ISD::INTRINSIC_W_CHAIN: {
     MemIntrinsicSDNode *Intrin = cast<MemIntrinsicSDNode>(N);
     Chain = Intrin->getChain();
-    Base = Intrin->getBasePtr();
+    // Similarly to the store case below, Intrin->getBasePtr() doesn't get
+    // us what we want. Get operand 2 instead.
+    Base = Intrin->getOperand(2);
     MMO = Intrin->getMemOperand();
     break;
   }
@@ -10689,7 +10689,7 @@ unsigned PPCTargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
 /// getConstraintType - Given a constraint, return the type of
 /// constraint it is for this target.
 PPCTargetLowering::ConstraintType
-PPCTargetLowering::getConstraintType(const std::string &Constraint) const {
+PPCTargetLowering::getConstraintType(StringRef Constraint) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     default: break;
@@ -10774,7 +10774,7 @@ PPCTargetLowering::getSingleConstraintMatchWeight(
 
 std::pair<unsigned, const TargetRegisterClass *>
 PPCTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
-                                                const std::string &Constraint,
+                                                StringRef Constraint,
                                                 MVT VT) const {
   if (Constraint.size() == 1) {
     // GCC RS6000 Constraint Letters

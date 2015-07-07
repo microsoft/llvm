@@ -38,6 +38,7 @@ class InlineAsm;
 class Instruction;
 class LLVMContext;
 class Module;
+class ModuleSlotTracker;
 class StringRef;
 class Twine;
 class Type;
@@ -199,7 +200,10 @@ public:
   void dump() const;
 
   /// \brief Implement operator<< on Value.
+  /// @{
   void print(raw_ostream &O) const;
+  void print(raw_ostream &O, ModuleSlotTracker &MST) const;
+  /// @}
 
   /// \brief Print the name of this Value out to the specified raw_ostream.
   ///
@@ -207,8 +211,12 @@ public:
   /// instruction that generated it. If you specify a Module for context, then
   /// even constanst get pretty-printed; for example, the type of a null
   /// pointer is printed symbolically.
+  /// @{
   void printAsOperand(raw_ostream &O, bool PrintType = true,
                       const Module *M = nullptr) const;
+  void printAsOperand(raw_ostream &O, bool PrintType,
+                      ModuleSlotTracker &MST) const;
+  /// @}
 
   /// \brief All values are typed, get the type of this value.
   Type *getType() const { return VTy; }

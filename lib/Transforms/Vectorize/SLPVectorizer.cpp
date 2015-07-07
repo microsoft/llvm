@@ -43,7 +43,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/VectorUtils.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -2136,9 +2136,8 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
         }
 
         // Prepare the operand vector.
-        for (unsigned j = 0; j < E->Scalars.size(); ++j)
-          Operands.push_back(cast<PHINode>(E->Scalars[j])->
-                             getIncomingValueForBlock(IBB));
+        for (Value *V : E->Scalars)
+          Operands.push_back(cast<PHINode>(V)->getIncomingValueForBlock(IBB));
 
         Builder.SetInsertPoint(IBB->getTerminator());
         Builder.SetCurrentDebugLocation(PH->getDebugLoc());
@@ -2172,8 +2171,8 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
     case Instruction::FPTrunc:
     case Instruction::BitCast: {
       ValueList INVL;
-      for (int i = 0, e = E->Scalars.size(); i < e; ++i)
-        INVL.push_back(cast<Instruction>(E->Scalars[i])->getOperand(0));
+      for (Value *V : E->Scalars)
+        INVL.push_back(cast<Instruction>(V)->getOperand(0));
 
       setInsertPointAfterBundle(E->Scalars);
 
@@ -2191,9 +2190,9 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
     case Instruction::FCmp:
     case Instruction::ICmp: {
       ValueList LHSV, RHSV;
-      for (int i = 0, e = E->Scalars.size(); i < e; ++i) {
-        LHSV.push_back(cast<Instruction>(E->Scalars[i])->getOperand(0));
-        RHSV.push_back(cast<Instruction>(E->Scalars[i])->getOperand(1));
+      for (Value *V : E->Scalars) {
+        LHSV.push_back(cast<Instruction>(V)->getOperand(0));
+        RHSV.push_back(cast<Instruction>(V)->getOperand(1));
       }
 
       setInsertPointAfterBundle(E->Scalars);
@@ -2217,10 +2216,10 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
     }
     case Instruction::Select: {
       ValueList TrueVec, FalseVec, CondVec;
-      for (int i = 0, e = E->Scalars.size(); i < e; ++i) {
-        CondVec.push_back(cast<Instruction>(E->Scalars[i])->getOperand(0));
-        TrueVec.push_back(cast<Instruction>(E->Scalars[i])->getOperand(1));
-        FalseVec.push_back(cast<Instruction>(E->Scalars[i])->getOperand(2));
+      for (Value *V : E->Scalars) {
+        CondVec.push_back(cast<Instruction>(V)->getOperand(0));
+        TrueVec.push_back(cast<Instruction>(V)->getOperand(1));
+        FalseVec.push_back(cast<Instruction>(V)->getOperand(2));
       }
 
       setInsertPointAfterBundle(E->Scalars);
@@ -2259,9 +2258,9 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       if (isa<BinaryOperator>(VL0) && VL0->isCommutative())
         reorderInputsAccordingToOpcode(E->Scalars, LHSVL, RHSVL);
       else
-        for (int i = 0, e = E->Scalars.size(); i < e; ++i) {
-          LHSVL.push_back(cast<Instruction>(E->Scalars[i])->getOperand(0));
-          RHSVL.push_back(cast<Instruction>(E->Scalars[i])->getOperand(1));
+        for (Value *V : E->Scalars) {
+          LHSVL.push_back(cast<Instruction>(V)->getOperand(0));
+          RHSVL.push_back(cast<Instruction>(V)->getOperand(1));
         }
 
       setInsertPointAfterBundle(E->Scalars);
@@ -2322,8 +2321,8 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       unsigned AS = SI->getPointerAddressSpace();
 
       ValueList ValueOp;
-      for (int i = 0, e = E->Scalars.size(); i < e; ++i)
-        ValueOp.push_back(cast<StoreInst>(E->Scalars[i])->getValueOperand());
+      for (Value *V : E->Scalars)
+        ValueOp.push_back(cast<StoreInst>(V)->getValueOperand());
 
       setInsertPointAfterBundle(E->Scalars);
 
@@ -2351,8 +2350,8 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       setInsertPointAfterBundle(E->Scalars);
 
       ValueList Op0VL;
-      for (int i = 0, e = E->Scalars.size(); i < e; ++i)
-        Op0VL.push_back(cast<GetElementPtrInst>(E->Scalars[i])->getOperand(0));
+      for (Value *V : E->Scalars)
+        Op0VL.push_back(cast<GetElementPtrInst>(V)->getOperand(0));
 
       Value *Op0 = vectorizeTree(Op0VL);
 
@@ -2360,8 +2359,8 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       for (int j = 1, e = cast<GetElementPtrInst>(VL0)->getNumOperands(); j < e;
            ++j) {
         ValueList OpVL;
-        for (int i = 0, e = E->Scalars.size(); i < e; ++i)
-          OpVL.push_back(cast<GetElementPtrInst>(E->Scalars[i])->getOperand(j));
+        for (Value *V : E->Scalars)
+          OpVL.push_back(cast<GetElementPtrInst>(V)->getOperand(j));
 
         Value *OpVec = vectorizeTree(OpVL);
         OpVecs.push_back(OpVec);
@@ -2397,8 +2396,8 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
           OpVecs.push_back(CEI->getArgOperand(j));
           continue;
         }
-        for (int i = 0, e = E->Scalars.size(); i < e; ++i) {
-          CallInst *CEI = cast<CallInst>(E->Scalars[i]);
+        for (Value *V : E->Scalars) {
+          CallInst *CEI = cast<CallInst>(V);
           OpVL.push_back(CEI->getArgOperand(j));
         }
 
@@ -3277,12 +3276,11 @@ bool SLPVectorizer::vectorizeStores(ArrayRef<StoreInst *> Stores,
       I = ConsecutiveChain[I];
     }
 
-    bool Vectorized = vectorizeStoreChain(Operands, costThreshold, R);
-
-    // Mark the vectorized stores so that we don't vectorize them again.
-    if (Vectorized)
+    if (vectorizeStoreChain(Operands, costThreshold, R)) {
+      // Mark the vectorized stores so that we don't vectorize them again.
       VectorizedStores.insert(Operands.begin(), Operands.end());
-    Changed |= Vectorized;
+      Changed = true;
+    }
   }
 
   return Changed;
@@ -3293,8 +3291,8 @@ unsigned SLPVectorizer::collectStores(BasicBlock *BB, BoUpSLP &R) {
   unsigned count = 0;
   StoreRefs.clear();
   const DataLayout &DL = BB->getModule()->getDataLayout();
-  for (BasicBlock::iterator it = BB->begin(), e = BB->end(); it != e; ++it) {
-    StoreInst *SI = dyn_cast<StoreInst>(it);
+  for (Instruction &I : *BB) {
+    StoreInst *SI = dyn_cast<StoreInst>(&I);
     if (!SI)
       continue;
 
@@ -3344,11 +3342,11 @@ bool SLPVectorizer::tryToVectorizeList(ArrayRef<Value *> VL, BoUpSLP &R,
   unsigned Sz = DL.getTypeSizeInBits(Ty0);
   unsigned VF = MinVecRegSize / Sz;
 
-  for (int i = 0, e = VL.size(); i < e; ++i) {
-    Type *Ty = VL[i]->getType();
+  for (Value *V : VL) {
+    Type *Ty = V->getType();
     if (!isValidElementType(Ty))
       return false;
-    Instruction *Inst = dyn_cast<Instruction>(VL[i]);
+    Instruction *Inst = dyn_cast<Instruction>(V);
     if (!Inst || Inst->getOpcode() != Opcode0)
       return false;
   }

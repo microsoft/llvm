@@ -19,6 +19,9 @@ using namespace llvm;
 // Sentinel value for the absolute pseudo section.
 MCSection *MCSymbol::AbsolutePseudoSection = reinterpret_cast<MCSection *>(1);
 
+const unsigned MCSymbol::NumCommonAlignmentBits;
+const unsigned MCSymbol::NumFlagsBits;
+
 void *MCSymbol::operator new(size_t s, const StringMapEntry<bool> *Name,
                              MCContext &Ctx) {
   // We may need more space for a Name to account for alignment.  So allocate
@@ -45,7 +48,7 @@ void MCSymbol::setVariableValue(const MCExpr *Value) {
          "Cannot give common/offset symbol a variable value");
   this->Value = Value;
   SymbolContents = SymContentsVariable;
-  SectionOrFragment = nullptr;
+  setUndefined();
 }
 
 void MCSymbol::print(raw_ostream &OS, const MCAsmInfo *MAI) const {

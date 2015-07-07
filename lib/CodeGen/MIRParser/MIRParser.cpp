@@ -14,10 +14,12 @@
 
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "MIParser.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/AsmParser/SlotMapping.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
@@ -45,6 +47,7 @@ class MIRParserImpl {
   StringRef Filename;
   LLVMContext &Context;
   StringMap<std::unique_ptr<yaml::MachineFunction>> Functions;
+  SlotMapping IRSlots;
 
 public:
   MIRParserImpl(std::unique_ptr<MemoryBuffer> Contents, StringRef Filename,
@@ -56,6 +59,12 @@ public:
   ///
   /// Always returns true.
   bool error(const Twine &Message);
+
+  /// Report a given error with the location translated from the location in an
+  /// embedded string literal to a location in the MIR file.
+  ///
+  /// Always returns true.
+  bool error(const SMDiagnostic &Error, SMRange SourceRange);
 
   /// Try to parse the optional LLVM module and the machine functions in the MIR
   /// file.
@@ -81,8 +90,10 @@ public:
   /// Initialize the machine basic block using it's YAML representation.
   ///
   /// Return true if an error occurred.
-  bool initializeMachineBasicBlock(MachineFunction &MF, MachineBasicBlock &MBB,
-                                   const yaml::MachineBasicBlock &YamlMBB);
+  bool initializeMachineBasicBlock(
+      MachineFunction &MF, MachineBasicBlock &MBB,
+      const yaml::MachineBasicBlock &YamlMBB,
+      const DenseMap<unsigned, MachineBasicBlock *> &MBBSlots);
 
   bool initializeRegisterInfo(MachineRegisterInfo &RegInfo,
                               const yaml::MachineFunction &YamlMF);
@@ -111,6 +122,12 @@ MIRParserImpl::MIRParserImpl(std::unique_ptr<MemoryBuffer> Contents,
 bool MIRParserImpl::error(const Twine &Message) {
   Context.diagnose(DiagnosticInfoMIRParser(
       DS_Error, SMDiagnostic(Filename, SourceMgr::DK_Error, Message.str())));
+  return true;
+}
+
+bool MIRParserImpl::error(const SMDiagnostic &Error, SMRange SourceRange) {
+  assert(Error.getKind() == SourceMgr::DK_Error && "Expected an error");
+  reportDiagnostic(diagFromMIStringDiag(Error, SourceRange));
   return true;
 }
 
@@ -154,7 +171,7 @@ std::unique_ptr<Module> MIRParserImpl::parse() {
           dyn_cast_or_null<yaml::BlockScalarNode>(In.getCurrentNode())) {
     SMDiagnostic Error;
     M = parseAssembly(MemoryBufferRef(BSN->getValue(), Filename), Error,
-                      Context);
+                      Context, &IRSlots);
     if (!M) {
       reportDiagnostic(diagFromLLVMAssemblyDiag(Error, BSN->getSourceRange()));
       return M;
@@ -220,6 +237,7 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
     return true;
 
   const auto &F = *MF.getFunction();
+  DenseMap<unsigned, MachineBasicBlock *> MBBSlots;
   for (const auto &YamlMBB : YamlMF.BasicBlocks) {
     const BasicBlock *BB = nullptr;
     if (!YamlMBB.Name.empty()) {
@@ -231,7 +249,18 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
     }
     auto *MBB = MF.CreateMachineBasicBlock(BB);
     MF.insert(MF.end(), MBB);
-    if (initializeMachineBasicBlock(MF, *MBB, YamlMBB))
+    bool WasInserted = MBBSlots.insert(std::make_pair(YamlMBB.ID, MBB)).second;
+    if (!WasInserted)
+      return error(Twine("redefinition of machine basic block with id #") +
+                   Twine(YamlMBB.ID));
+  }
+
+  // Initialize the machine basic blocks after creating them all so that the
+  // machine instructions parser can resolve the MBB references.
+  unsigned I = 0;
+  for (const auto &YamlMBB : YamlMF.BasicBlocks) {
+    if (initializeMachineBasicBlock(MF, *MF.getBlockNumbered(I++), YamlMBB,
+                                    MBBSlots))
       return true;
   }
   return false;
@@ -239,20 +268,28 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
 
 bool MIRParserImpl::initializeMachineBasicBlock(
     MachineFunction &MF, MachineBasicBlock &MBB,
-    const yaml::MachineBasicBlock &YamlMBB) {
+    const yaml::MachineBasicBlock &YamlMBB,
+    const DenseMap<unsigned, MachineBasicBlock *> &MBBSlots) {
   MBB.setAlignment(YamlMBB.Alignment);
   if (YamlMBB.AddressTaken)
     MBB.setHasAddressTaken();
   MBB.setIsLandingPad(YamlMBB.IsLandingPad);
+  SMDiagnostic Error;
+  // Parse the successors.
+  for (const auto &MBBSource : YamlMBB.Successors) {
+    MachineBasicBlock *SuccMBB = nullptr;
+    if (parseMBBReference(SuccMBB, SM, MF, MBBSource.Value, MBBSlots, IRSlots,
+                          Error))
+      return error(Error, MBBSource.SourceRange);
+    // TODO: Report an error when adding the same successor more than once.
+    MBB.addSuccessor(SuccMBB);
+  }
   // Parse the instructions.
   for (const auto &MISource : YamlMBB.Instructions) {
-    SMDiagnostic Error;
-    if (auto *MI = parseMachineInstr(SM, MF, MISource.Value, Error)) {
-      MBB.insert(MBB.end(), MI);
-      continue;
-    }
-    reportDiagnostic(diagFromMIStringDiag(Error, MISource.SourceRange));
-    return true;
+    MachineInstr *MI = nullptr;
+    if (parseMachineInstr(MI, SM, MF, MISource.Value, MBBSlots, IRSlots, Error))
+      return error(Error, MISource.SourceRange);
+    MBB.insert(MBB.end(), MI);
   }
   return false;
 }

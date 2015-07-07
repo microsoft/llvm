@@ -261,8 +261,9 @@ static SDValue getCopyFromPartsVector(SelectionDAG &DAG, SDLoc DL,
     assert(NumRegs == NumParts && "Part count doesn't match vector breakdown!");
     NumParts = NumRegs; // Silence a compiler warning.
     assert(RegisterVT == PartVT && "Part type doesn't match vector breakdown!");
-    assert(RegisterVT == Parts[0].getSimpleValueType() &&
-           "Part type doesn't match part!");
+    assert(RegisterVT.getSizeInBits() ==
+           Parts[0].getSimpleValueType().getSizeInBits() &&
+           "Part type sizes don't match!");
 
     // Assemble the parts into intermediate operands.
     SmallVector<SDValue, 8> Ops(NumIntermediates);
@@ -2238,17 +2239,11 @@ void SelectionDAGBuilder::visitSDiv(const User &I) {
   SDValue Op1 = getValue(I.getOperand(0));
   SDValue Op2 = getValue(I.getOperand(1));
 
-  // Turn exact SDivs into multiplications.
-  // FIXME: This should be in DAGCombiner, but it doesn't have access to the
-  // exact bit.
-  if (isa<BinaryOperator>(&I) && cast<BinaryOperator>(&I)->isExact() &&
-      !isa<ConstantSDNode>(Op1) &&
-      isa<ConstantSDNode>(Op2) && !cast<ConstantSDNode>(Op2)->isNullValue())
-    setValue(&I, DAG.getTargetLoweringInfo()
-                     .BuildExactSDIV(Op1, Op2, getCurSDLoc(), DAG));
-  else
-    setValue(&I, DAG.getNode(ISD::SDIV, getCurSDLoc(), Op1.getValueType(),
-                             Op1, Op2));
+  SDNodeFlags Flags;
+  Flags.setExact(isa<PossiblyExactOperator>(&I) &&
+                 cast<PossiblyExactOperator>(&I)->isExact());
+  setValue(&I, DAG.getNode(ISD::SDIV, getCurSDLoc(), Op1.getValueType(), Op1,
+                           Op2, &Flags));
 }
 
 void SelectionDAGBuilder::visitICmp(const User &I) {
@@ -4786,7 +4781,10 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
 
   case Intrinsic::debugtrap:
   case Intrinsic::trap: {
-    StringRef TrapFuncName = TM.Options.getTrapFunctionName();
+    StringRef TrapFuncName =
+        I.getAttributes()
+            .getAttribute(AttributeSet::FunctionIndex, "trap-func-name")
+            .getValueAsString();
     if (TrapFuncName.empty()) {
       ISD::NodeType Op = (Intrinsic == Intrinsic::trap) ?
         ISD::TRAP : ISD::DEBUGTRAP;

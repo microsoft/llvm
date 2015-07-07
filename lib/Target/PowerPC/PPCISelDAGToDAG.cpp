@@ -2773,18 +2773,6 @@ SDNode *PPCDAGToDAGISel::Select(SDNode *N) {
         else
           DM[i] = 1;
 
-      // For little endian, we must swap the input operands and adjust
-      // the mask elements (reverse and invert them).
-      if (PPCSubTarget->isLittleEndian()) {
-        std::swap(Op1, Op2);
-        unsigned tmp = DM[0];
-        DM[0] = 1 - DM[1];
-        DM[1] = 1 - tmp;
-      }
-
-      SDValue DMV = CurDAG->getTargetConstant(DM[1] | (DM[0] << 1), dl,
-                                              MVT::i32);
-
       if (Op1 == Op2 && DM[0] == 0 && DM[1] == 0 &&
           Op1.getOpcode() == ISD::SCALAR_TO_VECTOR &&
           isa<LoadSDNode>(Op1.getOperand(0))) {
@@ -2800,6 +2788,17 @@ SDNode *PPCDAGToDAGISel::Select(SDNode *N) {
         }
       }
 
+      // For little endian, we must swap the input operands and adjust
+      // the mask elements (reverse and invert them).
+      if (PPCSubTarget->isLittleEndian()) {
+        std::swap(Op1, Op2);
+        unsigned tmp = DM[0];
+        DM[0] = 1 - DM[1];
+        DM[1] = 1 - tmp;
+      }
+
+      SDValue DMV = CurDAG->getTargetConstant(DM[1] | (DM[0] << 1), dl,
+                                              MVT::i32);
       SDValue Ops[] = { Op1, Op2, DMV };
       return CurDAG->SelectNodeTo(N, PPC::XXPERMDI, N->getValueType(0), Ops);
     }
@@ -2902,7 +2901,7 @@ SDNode *PPCDAGToDAGISel::Select(SDNode *N) {
     if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(GA)) {
       const GlobalValue *GValue = G->getGlobal();
       if ((GValue->getType()->getElementType()->isFunctionTy() &&
-           (GValue->isDeclaration() || GValue->isWeakForLinker())) ||
+           !GValue->isStrongDefinitionForLinker()) ||
           GValue->isDeclaration() || GValue->hasCommonLinkage() ||
           GValue->hasAvailableExternallyLinkage())
         return transferMemOperands(N, CurDAG->getMachineNode(PPC::LDtocL, dl,

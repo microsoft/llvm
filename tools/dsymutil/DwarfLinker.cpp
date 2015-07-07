@@ -1427,10 +1427,10 @@ void DwarfLinker::endDebugObject() {
   ValidRelocs.clear();
   Ranges.clear();
 
-  for (auto *Block : DIEBlocks)
-    Block->~DIEBlock();
-  for (auto *Loc : DIELocs)
-    Loc->~DIELoc();
+  for (auto I = DIEBlocks.begin(), E = DIEBlocks.end(); I != E; ++I)
+    (*I)->~DIEBlock();
+  for (auto I = DIELocs.begin(), E = DIELocs.end(); I != E; ++I)
+    (*I)->~DIELoc();
 
   DIEBlocks.clear();
   DIELocs.clear();
@@ -1451,8 +1451,8 @@ void DwarfLinker::findValidRelocsMachO(const object::SectionRef &Section,
     object::DataRefImpl RelocDataRef = Reloc.getRawDataRefImpl();
     MachO::any_relocation_info MachOReloc = Obj.getRelocation(RelocDataRef);
     unsigned RelocSize = 1 << Obj.getAnyRelocationLength(MachOReloc);
-    uint64_t Offset64;
-    if ((RelocSize != 4 && RelocSize != 8) || Reloc.getOffset(Offset64)) {
+    uint64_t Offset64 = Reloc.getOffset();
+    if ((RelocSize != 4 && RelocSize != 8)) {
       reportWarning(" unsupported relocation in debug_info section.");
       continue;
     }
@@ -1462,12 +1462,12 @@ void DwarfLinker::findValidRelocsMachO(const object::SectionRef &Section,
 
     auto Sym = Reloc.getSymbol();
     if (Sym != Obj.symbol_end()) {
-      StringRef SymbolName;
-      if (Sym->getName(SymbolName)) {
+      ErrorOr<StringRef> SymbolName = Sym->getName();
+      if (!SymbolName) {
         reportWarning("error getting relocation symbol name.");
         continue;
       }
-      if (const auto *Mapping = DMO.lookupSymbol(SymbolName))
+      if (const auto *Mapping = DMO.lookupSymbol(*SymbolName))
         ValidRelocs.emplace_back(Offset64, RelocSize, Addend, Mapping);
     } else if (const auto *Mapping = DMO.lookupObjectAddress(Addend)) {
       // Do not store the addend. The addend was the address of the

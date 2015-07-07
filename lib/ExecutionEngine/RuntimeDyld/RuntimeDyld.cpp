@@ -114,9 +114,10 @@ void RuntimeDyldImpl::mapSectionAddress(const void *LocalAddress,
 }
 
 static std::error_code getOffset(const SymbolRef &Sym, uint64_t &Result) {
-  uint64_t Address;
-  if (std::error_code EC = Sym.getAddress(Address))
+  ErrorOr<uint64_t> AddressOrErr = Sym.getAddress();
+  if (std::error_code EC = AddressOrErr.getError())
     return EC;
+  uint64_t Address = *AddressOrErr;
 
   if (Address == UnknownAddress) {
     Result = UnknownAddress;
@@ -175,16 +176,16 @@ RuntimeDyldImpl::loadObjectImpl(const object::ObjectFile &Obj) {
     if (IsCommon)
       CommonSymbols.push_back(*I);
     else {
-      object::SymbolRef::Type SymType;
-      Check(I->getType(SymType));
+      object::SymbolRef::Type SymType = I->getType();
 
       if (SymType == object::SymbolRef::ST_Function ||
           SymType == object::SymbolRef::ST_Data ||
           SymType == object::SymbolRef::ST_Unknown) {
 
-        StringRef Name;
+        ErrorOr<StringRef> NameOrErr = I->getName();
+        Check(NameOrErr.getError());
+        StringRef Name = *NameOrErr;
         uint64_t SectOffset;
-        Check(I->getName(Name));
         Check(getOffset(*I, SectOffset));
         section_iterator SI = Obj.section_end();
         Check(I->getSection(SI));
@@ -267,10 +268,10 @@ computeAllocationSizeForSections(std::vector<uint64_t> &SectionSizes,
   return TotalSize;
 }
 
-static bool isRequiredForExecution(const SectionRef &Section) {
+static bool isRequiredForExecution(const SectionRef Section) {
   const ObjectFile *Obj = Section.getObject();
-  if (auto *ELFObj = dyn_cast<object::ELFObjectFileBase>(Obj))
-    return ELFObj->getSectionFlags(Section) & ELF::SHF_ALLOC;
+  if (isa<object::ELFObjectFileBase>(Obj))
+    return ELFSectionRef(Section).getFlags() & ELF::SHF_ALLOC;
   if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj)) {
     const coff_section *CoffSection = COFFObj->getCOFFSection(Section);
     // Avoid loading zero-sized COFF sections.
@@ -287,12 +288,12 @@ static bool isRequiredForExecution(const SectionRef &Section) {
   
   assert(isa<MachOObjectFile>(Obj));
   return true;
- }
+}
 
-static bool isReadOnlyData(const SectionRef &Section) {
+static bool isReadOnlyData(const SectionRef Section) {
   const ObjectFile *Obj = Section.getObject();
-  if (auto *ELFObj = dyn_cast<object::ELFObjectFileBase>(Obj))
-    return !(ELFObj->getSectionFlags(Section) &
+  if (isa<object::ELFObjectFileBase>(Obj))
+    return !(ELFSectionRef(Section).getFlags() &
              (ELF::SHF_WRITE | ELF::SHF_EXECINSTR));
   if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj))
     return ((COFFObj->getCOFFSection(Section)->Characteristics &
@@ -307,10 +308,10 @@ static bool isReadOnlyData(const SectionRef &Section) {
   return false;
 }
 
-static bool isZeroInit(const SectionRef &Section) {
+static bool isZeroInit(const SectionRef Section) {
   const ObjectFile *Obj = Section.getObject();
-  if (auto *ELFObj = dyn_cast<object::ELFObjectFileBase>(Obj))
-    return ELFObj->getSectionType(Section) == ELF::SHT_NOBITS;
+  if (isa<object::ELFObjectFileBase>(Obj))
+    return ELFSectionRef(Section).getType() == ELF::SHT_NOBITS;
   if (auto *COFFObj = dyn_cast<object::COFFObjectFile>(Obj))
     return COFFObj->getCOFFSection(Section)->Characteristics &
             COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA;
@@ -482,8 +483,9 @@ void RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
   DEBUG(dbgs() << "Processing common symbols...\n");
 
   for (const auto &Sym : CommonSymbols) {
-    StringRef Name;
-    Check(Sym.getName(Name));
+    ErrorOr<StringRef> NameOrErr = Sym.getName();
+    Check(NameOrErr.getError());
+    StringRef Name = *NameOrErr;
 
     // Skip common symbols already elsewhere.
     if (GlobalSymbolTable.count(Name) ||
@@ -516,9 +518,10 @@ void RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
   // Assign the address of each symbol
   for (auto &Sym : SymbolsToAllocate) {
     uint32_t Align = Sym.getAlignment();
-    StringRef Name;
     uint64_t Size = Sym.getCommonSize();
-    Check(Sym.getName(Name));
+    ErrorOr<StringRef> NameOrErr = Sym.getName();
+    Check(NameOrErr.getError());
+    StringRef Name = *NameOrErr;
     if (Align) {
       // This symbol has an alignment requirement.
       uint64_t AlignOffset = OffsetToAlignment((uint64_t)Addr, Align);
@@ -812,12 +815,16 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
         report_fatal_error("Program used external function '" + Name +
                            "' which could not be resolved!");
 
-      DEBUG(dbgs() << "Resolving relocations Name: " << Name << "\t"
-                   << format("0x%lx", Addr) << "\n");
-      // This list may have been updated when we called getSymbolAddress, so
-      // don't change this code to get the list earlier.
-      RelocationList &Relocs = i->second;
-      resolveRelocationList(Relocs, Addr);
+      // If Resolver returned UINT64_MAX, the client wants to handle this symbol
+      // manually and we shouldn't resolve its relocations.
+      if (Addr != UINT64_MAX) {
+        DEBUG(dbgs() << "Resolving relocations Name: " << Name << "\t"
+                     << format("0x%lx", Addr) << "\n");
+        // This list may have been updated when we called getSymbolAddress, so
+        // don't change this code to get the list earlier.
+        RelocationList &Relocs = i->second;
+        resolveRelocationList(Relocs, Addr);
+      }
     }
 
     ExternalSymbolRelocations.erase(i);

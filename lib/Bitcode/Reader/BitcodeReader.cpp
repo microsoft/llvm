@@ -170,7 +170,7 @@ class BitcodeReader : public GVMaterializer {
 
   // When intrinsic functions are encountered which require upgrading they are
   // stored here with their replacement function.
-  typedef std::vector<std::pair<Function*, Function*> > UpgradedIntrinsicMap;
+  typedef DenseMap<Function*, Function*> UpgradedIntrinsicMap;
   UpgradedIntrinsicMap UpgradedIntrinsics;
 
   // Map the bitcode's custom MDKind ID to the Module's MDKind ID.
@@ -1827,6 +1827,20 @@ std::error_code BitcodeReader::parseMetadata() {
           NextMDValueNo++);
       break;
     }
+
+    case bitc::METADATA_MODULE: {
+      if (Record.size() != 6)
+        return error("Invalid record");
+
+      MDValueList.assignValue(
+          GET_OR_DISTINCT(DIModule, Record[0],
+                          (Context, getMDOrNull(Record[1]),
+                          getMDString(Record[2]), getMDString(Record[3]),
+                          getMDString(Record[4]), getMDString(Record[5]))),
+          NextMDValueNo++);
+      break;
+    }
+
     case bitc::METADATA_FILE: {
       if (Record.size() != 3)
         return error("Invalid record");
@@ -2696,7 +2710,7 @@ std::error_code BitcodeReader::globalCleanup() {
   for (Function &F : *TheModule) {
     Function *NewFn;
     if (UpgradeIntrinsicFunction(&F, NewFn))
-      UpgradedIntrinsics.push_back(std::make_pair(&F, NewFn));
+      UpgradedIntrinsics[&F] = NewFn;
   }
 
   // Look for global variables which need to be renamed.
@@ -4443,14 +4457,12 @@ std::error_code BitcodeReader::materialize(GlobalValue *GV) {
     stripDebugInfo(*F);
 
   // Upgrade any old intrinsic calls in the function.
-  for (UpgradedIntrinsicMap::iterator I = UpgradedIntrinsics.begin(),
-       E = UpgradedIntrinsics.end(); I != E; ++I) {
-    if (I->first != I->second) {
-      for (auto UI = I->first->user_begin(), UE = I->first->user_end();
-           UI != UE;) {
-        if (CallInst* CI = dyn_cast<CallInst>(*UI++))
-          UpgradeIntrinsicCall(CI, I->second);
-      }
+  for (auto &I : UpgradedIntrinsics) {
+    for (auto UI = I.first->user_begin(), UE = I.first->user_end(); UI != UE;) {
+      User *U = *UI;
+      ++UI;
+      if (CallInst *CI = dyn_cast<CallInst>(U))
+        UpgradeIntrinsicCall(CI, I.second);
     }
   }
 
@@ -4517,20 +4529,16 @@ std::error_code BitcodeReader::materializeModule(Module *M) {
   // delete the old functions to clean up. We can't do this unless the entire
   // module is materialized because there could always be another function body
   // with calls to the old function.
-  for (std::vector<std::pair<Function*, Function*> >::iterator I =
-       UpgradedIntrinsics.begin(), E = UpgradedIntrinsics.end(); I != E; ++I) {
-    if (I->first != I->second) {
-      for (auto UI = I->first->user_begin(), UE = I->first->user_end();
-           UI != UE;) {
-        if (CallInst* CI = dyn_cast<CallInst>(*UI++))
-          UpgradeIntrinsicCall(CI, I->second);
-      }
-      if (!I->first->use_empty())
-        I->first->replaceAllUsesWith(I->second);
-      I->first->eraseFromParent();
+  for (auto &I : UpgradedIntrinsics) {
+    for (auto *U : I.first->users()) {
+      if (CallInst *CI = dyn_cast<CallInst>(U))
+        UpgradeIntrinsicCall(CI, I.second);
     }
+    if (!I.first->use_empty())
+      I.first->replaceAllUsesWith(I.second);
+    I.first->eraseFromParent();
   }
-  std::vector<std::pair<Function*, Function*> >().swap(UpgradedIntrinsics);
+  UpgradedIntrinsics.clear();
 
   for (unsigned I = 0, E = InstsWithTBAATag.size(); I < E; I++)
     UpgradeInstWithTBAATag(InstsWithTBAATag[I]);

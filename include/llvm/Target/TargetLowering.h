@@ -1235,11 +1235,10 @@ protected:
     HasExtractBitsInsn = hasExtractInsn;
   }
 
-  /// Tells the code generator not to expand sequence of operations into a
-  /// separate sequences that increases the amount of flow control.
-  void setJumpIsExpensive(bool isExpensive = true) {
-    JumpIsExpensive = isExpensive;
-  }
+  /// Tells the code generator not to expand logic operations on comparison
+  /// predicates into separate sequences that increase the amount of flow
+  /// control.
+  void setJumpIsExpensive(bool isExpensive = true);
 
   /// Tells the code generator that integer divide is expensive, and if
   /// possible, should be replaced by an alternate sequence of instructions not
@@ -2680,7 +2679,7 @@ public:
                                       SelectionDAG *DAG = nullptr) const;
 
   /// Given a constraint, return the type of constraint it is for this target.
-  virtual ConstraintType getConstraintType(const std::string &Constraint) const;
+  virtual ConstraintType getConstraintType(StringRef Constraint) const;
 
   /// Given a physical register constraint (e.g.  {edx}), return the register
   /// number and the register class for the register.
@@ -2693,10 +2692,9 @@ public:
   /// returns a register number of 0 and a null register class pointer.
   virtual std::pair<unsigned, const TargetRegisterClass *>
   getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
-                               const std::string &Constraint, MVT VT) const;
+                               StringRef Constraint, MVT VT) const;
 
-  virtual unsigned
-  getInlineAsmMemConstraint(const std::string &ConstraintCode) const {
+  virtual unsigned getInlineAsmMemConstraint(StringRef ConstraintCode) const {
     if (ConstraintCode == "i")
       return InlineAsm::Constraint_i;
     else if (ConstraintCode == "m")
@@ -2718,8 +2716,6 @@ public:
   //===--------------------------------------------------------------------===//
   // Div utility functions
   //
-  SDValue BuildExactSDIV(SDValue Op1, SDValue Op2, SDLoc dl,
-                         SelectionDAG &DAG) const;
   SDValue BuildSDIV(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                     bool IsAfterLegalization,
                     std::vector<SDNode *> *Created) const;

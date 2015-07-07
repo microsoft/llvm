@@ -33,6 +33,7 @@
 #if defined(_MSC_VER)
 #include <Windows.h>
 #include <DbgHelp.h>
+#pragma comment(lib, "dbghelp.lib")
 #endif
 
 namespace llvm {
@@ -80,14 +81,14 @@ ModuleInfo::ModuleInfo(ObjectFile *Obj, DIContext *DICtx)
 
 void ModuleInfo::addSymbol(const SymbolRef &Symbol, uint64_t SymbolSize,
                            DataExtractor *OpdExtractor, uint64_t OpdAddress) {
-  SymbolRef::Type SymbolType;
-  if (error(Symbol.getType(SymbolType)))
-    return;
+  SymbolRef::Type SymbolType = Symbol.getType();
   if (SymbolType != SymbolRef::ST_Function && SymbolType != SymbolRef::ST_Data)
     return;
-  uint64_t SymbolAddress;
-  if (error(Symbol.getAddress(SymbolAddress)) ||
-      SymbolAddress == UnknownAddress)
+  ErrorOr<uint64_t> SymbolAddressOrErr = Symbol.getAddress();
+  if (error(SymbolAddressOrErr.getError()))
+    return;
+  uint64_t SymbolAddress = *SymbolAddressOrErr;
+  if (SymbolAddress == UnknownAddress)
     return;
   if (OpdExtractor) {
     // For big-endian PowerPC64 ELF, symbols in the .opd section refer to
@@ -101,9 +102,10 @@ void ModuleInfo::addSymbol(const SymbolRef &Symbol, uint64_t SymbolSize,
         OpdExtractor->isValidOffsetForAddress(OpdOffset32))
       SymbolAddress = OpdExtractor->getAddress(&OpdOffset32);
   }
-  StringRef SymbolName;
-  if (error(Symbol.getName(SymbolName)))
+  ErrorOr<StringRef> SymbolNameOrErr = Symbol.getName();
+  if (error(SymbolNameOrErr.getError()))
     return;
+  StringRef SymbolName = *SymbolNameOrErr;
   // Mach-O symbol table names have leading underscore, skip it.
   if (Module->isMachO() && SymbolName.size() > 0 && SymbolName[0] == '_')
     SymbolName = SymbolName.drop_front();
