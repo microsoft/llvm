@@ -39,11 +39,6 @@ def SDTX86VFCMP : SDTypeProfile<1, 3, [SDTCisInt<0>, SDTCisSameAs<1, 2>,
                                        SDTCisFP<1>, SDTCisVT<3, i8>,
                                        SDTCisVec<1>]>;
 
-def X86umin    : SDNode<"X86ISD::UMIN",      SDTIntBinOp>;
-def X86umax    : SDNode<"X86ISD::UMAX",      SDTIntBinOp>;
-def X86smin    : SDNode<"X86ISD::SMIN",      SDTIntBinOp>;
-def X86smax    : SDNode<"X86ISD::SMAX",      SDTIntBinOp>;
-
 def X86fmin    : SDNode<"X86ISD::FMIN",      SDTFPBinOp>;
 def X86fmax    : SDNode<"X86ISD::FMAX",      SDTFPBinOp>;
 
@@ -187,6 +182,7 @@ def X86addus   : SDNode<"X86ISD::ADDUS", SDTIntBinOp>;
 def X86subus   : SDNode<"X86ISD::SUBUS", SDTIntBinOp>;
 def X86adds    : SDNode<"X86ISD::ADDS", SDTIntBinOp>;
 def X86subs    : SDNode<"X86ISD::SUBS", SDTIntBinOp>;
+def X86mulhrs  : SDNode<"X86ISD::MULHRS" , SDTIntBinOp>;
 def X86avg     : SDNode<"X86ISD::AVG" , SDTIntBinOp>;
 def X86ptest   : SDNode<"X86ISD::PTEST", SDTX86CmpPTest>;
 def X86testp   : SDNode<"X86ISD::TESTP", SDTX86CmpPTest>;
@@ -207,6 +203,14 @@ def X86pmuludq : SDNode<"X86ISD::PMULUDQ",
 def X86pmuldq  : SDNode<"X86ISD::PMULDQ",
                          SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisVec<1>,
                                        SDTCisSameAs<1,2>]>>;
+
+def X86extrqi : SDNode<"X86ISD::EXTRQI",
+                  SDTypeProfile<1, 3, [SDTCisVT<0, v2i64>, SDTCisSameAs<0,1>,
+                                       SDTCisVT<2, i8>, SDTCisVT<3, i8>]>>;
+def X86insertqi : SDNode<"X86ISD::INSERTQI",
+                    SDTypeProfile<1, 4, [SDTCisVT<0, v2i64>, SDTCisSameAs<0,1>,
+                                         SDTCisSameAs<1,2>, SDTCisVT<3, i8>,
+                                         SDTCisVT<4, i8>]>>;
 
 // Specific shuffle nodes - At some point ISD::VECTOR_SHUFFLE will always get
 // translated into one of the target nodes below during lowering.

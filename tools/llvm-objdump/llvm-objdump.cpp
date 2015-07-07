@@ -212,9 +212,7 @@ static const Target *getTarget(const ObjectFile *Obj = nullptr) {
 }
 
 bool llvm::RelocAddressLess(RelocationRef a, RelocationRef b) {
-  uint64_t a_addr = a.getOffset();
-  uint64_t b_addr = b.getOffset();
-  return a_addr < b_addr;
+  return a.getOffset() < b.getOffset();
 }
 
 namespace {
@@ -827,8 +825,6 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
         if (error(AddressOrErr.getError()))
           break;
         uint64_t Address = *AddressOrErr;
-        if (Address == UnknownAddress)
-          continue;
         Address -= SectionAddr;
         if (Address >= SectSize)
           continue;
@@ -1138,11 +1134,6 @@ void llvm::PrintSymbolTable(const ObjectFile *o) {
     bool Common = Flags & SymbolRef::SF_Common;
     bool Hidden = Flags & SymbolRef::SF_Hidden;
 
-    if (Common)
-      Address = Symbol.getCommonSize();
-
-    if (Address == UnknownAddress)
-      Address = 0;
     char GlobLoc = ' ';
     if (Type != SymbolRef::ST_Unknown)
       GlobLoc = Global ? 'g' : 'l';
