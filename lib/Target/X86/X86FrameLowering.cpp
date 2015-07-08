@@ -1197,7 +1197,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       // it recovers the frame pointer from the base pointer rather than the
       // other way around.
       unsigned Opm = Uses64BitFramePtr ? X86::MOV64mr : X86::MOV32mr;
-      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(Opm)), BasePtr, true,
+      addRegOffset(BuildMI(*MBB, MBBI, DL, TII.get(Opm)), BasePtr, true,
                    getFrameIndexOffset(MF, X86FI->getSEHFramePtrSaveIndex()))
           .addReg(FramePtr)
           .setMIFlag(MachineInstr::FrameSetup);
