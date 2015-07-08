@@ -163,8 +163,6 @@ public:
   const TargetMachine &getTargetMachine() const { return TM; }
   const DataLayout *getDataLayout() const { return TM.getDataLayout(); }
 
-  bool isBigEndian() const { return !IsLittleEndian; }
-  bool isLittleEndian() const { return IsLittleEndian; }
   virtual bool useSoftFloat() const { return false; }
 
   /// Return the pointer type for the given address space, defaults to
@@ -818,8 +816,8 @@ public:
   /// When splitting a value of the specified type into parts, does the Lo
   /// or Hi part come first?  This usually follows the endianness, except
   /// for ppcf128, where the Hi part always comes first.
-  bool hasBigEndianPartOrdering(EVT VT) const {
-    return isBigEndian() || VT == MVT::ppcf128;
+  bool hasBigEndianPartOrdering(EVT VT, const DataLayout &DL) const {
+    return DL.isBigEndian() || VT == MVT::ppcf128;
   }
 
   /// If true, the target has custom DAG combine transformations that it can
@@ -1734,9 +1732,6 @@ public:
 private:
   const TargetMachine &TM;
 
-  /// True if this is a little endian target.
-  bool IsLittleEndian;
-
   /// Tells the code generator not to expand operations into sequences that use
   /// the select operations if possible.
   bool SelectIsExpensive;
@@ -2414,6 +2409,7 @@ public:
     ArgListTy &getArgs() {
       return Args;
     }
+
   };
 
   /// This function lowers an abstract call to a function into an actual call.
@@ -2657,7 +2653,8 @@ public:
   /// specific constraints and their prefixes, and also tie in the associated
   /// operand values.  If this returns an empty vector, and if the constraint
   /// string itself isn't empty, there was an error parsing.
-  virtual AsmOperandInfoVector ParseConstraints(const TargetRegisterInfo *TRI,
+  virtual AsmOperandInfoVector ParseConstraints(const DataLayout &DL,
+                                                const TargetRegisterInfo *TRI,
                                                 ImmutableCallSite CS) const;
 
   /// Examine constraint type and operand type and determine a weight value.

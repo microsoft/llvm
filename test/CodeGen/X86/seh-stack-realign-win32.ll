@@ -16,7 +16,8 @@ declare i8* @llvm.x86.seh.recoverfp(i8*, i8*)
 
 define i32 @main() personality i8* bitcast (i32 (...)* @_except_handler3 to i8*) {
 entry:
-  %__exceptioncode = alloca i32, align 4
+  ; The EH code allocation is overaligned, triggering realignment.
+  %__exceptioncode = alloca i32, align 8
   call void (...) @llvm.localescape(i32* %__exceptioncode)
   invoke void @crash() #5
           to label %__try.cont unwind label %lpad
@@ -61,18 +62,22 @@ entry:
 ; CHECK-LABEL: _main:
 ; CHECK: Lmain$frame_escape_0 = [[code_offs:[-0-9]+]]
 ; CHECK: Lmain$frame_escape_1 = [[reg_offs:[-0-9]+]]
-; CHECK: movl %esp, [[reg_offs]](%ebp)
+; CHECK: movl %esp, [[reg_offs]](%esi)
 ; CHECK: movl $L__ehtable$main,
-; 	EH state 0
-; CHECK: movl $0, -4(%ebp)
+;       EH state 0
+; CHECK: movl $0, 40(%esi)
 ; CHECK: calll _crash
 ; CHECK: retl
 ; CHECK: # Block address taken
-; 	stackrestore
-; CHECK: movl [[reg_offs]](%ebp), %esp
-; 	EH state -1
-; CHECK: movl [[code_offs]](%ebp), %[[code:[a-z]+]]
-; CHECK: movl $-1, -4(%ebp)
+;       stackrestore
+; CHECK: movl -24(%ebp), %esp
+; CHECK: movl $Lmain$parent_frame_offset, %eax
+; CHECK: negl %eax
+; CHECK: leal -24(%ebp,%eax), %esi
+; CHECK: movl 12(%esi), %ebp    # 4-byte Reload
+;       EH state -1
+; CHECK: movl [[code_offs]](%esi), %[[code:[a-z]+]]
+; CHECK: movl $-1, 40(%esi)
 ; CHECK-DAG: movl %[[code]], 4(%esp)
 ; CHECK-DAG: movl $_str, (%esp)
 ; CHECK: calll _printf
