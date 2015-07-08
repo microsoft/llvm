@@ -72,8 +72,12 @@ void WinException::beginFunction(const MachineFunction *MF) {
   unsigned PerEncoding = TLOF.getPersonalityEncoding();
   const Function *Per = MMI->getPersonality();
 
-  shouldEmitPersonality = hasLandingPads &&
-    PerEncoding != dwarf::DW_EH_PE_omit && Per;
+  // TODO: reconcile this once the new EH representation lands.  Need to emit
+  // for funclets and filters.  Late outlining generates artificial landingpads
+  // in funclets, but early filter outlining does not, hence the check on
+  // F != ParentF.
+  shouldEmitPersonality = (hasLandingPads || (F != ParentF)) &&
+                          PerEncoding != dwarf::DW_EH_PE_omit && Per;
 
   unsigned LSDAEncoding = TLOF.getLSDAEncoding();
   shouldEmitLSDA = shouldEmitPersonality &&
@@ -732,7 +736,7 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
       HandlerTreeNode *PopNode = Pair.second;
       HandlerTreeNode *Ancestor = getAncestor(PopNode, TreeNode);
       while (PopNode != Ancestor) {
-        Info.Clauses.push_back({ BeginLabel, LastLabel, PopNode->Handler, PopNode->CatchType });
+        Info.Clauses.push_back({BeginLabel, LastLabel, PopNode});
         if (HandlerStack.back().second == PopNode) {
           HandlerStack.pop_back();
         }
@@ -755,7 +759,7 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
     MCSymbol *BeginLabel = Pair.first;
     HandlerTreeNode *PopNode = Pair.second;
     while (PopNode != nullptr) {
-      Info.Clauses.push_back({ BeginLabel, LastLabel, PopNode->Handler, PopNode->CatchType });
+      Info.Clauses.push_back({BeginLabel, LastLabel, PopNode});
       PopNode = PopNode->Parent;
     }
   }
@@ -773,7 +777,7 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
     // Now write out the clauses into a dummy section.
     Asm->OutStreamer->EmitIntValue(Info.Clauses.size(), 4);
     for (ClrEHClause &Clause : Info.Clauses) {
-      auto &HandlerLabels = StartEndLabelMap[Clause.Handler];
+      auto &HandlerLabels = StartEndLabelMap[Clause.Node->Handler];
       /*
         struct CORINFO_EH_CLAUSE
         {
@@ -808,16 +812,30 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
         MCBinaryExpr::createAdd(RealClauseBegin, MCOne, Asm->OutContext);
       const MCExpr *ClauseEnd =
         MCBinaryExpr::createAdd(RealClauseEnd, MCOne, Asm->OutContext);
-      if (Clause.CatchType == 0) {
+      switch (Clause.Node->Kind) {
+      case HandlerTreeNode::ClauseKind::Finally:
         Asm->OutStreamer->EmitIntValue(2, 4); // flags 2 means finally clause
-      } else {
+        break;
+      case HandlerTreeNode::ClauseKind::Catch:
         Asm->OutStreamer->EmitIntValue(0, 4); // flags 0 means catch clause
+        break;
+      case HandlerTreeNode::ClauseKind::Filter:
+        Asm->OutStreamer->EmitIntValue(1, 4); // flags 1 means filter clause
+        break;
       }
       Asm->OutStreamer->EmitValue(ClauseBegin, 4);
       Asm->OutStreamer->EmitValue(ClauseEnd, 4);
       Asm->OutStreamer->EmitValue(getOffset(HandlerLabels.first, RootBegin), 4);
       Asm->OutStreamer->EmitValue(getOffset(HandlerLabels.second, RootBegin), 4);
-      Asm->OutStreamer->EmitIntValue(Clause.CatchType, 4);
+      if (Clause.Node->Kind == HandlerTreeNode::ClauseKind::Filter) {
+        // Write out offset to start of filter function (from RootBegin),
+        // 4 bytes
+        auto &FilterLabels = StartEndLabelMap[Clause.Node->FilterFunction];
+        Asm->OutStreamer->EmitValue(getOffset(FilterLabels.first, RootBegin),
+                                    4);
+      } else {
+        Asm->OutStreamer->EmitIntValue(Clause.Node->CatchType, 4);
+      }
     }
   }
 }

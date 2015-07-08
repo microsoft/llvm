@@ -72,17 +72,25 @@ struct SEHHandler {
 // Tree node indicating handler nesting relationship
 // FIXME: stop leaking this memory
 struct HandlerTreeNode {
+  enum ClauseKind {
+    Catch,
+    Finally,
+    Filter,
+  };
   HandlerTreeNode *Parent;
   const Function *Handler;
-  uint32_t CatchType;
+  ClauseKind Kind;
+  union {
+    uint32_t CatchType;
+    const Function *FilterFunction;
+  };
 };
 
 // Information used per protected region in CoreCLR EH table generation
 struct ClrEHClause {
   MCSymbol *Begin;
   MCSymbol *End;
-  const Function *Handler;
-  uint32_t CatchType;
+  HandlerTreeNode *Node;
 };
 
 // Function-wide EH info for CoreCLR

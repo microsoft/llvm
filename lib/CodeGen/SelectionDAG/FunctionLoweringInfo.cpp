@@ -360,16 +360,32 @@ void FunctionLoweringInfo::buildHandlerTree(ArrayRef<const LandingPadInst *> LPa
         CatchHandler *TheCatchHandler = dyn_cast<CatchHandler>(Action);
         if (TheCatchHandler == nullptr) {
           assert(isa<CleanupHandler>(Action));
+          // This is a fault or finally.  TODO: figure out if these need to
+          // be reported differently.
           Current->CatchType = 0;
+          Current->Kind = HandlerTreeNode::ClauseKind::Finally;
         } else {
           assert(isa<Operator>(TheCatchHandler->getSelector()) && "Expected IntToPtr(handlerToken)");
           Operator *IntToPtr = cast<Operator>(TheCatchHandler->getSelector());
-          assert(IntToPtr->getOpcode() == CastInst::IntToPtr && "Expected IntToPtr(handlerToken)");
-          Value *TokenValue = IntToPtr->getOperand(0);
-          assert(isa<Constant>(TokenValue) && "Need literal token value");
-          uint64_t extendedToken = *(cast<Constant>(TokenValue)->getUniqueInteger().getRawData());
-          uint32_t token = (uint32_t)extendedToken;
-          Current->CatchType = token;
+          if (IntToPtr->getOpcode() == CastInst::BitCast) {
+            // This is a filter handler.
+            const Function *FilterFunction =
+                cast<Function>(IntToPtr->stripPointerCasts());
+            Current->FilterFunction = FilterFunction;
+            Current->Kind = HandlerTreeNode::ClauseKind::Filter;
+            Info.Handlers.insert(FilterFunction);
+          } else {
+            // This is a catch handler.
+            assert(IntToPtr->getOpcode() == CastInst::IntToPtr &&
+                   "Expected IntToPtr(handlerToken)");
+            Value *TokenValue = IntToPtr->getOperand(0);
+            assert(isa<Constant>(TokenValue) && "Need literal token value");
+            uint64_t extendedToken =
+                *(cast<Constant>(TokenValue)->getUniqueInteger().getRawData());
+            uint32_t token = (uint32_t)extendedToken;
+            Current->CatchType = token;
+            Current->Kind = HandlerTreeNode::ClauseKind::Catch;
+          }
         }
       } else {
         assert(Current->Parent == Parent);
