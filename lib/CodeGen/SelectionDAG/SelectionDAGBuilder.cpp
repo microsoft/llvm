@@ -146,7 +146,7 @@ static SDValue getCopyFromParts(SelectionDAG &DAG, SDLoc DL,
         Hi = DAG.getNode(ISD::BITCAST, DL, HalfVT, Parts[1]);
       }
 
-      if (TLI.isBigEndian())
+      if (DAG.getDataLayout().isBigEndian())
         std::swap(Lo, Hi);
 
       Val = DAG.getNode(ISD::BUILD_PAIR, DL, RoundVT, Lo, Hi);
@@ -160,7 +160,7 @@ static SDValue getCopyFromParts(SelectionDAG &DAG, SDLoc DL,
 
         // Combine the round and odd parts.
         Lo = Val;
-        if (TLI.isBigEndian())
+        if (DAG.getDataLayout().isBigEndian())
           std::swap(Lo, Hi);
         EVT TotalVT = EVT::getIntegerVT(*DAG.getContext(), NumParts * PartBits);
         Hi = DAG.getNode(ISD::ANY_EXTEND, DL, TotalVT, Hi);
@@ -177,7 +177,7 @@ static SDValue getCopyFromParts(SelectionDAG &DAG, SDLoc DL,
       SDValue Lo, Hi;
       Lo = DAG.getNode(ISD::BITCAST, DL, EVT(MVT::f64), Parts[0]);
       Hi = DAG.getNode(ISD::BITCAST, DL, EVT(MVT::f64), Parts[1]);
-      if (TLI.hasBigEndianPartOrdering(ValueVT))
+      if (TLI.hasBigEndianPartOrdering(ValueVT, DAG.getDataLayout()))
         std::swap(Lo, Hi);
       Val = DAG.getNode(ISD::BUILD_PAIR, DL, ValueVT, Lo, Hi);
     } else {
@@ -362,10 +362,10 @@ static void getCopyToParts(SelectionDAG &DAG, SDLoc DL,
   if (ValueVT.isVector())
     return getCopyToPartsVector(DAG, DL, Val, Parts, NumParts, PartVT, V);
 
-  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   unsigned PartBits = PartVT.getSizeInBits();
   unsigned OrigNumParts = NumParts;
-  assert(TLI.isTypeLegal(PartVT) && "Copying to an illegal type!");
+  assert(DAG.getTargetLoweringInfo().isTypeLegal(PartVT) &&
+         "Copying to an illegal type!");
 
   if (NumParts == 0)
     return;
@@ -433,7 +433,7 @@ static void getCopyToParts(SelectionDAG &DAG, SDLoc DL,
                                  DAG.getIntPtrConstant(RoundBits, DL));
     getCopyToParts(DAG, DL, OddVal, Parts + RoundParts, OddParts, PartVT, V);
 
-    if (TLI.isBigEndian())
+    if (DAG.getDataLayout().isBigEndian())
       // The odd parts were reversed by getCopyToParts - unreverse them.
       std::reverse(Parts + RoundParts, Parts + NumParts);
 
@@ -468,7 +468,7 @@ static void getCopyToParts(SelectionDAG &DAG, SDLoc DL,
     }
   }
 
-  if (TLI.isBigEndian())
+  if (DAG.getDataLayout().isBigEndian())
     std::reverse(Parts, Parts + OrigNumParts);
 }
 
@@ -796,7 +796,7 @@ void RegsForValue::AddInlineAsmOperands(unsigned Code, bool HasMatching,
       if (TheReg == SP && Code == InlineAsm::Kind_Clobber) {
         // If we clobbered the stack pointer, MFI should know about it.
         assert(DAG.getMachineFunction().getFrameInfo()->
-            hasInlineAsmWithSPAdjust());
+            hasOpaqueSPAdjustment());
       }
     }
   }
@@ -807,7 +807,7 @@ void SelectionDAGBuilder::init(GCFunctionInfo *gfi, AliasAnalysis &aa,
   AA = &aa;
   GFI = gfi;
   LibInfo = li;
-  DL = DAG.getTarget().getDataLayout();
+  DL = &DAG.getDataLayout();
   Context = DAG.getContext();
   LPadToCallSiteMap.clear();
 }
@@ -1771,8 +1771,7 @@ void SelectionDAGBuilder::visitSPDescriptorParent(StackProtectorDescriptor &SPD,
   SDValue GuardPtr = getValue(IRGuard);
   SDValue StackSlotPtr = DAG.getFrameIndex(FI, PtrTy);
 
-  unsigned Align =
-    TLI.getDataLayout()->getPrefTypeAlignment(IRGuard->getType());
+  unsigned Align = DL->getPrefTypeAlignment(IRGuard->getType());
 
   SDValue Guard;
   SDLoc dl = getCurSDLoc();
@@ -2823,10 +2822,10 @@ void SelectionDAGBuilder::visitAlloca(const AllocaInst &I) {
   SDLoc dl = getCurSDLoc();
   Type *Ty = I.getAllocatedType();
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
-  uint64_t TySize = TLI.getDataLayout()->getTypeAllocSize(Ty);
+  auto &DL = DAG.getDataLayout();
+  uint64_t TySize = DL.getTypeAllocSize(Ty);
   unsigned Align =
-      std::max((unsigned)TLI.getDataLayout()->getPrefTypeAlignment(Ty),
-               I.getAlignment());
+      std::max((unsigned)DL.getPrefTypeAlignment(Ty), I.getAlignment());
 
   SDValue AllocSize = getValue(I.getArraySize());
 
@@ -4935,11 +4934,11 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::instrprof_increment:
     llvm_unreachable("instrprof failed to lower an increment");
 
-  case Intrinsic::frameescape: {
+  case Intrinsic::localescape: {
     MachineFunction &MF = DAG.getMachineFunction();
     const TargetInstrInfo *TII = DAG.getSubtarget().getInstrInfo();
 
-    // Directly emit some FRAME_ALLOC machine instrs. Label assignment emission
+    // Directly emit some LOCAL_ESCAPE machine instrs. Label assignment emission
     // is the same on all targets.
     for (unsigned Idx = 0, E = I.getNumArgOperands(); Idx < E; ++Idx) {
       Value *Arg = I.getArgOperand(Idx)->stripPointerCasts();
@@ -4953,7 +4952,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
           MF.getMMI().getContext().getOrCreateFrameAllocSymbol(
               GlobalValue::getRealLinkageName(MF.getName()), Idx);
       BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, dl,
-              TII->get(TargetOpcode::FRAME_ALLOC))
+              TII->get(TargetOpcode::LOCAL_ESCAPE))
           .addSym(FrameAllocSym)
           .addFrameIndex(FI);
     }
@@ -4961,8 +4960,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     return nullptr;
   }
 
-  case Intrinsic::framerecover: {
-    // i8* @llvm.framerecover(i8* %fn, i8* %fp, i32 %idx)
+  case Intrinsic::localrecover: {
+    // i8* @llvm.localrecover(i8* %fn, i8* %fp, i32 %idx)
     MachineFunction &MF = DAG.getMachineFunction();
     MVT PtrVT = TLI.getPointerTy(0);
 
@@ -4978,7 +4977,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     // that would make this PC relative.
     SDValue OffsetSym = DAG.getMCSymbol(FrameAllocSym, PtrVT);
     SDValue OffsetVal =
-        DAG.getNode(ISD::FRAME_ALLOC_RECOVER, sdl, PtrVT, OffsetSym);
+        DAG.getNode(ISD::LOCAL_RECOVER, sdl, PtrVT, OffsetSym);
 
     // Add the offset to the FP.
     Value *FP = I.getArgOperand(1);
@@ -5671,9 +5670,8 @@ public:
   /// getCallOperandValEVT - Return the EVT of the Value* that this operand
   /// corresponds to.  If there is no Value* for this operand, it returns
   /// MVT::Other.
-  EVT getCallOperandValEVT(LLVMContext &Context,
-                           const TargetLowering &TLI,
-                           const DataLayout *DL) const {
+  EVT getCallOperandValEVT(LLVMContext &Context, const TargetLowering &TLI,
+                           const DataLayout &DL) const {
     if (!CallOperandVal) return MVT::Other;
 
     if (isa<BasicBlock>(CallOperandVal))
@@ -5699,7 +5697,7 @@ public:
     // If OpTy is not a single value, it may be a struct/union that we
     // can tile with integers.
     if (!OpTy->isSingleValueType() && OpTy->isSized()) {
-      unsigned BitSize = DL->getTypeSizeInBits(OpTy);
+      unsigned BitSize = DL.getTypeSizeInBits(OpTy);
       switch (BitSize) {
       default: break;
       case 1:
@@ -5839,8 +5837,8 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
   SDISelAsmOperandInfoVector ConstraintOperands;
 
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
-  TargetLowering::AsmOperandInfoVector TargetConstraints =
-      TLI.ParseConstraints(DAG.getSubtarget().getRegisterInfo(), CS);
+  TargetLowering::AsmOperandInfoVector TargetConstraints = TLI.ParseConstraints(
+      DAG.getDataLayout(), DAG.getSubtarget().getRegisterInfo(), CS);
 
   bool hasMemory = false;
 
@@ -5889,8 +5887,8 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
         OpInfo.CallOperand = getValue(OpInfo.CallOperandVal);
       }
 
-      OpVT =
-          OpInfo.getCallOperandValEVT(*DAG.getContext(), TLI, DL).getSimpleVT();
+      OpVT = OpInfo.getCallOperandValEVT(*DAG.getContext(), TLI,
+                                         DAG.getDataLayout()).getSimpleVT();
     }
 
     OpInfo.ConstraintVT = OpVT;
@@ -5984,8 +5982,9 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
         // Otherwise, create a stack slot and emit a store to it before the
         // asm.
         Type *Ty = OpVal->getType();
-        uint64_t TySize = TLI.getDataLayout()->getTypeAllocSize(Ty);
-        unsigned Align  = TLI.getDataLayout()->getPrefTypeAlignment(Ty);
+        auto &DL = DAG.getDataLayout();
+        uint64_t TySize = DL.getTypeAllocSize(Ty);
+        unsigned Align = DL.getPrefTypeAlignment(Ty);
         MachineFunction &MF = DAG.getMachineFunction();
         int SSFI = MF.getFrameInfo()->CreateStackObject(TySize, Align, false);
         SDValue StackSlot = DAG.getFrameIndex(SSFI, TLI.getPointerTy());
@@ -6381,7 +6380,7 @@ void SelectionDAGBuilder::visitVAStart(const CallInst &I) {
 
 void SelectionDAGBuilder::visitVAArg(const VAArgInst &I) {
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
-  const DataLayout &DL = *TLI.getDataLayout();
+  const DataLayout &DL = DAG.getDataLayout();
   SDValue V = DAG.getVAArg(TLI.getValueType(I.getType()), getCurSDLoc(),
                            getRoot(), getValue(I.getOperand(0)),
                            DAG.getSrcValue(I.getOperand(0)),
@@ -6719,6 +6718,7 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
   Type *OrigRetTy = CLI.RetTy;
   SmallVector<EVT, 4> RetTys;
   SmallVector<uint64_t, 4> Offsets;
+  auto &DL = CLI.DAG.getDataLayout();
   ComputeValueVTs(*this, CLI.RetTy, RetTys, &Offsets);
 
   SmallVector<ISD::OutputArg, 4> Outs;
@@ -6734,8 +6734,8 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
     // FIXME: equivalent assert?
     // assert(!CS.hasInAllocaArgument() &&
     //        "sret demotion is incompatible with inalloca");
-    uint64_t TySize = getDataLayout()->getTypeAllocSize(CLI.RetTy);
-    unsigned Align  = getDataLayout()->getPrefTypeAlignment(CLI.RetTy);
+    uint64_t TySize = DL.getTypeAllocSize(CLI.RetTy);
+    unsigned Align = DL.getPrefTypeAlignment(CLI.RetTy);
     MachineFunction &MF = CLI.DAG.getMachineFunction();
     DemoteStackIdx = MF.getFrameInfo()->CreateStackObject(TySize, Align, false);
     Type *StackSlotPtrType = PointerType::getUnqual(CLI.RetTy);
@@ -6798,7 +6798,7 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
       SDValue Op = SDValue(Args[i].Node.getNode(),
                            Args[i].Node.getResNo() + Value);
       ISD::ArgFlagsTy Flags;
-      unsigned OriginalAlignment = getDataLayout()->getABITypeAlignment(ArgTy);
+      unsigned OriginalAlignment = DL.getABITypeAlignment(ArgTy);
 
       if (Args[i].isZExt)
         Flags.setZExt();
@@ -6822,7 +6822,7 @@ TargetLowering::LowerCallTo(TargetLowering::CallLoweringInfo &CLI) const {
       if (Args[i].isByVal || Args[i].isInAlloca) {
         PointerType *Ty = cast<PointerType>(Args[i].Ty);
         Type *ElementTy = Ty->getElementType();
-        Flags.setByValSize(getDataLayout()->getTypeAllocSize(ElementTy));
+        Flags.setByValSize(DL.getTypeAllocSize(ElementTy));
         // For ByVal, alignment should come from FE.  BE will guess if this
         // info is not there but there are cases it cannot get right.
         unsigned FrameAlign;
@@ -7031,7 +7031,7 @@ static bool isOnlyUsedInEntryBlock(const Argument *A, bool FastISel) {
 void SelectionDAGISel::LowerArguments(const Function &F) {
   SelectionDAG &DAG = SDB->DAG;
   SDLoc dl = SDB->getCurSDLoc();
-  const DataLayout *DL = TLI->getDataLayout();
+  const DataLayout &DL = DAG.getDataLayout();
   SmallVector<ISD::InputArg, 16> Ins;
 
   if (!FuncInfo->CanLowerReturn) {
@@ -7067,7 +7067,7 @@ void SelectionDAGISel::LowerArguments(const Function &F) {
       EVT VT = ValueVTs[Value];
       Type *ArgTy = VT.getTypeForEVT(*DAG.getContext());
       ISD::ArgFlagsTy Flags;
-      unsigned OriginalAlignment = DL->getABITypeAlignment(ArgTy);
+      unsigned OriginalAlignment = DL.getABITypeAlignment(ArgTy);
 
       if (F.getAttributes().hasAttribute(Idx, Attribute::ZExt))
         Flags.setZExt();
@@ -7091,7 +7091,7 @@ void SelectionDAGISel::LowerArguments(const Function &F) {
       if (Flags.isByVal() || Flags.isInAlloca()) {
         PointerType *Ty = cast<PointerType>(I->getType());
         Type *ElementTy = Ty->getElementType();
-        Flags.setByValSize(DL->getTypeAllocSize(ElementTy));
+        Flags.setByValSize(DL.getTypeAllocSize(ElementTy));
         // For ByVal, alignment should be passed from FE.  BE will guess if
         // this info is not there but there are cases it cannot get right.
         unsigned FrameAlign;
@@ -7596,7 +7596,7 @@ void SelectionDAGBuilder::findJumpTables(CaseClusterVector &Clusters,
 
 bool SelectionDAGBuilder::rangeFitsInWord(const APInt &Low, const APInt &High) {
   // FIXME: Using the pointer type doesn't seem ideal.
-  uint64_t BW = DAG.getTargetLoweringInfo().getPointerTy().getSizeInBits();
+  uint64_t BW = DAG.getDataLayout().getPointerSizeInBits();
   uint64_t Range = (High - Low).getLimitedValue(UINT64_MAX - 1) + 1;
   return Range <= BW;
 }
