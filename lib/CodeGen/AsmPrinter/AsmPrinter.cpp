@@ -1169,8 +1169,13 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   CurrentFnBegin = nullptr;
   CurExceptionSym = nullptr;
   bool NeedsLocalForSize = MAI->needsLocalForSize();
+  // TODO: reconcile this once the new EH representation lands.  Need to emit
+  // for funclets and filters.  Late outlining generates artificial landingpads
+  // in funclets, but early filter outlining does not, hence the check
+  // on MF and its WinEHParent.
   if (!MMI->getLandingPads().empty() || MMI->hasDebugInfo() ||
-      NeedsLocalForSize) {
+      NeedsLocalForSize ||
+      (MF.getFunction() != MMI->getWinEHParent(MF.getFunction()))) {
     CurrentFnBegin = createTempSymbol("func_begin");
     if (NeedsLocalForSize)
       CurrentFnSymForSize = CurrentFnBegin;

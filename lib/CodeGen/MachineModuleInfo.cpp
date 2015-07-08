@@ -490,6 +490,17 @@ const Function *MachineModuleInfo::getPersonality() const {
   for (const LandingPadInfo &LPI : LandingPads)
     if (LPI.Personality)
       return LPI.Personality;
+  if (Context.getObjectFileInfo()
+          ->getTargetTriple()
+          .isWindowsCoreCLREnvironment()) {
+    // Need to report the personality for outlined filters even though the
+    // filter won't have a landing pad inside it.
+    // TODO: Update this to whatever the new mechanism is for handler funclets
+    // when WindowsEH is changed over to the new representation.
+    for (const Function *F : Personalities) {
+      return F;
+    }
+  }
   return nullptr;
 }
 

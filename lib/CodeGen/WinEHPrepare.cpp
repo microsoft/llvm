@@ -107,7 +107,8 @@ private:
                                 const LandingPadInst *OriginalLPad,
                                 FrameVarInfoMap &VarInfo);
   Function *createHandlerFunc(Function *ParentFn, Type *RetTy,
-                              const Twine &Name, Module *M, Value *&ParentFP);
+                              const Twine &Name, Module *M,
+                              Function *Previous, Value *&ParentFP);
   bool outlineHandler(ActionHandler *Action, Function *SrcFn,
                       LandingPadInst *LPad, BasicBlock *StartBB,
                       FrameVarInfoMap &VarInfo);
@@ -1332,7 +1333,7 @@ void WinEHPrepare::addStubInvokeToHandlerIfNeeded(Function *Handler) {
 // usually doesn't build LLVM IR, so that's probably the wrong place.
 Function *WinEHPrepare::createHandlerFunc(Function *ParentFn, Type *RetTy,
                                           const Twine &Name, Module *M,
-                                          Value *&ParentFP) {
+                                          Function *Previous, Value *&ParentFP) {
   // x64 uses a two-argument prototype where the parent FP is the second
   // argument. x86 uses no arguments, just the incoming EBP value.
   LLVMContext &Context = M->getContext();
@@ -1346,7 +1347,14 @@ Function *WinEHPrepare::createHandlerFunc(Function *ParentFn, Type *RetTy,
   }
 
   Function *Handler =
-      Function::Create(FnType, GlobalVariable::InternalLinkage, Name, M);
+      Function::Create(FnType, GlobalVariable::InternalLinkage, Name);
+  if (Previous) {
+    // Caller requested outlined function to be inserted in a particular spot
+    // in the module.
+    M->getFunctionList().insertAfter(Previous, Handler);
+  } else {
+    M->getFunctionList().push_back(Handler);
+  }
   BasicBlock *Entry = BasicBlock::Create(Context, "entry");
   Handler->getBasicBlockList().push_front(Entry);
   if (TheTriple.getArch() == Triple::x86_64) {
@@ -1377,11 +1385,20 @@ bool WinEHPrepare::outlineHandler(ActionHandler *Action, Function *SrcFn,
   Value *ParentFP;
   Function *Handler;
   if (Action->getType() == Catch) {
+    Function *PreviousFn = nullptr;
+    if (TheTriple.isWindowsCoreCLREnvironment()) {
+      // CoreCLR requires filter handlers be inserted immediately after the
+      // associated filter function
+      if (auto *CatchAction = dyn_cast<CatchHandler>(Action))
+        PreviousFn =
+            dyn_cast<Function>(CatchAction->getSelector()->stripPointerCasts());
+    }
     Handler = createHandlerFunc(SrcFn, Int8PtrType, SrcFn->getName() + ".catch", M,
-                                ParentFP);
+                                PreviousFn, ParentFP);
   } else {
     Handler = createHandlerFunc(SrcFn, Type::getVoidTy(Context),
-                                SrcFn->getName() + ".cleanup", M, ParentFP);
+                                SrcFn->getName() + ".cleanup", M, nullptr,
+                                ParentFP);
   }
   Handler->setPersonalityFn(SrcFn->getPersonalityFn());
   HandlerToParentFP[Handler] = ParentFP;
