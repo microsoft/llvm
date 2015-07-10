@@ -269,14 +269,11 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::XOR8rr,      X86::XOR8mr,     0 }
   };
 
-  for (unsigned i = 0, e = array_lengthof(MemoryFoldTable2Addr); i != e; ++i) {
-    unsigned RegOp = MemoryFoldTable2Addr[i].RegOp;
-    unsigned MemOp = MemoryFoldTable2Addr[i].MemOp;
-    unsigned Flags = MemoryFoldTable2Addr[i].Flags;
+  for (X86MemoryFoldTableEntry Entry : MemoryFoldTable2Addr) {
     AddTableEntry(RegOp2MemOpTable2Addr, MemOp2RegOpTable,
-                  RegOp, MemOp,
+                  Entry.RegOp, Entry.MemOp,
                   // Index 0, folded load and store, no alignment requirement.
-                  Flags | TB_INDEX_0 | TB_FOLDED_LOAD | TB_FOLDED_STORE);
+                  Entry.Flags | TB_INDEX_0 | TB_FOLDED_LOAD | TB_FOLDED_STORE);
   }
 
   static const X86MemoryFoldTableEntry MemoryFoldTable0[] = {
@@ -424,12 +421,9 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::VCVTPS2PHYrr,       X86::VCVTPS2PHYmr,     TB_FOLDED_STORE }
   };
 
-  for (unsigned i = 0, e = array_lengthof(MemoryFoldTable0); i != e; ++i) {
-    unsigned RegOp      = MemoryFoldTable0[i].RegOp;
-    unsigned MemOp      = MemoryFoldTable0[i].MemOp;
-    unsigned Flags      = MemoryFoldTable0[i].Flags;
+  for (X86MemoryFoldTableEntry Entry : MemoryFoldTable0) {
     AddTableEntry(RegOp2MemOpTable0, MemOp2RegOpTable,
-                  RegOp, MemOp, TB_INDEX_0 | Flags);
+                  Entry.RegOp, Entry.MemOp, TB_INDEX_0 | Entry.Flags);
   }
 
   static const X86MemoryFoldTableEntry MemoryFoldTable1[] = {
@@ -862,14 +856,11 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::VAESKEYGENASSIST128rr, X86::VAESKEYGENASSIST128rm, 0 }
   };
 
-  for (unsigned i = 0, e = array_lengthof(MemoryFoldTable1); i != e; ++i) {
-    unsigned RegOp = MemoryFoldTable1[i].RegOp;
-    unsigned MemOp = MemoryFoldTable1[i].MemOp;
-    unsigned Flags = MemoryFoldTable1[i].Flags;
+  for (X86MemoryFoldTableEntry Entry : MemoryFoldTable1) {
     AddTableEntry(RegOp2MemOpTable1, MemOp2RegOpTable,
-                  RegOp, MemOp,
+                  Entry.RegOp, Entry.MemOp,
                   // Index 1, folded load
-                  Flags | TB_INDEX_1 | TB_FOLDED_LOAD);
+                  Entry.Flags | TB_INDEX_1 | TB_FOLDED_LOAD);
   }
 
   static const X86MemoryFoldTableEntry MemoryFoldTable2[] = {
@@ -1733,14 +1724,11 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::SHA256RNDS2rr,     X86::SHA256RNDS2rm,       TB_ALIGN_16 }
   };
 
-  for (unsigned i = 0, e = array_lengthof(MemoryFoldTable2); i != e; ++i) {
-    unsigned RegOp = MemoryFoldTable2[i].RegOp;
-    unsigned MemOp = MemoryFoldTable2[i].MemOp;
-    unsigned Flags = MemoryFoldTable2[i].Flags;
+  for (X86MemoryFoldTableEntry Entry : MemoryFoldTable2) {
     AddTableEntry(RegOp2MemOpTable2, MemOp2RegOpTable,
-                  RegOp, MemOp,
+                  Entry.RegOp, Entry.MemOp,
                   // Index 2, folded load
-                  Flags | TB_INDEX_2 | TB_FOLDED_LOAD);
+                  Entry.Flags | TB_INDEX_2 | TB_FOLDED_LOAD);
   }
 
   static const X86MemoryFoldTableEntry MemoryFoldTable3[] = {
@@ -1949,14 +1937,11 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::VMAXPDZ128rrkz,        X86::VMAXPDZ128rmkz,        0 }
   };
 
-  for (unsigned i = 0, e = array_lengthof(MemoryFoldTable3); i != e; ++i) {
-    unsigned RegOp = MemoryFoldTable3[i].RegOp;
-    unsigned MemOp = MemoryFoldTable3[i].MemOp;
-    unsigned Flags = MemoryFoldTable3[i].Flags;
+  for (X86MemoryFoldTableEntry Entry : MemoryFoldTable3) {
     AddTableEntry(RegOp2MemOpTable3, MemOp2RegOpTable,
-                  RegOp, MemOp,
+                  Entry.RegOp, Entry.MemOp,
                   // Index 3, folded load
-                  Flags | TB_INDEX_3 | TB_FOLDED_LOAD);
+                  Entry.Flags | TB_INDEX_3 | TB_FOLDED_LOAD);
   }
 
   static const X86MemoryFoldTableEntry MemoryFoldTable4[] = {
@@ -2001,14 +1986,11 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::VMAXPDZ128rrk,      X86::VMAXPDZ128rmk,        0 }
   };
 
-  for (unsigned i = 0, e = array_lengthof(MemoryFoldTable4); i != e; ++i) {
-    unsigned RegOp = MemoryFoldTable4[i].RegOp;
-    unsigned MemOp = MemoryFoldTable4[i].MemOp;
-    unsigned Flags = MemoryFoldTable4[i].Flags;
+  for (X86MemoryFoldTableEntry Entry : MemoryFoldTable4) {
     AddTableEntry(RegOp2MemOpTable4, MemOp2RegOpTable,
-                  RegOp, MemOp,
+                  Entry.RegOp, Entry.MemOp,
                   // Index 4, folded load
-                  Flags | TB_INDEX_4 | TB_FOLDED_LOAD);
+                  Entry.Flags | TB_INDEX_4 | TB_FOLDED_LOAD);
   }
 }
 
@@ -6417,18 +6399,30 @@ static bool hasReassocSibling(const MachineInstr &Inst, bool &Commuted) {
   return false;
 }
 
+// TODO: There are many more machine instruction opcodes to match:
+//       1. Other data types (double, integer, vectors)
+//       2. Other math / logic operations (mul, and, or)
+static bool isAssociativeAndCommutative(unsigned Opcode) {
+  switch (Opcode) {
+  case X86::VADDSSrr:
+  case X86::ADDSSrr:
+    return true;
+  default:
+    return false;
+  }
+}
+
 /// Return true if the input instruction is part of a chain of dependent ops
 /// that are suitable for reassociation, otherwise return false.
 /// If the instruction's operands must be commuted to have a previous
 /// instruction of the same type define the first source operand, Commuted will
 /// be set to true.
-static bool isReassocCandidate(const MachineInstr &Inst, unsigned AssocOpcode,
-                               bool &Commuted) {
-  // 1. The instruction must have the correct type.
+static bool isReassocCandidate(const MachineInstr &Inst, bool &Commuted) {
+  // 1. The operation must be associative and commutative.
   // 2. The instruction must have virtual register definitions for its
   //    operands in the same basic block.
-  // 3. The instruction must have a reassociatable sibling.
-  if (Inst.getOpcode() == AssocOpcode &&
+  // 3. The instruction must have a reassociable sibling.
+  if (isAssociativeAndCommutative(Inst.getOpcode()) &&
       hasVirtualRegDefsInBasicBlock(Inst, Inst.getParent()) &&
       hasReassocSibling(Inst, Commuted))
     return true;
@@ -6455,14 +6449,8 @@ bool X86InstrInfo::getMachineCombinerPatterns(MachineInstr &Root,
   //   B = A op X (Prev)
   //   C = B op Y (Root)
 
-  // TODO: There are many more associative instruction types to match:
-  //       1. Other forms of scalar FP add (non-AVX)
-  //       2. Other data types (double, integer, vectors)
-  //       3. Other math / logic operations (mul, and, or)
-  unsigned AssocOpcode = X86::VADDSSrr;
-
-  bool Commute = false;
-  if (isReassocCandidate(Root, AssocOpcode, Commute)) {
+  bool Commute;
+  if (isReassocCandidate(Root, Commute)) {
     // We found a sequence of instructions that may be suitable for a
     // reassociation of operands to increase ILP. Specify each commutation
     // possibility for the Prev instruction in the sequence and let the
