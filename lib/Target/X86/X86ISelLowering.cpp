@@ -19355,7 +19355,7 @@ X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
   const X86RegisterInfo *X86RI = static_cast<const X86RegisterInfo *>(TRI);
   MachineRegisterInfo &MRI = MF->getRegInfo();
 
-  MVT PVT = getPointerTy();
+  MVT PVT = getPointerTy(MF->getDataLayout());
   assert((PVT == MVT::i64 || PVT == MVT::i32) &&
          "Invalid Pointer Size!");
 
@@ -19472,7 +19472,7 @@ X86TargetLowering::EmitGCTransitionPause(MachineInstr *MI,
   const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
   const X86RegisterInfo *X86RI = static_cast<const X86RegisterInfo *>(TRI);
 
-  MVT PVT = getPointerTy();
+  MVT PVT = getPointerTy(MF->getDataLayout());
   assert((PVT == MVT::i64 || PVT == MVT::i32) &&
          "Invalid Pointer Size!");
 
