@@ -24,11 +24,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "x86-selectiondag-info"
 
-X86SelectionDAGInfo::X86SelectionDAGInfo(const DataLayout &DL)
-    : TargetSelectionDAGInfo(&DL) {}
-
-X86SelectionDAGInfo::~X86SelectionDAGInfo() {}
-
 bool X86SelectionDAGInfo::isBaseRegConflictPossible(
     SelectionDAG &DAG, ArrayRef<unsigned> ClobberSet) const {
   // We cannot use TRI->hasBasePointer() until *after* we select all basic
@@ -81,8 +76,9 @@ X86SelectionDAGInfo::EmitTargetCodeForMemset(SelectionDAG &DAG, SDLoc dl,
 
     if (const char *bzeroEntry =  V &&
         V->isNullValue() ? Subtarget.getBZeroEntry() : nullptr) {
-      EVT IntPtr = DAG.getTargetLoweringInfo().getPointerTy();
-      Type *IntPtrTy = getDataLayout()->getIntPtrType(*DAG.getContext());
+      EVT IntPtr =
+          DAG.getTargetLoweringInfo().getPointerTy(DAG.getDataLayout());
+      Type *IntPtrTy = DAG.getDataLayout().getIntPtrType(*DAG.getContext());
       TargetLowering::ArgListTy Args;
       TargetLowering::ArgListEntry Entry;
       Entry.Node = Dst;

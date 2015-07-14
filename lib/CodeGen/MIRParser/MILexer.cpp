@@ -71,6 +71,8 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("implicit", MIToken::kw_implicit)
       .Case("implicit-def", MIToken::kw_implicit_define)
       .Case("dead", MIToken::kw_dead)
+      .Case("killed", MIToken::kw_killed)
+      .Case("undef", MIToken::kw_undef)
       .Default(MIToken::Identifier);
 }
 
@@ -113,9 +115,22 @@ static Cursor maybeLexMachineBasicBlock(
   return C;
 }
 
+static Cursor lexVirtualRegister(Cursor C, MIToken &Token) {
+  auto Range = C;
+  C.advance(); // Skip '%'
+  auto NumberRange = C;
+  while (isdigit(C.peek()))
+    C.advance();
+  Token = MIToken(MIToken::VirtualRegister, Range.upto(C),
+                  APSInt(NumberRange.upto(C)));
+  return C;
+}
+
 static Cursor maybeLexRegister(Cursor C, MIToken &Token) {
   if (C.peek() != '%')
     return None;
+  if (isdigit(C.peek(1)))
+    return lexVirtualRegister(C, Token);
   auto Range = C;
   C.advance(); // Skip '%'
   while (isIdentifierChar(C.peek()))
@@ -164,6 +179,8 @@ static MIToken::TokenKind symbolToken(char C) {
     return MIToken::comma;
   case '=':
     return MIToken::equal;
+  case ':':
+    return MIToken::colon;
   default:
     return MIToken::Error;
   }

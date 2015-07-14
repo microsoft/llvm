@@ -16,11 +16,13 @@ add_llvm_target(HexagonCodeGen
   HexagonAsmPrinter.cpp
   HexagonBitTracker.cpp
   HexagonCFGOptimizer.cpp
+  HexagonCommonGEP.cpp
   HexagonCopyToCombine.cpp
   HexagonExpandCondsets.cpp
   HexagonExpandPredSpillCode.cpp
   HexagonFixupHwLoops.cpp
   HexagonFrameLowering.cpp
+  HexagonGenInsert.cpp
   HexagonHardwareLoops.cpp
   HexagonInstrInfo.cpp
   HexagonISelDAGToDAG.cpp

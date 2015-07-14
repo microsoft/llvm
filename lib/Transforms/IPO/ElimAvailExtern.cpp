@@ -24,7 +24,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "elim-avail-extern"
 
-STATISTIC(NumAliases  , "Number of global aliases removed");
 STATISTIC(NumFunctions, "Number of functions removed");
 STATISTIC(NumVariables, "Number of global variables removed");
 
@@ -67,7 +66,6 @@ bool EliminateAvailableExternally::runOnModule(Module &M) {
     }
     I->removeDeadConstantUsers();
     I->setLinkage(GlobalValue::ExternalLinkage);
-    I->setVisibility(GlobalValue::DefaultVisibility);
     NumVariables++;
   }
 
@@ -78,21 +76,8 @@ bool EliminateAvailableExternally::runOnModule(Module &M) {
     if (!I->isDeclaration())
       // This will set the linkage to external
       I->deleteBody();
-    I->setVisibility(GlobalValue::DefaultVisibility);
     I->removeDeadConstantUsers();
     NumFunctions++;
-  }
-
-  // Drop targets of available externally aliases.
-  for (Module::alias_iterator I = M.alias_begin(), E = M.alias_end(); I != E;
-       ++I) {
-    if (!I->hasAvailableExternallyLinkage())
-      continue;
-    I->setAliasee(nullptr);
-    I->removeDeadConstantUsers();
-    I->setLinkage(GlobalValue::ExternalLinkage);
-    I->setVisibility(GlobalValue::DefaultVisibility);
-    NumAliases++;
   }
 
   return Changed;
