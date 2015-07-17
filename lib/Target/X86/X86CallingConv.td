@@ -441,6 +441,28 @@ def CC_X86_64_AnyReg : CallingConv<[
   CCCustom<"CC_X86_AnyReg_Error">
 ]>;
 
+def CC_X86_64_CLR_VirtualDispatchStub : CallingConv<[
+  // The first pointer-sized argument is passed in R11
+  CCIfType<[i64], CCAssignToReg<[R11]>>,
+
+  // Mingw64 and native Win64 use Win64 CC
+  CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
+
+  // Otherwise, drop to normal X86-64 CC
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
+def CC_X86_64_CLR_SecretParameter : CallingConv<[
+  // The secret parameter is passed in R10
+  CCIf<"hasCLRSecretParameterAttribute(ValNo, State)", CCAssignToReg<[R10]>>,
+
+  // Mingw64 and native Win64 use Win64 CC
+  CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
+
+  // Otherwise, drop to normal X86-64 CC
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
 //===----------------------------------------------------------------------===//
 // X86 C Calling Convention
 //===----------------------------------------------------------------------===//
@@ -708,6 +730,23 @@ def CC_Intel_OCL_BI : CallingConv<[
   CCDelegateTo<CC_X86_32_C>
 ]>;
 
+def CC_X86_32_CLR_VirtualDispatchStub : CallingConv<[
+  // The first pointer-sized argument is passed in EAX
+  CCIfType<[i32], CCAssignToReg<[EAX]>>,
+
+  // Otherwise, drop to normal X86-32 CC
+  CCDelegateTo<CC_X86_32_C>
+]>;
+
+def CC_X86_32_CLR_SecretParameter : CallingConv<[
+  // The secret parameter is passed in EAX
+  CCIf<"hasCLRSecretParameterAttribute(ValNo, State)", CCAssignToReg<[EAX]>>,
+
+  // Otherwise, drop to normal X86-32 CC
+  CCDelegateTo<CC_X86_32_C>
+]>;
+
+
 //===----------------------------------------------------------------------===//
 // X86 Root Argument Calling Conventions
 //===----------------------------------------------------------------------===//
@@ -720,6 +759,10 @@ def CC_X86_32 : CallingConv<[
   CCIfCC<"CallingConv::Fast", CCDelegateTo<CC_X86_32_FastCC>>,
   CCIfCC<"CallingConv::GHC", CCDelegateTo<CC_X86_32_GHC>>,
   CCIfCC<"CallingConv::HiPE", CCDelegateTo<CC_X86_32_HiPE>>,
+  CCIfCC<"CallingConv::CLR_VirtualDispatchStub",
+         CCDelegateTo<CC_X86_32_CLR_VirtualDispatchStub>>,
+  CCIfCC<"CallingConv::CLR_SecretParameter",
+         CCDelegateTo<CC_X86_32_CLR_SecretParameter>>,
 
   // Otherwise, drop to normal X86-32 CC
   CCDelegateTo<CC_X86_32_C>
@@ -734,6 +777,10 @@ def CC_X86_64 : CallingConv<[
   CCIfCC<"CallingConv::X86_64_Win64", CCDelegateTo<CC_X86_Win64_C>>,
   CCIfCC<"CallingConv::X86_64_SysV", CCDelegateTo<CC_X86_64_C>>,
   CCIfCC<"CallingConv::X86_VectorCall", CCDelegateTo<CC_X86_Win64_VectorCall>>,
+  CCIfCC<"CallingConv::CLR_VirtualDispatchStub",
+         CCDelegateTo<CC_X86_64_CLR_VirtualDispatchStub>>,
+  CCIfCC<"CallingConv::CLR_SecretParameter",
+         CCDelegateTo<CC_X86_64_CLR_SecretParameter>>,
 
   // Mingw64 and native Win64 use Win64 CC
   CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
@@ -758,11 +805,18 @@ def CSR_NoRegs : CalleeSavedRegs<(add)>;
 def CSR_32 : CalleeSavedRegs<(add ESI, EDI, EBX, EBP)>;
 def CSR_64 : CalleeSavedRegs<(add RBX, R12, R13, R14, R15, RBP)>;
 
+def CSR_32_NoGPRs : CalleeSavedRegs<(add EBP)>;
+def CSR_64_NoGPRs : CalleeSavedRegs<(add RBP)>;
+
+def CSR_64_WithRet : CalleeSavedRegs<(add CSR_64, RAX, RDX, XMM0, XMM1, FP0, FP1)>;
+
 def CSR_32EHRet : CalleeSavedRegs<(add EAX, EDX, CSR_32)>;
 def CSR_64EHRet : CalleeSavedRegs<(add RAX, RDX, CSR_64)>;
 
 def CSR_Win64 : CalleeSavedRegs<(add RBX, RBP, RDI, RSI, R12, R13, R14, R15,
                                      (sequence "XMM%u", 6, 15))>;
+def CSR_Win64_NoGPRs : CalleeSavedRegs<(add RBP, (sequence "XMM%u", 6, 15))>;
+def CSR_Win64_WithRet : CalleeSavedRegs<(add CSR_Win64, RAX, XMM0)>;
 
 // All GPRs - except r11
 def CSR_64_RT_MostRegs : CalleeSavedRegs<(add CSR_64, RAX, RCX, RDX, RSI, RDI,

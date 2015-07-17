@@ -47,11 +47,24 @@ public:
 
   unsigned StackPtr;
 
-  /// Emit a call to the target's stack probe function. This is required for all
+  /// Emit target stack probe code. This is required for all
   /// large stack allocations on Windows. The caller is required to materialize
-  /// the number of bytes to probe in RAX/EAX.
-  void emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
-                          MachineBasicBlock::iterator MBBI, DebugLoc DL) const;
+  /// the number of bytes to probe in RAX/EAX. Returns instruction just
+  /// after the expansion.
+  MachineInstr *emitStackProbe(MachineFunction &MF, MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                               bool IsProlog) const;
+
+  /// Emit target stack probe as a call to a helper function
+  MachineInstr *emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MBBI,
+                                   DebugLoc DL, bool IsProlog) const;
+
+  /// Emit target stack probe as an inline sequence.
+  MachineInstr *emitStackProbeInline(MachineFunction &MF,
+                                     MachineBasicBlock &MBB,
+                                     MachineBasicBlock::iterator MBBI,
+                                     DebugLoc DL, bool IsProlog) const;
 
   void emitCalleeSavedFrameMoves(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MBBI,

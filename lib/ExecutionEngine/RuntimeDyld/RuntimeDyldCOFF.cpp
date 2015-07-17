@@ -32,9 +32,7 @@ public:
       : LoadedObjectInfoHelper(RTDyld, BeginIdx, EndIdx) {}
 
   OwningBinary<ObjectFile>
-  getObjectForDebug(const ObjectFile &Obj) const override {
-    return OwningBinary<ObjectFile>();
-  }
+  getObjectForDebug(const ObjectFile &Obj) const override;
 };
 }
 
@@ -71,3 +69,25 @@ bool RuntimeDyldCOFF::isCompatibleFile(const object::ObjectFile &Obj) const {
 }
 
 } // namespace llvm
+
+OwningBinary<ObjectFile> createCOFFDebugObject(const ObjectFile &Obj,
+                                               const LoadedCOFFObjectInfo &L) {
+  assert(Obj.isCOFF() && "Not a COFF object file");
+
+  std::unique_ptr<MemoryBuffer> Buffer =
+    MemoryBuffer::getMemBufferCopy(Obj.getData(), Obj.getFileName());
+
+  std::error_code ec;
+
+  std::unique_ptr<COFFObjectFile> DebugObj =
+    llvm::make_unique<COFFObjectFile>(Buffer->getMemBufferRef(), ec);
+
+  assert(!ec && "Could not construct copy COFF object file");
+
+  return OwningBinary<ObjectFile>(std::move(DebugObj), std::move(Buffer));
+}
+
+OwningBinary<ObjectFile>
+LoadedCOFFObjectInfo::getObjectForDebug(const ObjectFile &Obj) const {
+  return createCOFFDebugObject(Obj, *this);
+}

@@ -402,6 +402,10 @@ public:
     return TargetTriple.isWindowsMSVCEnvironment();
   }
 
+  bool isTargetWindowsCoreCLR() const {
+    return TargetTriple.isWindowsCoreCLREnvironment();
+  }
+
   bool isTargetKnownWindowsMSVC() const {
     return TargetTriple.isKnownWindowsMSVCEnvironment();
   }
@@ -456,6 +460,8 @@ public:
     case CallingConv::X86_ThisCall:
     case CallingConv::X86_VectorCall:
     case CallingConv::Intel_OCL_BI:
+    case CallingConv::CLR_VirtualDispatchStub:
+    case CallingConv::CLR_SecretParameter:
       return isTargetWin64();
     // This convention allows using the Win64 convention on other targets.
     case CallingConv::X86_64_Win64:
