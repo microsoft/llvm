@@ -19,6 +19,7 @@
 #define LLVM_LIB_CODEGEN_MIRYAMLMAPPING_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/Support/YAMLTraits.h"
 #include <vector>
 
@@ -72,6 +73,22 @@ template <> struct ScalarTraits<FlowStringValue> {
   static bool mustQuote(StringRef Scalar) { return needsQuotes(Scalar); }
 };
 
+template <> struct ScalarEnumerationTraits<MachineJumpTableInfo::JTEntryKind> {
+  static void enumeration(yaml::IO &IO,
+                          MachineJumpTableInfo::JTEntryKind &EntryKind) {
+    IO.enumCase(EntryKind, "block-address",
+                MachineJumpTableInfo::EK_BlockAddress);
+    IO.enumCase(EntryKind, "gp-rel64-block-address",
+                MachineJumpTableInfo::EK_GPRel64BlockAddress);
+    IO.enumCase(EntryKind, "gp-rel32-block-address",
+                MachineJumpTableInfo::EK_GPRel32BlockAddress);
+    IO.enumCase(EntryKind, "label-difference32",
+                MachineJumpTableInfo::EK_LabelDifference32);
+    IO.enumCase(EntryKind, "inline", MachineJumpTableInfo::EK_Inline);
+    IO.enumCase(EntryKind, "custom32", MachineJumpTableInfo::EK_Custom32);
+  }
+};
+
 } // end namespace yaml
 } // end namespace llvm
 
@@ -102,9 +119,9 @@ struct MachineBasicBlock {
   unsigned Alignment = 0;
   bool IsLandingPad = false;
   bool AddressTaken = false;
-  // TODO: Serialize the successor weights and liveins.
+  // TODO: Serialize the successor weights.
   std::vector<FlowStringValue> Successors;
-
+  std::vector<FlowStringValue> LiveIns;
   std::vector<StringValue> Instructions;
 };
 
@@ -117,6 +134,7 @@ template <> struct MappingTraits<MachineBasicBlock> {
     YamlIO.mapOptional("isLandingPad", MBB.IsLandingPad);
     YamlIO.mapOptional("addressTaken", MBB.AddressTaken);
     YamlIO.mapOptional("successors", MBB.Successors);
+    YamlIO.mapOptional("liveins", MBB.LiveIns);
     YamlIO.mapOptional("instructions", MBB.Instructions);
   }
 };
@@ -131,8 +149,9 @@ template <> struct MappingTraits<MachineBasicBlock> {
 /// objects (Serialize local objects).
 struct MachineStackObject {
   enum ObjectType { DefaultType, SpillSlot, VariableSized };
-  // TODO: Serialize LLVM alloca reference.
   unsigned ID;
+  StringValue Name;
+  // TODO: Serialize unnamed LLVM alloca reference.
   ObjectType Type = DefaultType;
   int64_t Offset = 0;
   uint64_t Size = 0;
@@ -150,6 +169,8 @@ template <> struct ScalarEnumerationTraits<MachineStackObject::ObjectType> {
 template <> struct MappingTraits<MachineStackObject> {
   static void mapping(yaml::IO &YamlIO, MachineStackObject &Object) {
     YamlIO.mapRequired("id", Object.ID);
+    YamlIO.mapOptional("name", Object.Name,
+                       StringValue()); // Don't print out an empty name.
     YamlIO.mapOptional(
         "type", Object.Type,
         MachineStackObject::DefaultType); // Don't print the default type.
@@ -202,6 +223,23 @@ template <> struct MappingTraits<FixedMachineStackObject> {
   static const bool flow = true;
 };
 
+struct MachineJumpTable {
+  struct Entry {
+    unsigned ID;
+    std::vector<FlowStringValue> Blocks;
+  };
+
+  MachineJumpTableInfo::JTEntryKind Kind = MachineJumpTableInfo::EK_Custom32;
+  std::vector<Entry> Entries;
+};
+
+template <> struct MappingTraits<MachineJumpTable::Entry> {
+  static void mapping(IO &YamlIO, MachineJumpTable::Entry &Entry) {
+    YamlIO.mapRequired("id", Entry.ID);
+    YamlIO.mapOptional("blocks", Entry.Blocks);
+  }
+};
+
 } // end namespace yaml
 } // end namespace llvm
 
@@ -209,9 +247,17 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::VirtualRegisterDefinition)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineBasicBlock)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineStackObject)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::FixedMachineStackObject)
+LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineJumpTable::Entry)
 
 namespace llvm {
 namespace yaml {
+
+template <> struct MappingTraits<MachineJumpTable> {
+  static void mapping(IO &YamlIO, MachineJumpTable &JT) {
+    YamlIO.mapRequired("kind", JT.Kind);
+    YamlIO.mapOptional("entries", JT.Entries);
+  }
+};
 
 /// Serializable representation of MachineFrameInfo.
 ///
@@ -274,6 +320,7 @@ struct MachineFunction {
   MachineFrameInfo FrameInfo;
   std::vector<FixedMachineStackObject> FixedStackObjects;
   std::vector<MachineStackObject> StackObjects;
+  MachineJumpTable JumpTableInfo;
 
   std::vector<MachineBasicBlock> BasicBlocks;
 };
@@ -291,6 +338,8 @@ template <> struct MappingTraits<MachineFunction> {
     YamlIO.mapOptional("frameInfo", MF.FrameInfo);
     YamlIO.mapOptional("fixedStack", MF.FixedStackObjects);
     YamlIO.mapOptional("stack", MF.StackObjects);
+    if (!YamlIO.outputting() || !MF.JumpTableInfo.Entries.empty())
+      YamlIO.mapOptional("jumpTable", MF.JumpTableInfo);
     YamlIO.mapOptional("body", MF.BasicBlocks);
   }
 };

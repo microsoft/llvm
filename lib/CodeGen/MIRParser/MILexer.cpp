@@ -73,6 +73,7 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("dead", MIToken::kw_dead)
       .Case("killed", MIToken::kw_killed)
       .Case("undef", MIToken::kw_undef)
+      .Case("frame-setup", MIToken::kw_frame_setup)
       .Default(MIToken::Identifier);
 }
 
@@ -113,6 +114,52 @@ static Cursor maybeLexMachineBasicBlock(
   Token = MIToken(MIToken::MachineBasicBlock, Range.upto(C), APSInt(Number),
                   StringOffset);
   return C;
+}
+
+static Cursor maybeLexIndex(Cursor C, MIToken &Token, StringRef Rule,
+                            MIToken::TokenKind Kind) {
+  if (!C.remaining().startswith(Rule) || !isdigit(C.peek(Rule.size())))
+    return None;
+  auto Range = C;
+  C.advance(Rule.size());
+  auto NumberRange = C;
+  while (isdigit(C.peek()))
+    C.advance();
+  Token = MIToken(Kind, Range.upto(C), APSInt(NumberRange.upto(C)));
+  return C;
+}
+
+static Cursor maybeLexIndexAndName(Cursor C, MIToken &Token, StringRef Rule,
+                                   MIToken::TokenKind Kind) {
+  if (!C.remaining().startswith(Rule) || !isdigit(C.peek(Rule.size())))
+    return None;
+  auto Range = C;
+  C.advance(Rule.size());
+  auto NumberRange = C;
+  while (isdigit(C.peek()))
+    C.advance();
+  StringRef Number = NumberRange.upto(C);
+  unsigned StringOffset = Rule.size() + Number.size();
+  if (C.peek() == '.') {
+    C.advance();
+    ++StringOffset;
+    while (isIdentifierChar(C.peek()))
+      C.advance();
+  }
+  Token = MIToken(Kind, Range.upto(C), APSInt(Number), StringOffset);
+  return C;
+}
+
+static Cursor maybeLexJumpTableIndex(Cursor C, MIToken &Token) {
+  return maybeLexIndex(C, Token, "%jump-table.", MIToken::JumpTableIndex);
+}
+
+static Cursor maybeLexStackObject(Cursor C, MIToken &Token) {
+  return maybeLexIndexAndName(C, Token, "%stack.", MIToken::StackObject);
+}
+
+static Cursor maybeLexFixedStackObject(Cursor C, MIToken &Token) {
+  return maybeLexIndex(C, Token, "%fixed-stack.", MIToken::FixedStackObject);
 }
 
 static Cursor lexVirtualRegister(Cursor C, MIToken &Token) {
@@ -208,6 +255,12 @@ StringRef llvm::lexMIToken(
   if (Cursor R = maybeLexIdentifier(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexMachineBasicBlock(C, Token, ErrorCallback))
+    return R.remaining();
+  if (Cursor R = maybeLexJumpTableIndex(C, Token))
+    return R.remaining();
+  if (Cursor R = maybeLexStackObject(C, Token))
+    return R.remaining();
+  if (Cursor R = maybeLexFixedStackObject(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexRegister(C, Token))
     return R.remaining();

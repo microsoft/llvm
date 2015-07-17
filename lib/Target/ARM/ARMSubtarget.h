@@ -112,9 +112,9 @@ protected:
   /// IsR9Reserved - True if R9 is a not available as general purpose register.
   bool IsR9Reserved;
 
-  /// UseMovt - True if MOVT / MOVW pairs are used for materialization of 32-bit
-  /// imms (including global addresses).
-  bool UseMovt;
+  /// NoMovt - True if MOVT / MOVW pairs are not used for materialization of
+  /// 32-bit imms (including global addresses).
+  bool NoMovt;
 
   /// SupportsTailCall - True if the OS supports tail call. The dynamic linker
   /// must be able to synthesize call stubs for interworking between ARM and
@@ -432,6 +432,9 @@ public:
   /// This function returns true if the target has sincos() routine in its
   /// compiler runtime or math libraries.
   bool hasSinCos() const;
+
+  /// Returns true if machine scheduler should be enabled.
+  bool enableMachineScheduler() const override;
 
   /// True for some subtargets at > -O0.
   bool enablePostRAScheduler() const override;

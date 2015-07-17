@@ -108,8 +108,14 @@ public:
                          const yaml::MachineFunction &YamlMF,
                          DenseMap<unsigned, unsigned> &VirtualRegisterSlots);
 
-  bool initializeFrameInfo(MachineFrameInfo &MFI,
-                           const yaml::MachineFunction &YamlMF);
+  bool initializeFrameInfo(const Function &F, MachineFrameInfo &MFI,
+                           const yaml::MachineFunction &YamlMF,
+                           DenseMap<unsigned, int> &StackObjectSlots,
+                           DenseMap<unsigned, int> &FixedStackObjectSlots);
+
+  bool initializeJumpTableInfo(MachineFunction &MF,
+                               const yaml::MachineJumpTable &YamlJTI,
+                               PerFunctionMIParsingState &PFS);
 
 private:
   /// Return a MIR diagnostic converted from an MI string diagnostic.
@@ -264,7 +270,8 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
   if (initializeRegisterInfo(MF, MF.getRegInfo(), YamlMF,
                              PFS.VirtualRegisterSlots))
     return true;
-  if (initializeFrameInfo(*MF.getFrameInfo(), YamlMF))
+  if (initializeFrameInfo(*MF.getFunction(), *MF.getFrameInfo(), YamlMF,
+                          PFS.StackObjectSlots, PFS.FixedStackObjectSlots))
     return true;
 
   const auto &F = *MF.getFunction();
@@ -292,6 +299,11 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
   if (YamlMF.BasicBlocks.empty())
     return error(Twine("machine function '") + Twine(MF.getName()) +
                  "' requires at least one machine basic block in its body");
+  // Initialize the jump table after creating all the MBBs so that the MBB
+  // references can be resolved.
+  if (!YamlMF.JumpTableInfo.Entries.empty() &&
+      initializeJumpTableInfo(MF, YamlMF.JumpTableInfo, PFS))
+    return true;
   // Initialize the machine basic blocks after creating them all so that the
   // machine instructions parser can resolve the MBB references.
   unsigned I = 0;
@@ -320,6 +332,14 @@ bool MIRParserImpl::initializeMachineBasicBlock(
       return error(Error, MBBSource.SourceRange);
     // TODO: Report an error when adding the same successor more than once.
     MBB.addSuccessor(SuccMBB);
+  }
+  // Parse the liveins.
+  for (const auto &LiveInSource : YamlMBB.LiveIns) {
+    unsigned Reg = 0;
+    if (parseNamedRegisterReference(Reg, SM, MF, LiveInSource.Value, PFS,
+                                    IRSlots, Error))
+      return error(Error, LiveInSource.SourceRange);
+    MBB.addLiveIn(Reg);
   }
   // Parse the instructions.
   for (const auto &MISource : YamlMBB.Instructions) {
@@ -358,8 +378,11 @@ bool MIRParserImpl::initializeRegisterInfo(
   return false;
 }
 
-bool MIRParserImpl::initializeFrameInfo(MachineFrameInfo &MFI,
-                                        const yaml::MachineFunction &YamlMF) {
+bool MIRParserImpl::initializeFrameInfo(
+    const Function &F, MachineFrameInfo &MFI,
+    const yaml::MachineFunction &YamlMF,
+    DenseMap<unsigned, int> &StackObjectSlots,
+    DenseMap<unsigned, int> &FixedStackObjectSlots) {
   const yaml::MachineFrameInfo &YamlMFI = YamlMF.FrameInfo;
   MFI.setFrameAddressIsTaken(YamlMFI.IsFrameAddressTaken);
   MFI.setReturnAddressIsTaken(YamlMFI.IsReturnAddressTaken);
@@ -385,23 +408,53 @@ bool MIRParserImpl::initializeFrameInfo(MachineFrameInfo &MFI,
     else
       ObjectIdx = MFI.CreateFixedSpillStackObject(Object.Size, Object.Offset);
     MFI.setObjectAlignment(ObjectIdx, Object.Alignment);
-    // TODO: Store the mapping between fixed object IDs and object indices to
-    // parse fixed stack object references correctly.
+    // TODO: Report an error when objects are redefined.
+    FixedStackObjectSlots.insert(std::make_pair(Object.ID, ObjectIdx));
   }
 
   // Initialize the ordinary frame objects.
   for (const auto &Object : YamlMF.StackObjects) {
     int ObjectIdx;
+    const AllocaInst *Alloca = nullptr;
+    const yaml::StringValue &Name = Object.Name;
+    if (!Name.Value.empty()) {
+      Alloca = dyn_cast_or_null<AllocaInst>(
+          F.getValueSymbolTable().lookup(Name.Value));
+      if (!Alloca)
+        return error(Name.SourceRange.Start,
+                     "alloca instruction named '" + Name.Value +
+                         "' isn't defined in the function '" + F.getName() +
+                         "'");
+    }
     if (Object.Type == yaml::MachineStackObject::VariableSized)
-      ObjectIdx =
-          MFI.CreateVariableSizedObject(Object.Alignment, /*Alloca=*/nullptr);
+      ObjectIdx = MFI.CreateVariableSizedObject(Object.Alignment, Alloca);
     else
       ObjectIdx = MFI.CreateStackObject(
           Object.Size, Object.Alignment,
-          Object.Type == yaml::MachineStackObject::SpillSlot);
+          Object.Type == yaml::MachineStackObject::SpillSlot, Alloca);
     MFI.setObjectOffset(ObjectIdx, Object.Offset);
-    // TODO: Store the mapping between object IDs and object indices to parse
-    // stack object references correctly.
+    // TODO: Report an error when objects are redefined.
+    StackObjectSlots.insert(std::make_pair(Object.ID, ObjectIdx));
+  }
+  return false;
+}
+
+bool MIRParserImpl::initializeJumpTableInfo(
+    MachineFunction &MF, const yaml::MachineJumpTable &YamlJTI,
+    PerFunctionMIParsingState &PFS) {
+  MachineJumpTableInfo *JTI = MF.getOrCreateJumpTableInfo(YamlJTI.Kind);
+  SMDiagnostic Error;
+  for (const auto &Entry : YamlJTI.Entries) {
+    std::vector<MachineBasicBlock *> Blocks;
+    for (const auto &MBBSource : Entry.Blocks) {
+      MachineBasicBlock *MBB = nullptr;
+      if (parseMBBReference(MBB, SM, MF, MBBSource.Value, PFS, IRSlots, Error))
+        return error(Error, MBBSource.SourceRange);
+      Blocks.push_back(MBB);
+    }
+    unsigned Index = JTI->createJumpTableIndex(Blocks);
+    // TODO: Report an error when the same jump table slot ID is redefined.
+    PFS.JumpTableSlots.insert(std::make_pair(Entry.ID, Index));
   }
   return false;
 }

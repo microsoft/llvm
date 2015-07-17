@@ -1,5 +1,3 @@
-; This isn't really an assembly file, its just here to run the test.
-
 ; This test just makes sure that llvm-ar can extract bytecode members
 ; from various style archives.
 
@@ -43,3 +41,16 @@
 ; RUN: env TZ=GMT llvm-ar tv %t.a | FileCheck %s
 
 CHECK: 1465 2004-11-19 03:01:31.000000000 very_long_bytecode_file_name.bc
+
+
+RUN: not llvm-ar x %p/Inputs/GNU.a foo.o 2>&1 | FileCheck --check-prefix=NOTFOUND %s
+NOTFOUND: foo.o was not found
+
+RUN: not llvm-ar x %p/Inputs/thin.a foo.o 2>&1 | FileCheck %s --check-prefix=THINEXTRACT
+THINEXTRACT: extracting from a thin archive is not supported
+
+RUN: llvm-ar p %p/Inputs/thin.a evenlen | FileCheck %s --check-prefix=EVENLEN
+EVENLEN: evenlen
+
+RUN: not llvm-ar p %p/Inputs/thin-path.a t/test2.o | FileCheck %s --check-prefix=MISSING
+MISSING: {{N|n}}o such file or directory.

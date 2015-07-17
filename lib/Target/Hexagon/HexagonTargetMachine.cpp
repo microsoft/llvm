@@ -43,6 +43,12 @@ static cl::opt<bool> EnableGenInsert("hexagon-insert", cl::init(true),
 static cl::opt<bool> EnableCommGEP("hexagon-commgep", cl::init(true),
   cl::Hidden, cl::ZeroOrMore, cl::desc("Enable commoning of GEP instructions"));
 
+static cl::opt<bool> EnableGenExtract("hexagon-extract", cl::init(true),
+  cl::Hidden, cl::desc("Generate \"extract\" instructions"));
+
+static cl::opt<bool> EnableGenPred("hexagon-gen-pred", cl::init(true),
+  cl::Hidden, cl::desc("Enable conversion of arithmetic operations to "
+  "predicate instructions"));
 
 /// HexagonTargetMachineModule - Note that this is used on hosts that
 /// cannot link in a library unless there are references into the
@@ -66,24 +72,23 @@ SchedCustomRegistry("hexagon", "Run Hexagon's custom scheduler",
                     createVLIWMachineSched);
 
 namespace llvm {
+  FunctionPass *createHexagonCFGOptimizer();
   FunctionPass *createHexagonCommonGEP();
+  FunctionPass *createHexagonCopyToCombine();
   FunctionPass *createHexagonExpandCondsets();
+  FunctionPass *createHexagonExpandPredSpillCode();
+  FunctionPass *createHexagonFixupHwLoops();
+  FunctionPass *createHexagonGenExtract();
+  FunctionPass *createHexagonGenInsert();
+  FunctionPass *createHexagonGenPredicate();
+  FunctionPass *createHexagonHardwareLoops();
   FunctionPass *createHexagonISelDag(HexagonTargetMachine &TM,
                                      CodeGenOpt::Level OptLevel);
-  FunctionPass *createHexagonDelaySlotFillerPass(const TargetMachine &TM);
-  FunctionPass *createHexagonRemoveExtendArgs(const HexagonTargetMachine &TM);
-  FunctionPass *createHexagonCFGOptimizer();
-
-  FunctionPass *createHexagonSplitConst32AndConst64();
-  FunctionPass *createHexagonExpandPredSpillCode();
-  FunctionPass *createHexagonGenInsert();
-  FunctionPass *createHexagonHardwareLoops();
-  FunctionPass *createHexagonPeephole();
-  FunctionPass *createHexagonFixupHwLoops();
   FunctionPass *createHexagonNewValueJump();
-  FunctionPass *createHexagonCopyToCombine();
   FunctionPass *createHexagonPacketizer();
-  FunctionPass *createHexagonNewValueJump();
+  FunctionPass *createHexagonPeephole();
+  FunctionPass *createHexagonRemoveExtendArgs(const HexagonTargetMachine &TM);
+  FunctionPass *createHexagonSplitConst32AndConst64();
 } // end namespace llvm;
 
 /// HexagonTargetMachine ctor - Create an ILP32 architecture model.
@@ -147,8 +152,13 @@ void HexagonPassConfig::addIRPasses() {
   bool NoOpt = (getOptLevel() == CodeGenOpt::None);
 
   addPass(createAtomicExpandPass(TM));
-  if (!NoOpt && EnableCommGEP)
-    addPass(createHexagonCommonGEP());
+  if (!NoOpt) {
+    if (EnableCommGEP)
+      addPass(createHexagonCommonGEP());
+    // Replace certain combinations of shifts and ands with extracts.
+    if (EnableGenExtract)
+      addPass(createHexagonGenExtract());
+  }
 }
 
 bool HexagonPassConfig::addInstSelector() {
@@ -161,6 +171,9 @@ bool HexagonPassConfig::addInstSelector() {
   addPass(createHexagonISelDag(TM, getOptLevel()));
 
   if (!NoOpt) {
+    // Create logical operations on predicate registers.
+    if (EnableGenPred)
+      addPass(createHexagonGenPredicate(), false);
     addPass(createHexagonPeephole());
     printAndVerify("After hexagon peephole pass");
     if (EnableGenInsert)
