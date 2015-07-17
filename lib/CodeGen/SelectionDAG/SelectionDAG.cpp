@@ -1234,7 +1234,7 @@ SDValue SelectionDAG::getConstant(const ConstantInt &Val, SDLoc DL, EVT VT,
 }
 
 SDValue SelectionDAG::getIntPtrConstant(uint64_t Val, SDLoc DL, bool isTarget) {
-  return getConstant(Val, DL, TLI->getPointerTy(), isTarget);
+  return getConstant(Val, DL, TLI->getPointerTy(getDataLayout()), isTarget);
 }
 
 SDValue SelectionDAG::getConstantFP(const APFloat& V, SDLoc DL, EVT VT,
@@ -1850,7 +1850,7 @@ SDValue SelectionDAG::getAddrSpaceCast(SDLoc dl, EVT VT, SDValue Ptr,
 /// the target's desired shift amount type.
 SDValue SelectionDAG::getShiftAmountOperand(EVT LHSTy, SDValue Op) {
   EVT OpTy = Op.getValueType();
-  EVT ShTy = TLI->getShiftAmountTy(LHSTy);
+  EVT ShTy = TLI->getShiftAmountTy(LHSTy, getDataLayout());
   if (OpTy == ShTy || OpTy.isVector()) return Op;
 
   ISD::NodeType Opcode = OpTy.bitsGT(ShTy) ?  ISD::TRUNCATE : ISD::ZERO_EXTEND;
@@ -1867,7 +1867,7 @@ SDValue SelectionDAG::CreateStackTemporary(EVT VT, unsigned minAlign) {
       std::max((unsigned)getDataLayout().getPrefTypeAlignment(Ty), minAlign);
 
   int FrameIdx = FrameInfo->CreateStackObject(ByteSize, StackAlign, false);
-  return getFrameIndex(FrameIdx, TLI->getPointerTy());
+  return getFrameIndex(FrameIdx, TLI->getPointerTy(getDataLayout()));
 }
 
 /// CreateStackTemporary - Create a stack temporary suitable for holding
@@ -1883,7 +1883,7 @@ SDValue SelectionDAG::CreateStackTemporary(EVT VT1, EVT VT2) {
 
   MachineFrameInfo *FrameInfo = getMachineFunction().getFrameInfo();
   int FrameIdx = FrameInfo->CreateStackObject(Bytes, Align, false);
-  return getFrameIndex(FrameIdx, TLI->getPointerTy());
+  return getFrameIndex(FrameIdx, TLI->getPointerTy(getDataLayout()));
 }
 
 SDValue SelectionDAG::FoldSetCC(EVT VT, SDValue N1,
@@ -2356,15 +2356,24 @@ void SelectionDAG::computeKnownBits(SDValue Op, APInt &KnownZero,
     // Output known-0 bits are known if clear or set in both the low clear bits
     // common to both LHS & RHS.  For example, 8+(X<<3) is known to have the
     // low 3 bits clear.
+    // Output known-0 bits are also known if the top bits of each input are
+    // known to be clear. For example, if one input has the top 10 bits clear
+    // and the other has the top 8 bits clear, we know the top 7 bits of the
+    // output must be clear.
     computeKnownBits(Op.getOperand(0), KnownZero2, KnownOne2, Depth+1);
-    unsigned KnownZeroOut = KnownZero2.countTrailingOnes();
+    unsigned KnownZeroHigh = KnownZero2.countLeadingOnes();
+    unsigned KnownZeroLow = KnownZero2.countTrailingOnes();
 
     computeKnownBits(Op.getOperand(1), KnownZero2, KnownOne2, Depth+1);
-    KnownZeroOut = std::min(KnownZeroOut,
+    KnownZeroHigh = std::min(KnownZeroHigh,
+                             KnownZero2.countLeadingOnes());
+    KnownZeroLow = std::min(KnownZeroLow,
                             KnownZero2.countTrailingOnes());
 
     if (Op.getOpcode() == ISD::ADD) {
-      KnownZero |= APInt::getLowBitsSet(BitWidth, KnownZeroOut);
+      KnownZero |= APInt::getLowBitsSet(BitWidth, KnownZeroLow);
+      if (KnownZeroHigh > 1)
+        KnownZero |= APInt::getHighBitsSet(BitWidth, KnownZeroHigh - 1);
       break;
     }
 
@@ -2372,8 +2381,8 @@ void SelectionDAG::computeKnownBits(SDValue Op, APInt &KnownZero,
     // information if we know (at least) that the low two bits are clear.  We
     // then return to the caller that the low bit is unknown but that other bits
     // are known zero.
-    if (KnownZeroOut >= 2) // ADDE
-      KnownZero |= APInt::getBitsSet(BitWidth, 1, KnownZeroOut);
+    if (KnownZeroLow >= 2) // ADDE
+      KnownZero |= APInt::getBitsSet(BitWidth, 1, KnownZeroLow);
     break;
   }
   case ISD::SREM:
@@ -4068,7 +4077,7 @@ static bool FindOptimalMemOpLowering(std::vector<EVT> &MemOps,
     unsigned AS = 0;
     if (DstAlign >= DAG.getDataLayout().getPointerPrefAlignment(AS) ||
         TLI.allowsMisalignedMemoryAccesses(VT, AS, DstAlign)) {
-      VT = TLI.getPointerTy();
+      VT = TLI.getPointerTy(DAG.getDataLayout());
     } else {
       switch (DstAlign & 7) {
       case 0:  VT = MVT::i64; break;
@@ -4494,13 +4503,15 @@ SDValue SelectionDAG::getMemcpy(SDValue Chain, SDLoc dl, SDValue Dst,
   Entry.Node = Size; Args.push_back(Entry);
   // FIXME: pass in SDLoc
   TargetLowering::CallLoweringInfo CLI(*this);
-  CLI.setDebugLoc(dl).setChain(Chain)
-    .setCallee(TLI->getLibcallCallingConv(RTLIB::MEMCPY),
-               Type::getVoidTy(*getContext()),
-               getExternalSymbol(TLI->getLibcallName(RTLIB::MEMCPY),
-                                 TLI->getPointerTy()), std::move(Args), 0)
-    .setDiscardResult()
-    .setTailCall(isTailCall);
+  CLI.setDebugLoc(dl)
+      .setChain(Chain)
+      .setCallee(TLI->getLibcallCallingConv(RTLIB::MEMCPY),
+                 Type::getVoidTy(*getContext()),
+                 getExternalSymbol(TLI->getLibcallName(RTLIB::MEMCPY),
+                                   TLI->getPointerTy(getDataLayout())),
+                 std::move(Args), 0)
+      .setDiscardResult()
+      .setTailCall(isTailCall);
 
   std::pair<SDValue,SDValue> CallResult = TLI->LowerCallTo(CLI);
   return CallResult.second;
@@ -4544,19 +4555,21 @@ SDValue SelectionDAG::getMemmove(SDValue Chain, SDLoc dl, SDValue Dst,
   // Emit a library call.
   TargetLowering::ArgListTy Args;
   TargetLowering::ArgListEntry Entry;
-  Entry.Ty = TLI->getDataLayout()->getIntPtrType(*getContext());
+  Entry.Ty = getDataLayout().getIntPtrType(*getContext());
   Entry.Node = Dst; Args.push_back(Entry);
   Entry.Node = Src; Args.push_back(Entry);
   Entry.Node = Size; Args.push_back(Entry);
   // FIXME:  pass in SDLoc
   TargetLowering::CallLoweringInfo CLI(*this);
-  CLI.setDebugLoc(dl).setChain(Chain)
-    .setCallee(TLI->getLibcallCallingConv(RTLIB::MEMMOVE),
-               Type::getVoidTy(*getContext()),
-               getExternalSymbol(TLI->getLibcallName(RTLIB::MEMMOVE),
-                                 TLI->getPointerTy()), std::move(Args), 0)
-    .setDiscardResult()
-    .setTailCall(isTailCall);
+  CLI.setDebugLoc(dl)
+      .setChain(Chain)
+      .setCallee(TLI->getLibcallCallingConv(RTLIB::MEMMOVE),
+                 Type::getVoidTy(*getContext()),
+                 getExternalSymbol(TLI->getLibcallName(RTLIB::MEMMOVE),
+                                   TLI->getPointerTy(getDataLayout())),
+                 std::move(Args), 0)
+      .setDiscardResult()
+      .setTailCall(isTailCall);
 
   std::pair<SDValue,SDValue> CallResult = TLI->LowerCallTo(CLI);
   return CallResult.second;
@@ -4608,13 +4621,15 @@ SDValue SelectionDAG::getMemset(SDValue Chain, SDLoc dl, SDValue Dst,
 
   // FIXME: pass in SDLoc
   TargetLowering::CallLoweringInfo CLI(*this);
-  CLI.setDebugLoc(dl).setChain(Chain)
-    .setCallee(TLI->getLibcallCallingConv(RTLIB::MEMSET),
-               Type::getVoidTy(*getContext()),
-               getExternalSymbol(TLI->getLibcallName(RTLIB::MEMSET),
-                                 TLI->getPointerTy()), std::move(Args), 0)
-    .setDiscardResult()
-    .setTailCall(isTailCall);
+  CLI.setDebugLoc(dl)
+      .setChain(Chain)
+      .setCallee(TLI->getLibcallCallingConv(RTLIB::MEMSET),
+                 Type::getVoidTy(*getContext()),
+                 getExternalSymbol(TLI->getLibcallName(RTLIB::MEMSET),
+                                   TLI->getPointerTy(getDataLayout())),
+                 std::move(Args), 0)
+      .setDiscardResult()
+      .setTailCall(isTailCall);
 
   std::pair<SDValue,SDValue> CallResult = TLI->LowerCallTo(CLI);
   return CallResult.second;
@@ -6784,10 +6799,9 @@ SDValue SelectionDAG::UnrollVectorOp(SDNode *N, unsigned ResNE) {
       if (OperandVT.isVector()) {
         // A vector operand; extract a single element.
         EVT OperandEltVT = OperandVT.getVectorElementType();
-        Operands[j] = getNode(ISD::EXTRACT_VECTOR_ELT, dl,
-                              OperandEltVT,
-                              Operand,
-                              getConstant(i, dl, TLI->getVectorIdxTy()));
+        Operands[j] =
+            getNode(ISD::EXTRACT_VECTOR_ELT, dl, OperandEltVT, Operand,
+                    getConstant(i, dl, TLI->getVectorIdxTy(getDataLayout())));
       } else {
         // A scalar operand; just use it as is.
         Operands[j] = Operand;
@@ -6950,10 +6964,10 @@ SelectionDAG::SplitVector(const SDValue &N, const SDLoc &DL, const EVT &LoVT,
          "More vector elements requested than available!");
   SDValue Lo, Hi;
   Lo = getNode(ISD::EXTRACT_SUBVECTOR, DL, LoVT, N,
-               getConstant(0, DL, TLI->getVectorIdxTy()));
+               getConstant(0, DL, TLI->getVectorIdxTy(getDataLayout())));
   Hi = getNode(ISD::EXTRACT_SUBVECTOR, DL, HiVT, N,
                getConstant(LoVT.getVectorNumElements(), DL,
-                           TLI->getVectorIdxTy()));
+                           TLI->getVectorIdxTy(getDataLayout())));
   return std::make_pair(Lo, Hi);
 }
 
@@ -6965,7 +6979,7 @@ void SelectionDAG::ExtractVectorElements(SDValue Op,
     Count = VT.getVectorNumElements();
 
   EVT EltVT = VT.getVectorElementType();
-  EVT IdxTy = TLI->getVectorIdxTy();
+  EVT IdxTy = TLI->getVectorIdxTy(getDataLayout());
   SDLoc SL(Op);
   for (unsigned i = Start, e = Start + Count; i != e; ++i) {
     Args.push_back(getNode(ISD::EXTRACT_VECTOR_ELT, SL, EltVT,

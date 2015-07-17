@@ -123,7 +123,7 @@ public:
 
   bool isNarrowingProfitable(EVT VT1, EVT VT2) const override;
 
-  MVT getVectorIdxTy() const override;
+  MVT getVectorIdxTy(const DataLayout &) const override;
   bool isSelectSupported(SelectSupportKind) const override;
 
   bool isFPImmLegal(const APFloat &Imm, EVT VT) const override;
@@ -207,6 +207,16 @@ public:
   virtual SDValue CreateLiveInRegister(SelectionDAG &DAG,
                                        const TargetRegisterClass *RC,
                                        unsigned Reg, EVT VT) const;
+
+  enum ImplicitParameter {
+    GRID_DIM,
+    GRID_OFFSET
+  };
+
+  /// \brief Helper function that returns the byte offset of the given
+  /// type of implicit parameter.
+  unsigned getImplicitParameterOffset(const AMDGPUMachineFunction *MFI,
+                                      const ImplicitParameter Param) const;
 };
 
 namespace AMDGPUISD {
