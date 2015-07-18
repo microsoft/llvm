@@ -44,9 +44,6 @@ ReserveR9("arm-reserve-r9", cl::Hidden,
           cl::desc("Reserve R9, making it unavailable as GPR"));
 
 static cl::opt<bool>
-ArmUseMOVT("arm-use-movt", cl::init(true), cl::Hidden);
-
-static cl::opt<bool>
 UseFusedMulOps("arm-use-mulops",
                cl::init(true), cl::Hidden);
 
@@ -148,7 +145,7 @@ void ARMSubtarget::initializeEnvironment() {
   HasThumb2 = false;
   NoARM = false;
   IsR9Reserved = ReserveR9;
-  UseMovt = false;
+  NoMovt = false;
   SupportsTailCall = false;
   HasFP16 = false;
   HasD16 = false;
@@ -214,8 +211,6 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
     stackAlignment = 8;
   if (isTargetNaCl())
     stackAlignment = 16;
-
-  UseMovt = hasV6T2Ops() && ArmUseMOVT;
 
   if (isTargetMachO()) {
     IsR9Reserved = ReserveR9 || !HasV6Ops;
@@ -324,8 +319,19 @@ bool ARMSubtarget::hasSinCos() const {
   return getTargetTriple().isiOS() && !getTargetTriple().isOSVersionLT(7, 0);
 }
 
+bool ARMSubtarget::enableMachineScheduler() const {
+  // Enable the MachineScheduler before register allocation for out-of-order
+  // architectures where we do not use the PostRA scheduler anymore (for now
+  // restricted to swift).
+  return getSchedModel().isOutOfOrder() && isSwift();
+}
+
 // This overrides the PostRAScheduler bit in the SchedModel for any CPU.
 bool ARMSubtarget::enablePostRAScheduler() const {
+  // No need for PostRA scheduling on out of order CPUs (for now restricted to
+  // swift).
+  if (getSchedModel().isOutOfOrder() && isSwift())
+    return false;
   return (!isThumb() || hasThumb2());
 }
 
@@ -337,8 +343,9 @@ bool ARMSubtarget::useMovt(const MachineFunction &MF) const {
   // NOTE Windows on ARM needs to use mov.w/mov.t pairs to materialise 32-bit
   // immediates as it is inherently position independent, and may be out of
   // range otherwise.
-  return UseMovt && (isTargetWindows() ||
-                     !MF.getFunction()->hasFnAttribute(Attribute::MinSize));
+  return !NoMovt && hasV6T2Ops() &&
+         (isTargetWindows() ||
+          !MF.getFunction()->hasFnAttribute(Attribute::MinSize));
 }
 
 bool ARMSubtarget::useFastISel() const {

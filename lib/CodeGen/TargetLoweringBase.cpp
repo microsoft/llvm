@@ -827,6 +827,8 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::USUBO, VT, Expand);
     setOperationAction(ISD::SMULO, VT, Expand);
     setOperationAction(ISD::UMULO, VT, Expand);
+    setOperationAction(ISD::UABSDIFF, VT, Expand);
+    setOperationAction(ISD::SABSDIFF, VT, Expand);
 
     // These library functions default to expand.
     setOperationAction(ISD::FROUND, VT, Expand);
@@ -1149,7 +1151,7 @@ TargetLoweringBase::emitPatchPoint(MachineInstr *MI,
     }
     MachineMemOperand *MMO = MF.getMachineMemOperand(
         MachinePointerInfo::getFixedStack(FI), Flags,
-        TM.getDataLayout()->getPointerSize(), MFI.getObjectAlignment(FI));
+        MF.getDataLayout().getPointerSize(), MFI.getObjectAlignment(FI));
     MIB->addMemOperand(MF, MMO);
 
     // Replace the instruction and update the operand index.

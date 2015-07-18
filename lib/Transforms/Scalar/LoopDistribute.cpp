@@ -432,15 +432,14 @@ public:
   /// partitions its entry is set to -1.
   SmallVector<int, 8>
   computePartitionSetForPointers(const LoopAccessInfo &LAI) {
-    const LoopAccessInfo::RuntimePointerCheck *RtPtrCheck =
-        LAI.getRuntimePointerCheck();
+    const RuntimePointerChecking *RtPtrCheck = LAI.getRuntimePointerChecking();
 
     unsigned N = RtPtrCheck->Pointers.size();
     SmallVector<int, 8> PtrToPartitions(N);
     for (unsigned I = 0; I < N; ++I) {
-      Value *Ptr = RtPtrCheck->Pointers[I];
+      Value *Ptr = RtPtrCheck->Pointers[I].PointerValue;
       auto Instructions =
-          LAI.getInstructionsForAccess(Ptr, RtPtrCheck->IsWritePtr[I]);
+          LAI.getInstructionsForAccess(Ptr, RtPtrCheck->Pointers[I].IsWritePtr);
 
       int &Partition = PtrToPartitions[I];
       // First set it to uninitialized.
@@ -753,7 +752,7 @@ private:
     LoopVersioning LVer(LAI, L, LI, DT, &PtrToPartition);
     if (LVer.needsRuntimeChecks()) {
       DEBUG(dbgs() << "\nPointers:\n");
-      DEBUG(LAI.getRuntimePointerCheck()->print(dbgs(), 0, &PtrToPartition));
+      DEBUG(LAI.getRuntimePointerChecking()->print(dbgs(), 0, &PtrToPartition));
       LVer.versionLoop(this);
       LVer.addPHINodes(DefsUsedOutside);
     }
