@@ -337,10 +337,12 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
 
   ShadowMapping Mapping;
 
-  if (LongSize == 32) {
-    if (IsAndroid)
-      Mapping.Offset = 0;
-    else if (IsMIPS32)
+  if (IsAndroid) {
+    // Android is always PIE, which means that the beginning of the address
+    // space is always available.
+    Mapping.Offset = 0;
+  } else if (LongSize == 32) {
+    if (IsMIPS32)
       Mapping.Offset = kMIPS32_ShadowOffset32;
     else if (IsFreeBSD)
       Mapping.Offset = kFreeBSD_ShadowOffset32;
@@ -1738,6 +1740,9 @@ void FunctionStackPoisoner::poisonStack() {
   IRBuilder<> IRB(InsBefore);
   IRB.SetCurrentDebugLocation(EntryDebugLocation);
 
+  // Make sure non-instrumented allocas stay in the first basic block.
+  // Otherwise, debug info is broken, because only first-basic-block allocas are
+  // treated as regular stack slots.
   for (auto *AI : NonInstrumentedStaticAllocaVec) AI->moveBefore(InsBefore);
 
   SmallVector<ASanStackVariableDescription, 16> SVD;
