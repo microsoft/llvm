@@ -31,6 +31,22 @@ using namespace llvm;
 
 namespace {
 
+struct StringValueUtility {
+  StringRef String;
+  std::string UnescapedString;
+
+  StringValueUtility(const MIToken &Token) {
+    if (Token.isStringValueQuoted()) {
+      Token.unescapeQuotedStringValue(UnescapedString);
+      String = UnescapedString;
+      return;
+    }
+    String = Token.stringValue();
+  }
+
+  operator StringRef() const { return String; }
+};
+
 /// A wrapper struct around the 'MachineOperand' struct that includes a source
 /// range.
 struct MachineOperandWithLocation {
@@ -92,6 +108,7 @@ public:
   bool parseStackObjectOperand(MachineOperand &Dest);
   bool parseFixedStackObjectOperand(MachineOperand &Dest);
   bool parseGlobalAddressOperand(MachineOperand &Dest);
+  bool parseConstantPoolIndexOperand(MachineOperand &Dest);
   bool parseJumpTableIndexOperand(MachineOperand &Dest);
   bool parseMachineOperand(MachineOperand &Dest);
 
@@ -485,14 +502,16 @@ bool MIParser::parseFixedStackObjectOperand(MachineOperand &Dest) {
 
 bool MIParser::parseGlobalAddressOperand(MachineOperand &Dest) {
   switch (Token.kind()) {
-  case MIToken::NamedGlobalValue: {
-    auto Name = Token.stringValue();
+  case MIToken::NamedGlobalValue:
+  case MIToken::QuotedNamedGlobalValue: {
+    StringValueUtility Name(Token);
     const Module *M = MF.getFunction()->getParent();
     if (const auto *GV = M->getNamedValue(Name)) {
       Dest = MachineOperand::CreateGA(GV, /*Offset=*/0);
       break;
     }
-    return error(Twine("use of undefined global value '@") + Name + "'");
+    return error(Twine("use of undefined global value '@") +
+                 Token.rawStringValue() + "'");
   }
   case MIToken::GlobalValue: {
     unsigned GVIdx;
@@ -510,6 +529,20 @@ bool MIParser::parseGlobalAddressOperand(MachineOperand &Dest) {
   }
   // TODO: Parse offset and target flags.
   lex();
+  return false;
+}
+
+bool MIParser::parseConstantPoolIndexOperand(MachineOperand &Dest) {
+  assert(Token.is(MIToken::ConstantPoolItem));
+  unsigned ID;
+  if (getUnsigned(ID))
+    return true;
+  auto ConstantInfo = PFS.ConstantPoolSlots.find(ID);
+  if (ConstantInfo == PFS.ConstantPoolSlots.end())
+    return error("use of undefined constant '%const." + Twine(ID) + "'");
+  lex();
+  // TODO: Parse offset and target flags.
+  Dest = MachineOperand::CreateCPI(ID, /*Offset=*/0);
   return false;
 }
 
@@ -548,7 +581,10 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
     return parseFixedStackObjectOperand(Dest);
   case MIToken::GlobalValue:
   case MIToken::NamedGlobalValue:
+  case MIToken::QuotedNamedGlobalValue:
     return parseGlobalAddressOperand(Dest);
+  case MIToken::ConstantPoolItem:
+    return parseConstantPoolIndexOperand(Dest);
   case MIToken::JumpTableIndex:
     return parseJumpTableIndexOperand(Dest);
   case MIToken::Error:
