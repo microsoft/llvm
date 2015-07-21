@@ -935,6 +935,11 @@ void ARMLoadStoreOpt::FormCandidates(const MemOpQueue &MemOps) {
     if (STI->isSwift() && !isNotVFP && (PRegNum % 2) == 1)
       CanMergeToLSMulti = false;
 
+    // LDRD/STRD do not allow SP/PC. LDM/STM do not support it or have it
+    // deprecated; LDM to PC is fine but cannot happen here.
+    if (PReg == ARM::SP || PReg == ARM::PC)
+      CanMergeToLSMulti = CanMergeToLSDouble = false;
+
     // Merge following instructions where possible.
     for (unsigned I = SIndex+1; I < EIndex; ++I, ++Count) {
       int NewOffset = MemOps[I].Offset;
@@ -942,16 +947,15 @@ void ARMLoadStoreOpt::FormCandidates(const MemOpQueue &MemOps) {
         break;
       const MachineOperand &MO = getLoadStoreRegOp(*MemOps[I].MI);
       unsigned Reg = MO.getReg();
-      unsigned RegNum = MO.isUndef() ? UINT_MAX : TRI->getEncodingValue(Reg);
+      if (Reg == ARM::SP || Reg == ARM::PC)
+        break;
 
       // See if the current load/store may be part of a multi load/store.
+      unsigned RegNum = MO.isUndef() ? UINT_MAX : TRI->getEncodingValue(Reg);
       bool PartOfLSMulti = CanMergeToLSMulti;
       if (PartOfLSMulti) {
-        // Cannot load from SP
-        if (Reg == ARM::SP)
-          PartOfLSMulti = false;
         // Register numbers must be in ascending order.
-        else if (RegNum <= PRegNum)
+        if (RegNum <= PRegNum)
           PartOfLSMulti = false;
         // For VFP / NEON load/store multiples, the registers must be
         // consecutive and within the limit on the number of registers per

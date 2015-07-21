@@ -31,3 +31,28 @@ RUN: not llvm-readobj -dynamic-table %p/Inputs/corrupt-invalid-strtab.elf.x86-64
 RUN:     2>&1 | FileCheck --check-prefix=STRTAB %s
 
 STRTAB: Invalid dynamic string table reference
+
+RUN: not llvm-readobj -program-headers \
+RUN:   %p/Inputs/corrupt-invalid-phentsize.elf.x86-64 2>&1 | \
+RUN:   FileCheck --check-prefix=PHENTSIZE %s
+
+PHENTSIZE: Invalid program header size
+
+RUN: not llvm-readobj -dynamic-table \
+RUN:   %p/Inputs/corrupt-invalid-virtual-addr.elf.x86-64 2>&1 | \
+RUN:   FileCheck --check-prefix=VIRTADDR %s
+
+VIRTADDR: Virtual address is not in any segment
+
+
+RUN: not llvm-readobj -dyn-relocations \
+RUN:   %p/Inputs/corrupt-invalid-relocation-size.elf.x86-64 2>&1 | \
+RUN:   FileCheck --check-prefix=RELOC %s
+
+RELOC:  Invalid relocation entry size
+
+RUN: not llvm-readobj -dyn-relocations \
+RUN:   %p/Inputs/corrupt-invalid-dynamic-table-size.elf.x86-64 2>&1 | \
+RUN:   FileCheck --check-prefix=DYN-TABLE-SIZE %s
+
+DYN-TABLE-SIZE:  Invalid dynamic table size
