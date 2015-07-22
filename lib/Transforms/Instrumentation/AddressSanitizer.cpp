@@ -453,6 +453,16 @@ struct AddressSanitizer : public FunctionPass {
   bool isSafeAccess(ObjectSizeOffsetVisitor &ObjSizeVis, Value *Addr,
                     uint64_t TypeSize) const;
 
+  /// Helper to cleanup per-function state.
+  struct FunctionStateRAII {
+    AddressSanitizer *Pass;
+    FunctionStateRAII(AddressSanitizer *Pass) : Pass(Pass) {
+      assert(Pass->ProcessedAllocas.empty() &&
+             "last pass forgot to clear cache");
+    }
+    ~FunctionStateRAII() { Pass->ProcessedAllocas.clear(); }
+  };
+
   LLVMContext *C;
   Triple TargetTriple;
   int LongSize;
@@ -1525,6 +1535,8 @@ bool AddressSanitizer::runOnFunction(Function &F) {
 
   if (!ClDebugFunc.empty() && ClDebugFunc != F.getName()) return false;
 
+  FunctionStateRAII CleanupObj(this);
+
   // We can't instrument allocas used with llvm.localescape. Only static allocas
   // can be passed to that intrinsic.
   markEscapedLocalAllocas(F);
@@ -1618,8 +1630,6 @@ bool AddressSanitizer::runOnFunction(Function &F) {
   bool res = NumInstrumented > 0 || ChangedStack || !NoReturnCalls.empty();
 
   DEBUG(dbgs() << "ASAN done instrumenting: " << res << " " << F << "\n");
-
-  ProcessedAllocas.clear();
 
   return res;
 }

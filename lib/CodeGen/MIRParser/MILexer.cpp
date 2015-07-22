@@ -123,11 +123,12 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("killed", MIToken::kw_killed)
       .Case("undef", MIToken::kw_undef)
       .Case("frame-setup", MIToken::kw_frame_setup)
+      .Case(".cfi_def_cfa_offset", MIToken::kw_cfi_def_cfa_offset)
       .Default(MIToken::Identifier);
 }
 
 static Cursor maybeLexIdentifier(Cursor C, MIToken &Token) {
-  if (!isalpha(C.peek()) && C.peek() != '_')
+  if (!isalpha(C.peek()) && C.peek() != '_' && C.peek() != '.')
     return None;
   auto Range = C;
   while (isIdentifierChar(C.peek()))
@@ -240,35 +241,53 @@ static Cursor maybeLexRegister(Cursor C, MIToken &Token) {
   return C;
 }
 
-static Cursor maybeLexGlobalValue(
-    Cursor C, MIToken &Token,
+static Cursor lexName(
+    Cursor C, MIToken &Token, MIToken::TokenKind Type,
+    MIToken::TokenKind QuotedType, unsigned PrefixLength,
     function_ref<void(StringRef::iterator Loc, const Twine &)> ErrorCallback) {
-  if (C.peek() != '@')
-    return None;
   auto Range = C;
-  C.advance(); // Skip the '@'
+  C.advance(PrefixLength);
   if (C.peek() == '"') {
     if (Cursor R = lexStringConstant(C, ErrorCallback)) {
-      Token = MIToken(MIToken::QuotedNamedGlobalValue, Range.upto(R),
-                      /*StringOffset=*/1); // Drop the '@'
+      Token = MIToken(QuotedType, Range.upto(R), PrefixLength);
       return R;
     }
     Token = MIToken(MIToken::Error, Range.remaining());
     return Range;
   }
-  if (!isdigit(C.peek())) {
-    while (isIdentifierChar(C.peek()))
-      C.advance();
-    Token = MIToken(MIToken::NamedGlobalValue, Range.upto(C),
-                    /*StringOffset=*/1); // Drop the '@'
-    return C;
-  }
+  while (isIdentifierChar(C.peek()))
+    C.advance();
+  Token = MIToken(Type, Range.upto(C), PrefixLength);
+  return C;
+}
+
+static Cursor maybeLexGlobalValue(
+    Cursor C, MIToken &Token,
+    function_ref<void(StringRef::iterator Loc, const Twine &)> ErrorCallback) {
+  if (C.peek() != '@')
+    return None;
+  if (!isdigit(C.peek(1)))
+    return lexName(C, Token, MIToken::NamedGlobalValue,
+                   MIToken::QuotedNamedGlobalValue, /*PrefixLength=*/1,
+                   ErrorCallback);
+  auto Range = C;
+  C.advance(1); // Skip the '@'
   auto NumberRange = C;
   while (isdigit(C.peek()))
     C.advance();
   Token =
       MIToken(MIToken::GlobalValue, Range.upto(C), APSInt(NumberRange.upto(C)));
   return C;
+}
+
+static Cursor maybeLexExternalSymbol(
+    Cursor C, MIToken &Token,
+    function_ref<void(StringRef::iterator Loc, const Twine &)> ErrorCallback) {
+  if (C.peek() != '$')
+    return None;
+  return lexName(C, Token, MIToken::ExternalSymbol,
+                 MIToken::QuotedExternalSymbol,
+                 /*PrefixLength=*/1, ErrorCallback);
 }
 
 static Cursor maybeLexIntegerLiteral(Cursor C, MIToken &Token) {
@@ -330,6 +349,8 @@ StringRef llvm::lexMIToken(
   if (Cursor R = maybeLexRegister(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexGlobalValue(C, Token, ErrorCallback))
+    return R.remaining();
+  if (Cursor R = maybeLexExternalSymbol(C, Token, ErrorCallback))
     return R.remaining();
   if (Cursor R = maybeLexIntegerLiteral(C, Token))
     return R.remaining();

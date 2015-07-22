@@ -44,6 +44,7 @@ struct MIToken {
     kw_killed,
     kw_undef,
     kw_frame_setup,
+    kw_cfi_def_cfa_offset,
 
     // Identifier tokens
     Identifier,
@@ -54,6 +55,8 @@ struct MIToken {
     NamedGlobalValue,
     QuotedNamedGlobalValue,
     GlobalValue,
+    ExternalSymbol,
+    QuotedExternalSymbol,
 
     // Other tokens
     IntegerLiteral,
@@ -96,7 +99,9 @@ public:
 
   StringRef::iterator location() const { return Range.begin(); }
 
-  bool isStringValueQuoted() const { return Kind == QuotedNamedGlobalValue; }
+  bool isStringValueQuoted() const {
+    return Kind == QuotedNamedGlobalValue || Kind == QuotedExternalSymbol;
+  }
 
   /// Return the token's raw string value.
   ///

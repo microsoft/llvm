@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
@@ -110,6 +111,9 @@ public:
   bool parseGlobalAddressOperand(MachineOperand &Dest);
   bool parseConstantPoolIndexOperand(MachineOperand &Dest);
   bool parseJumpTableIndexOperand(MachineOperand &Dest);
+  bool parseExternalSymbolOperand(MachineOperand &Dest);
+  bool parseCFIOffset(int &Offset);
+  bool parseCFIOperand(MachineOperand &Dest);
   bool parseMachineOperand(MachineOperand &Dest);
 
 private:
@@ -560,6 +564,40 @@ bool MIParser::parseJumpTableIndexOperand(MachineOperand &Dest) {
   return false;
 }
 
+bool MIParser::parseExternalSymbolOperand(MachineOperand &Dest) {
+  assert(Token.is(MIToken::ExternalSymbol) ||
+         Token.is(MIToken::QuotedExternalSymbol));
+  StringValueUtility Name(Token);
+  const char *Symbol = MF.createExternalSymbolName(Name);
+  lex();
+  // TODO: Parse the target flags.
+  Dest = MachineOperand::CreateES(Symbol);
+  return false;
+}
+
+bool MIParser::parseCFIOffset(int &Offset) {
+  if (Token.isNot(MIToken::IntegerLiteral))
+    return error("expected a cfi offset");
+  if (Token.integerValue().getMinSignedBits() > 32)
+    return error("expected a 32 bit integer (the cfi offset is too large)");
+  Offset = (int)Token.integerValue().getExtValue();
+  lex();
+  return false;
+}
+
+bool MIParser::parseCFIOperand(MachineOperand &Dest) {
+  // TODO: Parse the other CFI operands.
+  assert(Token.is(MIToken::kw_cfi_def_cfa_offset));
+  lex();
+  int Offset;
+  if (parseCFIOffset(Offset))
+    return true;
+  // NB: MCCFIInstruction::createDefCfaOffset negates the offset.
+  Dest = MachineOperand::CreateCFIIndex(MF.getMMI().addFrameInst(
+      MCCFIInstruction::createDefCfaOffset(nullptr, -Offset)));
+  return false;
+}
+
 bool MIParser::parseMachineOperand(MachineOperand &Dest) {
   switch (Token.kind()) {
   case MIToken::kw_implicit:
@@ -587,6 +625,11 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
     return parseConstantPoolIndexOperand(Dest);
   case MIToken::JumpTableIndex:
     return parseJumpTableIndexOperand(Dest);
+  case MIToken::ExternalSymbol:
+  case MIToken::QuotedExternalSymbol:
+    return parseExternalSymbolOperand(Dest);
+  case MIToken::kw_cfi_def_cfa_offset:
+    return parseCFIOperand(Dest);
   case MIToken::Error:
     return true;
   case MIToken::Identifier:

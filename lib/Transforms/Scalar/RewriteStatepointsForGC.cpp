@@ -850,31 +850,32 @@ static Value *findBasePointer(Value *I, Pass *P, DefiningValueMapTy &cache) {
   std::sort(Keys.begin(), Keys.end(), order_by_name);
   // TODO: adjust naming patterns to avoid this order of iteration dependency
   for (Value *V : Keys) {
-    Instruction *v = cast<Instruction>(V);
-    PhiState state = states[V];
-    assert(!isKnownBaseResult(v) && "why did it get added?");
-    assert(!state.isUnknown() && "Optimistic algorithm didn't complete!");
-    if (!state.isConflict())
+    Instruction *I = cast<Instruction>(V);
+    PhiState State = states[I];
+    assert(!isKnownBaseResult(I) && "why did it get added?");
+    assert(!State.isUnknown() && "Optimistic algorithm didn't complete!");
+    if (!State.isConflict())
       continue;
 
-    if (isa<PHINode>(v)) {
-      int num_preds =
-          std::distance(pred_begin(v->getParent()), pred_end(v->getParent()));
-      assert(num_preds > 0 && "how did we reach here");
-      PHINode *phi = PHINode::Create(v->getType(), num_preds, "base_phi", v);
-      // Add metadata marking this as a base value
-      phi->setMetadata("is_base_value", MDNode::get(v->getContext(), {}));
-      states[v] = PhiState(PhiState::Conflict, phi);
-    } else {
-      SelectInst *sel = cast<SelectInst>(v);
+    /// Create and insert a new instruction which will represent the base of
+    /// the given instruction 'I'.
+    auto MakeBaseInstPlaceholder = [](Instruction *I) -> Instruction* {
+      if (isa<PHINode>(I)) {
+        BasicBlock *BB = I->getParent();
+        int NumPreds = std::distance(pred_begin(BB), pred_end(BB));
+        assert(NumPreds > 0 && "how did we reach here");
+        return PHINode::Create(I->getType(), NumPreds, "base_phi", I);
+      }
+      SelectInst *Sel = cast<SelectInst>(I);
       // The undef will be replaced later
-      UndefValue *undef = UndefValue::get(sel->getType());
-      SelectInst *basesel = SelectInst::Create(sel->getCondition(), undef,
-                                               undef, "base_select", sel);
-      // Add metadata marking this as a base value
-      basesel->setMetadata("is_base_value", MDNode::get(v->getContext(), {}));
-      states[v] = PhiState(PhiState::Conflict, basesel);
-    }
+      UndefValue *Undef = UndefValue::get(Sel->getType());
+      return SelectInst::Create(Sel->getCondition(), Undef,
+                                Undef, "base_select", Sel);
+    };
+    Instruction *BaseInst = MakeBaseInstPlaceholder(I);
+    // Add metadata marking this as a base value
+    BaseInst->setMetadata("is_base_value", MDNode::get(I->getContext(), {}));
+    states[I] = PhiState(PhiState::Conflict, BaseInst);
   }
 
   // Fixup all the inputs of the new PHIs
@@ -1179,24 +1180,22 @@ static void CreateGCRelocates(ArrayRef<llvm::Value *> LiveVariables,
                               ArrayRef<llvm::Value *> BasePtrs,
                               Instruction *StatepointToken,
                               IRBuilder<> Builder) {
-  SmallVector<Instruction *, 64> NewDefs;
-  NewDefs.reserve(LiveVariables.size());
-
-  Module *M = StatepointToken->getParent()->getParent()->getParent();
+  if (LiveVariables.empty())
+    return;
+  
+  // All gc_relocate are set to i8 addrspace(1)* type. We originally generated
+  // unique declarations for each pointer type, but this proved problematic
+  // because the intrinsic mangling code is incomplete and fragile.  Since
+  // we're moving towards a single unified pointer type anyways, we can just
+  // cast everything to an i8* of the right address space.  A bitcast is added
+  // later to convert gc_relocate to the actual value's type. 
+  Module *M = StatepointToken->getModule();
+  auto AS = cast<PointerType>(LiveVariables[0]->getType())->getAddressSpace();
+  Type *Types[] = {Type::getInt8PtrTy(M->getContext(), AS)};
+  Value *GCRelocateDecl =
+    Intrinsic::getDeclaration(M, Intrinsic::experimental_gc_relocate, Types);
 
   for (unsigned i = 0; i < LiveVariables.size(); i++) {
-    // We generate a (potentially) unique declaration for every pointer type
-    // combination.  This results is some blow up the function declarations in
-    // the IR, but removes the need for argument bitcasts which shrinks the IR
-    // greatly and makes it much more readable.
-    SmallVector<Type *, 1> Types;                 // one per 'any' type
-    // All gc_relocate are set to i8 addrspace(1)* type. This could help avoid
-    // cases where the actual value's type mangling is not supported by llvm. A
-    // bitcast is added later to convert gc_relocate to the actual value's type.
-    Types.push_back(Type::getInt8PtrTy(M->getContext(), 1));
-    Value *GCRelocateDecl = Intrinsic::getDeclaration(
-        M, Intrinsic::experimental_gc_relocate, Types);
-
     // Generate the gc.relocate call and save the result
     Value *BaseIdx =
       Builder.getInt32(LiveStart + find_index(LiveVariables, BasePtrs[i]));
@@ -1204,18 +1203,14 @@ static void CreateGCRelocates(ArrayRef<llvm::Value *> LiveVariables,
       Builder.getInt32(LiveStart + find_index(LiveVariables, LiveVariables[i]));
 
     // only specify a debug name if we can give a useful one
-    Value *Reloc = Builder.CreateCall(
+    CallInst *Reloc = Builder.CreateCall(
         GCRelocateDecl, {StatepointToken, BaseIdx, LiveIdx},
         LiveVariables[i]->hasName() ? LiveVariables[i]->getName() + ".relocated"
                                     : "");
     // Trick CodeGen into thinking there are lots of free registers at this
     // fake call.
-    cast<CallInst>(Reloc)->setCallingConv(CallingConv::Cold);
-
-    NewDefs.push_back(cast<Instruction>(Reloc));
+    Reloc->setCallingConv(CallingConv::Cold);
   }
-  assert(NewDefs.size() == LiveVariables.size() &&
-         "missing or extra redefinition at safepoint");
 }
 
 static void
@@ -1325,10 +1320,8 @@ makeStatepointExplicitImpl(const CallSite &CS, /* to replace */
             unwindBlock->getLandingPadInst(), idx, "relocate_token"));
     result.UnwindToken = exceptional_token;
 
-    // Just throw away return value. We will use the one we got for normal
-    // block.
-    (void)CreateGCRelocates(liveVariables, live_start, basePtrs,
-                            exceptional_token, Builder);
+    CreateGCRelocates(liveVariables, live_start, basePtrs,
+                      exceptional_token, Builder);
 
     // Generate gc relocates and returns for normal block
     BasicBlock *normalDest = toReplace->getNormalDest();
@@ -1411,8 +1404,7 @@ makeStatepointExplicit(DominatorTree &DT, const CallSite &CS, Pass *P,
   basevec.reserve(liveset.size());
   for (Value *L : liveset) {
     livevec.push_back(L);
-
-    assert(PointerToBase.find(L) != PointerToBase.end());
+    assert(PointerToBase.count(L));
     Value *base = PointerToBase[L];
     basevec.push_back(base);
   }
@@ -1972,7 +1964,7 @@ static void rematerializeLiveValues(CallSite CS,
   for (Value *LiveValue: Info.liveset) {
     // For each live pointer find it's defining chain
     SmallVector<Instruction *, 3> ChainToBase;
-    assert(Info.PointerToBase.find(LiveValue) != Info.PointerToBase.end());
+    assert(Info.PointerToBase.count(LiveValue));
     bool FoundChain =
       findRematerializableChainToBasePointer(ChainToBase,
                                              LiveValue,
