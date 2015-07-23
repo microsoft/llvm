@@ -332,6 +332,9 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::MUL8r,       X86::MUL8m,         TB_FOLDED_LOAD },
     { X86::PEXTRDrr,    X86::PEXTRDmr,      TB_FOLDED_STORE },
     { X86::PEXTRQrr,    X86::PEXTRQmr,      TB_FOLDED_STORE },
+    { X86::PUSH16r,     X86::PUSH16rmm,     TB_FOLDED_LOAD },
+    { X86::PUSH32r,     X86::PUSH32rmm,     TB_FOLDED_LOAD },
+    { X86::PUSH64r,     X86::PUSH64rmm,     TB_FOLDED_LOAD },
     { X86::SETAEr,      X86::SETAEm,        TB_FOLDED_STORE },
     { X86::SETAr,       X86::SETAm,         TB_FOLDED_STORE },
     { X86::SETBEr,      X86::SETBEm,        TB_FOLDED_STORE },
@@ -1107,6 +1110,8 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::PUNPCKLQDQrr,    X86::PUNPCKLQDQrm,  TB_ALIGN_16 },
     { X86::PUNPCKLWDrr,     X86::PUNPCKLWDrm,   TB_ALIGN_16 },
     { X86::PXORrr,          X86::PXORrm,        TB_ALIGN_16 },
+    { X86::ROUNDSDr,        X86::ROUNDSDm,      0 },
+    { X86::ROUNDSSr,        X86::ROUNDSSm,      0 },
     { X86::SBB32rr,         X86::SBB32rm,       0 },
     { X86::SBB64rr,         X86::SBB64rm,       0 },
     { X86::SHUFPDrri,       X86::SHUFPDrmi,     TB_ALIGN_16 },
@@ -1403,6 +1408,8 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::VPUNPCKLQDQrr,     X86::VPUNPCKLQDQrm,      0 },
     { X86::VPUNPCKLWDrr,      X86::VPUNPCKLWDrm,       0 },
     { X86::VPXORrr,           X86::VPXORrm,            0 },
+    { X86::VROUNDSDr,         X86::VROUNDSDm,          0 },
+    { X86::VROUNDSSr,         X86::VROUNDSSm,          0 },
     { X86::VSHUFPDrri,        X86::VSHUFPDrmi,         0 },
     { X86::VSHUFPSrri,        X86::VSHUFPSrmi,         0 },
     { X86::VSUBPDrr,          X86::VSUBPDrm,           0 },
@@ -3802,7 +3809,7 @@ static unsigned CopyToFromAsymmetricReg(unsigned DestReg, unsigned SrcReg,
                                                X86::MOVPQIto64rr);
     if (X86::VR64RegClass.contains(SrcReg))
       // Copy from a VR64 register to a GR64 register.
-      return X86::MOVSDto64rr;
+      return X86::MMX_MOVD64from64rr;
   } else if (X86::GR64RegClass.contains(SrcReg)) {
     // Copy from a GR64 register to a VR128 register.
     if (X86::VR128XRegClass.contains(DestReg))
@@ -3810,7 +3817,7 @@ static unsigned CopyToFromAsymmetricReg(unsigned DestReg, unsigned SrcReg,
                                                X86::MOV64toPQIrr);
     // Copy from a GR64 register to a VR64 register.
     if (X86::VR64RegClass.contains(DestReg))
-      return X86::MOV64toSDrr;
+      return X86::MMX_MOVD64to64rr;
   }
 
   // SrcReg(FR32) -> DestReg(GR32)
@@ -4874,10 +4881,14 @@ MachineInstr *X86InstrInfo::foldMemoryOperandImpl(
   bool isCallRegIndirect = Subtarget.callRegIndirect();
   bool isTwoAddrFold = false;
 
-  // For CPUs that favor the register form of a call,
-  // do not fold loads into calls.
-  if (isCallRegIndirect &&
-    (MI->getOpcode() == X86::CALL32r || MI->getOpcode() == X86::CALL64r))
+  // For CPUs that favor the register form of a call or push,
+  // do not fold loads into calls or pushes, unless optimizing for size
+  // aggressively.
+  if (isCallRegIndirect && 
+      !MF.getFunction()->hasFnAttribute(Attribute::MinSize) &&
+      (MI->getOpcode() == X86::CALL32r || MI->getOpcode() == X86::CALL64r ||
+       MI->getOpcode() == X86::PUSH16r || MI->getOpcode() == X86::PUSH32r ||
+       MI->getOpcode() == X86::PUSH64r))
     return nullptr;
 
   unsigned NumOps = MI->getDesc().getNumOperands();
@@ -5463,62 +5474,6 @@ MachineInstr *X86InstrInfo::foldMemoryOperandImpl(
   }
   return foldMemoryOperandImpl(MF, MI, Ops[0], MOs, InsertPt,
                                /*Size=*/0, Alignment, /*AllowCommute=*/true);
-}
-
-bool X86InstrInfo::canFoldMemoryOperand(const MachineInstr *MI,
-                                        ArrayRef<unsigned> Ops) const {
-  // Check switch flag
-  if (NoFusing) return 0;
-
-  if (Ops.size() == 2 && Ops[0] == 0 && Ops[1] == 1) {
-    switch (MI->getOpcode()) {
-    default: return false;
-    case X86::TEST8rr:
-    case X86::TEST16rr:
-    case X86::TEST32rr:
-    case X86::TEST64rr:
-      return true;
-    case X86::ADD32ri:
-      // FIXME: AsmPrinter doesn't know how to handle
-      // X86II::MO_GOT_ABSOLUTE_ADDRESS after folding.
-      if (MI->getOperand(2).getTargetFlags() == X86II::MO_GOT_ABSOLUTE_ADDRESS)
-        return false;
-      break;
-    }
-  }
-
-  if (Ops.size() != 1)
-    return false;
-
-  unsigned OpNum = Ops[0];
-  unsigned Opc = MI->getOpcode();
-  unsigned NumOps = MI->getDesc().getNumOperands();
-  bool isTwoAddr = NumOps > 1 &&
-    MI->getDesc().getOperandConstraint(1, MCOI::TIED_TO) != -1;
-
-  // Folding a memory location into the two-address part of a two-address
-  // instruction is different than folding it other places.  It requires
-  // replacing the *two* registers with the memory location.
-  const DenseMap<unsigned,
-                 std::pair<unsigned,unsigned> > *OpcodeTablePtr = nullptr;
-  if (isTwoAddr && NumOps >= 2 && OpNum < 2) {
-    OpcodeTablePtr = &RegOp2MemOpTable2Addr;
-  } else if (OpNum == 0) {
-    if (Opc == X86::MOV32r0)
-      return true;
-
-    OpcodeTablePtr = &RegOp2MemOpTable0;
-  } else if (OpNum == 1) {
-    OpcodeTablePtr = &RegOp2MemOpTable1;
-  } else if (OpNum == 2) {
-    OpcodeTablePtr = &RegOp2MemOpTable2;
-  } else if (OpNum == 3) {
-    OpcodeTablePtr = &RegOp2MemOpTable3;
-  }
-
-  if (OpcodeTablePtr && OpcodeTablePtr->count(Opc))
-    return true;
-  return TargetInstrInfo::canFoldMemoryOperand(MI, Ops);
 }
 
 bool X86InstrInfo::unfoldMemoryOperand(MachineFunction &MF, MachineInstr *MI,
@@ -6395,17 +6350,23 @@ static bool hasReassocSibling(const MachineInstr &Inst, bool &Commuted) {
       hasVirtualRegDefsInBasicBlock(*MI1, MBB) &&
       MRI.hasOneNonDBGUse(MI1->getOperand(0).getReg()))
     return true;
-  
+
   return false;
 }
 
 // TODO: There are many more machine instruction opcodes to match:
-//       1. Other data types (double, integer, vectors)
-//       2. Other math / logic operations (mul, and, or)
+//       1. Other data types (integer, vectors)
+//       2. Other math / logic operations (and, or)
 static bool isAssociativeAndCommutative(unsigned Opcode) {
   switch (Opcode) {
-  case X86::VADDSSrr:
+  case X86::ADDSDrr:
   case X86::ADDSSrr:
+  case X86::VADDSDrr:
+  case X86::VADDSSrr:
+  case X86::MULSDrr:
+  case X86::MULSSrr:
+  case X86::VMULSDrr:
+  case X86::VMULSSrr:
     return true;
   default:
     return false;
@@ -6500,7 +6461,7 @@ static void reassociateOps(MachineInstr &Root, MachineInstr &Prev,
   MachineOperand &OpX = Prev.getOperand(OpIdx[Pattern][2]);
   MachineOperand &OpY = Root.getOperand(OpIdx[Pattern][3]);
   MachineOperand &OpC = Root.getOperand(0);
-  
+
   unsigned RegA = OpA.getReg();
   unsigned RegB = OpB.getReg();
   unsigned RegX = OpX.getReg();
@@ -6535,7 +6496,7 @@ static void reassociateOps(MachineInstr &Root, MachineInstr &Prev,
       .addReg(RegX, getKillRegState(KillX))
       .addReg(RegY, getKillRegState(KillY));
   InsInstrs.push_back(MIB1);
-  
+
   MachineInstrBuilder MIB2 =
     BuildMI(*MF, Root.getDebugLoc(), TII->get(Opcode), RegC)
       .addReg(RegA, getKillRegState(KillA))
@@ -6567,7 +6528,7 @@ void X86InstrInfo::genAlternativeCodeSequence(
       Prev = MRI.getUniqueVRegDef(Root.getOperand(2).getReg());
   }
   assert(Prev && "Unknown pattern for machine combiner");
-  
+
   reassociateOps(Root, *Prev, Pattern, InsInstrs, DelInstrs, InstIdxForVirtReg);
   return;
 }

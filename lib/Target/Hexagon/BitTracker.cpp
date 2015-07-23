@@ -84,8 +84,7 @@ namespace {
   }
 }
 
-
-raw_ostream &operator<< (raw_ostream &OS, const BT::BitValue &BV) {
+raw_ostream &llvm::operator<<(raw_ostream &OS, const BT::BitValue &BV) {
   switch (BV.Type) {
     case BT::BitValue::Top:
       OS << 'T';
@@ -103,8 +102,7 @@ raw_ostream &operator<< (raw_ostream &OS, const BT::BitValue &BV) {
   return OS;
 }
 
-
-raw_ostream &operator<< (raw_ostream &OS, const BT::RegisterCell &RC) {
+raw_ostream &llvm::operator<<(raw_ostream &OS, const BT::RegisterCell &RC) {
   unsigned n = RC.Bits.size();
   OS << "{ w:" << n;
   // Instead of printing each bit value individually, try to group them
@@ -169,11 +167,8 @@ raw_ostream &operator<< (raw_ostream &OS, const BT::RegisterCell &RC) {
   return OS;
 }
 
-
-BitTracker::BitTracker(const MachineEvaluator &E, llvm::MachineFunction &F) :
-  Trace(false), ME(E), MF(F), MRI(F.getRegInfo()), Map(*new CellMapType) {
-}
-
+BitTracker::BitTracker(const MachineEvaluator &E, MachineFunction &F)
+    : Trace(false), ME(E), MF(F), MRI(F.getRegInfo()), Map(*new CellMapType) {}
 
 BitTracker::~BitTracker() {
   delete &Map;
@@ -873,7 +868,7 @@ void BT::visitNonBranch(const MachineInstr *MI) {
       continue;
 
     bool Changed = false;
-    if (!Eval || !ResMap.has(RD.Reg)) {
+    if (!Eval || ResMap.count(RD.Reg) == 0) {
       // Set to "ref" (aka "bottom").
       uint16_t DefBW = ME.getRegBitWidth(RD);
       RegisterCell RefC = RegisterCell::self(RD.Reg, DefBW);
@@ -1010,7 +1005,7 @@ void BT::put(RegisterRef RR, const RegisterCell &RC) {
 // Replace all references to bits from OldRR with the corresponding bits
 // in NewRR.
 void BT::subst(RegisterRef OldRR, RegisterRef NewRR) {
-  assert(Map.has(OldRR.Reg) && "OldRR not present in map");
+  assert(Map.count(OldRR.Reg) > 0 && "OldRR not present in map");
   BitMask OM = ME.mask(OldRR.Reg, OldRR.Sub);
   BitMask NM = ME.mask(NewRR.Reg, NewRR.Sub);
   uint16_t OMB = OM.first(), OME = OM.last();

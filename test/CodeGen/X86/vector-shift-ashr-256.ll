@@ -5,7 +5,7 @@
 ; Variable Shifts
 ;
 
-define <4 x i64> @var_shift_v4i64(<4 x i64> %a, <4 x i64> %b) {
+define <4 x i64> @var_shift_v4i64(<4 x i64> %a, <4 x i64> %b) nounwind {
 ; AVX1-LABEL: var_shift_v4i64:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm2
@@ -59,43 +59,34 @@ define <4 x i64> @var_shift_v4i64(<4 x i64> %a, <4 x i64> %b) {
   ret <4 x i64> %shift
 }
 
-define <8 x i32> @var_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
+define <8 x i32> @var_shift_v8i32(<8 x i32> %a, <8 x i32> %b) nounwind {
 ; AVX1-LABEL: var_shift_v8i32:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm2
-; AVX1-NEXT:    vpextrd $1, %xmm2, %eax
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm3
-; AVX1-NEXT:    vpextrd $1, %xmm3, %ecx
-; AVX1-NEXT:    sarl %cl, %eax
-; AVX1-NEXT:    vmovd %xmm2, %edx
-; AVX1-NEXT:    vmovd %xmm3, %ecx
-; AVX1-NEXT:    sarl %cl, %edx
-; AVX1-NEXT:    vmovd %edx, %xmm4
-; AVX1-NEXT:    vpinsrd $1, %eax, %xmm4, %xmm4
-; AVX1-NEXT:    vpextrd $2, %xmm2, %eax
-; AVX1-NEXT:    vpextrd $2, %xmm3, %ecx
-; AVX1-NEXT:    sarl %cl, %eax
-; AVX1-NEXT:    vpinsrd $2, %eax, %xmm4, %xmm4
-; AVX1-NEXT:    vpextrd $3, %xmm2, %eax
-; AVX1-NEXT:    vpextrd $3, %xmm3, %ecx
-; AVX1-NEXT:    sarl %cl, %eax
-; AVX1-NEXT:    vpinsrd $3, %eax, %xmm4, %xmm2
-; AVX1-NEXT:    vpextrd $1, %xmm0, %eax
-; AVX1-NEXT:    vpextrd $1, %xmm1, %ecx
-; AVX1-NEXT:    sarl %cl, %eax
-; AVX1-NEXT:    vmovd %xmm0, %edx
-; AVX1-NEXT:    vmovd %xmm1, %ecx
-; AVX1-NEXT:    sarl %cl, %edx
-; AVX1-NEXT:    vmovd %edx, %xmm3
-; AVX1-NEXT:    vpinsrd $1, %eax, %xmm3, %xmm3
-; AVX1-NEXT:    vpextrd $2, %xmm0, %eax
-; AVX1-NEXT:    vpextrd $2, %xmm1, %ecx
-; AVX1-NEXT:    sarl %cl, %eax
-; AVX1-NEXT:    vpinsrd $2, %eax, %xmm3, %xmm3
-; AVX1-NEXT:    vpextrd $3, %xmm0, %eax
-; AVX1-NEXT:    vpextrd $3, %xmm1, %ecx
-; AVX1-NEXT:    sarl %cl, %eax
-; AVX1-NEXT:    vpinsrd $3, %eax, %xmm3, %xmm0
+; AVX1-NEXT:    vpsrldq {{.*#+}} xmm4 = xmm3[12,13,14,15],zero,zero,zero,zero,zero,zero,zero,zero,zero,zero,zero,zero
+; AVX1-NEXT:    vpsrad %xmm4, %xmm2, %xmm4
+; AVX1-NEXT:    vpsrlq $32, %xmm3, %xmm5
+; AVX1-NEXT:    vpsrad %xmm5, %xmm2, %xmm5
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm4 = xmm5[0,1,2,3],xmm4[4,5,6,7]
+; AVX1-NEXT:    vpxor %xmm5, %xmm5, %xmm5
+; AVX1-NEXT:    vpunpckhdq {{.*#+}} xmm6 = xmm3[2],xmm5[2],xmm3[3],xmm5[3]
+; AVX1-NEXT:    vpsrad %xmm6, %xmm2, %xmm6
+; AVX1-NEXT:    vpmovzxdq {{.*#+}} xmm3 = xmm3[0],zero,xmm3[1],zero
+; AVX1-NEXT:    vpsrad %xmm3, %xmm2, %xmm2
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm2 = xmm2[0,1,2,3],xmm6[4,5,6,7]
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm2 = xmm2[0,1],xmm4[2,3],xmm2[4,5],xmm4[6,7]
+; AVX1-NEXT:    vpsrldq {{.*#+}} xmm3 = xmm1[12,13,14,15],zero,zero,zero,zero,zero,zero,zero,zero,zero,zero,zero,zero
+; AVX1-NEXT:    vpsrad %xmm3, %xmm0, %xmm3
+; AVX1-NEXT:    vpsrlq $32, %xmm1, %xmm4
+; AVX1-NEXT:    vpsrad %xmm4, %xmm0, %xmm4
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm3 = xmm4[0,1,2,3],xmm3[4,5,6,7]
+; AVX1-NEXT:    vpunpckhdq {{.*#+}} xmm4 = xmm1[2],xmm5[2],xmm1[3],xmm5[3]
+; AVX1-NEXT:    vpsrad %xmm4, %xmm0, %xmm4
+; AVX1-NEXT:    vpmovzxdq {{.*#+}} xmm1 = xmm1[0],zero,xmm1[1],zero
+; AVX1-NEXT:    vpsrad %xmm1, %xmm0, %xmm0
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm0 = xmm0[0,1,2,3],xmm4[4,5,6,7]
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm0 = xmm0[0,1],xmm3[2,3],xmm0[4,5],xmm3[6,7]
 ; AVX1-NEXT:    vinsertf128 $1, %xmm2, %ymm0, %ymm0
 ; AVX1-NEXT:    retq
 ;
@@ -107,7 +98,7 @@ define <8 x i32> @var_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
   ret <8 x i32> %shift
 }
 
-define <16 x i16> @var_shift_v16i16(<16 x i16> %a, <16 x i16> %b) {
+define <16 x i16> @var_shift_v16i16(<16 x i16> %a, <16 x i16> %b) nounwind {
 ; AVX1-LABEL: var_shift_v16i16:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm2
@@ -160,7 +151,7 @@ define <16 x i16> @var_shift_v16i16(<16 x i16> %a, <16 x i16> %b) {
   ret <16 x i16> %shift
 }
 
-define <32 x i8> @var_shift_v32i8(<32 x i8> %a, <32 x i8> %b) {
+define <32 x i8> @var_shift_v32i8(<32 x i8> %a, <32 x i8> %b) nounwind {
 ; AVX1-LABEL: var_shift_v32i8:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm1, %xmm2
@@ -251,7 +242,7 @@ define <32 x i8> @var_shift_v32i8(<32 x i8> %a, <32 x i8> %b) {
 ; Uniform Variable Shifts
 ;
 
-define <4 x i64> @splatvar_shift_v4i64(<4 x i64> %a, <4 x i64> %b) {
+define <4 x i64> @splatvar_shift_v4i64(<4 x i64> %a, <4 x i64> %b) nounwind {
 ; AVX1-LABEL: splatvar_shift_v4i64:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vmovddup {{.*#+}} xmm1 = xmm1[0,0]
@@ -309,7 +300,7 @@ define <4 x i64> @splatvar_shift_v4i64(<4 x i64> %a, <4 x i64> %b) {
   ret <4 x i64> %shift
 }
 
-define <8 x i32> @splatvar_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
+define <8 x i32> @splatvar_shift_v8i32(<8 x i32> %a, <8 x i32> %b) nounwind {
 ; AVX1-LABEL: splatvar_shift_v8i32:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vpxor %xmm2, %xmm2, %xmm2
@@ -331,7 +322,7 @@ define <8 x i32> @splatvar_shift_v8i32(<8 x i32> %a, <8 x i32> %b) {
   ret <8 x i32> %shift
 }
 
-define <16 x i16> @splatvar_shift_v16i16(<16 x i16> %a, <16 x i16> %b) {
+define <16 x i16> @splatvar_shift_v16i16(<16 x i16> %a, <16 x i16> %b) nounwind {
 ; AVX1-LABEL: splatvar_shift_v16i16:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm2
@@ -355,7 +346,7 @@ define <16 x i16> @splatvar_shift_v16i16(<16 x i16> %a, <16 x i16> %b) {
   ret <16 x i16> %shift
 }
 
-define <32 x i8> @splatvar_shift_v32i8(<32 x i8> %a, <32 x i8> %b) {
+define <32 x i8> @splatvar_shift_v32i8(<32 x i8> %a, <32 x i8> %b) nounwind {
 ; AVX1-LABEL: splatvar_shift_v32i8:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vpxor %xmm2, %xmm2, %xmm2
@@ -442,7 +433,7 @@ define <32 x i8> @splatvar_shift_v32i8(<32 x i8> %a, <32 x i8> %b) {
 ; Constant Shifts
 ;
 
-define <4 x i64> @constant_shift_v4i64(<4 x i64> %a) {
+define <4 x i64> @constant_shift_v4i64(<4 x i64> %a) nounwind {
 ; AVX1-LABEL: constant_shift_v4i64:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm1
@@ -486,35 +477,23 @@ define <4 x i64> @constant_shift_v4i64(<4 x i64> %a) {
   ret <4 x i64> %shift
 }
 
-define <8 x i32> @constant_shift_v8i32(<8 x i32> %a) {
+define <8 x i32> @constant_shift_v8i32(<8 x i32> %a) nounwind {
 ; AVX1-LABEL: constant_shift_v8i32:
 ; AVX1:       # BB#0:
-; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm1
-; AVX1-NEXT:    vpextrd $1, %xmm1, %eax
-; AVX1-NEXT:    sarl $9, %eax
-; AVX1-NEXT:    vmovd %xmm1, %ecx
-; AVX1-NEXT:    sarl $8, %ecx
-; AVX1-NEXT:    vmovd %ecx, %xmm2
-; AVX1-NEXT:    vpinsrd $1, %eax, %xmm2, %xmm2
-; AVX1-NEXT:    vpextrd $2, %xmm1, %eax
-; AVX1-NEXT:    sarl $8, %eax
-; AVX1-NEXT:    vpinsrd $2, %eax, %xmm2, %xmm2
-; AVX1-NEXT:    vpextrd $3, %xmm1, %eax
-; AVX1-NEXT:    sarl $7, %eax
-; AVX1-NEXT:    vpinsrd $3, %eax, %xmm2, %xmm1
-; AVX1-NEXT:    vpextrd $1, %xmm0, %eax
-; AVX1-NEXT:    sarl $5, %eax
-; AVX1-NEXT:    vmovd %xmm0, %ecx
-; AVX1-NEXT:    sarl $4, %ecx
-; AVX1-NEXT:    vmovd %ecx, %xmm2
-; AVX1-NEXT:    vpinsrd $1, %eax, %xmm2, %xmm2
-; AVX1-NEXT:    vpextrd $2, %xmm0, %eax
-; AVX1-NEXT:    sarl $6, %eax
-; AVX1-NEXT:    vpinsrd $2, %eax, %xmm2, %xmm2
-; AVX1-NEXT:    vpextrd $3, %xmm0, %eax
-; AVX1-NEXT:    sarl $7, %eax
-; AVX1-NEXT:    vpinsrd $3, %eax, %xmm2, %xmm0
-; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
+; AVX1-NEXT:    vpsrad $7, %xmm0, %xmm1
+; AVX1-NEXT:    vpsrad $5, %xmm0, %xmm2
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm1 = xmm2[0,1,2,3],xmm1[4,5,6,7]
+; AVX1-NEXT:    vpsrad $6, %xmm0, %xmm2
+; AVX1-NEXT:    vpsrad $4, %xmm0, %xmm3
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm2 = xmm3[0,1,2,3],xmm2[4,5,6,7]
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm1 = xmm2[0,1],xmm1[2,3],xmm2[4,5],xmm1[6,7]
+; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm0
+; AVX1-NEXT:    vpsrad $7, %xmm0, %xmm2
+; AVX1-NEXT:    vpsrad $9, %xmm0, %xmm3
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm2 = xmm3[0,1,2,3],xmm2[4,5,6,7]
+; AVX1-NEXT:    vpsrad $8, %xmm0, %xmm0
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm0 = xmm0[0,1],xmm2[2,3],xmm0[4,5],xmm2[6,7]
+; AVX1-NEXT:    vinsertf128 $1, %xmm0, %ymm1, %ymm0
 ; AVX1-NEXT:    retq
 ;
 ; AVX2-LABEL: constant_shift_v8i32:
@@ -525,7 +504,7 @@ define <8 x i32> @constant_shift_v8i32(<8 x i32> %a) {
   ret <8 x i32> %shift
 }
 
-define <16 x i16> @constant_shift_v16i16(<16 x i16> %a) {
+define <16 x i16> @constant_shift_v16i16(<16 x i16> %a) nounwind {
 ; AVX1-LABEL: constant_shift_v16i16:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm1
@@ -574,7 +553,7 @@ define <16 x i16> @constant_shift_v16i16(<16 x i16> %a) {
   ret <16 x i16> %shift
 }
 
-define <32 x i8> @constant_shift_v32i8(<32 x i8> %a) {
+define <32 x i8> @constant_shift_v32i8(<32 x i8> %a) nounwind {
 ; AVX1-LABEL: constant_shift_v32i8:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vmovdqa {{.*#+}} xmm1 = [0,1,2,3,4,5,6,7,7,6,5,4,3,2,1,0]
@@ -659,30 +638,30 @@ define <32 x i8> @constant_shift_v32i8(<32 x i8> %a) {
 ; Uniform Constant Shifts
 ;
 
-define <4 x i64> @splatconstant_shift_v4i64(<4 x i64> %a) {
+define <4 x i64> @splatconstant_shift_v4i64(<4 x i64> %a) nounwind {
 ; AVX1-LABEL: splatconstant_shift_v4i64:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm1
-; AVX1-NEXT:    vpsrad       $7, %xmm1, %xmm2
-; AVX1-NEXT:    vpsrlq       $7, %xmm1, %xmm1
-; AVX1-NEXT:    vpblendw     {{.*#+}} xmm1 = xmm1[0,1],xmm2[2,3],xmm1[4,5],xmm2[6,7]
-; AVX1-NEXT:    vpsrad       $7, %xmm0, %xmm2
-; AVX1-NEXT:    vpsrlq       $7, %xmm0, %xmm0
-; AVX1-NEXT:    vpblendw     {{.*#+}} xmm0 = xmm0[0,1],xmm2[2,3],xmm0[4,5],xmm2[6,7]
-; AVX1-NEXT:    vinsertf128  $1, %xmm1, %ymm0, %ymm0
+; AVX1-NEXT:    vpsrad $7, %xmm1, %xmm2
+; AVX1-NEXT:    vpsrlq $7, %xmm1, %xmm1
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm1 = xmm1[0,1],xmm2[2,3],xmm1[4,5],xmm2[6,7]
+; AVX1-NEXT:    vpsrad $7, %xmm0, %xmm2
+; AVX1-NEXT:    vpsrlq $7, %xmm0, %xmm0
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm0 = xmm0[0,1],xmm2[2,3],xmm0[4,5],xmm2[6,7]
+; AVX1-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
 ; AVX1-NEXT:    retq
 ;
 ; AVX2-LABEL: splatconstant_shift_v4i64:
 ; AVX2:       # BB#0:
-; AVX2-NEXT:    vpsrad   $7, %ymm0, %ymm1
-; AVX2-NEXT:    vpsrlq   $7, %ymm0, %ymm0
+; AVX2-NEXT:    vpsrad $7, %ymm0, %ymm1
+; AVX2-NEXT:    vpsrlq $7, %ymm0, %ymm0
 ; AVX2-NEXT:    vpblendd {{.*#+}} ymm0 = ymm0[0],ymm1[1],ymm0[2],ymm1[3],ymm0[4],ymm1[5],ymm0[6],ymm1[7]
 ; AVX2-NEXT:    retq
   %shift = ashr <4 x i64> %a, <i64 7, i64 7, i64 7, i64 7>
   ret <4 x i64> %shift
 }
 
-define <8 x i32> @splatconstant_shift_v8i32(<8 x i32> %a) {
+define <8 x i32> @splatconstant_shift_v8i32(<8 x i32> %a) nounwind {
 ; AVX1-LABEL: splatconstant_shift_v8i32:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vpsrad $5, %xmm0, %xmm1
@@ -699,7 +678,7 @@ define <8 x i32> @splatconstant_shift_v8i32(<8 x i32> %a) {
   ret <8 x i32> %shift
 }
 
-define <16 x i16> @splatconstant_shift_v16i16(<16 x i16> %a) {
+define <16 x i16> @splatconstant_shift_v16i16(<16 x i16> %a) nounwind {
 ; AVX1-LABEL: splatconstant_shift_v16i16:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vpsraw $3, %xmm0, %xmm1
@@ -716,7 +695,7 @@ define <16 x i16> @splatconstant_shift_v16i16(<16 x i16> %a) {
   ret <16 x i16> %shift
 }
 
-define <32 x i8> @splatconstant_shift_v32i8(<32 x i8> %a) {
+define <32 x i8> @splatconstant_shift_v32i8(<32 x i8> %a) nounwind {
 ; AVX1-LABEL: splatconstant_shift_v32i8:
 ; AVX1:       # BB#0:
 ; AVX1-NEXT:    vextractf128 $1, %ymm0, %xmm1
@@ -735,11 +714,11 @@ define <32 x i8> @splatconstant_shift_v32i8(<32 x i8> %a) {
 ;
 ; AVX2-LABEL: splatconstant_shift_v32i8:
 ; AVX2:       # BB#0:
-; AVX2-NEXT:    vpsrlw  $3, %ymm0, %ymm0
-; AVX2-NEXT:    vpand   {{.*}}(%rip), %ymm0, %ymm0
+; AVX2-NEXT:    vpsrlw $3, %ymm0, %ymm0
+; AVX2-NEXT:    vpand {{.*}}(%rip), %ymm0, %ymm0
 ; AVX2-NEXT:    vmovdqa {{.*#+}} ymm1 = [16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16]
-; AVX2-NEXT:    vpxor   %ymm1, %ymm0, %ymm0
-; AVX2-NEXT:    vpsubb  %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    vpxor %ymm1, %ymm0, %ymm0
+; AVX2-NEXT:    vpsubb %ymm1, %ymm0, %ymm0
 ; AVX2-NEXT:    retq
   %shift = ashr <32 x i8> %a, <i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3, i8 3>
   ret <32 x i8> %shift

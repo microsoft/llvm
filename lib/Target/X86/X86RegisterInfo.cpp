@@ -44,12 +44,6 @@ using namespace llvm;
 #define GET_REGINFO_TARGET_DESC
 #include "X86GenRegisterInfo.inc"
 
-cl::opt<bool>
-ForceStackAlign("force-align-stack",
-                 cl::desc("Force align the stack to the minimum alignment"
-                           " needed for the function."),
-                 cl::init(false), cl::Hidden);
-
 static cl::opt<bool>
 EnableBasePointer("x86-use-base-pointer", cl::Hidden, cl::init(true),
           cl::desc("Enable use of a base pointer for complex stack frames"));
@@ -202,7 +196,7 @@ X86RegisterInfo::getCrossCopyRegClass(const TargetRegisterClass *RC) const {
 unsigned
 X86RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
                                      MachineFunction &MF) const {
-  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+  const X86FrameLowering *TFI = getFrameLowering(MF);
 
   unsigned FPDiff = TFI->hasFP(MF) ? 1 : 0;
   switch (RC->getID()) {
@@ -365,7 +359,7 @@ X86RegisterInfo::getNoPreservedMask() const {
 
 BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
-  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+  const X86FrameLowering *TFI = getFrameLowering(MF);
 
   // Set the stack-pointer register and its aliases as reserved.
   for (MCSubRegIterator I(X86::RSP, this, /*IncludeSelf=*/true); I.isValid();
@@ -479,7 +473,7 @@ bool X86RegisterInfo::hasBasePointer(const MachineFunction &MF) const {
 }
 
 bool X86RegisterInfo::canRealignStack(const MachineFunction &MF) const {
-  if (MF.getFunction()->hasFnAttribute("no-realign-stack"))
+  if (!TargetRegisterInfo::canRealignStack(MF))
     return false;
 
   const MachineFrameInfo *MFI = MF.getFrameInfo();
@@ -497,21 +491,6 @@ bool X86RegisterInfo::canRealignStack(const MachineFunction &MF) const {
   return true;
 }
 
-bool X86RegisterInfo::needsStackRealignment(const MachineFunction &MF) const {
-  const MachineFrameInfo *MFI = MF.getFrameInfo();
-  const Function *F = MF.getFunction();
-  unsigned StackAlign =
-    MF.getSubtarget().getFrameLowering()->getStackAlignment();
-  bool requiresRealignment = ((MFI->getMaxAlignment() > StackAlign) ||
-                              F->hasFnAttribute(Attribute::StackAlignment));
-
-  // If we've requested that we force align the stack do so now.
-  if (ForceStackAlign)
-    return canRealignStack(MF);
-
-  return requiresRealignment && canRealignStack(MF);
-}
-
 bool X86RegisterInfo::hasReservedSpillSlot(const MachineFunction &MF,
                                            unsigned Reg, int &FrameIdx) const {
   // Since X86 defines assignCalleeSavedSpillSlots which always return true
@@ -525,7 +504,7 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                      RegScavenger *RS) const {
   MachineInstr &MI = *II;
   MachineFunction &MF = *MI.getParent()->getParent();
-  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+  const X86FrameLowering *TFI = getFrameLowering(MF);
   int FrameIndex = MI.getOperand(FIOperandNum).getIndex();
   unsigned BasePtr;
 
@@ -551,8 +530,7 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     bool IsWinEH = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
     int Offset;
     if (IsWinEH)
-      Offset = static_cast<const X86FrameLowering *>(TFI)
-                     ->getFrameIndexOffsetFromSP(MF, FrameIndex);
+      Offset = TFI->getFrameIndexOffsetFromSP(MF, FrameIndex);
     else
       Offset = TFI->getFrameIndexOffset(MF, FrameIndex);
     FI.ChangeToImmediate(Offset);
@@ -606,7 +584,7 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
 }
 
 unsigned X86RegisterInfo::getFrameRegister(const MachineFunction &MF) const {
-  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+  const X86FrameLowering *TFI = getFrameLowering(MF);
   return TFI->hasFP(MF) ? FramePtr : StackPtr;
 }
 

@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include <cassert>
 #include <functional>
 
@@ -32,6 +33,9 @@ class RegScavenger;
 template<class T> class SmallVectorImpl;
 class VirtRegMap;
 class raw_ostream;
+class LiveRegMatrix;
+
+extern cl::opt<bool> ForceStackAlign;
 
 class TargetRegisterClass {
 public:
@@ -709,7 +713,9 @@ public:
                                      ArrayRef<MCPhysReg> Order,
                                      SmallVectorImpl<MCPhysReg> &Hints,
                                      const MachineFunction &MF,
-                                     const VirtRegMap *VRM = nullptr) const;
+                                     const VirtRegMap *VRM = nullptr,
+                                     const LiveRegMatrix *Matrix = nullptr)
+    const;
 
   /// updateRegAllocHint - A callback to allow target a chance to update
   /// register allocation hints when a register is "changed" (e.g. coalesced)
@@ -769,7 +775,7 @@ public:
   /// x86, if the frame register is required, the first fixed stack object is
   /// reserved as its spill slot. This tells PEI not to create a new stack frame
   /// object for the given register. It should be called only after
-  /// processFunctionBeforeCalleeSavedScan().
+  /// determineCalleeSaves().
   virtual bool hasReservedSpillSlot(const MachineFunction &MF, unsigned Reg,
                                     int &FrameIdx) const {
     return false;
@@ -781,12 +787,14 @@ public:
     return false;
   }
 
+  /// canRealignStack - true if the stack can be realigned for the target.
+  virtual bool canRealignStack(const MachineFunction &MF) const;
+
   /// needsStackRealignment - true if storage within the function requires the
   /// stack pointer to be aligned more than the normal calling convention calls
-  /// for.
-  virtual bool needsStackRealignment(const MachineFunction &MF) const {
-    return false;
-  }
+  /// for. This cannot be overriden by the target, but canRealignStack can be
+  /// overriden.
+  bool needsStackRealignment(const MachineFunction &MF) const;
 
   /// getFrameIndexInstrOffset - Get the offset from the referenced frame
   /// index in the instruction, if there is one.

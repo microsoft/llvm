@@ -26,8 +26,14 @@ using namespace llvm;
 
 #define DEBUG_TYPE "wasm-mc-target-desc"
 
+#define GET_INSTRINFO_MC_DESC
+#include "WebAssemblyGenInstrInfo.inc"
+
 #define GET_SUBTARGETINFO_MC_DESC
 #include "WebAssemblyGenSubtargetInfo.inc"
+
+#define GET_REGINFO_MC_DESC
+#include "WebAssemblyGenRegisterInfo.inc"
 
 static MCAsmInfo *createWebAssemblyMCAsmInfo(const MCRegisterInfo &MRI,
                                              const Triple &TT) {

@@ -47,6 +47,14 @@ MCAsmBackend *createWebAssemblyAsmBackend(const Target &T,
 // Defines symbolic names for WebAssembly registers. This defines a mapping from
 // register name to register number.
 //
+#define GET_REGINFO_ENUM
+#include "WebAssemblyGenRegisterInfo.inc"
+
+// Defines symbolic names for the WebAssembly instructions.
+//
+#define GET_INSTRINFO_ENUM
+#include "WebAssemblyGenInstrInfo.inc"
+
 #define GET_SUBTARGETINFO_ENUM
 #include "WebAssemblyGenSubtargetInfo.inc"
 

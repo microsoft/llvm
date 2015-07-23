@@ -656,10 +656,13 @@ namespace {
       LeaderTableEntry* Prev = nullptr;
       LeaderTableEntry* Curr = &LeaderTable[N];
 
-      while (Curr->Val != I || Curr->BB != BB) {
+      while (Curr && (Curr->Val != I || Curr->BB != BB)) {
         Prev = Curr;
         Curr = Curr->Next;
       }
+
+      if (!Curr)
+        return;
 
       if (Prev) {
         Prev->Next = Curr->Next;
@@ -1298,28 +1301,7 @@ static Value *ConstructSSAForLoadSet(LoadInst *LI,
   }
 
   // Perform PHI construction.
-  Value *V = SSAUpdate.GetValueInMiddleOfBlock(LI->getParent());
-
-  // If new PHI nodes were created, notify alias analysis.
-  if (V->getType()->getScalarType()->isPointerTy()) {
-    AliasAnalysis *AA = gvn.getAliasAnalysis();
-
-    for (unsigned i = 0, e = NewPHIs.size(); i != e; ++i)
-      AA->copyValue(LI, NewPHIs[i]);
-
-    // Now that we've copied information to the new PHIs, scan through
-    // them again and inform alias analysis that we've added potentially
-    // escaping uses to any values that are operands to these PHIs.
-    for (unsigned i = 0, e = NewPHIs.size(); i != e; ++i) {
-      PHINode *P = NewPHIs[i];
-      for (unsigned ii = 0, ee = P->getNumIncomingValues(); ii != ee; ++ii) {
-        unsigned jj = PHINode::getOperandNumForIncomingValue(ii);
-        AA->addEscapingUse(P->getOperandUse(jj));
-      }
-    }
-  }
-
-  return V;
+  return SSAUpdate.GetValueInMiddleOfBlock(LI->getParent());
 }
 
 Value *AvailableValueInBlock::MaterializeAdjustedValue(LoadInst *LI,
@@ -1796,7 +1778,7 @@ static void patchReplacementInstruction(Instruction *I, Value *Repl) {
     // In general, GVN unifies expressions over different control-flow
     // regions, and so we need a conservative combination of the noalias
     // scopes.
-    unsigned KnownIDs[] = {
+    static const unsigned KnownIDs[] = {
       LLVMContext::MD_tbaa,
       LLVMContext::MD_alias_scope,
       LLVMContext::MD_noalias,
@@ -2343,8 +2325,8 @@ bool GVN::runOnFunction(Function& F) {
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ) {
     BasicBlock *BB = FI++;
 
-    bool removedBlock = MergeBlockIntoPredecessor(
-        BB, DT, /* LoopInfo */ nullptr, VN.getAliasAnalysis(), MD);
+    bool removedBlock =
+        MergeBlockIntoPredecessor(BB, DT, /* LoopInfo */ nullptr, MD);
     if (removedBlock) ++NumGVNBlocks;
 
     Changed |= removedBlock;
@@ -2582,18 +2564,8 @@ bool GVN::performScalarPRE(Instruction *CurInst) {
   addToLeaderTable(ValNo, Phi, CurrentBlock);
   Phi->setDebugLoc(CurInst->getDebugLoc());
   CurInst->replaceAllUsesWith(Phi);
-  if (Phi->getType()->getScalarType()->isPointerTy()) {
-    // Because we have added a PHI-use of the pointer value, it has now
-    // "escaped" from alias analysis' perspective.  We need to inform
-    // AA of this.
-    for (unsigned ii = 0, ee = Phi->getNumIncomingValues(); ii != ee; ++ii) {
-      unsigned jj = PHINode::getOperandNumForIncomingValue(ii);
-      VN.getAliasAnalysis()->addEscapingUse(Phi->getOperandUse(jj));
-    }
-
-    if (MD)
-      MD->invalidateCachedPointerInfo(Phi);
-  }
+  if (MD && Phi->getType()->getScalarType()->isPointerTy())
+    MD->invalidateCachedPointerInfo(Phi);
   VN.erase(CurInst);
   removeFromLeaderTable(ValNo, CurInst, CurrentBlock);
 
@@ -2637,8 +2609,8 @@ bool GVN::performPRE(Function &F) {
 /// Split the critical edge connecting the given two blocks, and return
 /// the block inserted to the critical edge.
 BasicBlock *GVN::splitCriticalEdges(BasicBlock *Pred, BasicBlock *Succ) {
-  BasicBlock *BB = SplitCriticalEdge(
-      Pred, Succ, CriticalEdgeSplittingOptions(getAliasAnalysis(), DT));
+  BasicBlock *BB =
+      SplitCriticalEdge(Pred, Succ, CriticalEdgeSplittingOptions(DT));
   if (MD)
     MD->invalidateCachedPredecessors();
   return BB;
@@ -2652,7 +2624,7 @@ bool GVN::splitCriticalEdges() {
   do {
     std::pair<TerminatorInst*, unsigned> Edge = toSplit.pop_back_val();
     SplitCriticalEdge(Edge.first, Edge.second,
-                      CriticalEdgeSplittingOptions(getAliasAnalysis(), DT));
+                      CriticalEdgeSplittingOptions(DT));
   } while (!toSplit.empty());
   if (MD) MD->invalidateCachedPredecessors();
   return true;

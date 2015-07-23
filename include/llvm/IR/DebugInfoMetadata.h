@@ -67,8 +67,8 @@ public:
 
   operator Metadata *() const { return const_cast<Metadata *>(MD); }
 
-  bool operator==(const TypedDINodeRef<T> &X) const { return MD == X.MD; };
-  bool operator!=(const TypedDINodeRef<T> &X) const { return MD != X.MD; };
+  bool operator==(const TypedDINodeRef<T> &X) const { return MD == X.MD; }
+  bool operator!=(const TypedDINodeRef<T> &X) const { return MD != X.MD; }
 
   /// \brief Create a reference.
   ///
@@ -574,6 +574,7 @@ public:
   bool isStaticMember() const { return getFlags() & FlagStaticMember; }
   bool isLValueReference() const { return getFlags() & FlagLValueReference; }
   bool isRValueReference() const { return getFlags() & FlagRValueReference; }
+  bool isExternalTypeRef() const { return getFlags() & FlagExternalTypeRef; }
 
   DITypeRef getRef() const { return DITypeRef::get(this); }
 

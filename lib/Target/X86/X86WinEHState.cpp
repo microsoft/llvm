@@ -336,9 +336,11 @@ Function *WinEHStatePass::generateLSDAInEAXThunk(Function *ParentFunc) {
   FunctionType *TargetFuncTy =
       FunctionType::get(Int32Ty, makeArrayRef(&ArgTys[0], 5),
                         /*isVarArg=*/false);
-  Function *Trampoline = Function::Create(
-      TrampolineTy, GlobalValue::InternalLinkage,
-      Twine("__ehhandler$") + ParentFunc->getName(), TheModule);
+  Function *Trampoline =
+      Function::Create(TrampolineTy, GlobalValue::InternalLinkage,
+                       Twine("__ehhandler$") + GlobalValue::getRealLinkageName(
+                                                   ParentFunc->getName()),
+                       TheModule);
   BasicBlock *EntryBB = BasicBlock::Create(Context, "entry", Trampoline);
   IRBuilder<> Builder(EntryBB);
   Value *LSDA = emitEHLSDA(Builder, ParentFunc);
@@ -440,8 +442,10 @@ int WinEHStatePass::escapeRegNode(Function &F) {
 
   // Replace the call (if it exists) with new one. Otherwise, insert at the end
   // of the entry block.
-  IRBuilder<> Builder(&F.getEntryBlock(),
-                      EscapeCall ? EscapeCall : F.getEntryBlock().end());
+  Instruction *InsertPt = EscapeCall;
+  if (!EscapeCall)
+    InsertPt = F.getEntryBlock().getTerminator();
+  IRBuilder<> Builder(&F.getEntryBlock(), InsertPt);
   Builder.CreateCall(FrameEscape, Args);
   if (EscapeCall)
     EscapeCall->eraseFromParent();
@@ -520,6 +524,11 @@ void WinEHStatePass::addSEHStateStores(Function &F, MachineModuleInfo &MMI) {
           for (auto &Handler : ActionList) {
             if (auto *CH = dyn_cast<CatchHandler>(Handler.get())) {
               auto *BA = cast<BlockAddress>(CH->getHandlerBlockOrFunc());
+#ifndef NDEBUG
+              for (BasicBlock *Pred : predecessors(BA->getBasicBlock()))
+                assert(Pred->isLandingPad() &&
+                       "WinEHPrepare failed to split block");
+#endif
               ExceptBlocks.insert(BA->getBasicBlock());
             }
           }

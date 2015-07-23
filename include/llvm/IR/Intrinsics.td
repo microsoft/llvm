@@ -370,6 +370,8 @@ let Properties = [IntrNoMem] in {
   def int_rint  : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
   def int_nearbyint : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
   def int_round : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>]>;
+  def int_canonicalize : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>],
+                                   [IntrNoMem]>;
 }
 
 // NOTE: these are internal interfaces.
@@ -453,6 +455,7 @@ let Properties = [IntrNoMem] in {
 def int_eh_sjlj_functioncontext : Intrinsic<[], [llvm_ptr_ty]>;
 def int_eh_sjlj_setjmp          : Intrinsic<[llvm_i32_ty], [llvm_ptr_ty]>;
 def int_eh_sjlj_longjmp         : Intrinsic<[], [llvm_ptr_ty], [IntrNoReturn]>;
+def int_eh_sjlj_setup_dispatch  : Intrinsic<[], []>;
 
 //===---------------- Generic Variable Attribute Intrinsics----------------===//
 //
@@ -603,6 +606,12 @@ def int_convertuu  : Intrinsic<[llvm_anyint_ty],
 def int_clear_cache : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty],
                                 [], "llvm.clear_cache">;
 
+// Calculate the Absolute Differences of the two input vectors.
+def int_sabsdiff : Intrinsic<[llvm_anyvector_ty],
+                        [ LLVMMatchType<0>, LLVMMatchType<0> ], [IntrNoMem]>;
+def int_uabsdiff : Intrinsic<[llvm_anyvector_ty],
+                        [ LLVMMatchType<0>, LLVMMatchType<0> ], [IntrNoMem]>;
+
 //===-------------------------- Masked Intrinsics -------------------------===//
 //
 def int_masked_store : Intrinsic<[], [llvm_anyvector_ty, LLVMPointerTo<0>,
@@ -646,3 +655,4 @@ include "llvm/IR/IntrinsicsMips.td"
 include "llvm/IR/IntrinsicsAMDGPU.td"
 include "llvm/IR/IntrinsicsBPF.td"
 include "llvm/IR/IntrinsicsSystemZ.td"
+include "llvm/IR/IntrinsicsWebAssembly.td"

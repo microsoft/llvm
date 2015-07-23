@@ -71,15 +71,15 @@ class InvokeInst;
     /// any specific context knowledge.  For example, if the function is known
     /// to be readonly, this would be set to 'ref'.  If known to be readnone,
     /// this is set to NoModRef.
-    AliasAnalysis::ModRefResult UniversalBehavior;
-    
+    ModRefInfo UniversalBehavior;
+
     /// LocationMRInfo - This pair captures info about whether a specific
     /// location is modified or referenced by a libcall.
     struct LocationMRInfo {
       /// LocationID - ID # of the accessed location or ~0U for array end.
       unsigned LocationID;
       /// MRInfo - Mod/Ref info for this location.
-      AliasAnalysis::ModRefResult MRInfo;
+      ModRefInfo MRInfo;
     };
     
     /// DetailsType - Indicate the sense of the LocationDetails array.  This
@@ -206,6 +206,18 @@ class InvokeInst;
     case EHPersonality::CoreCLR:
       return true;
     default: return false;
+    }
+    llvm_unreachable("invalid enum");
+  }
+
+  /// \brief Return true if this personality may be safely removed if there
+  /// are no invoke instructions remaining in the current function.
+  inline bool isNoOpWithoutInvoke(EHPersonality Pers) {
+    switch (Pers) {
+    case EHPersonality::Unknown:
+      return false;
+    // All known personalities currently have this behavior
+    default: return true;
     }
     llvm_unreachable("invalid enum");
   }

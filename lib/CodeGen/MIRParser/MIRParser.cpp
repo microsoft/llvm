@@ -20,7 +20,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/AsmParser/SlotMapping.h"
+#include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/IR/BasicBlock.h"
@@ -48,6 +50,8 @@ class MIRParserImpl {
   LLVMContext &Context;
   StringMap<std::unique_ptr<yaml::MachineFunction>> Functions;
   SlotMapping IRSlots;
+  /// Maps from register class names to register classes.
+  StringMap<const TargetRegisterClass *> Names2RegClasses;
 
 public:
   MIRParserImpl(std::unique_ptr<MemoryBuffer> Contents, StringRef Filename,
@@ -59,6 +63,11 @@ public:
   ///
   /// Always returns true.
   bool error(const Twine &Message);
+
+  /// Report an error with the given message at the given location.
+  ///
+  /// Always returns true.
+  bool error(SMLoc Loc, const Twine &Message);
 
   /// Report a given error with the location translated from the location in an
   /// embedded string literal to a location in the MIR file.
@@ -94,8 +103,25 @@ public:
                                    const yaml::MachineBasicBlock &YamlMBB,
                                    const PerFunctionMIParsingState &PFS);
 
-  bool initializeRegisterInfo(MachineRegisterInfo &RegInfo,
-                              const yaml::MachineFunction &YamlMF);
+  bool
+  initializeRegisterInfo(const MachineFunction &MF,
+                         MachineRegisterInfo &RegInfo,
+                         const yaml::MachineFunction &YamlMF,
+                         DenseMap<unsigned, unsigned> &VirtualRegisterSlots);
+
+  bool initializeFrameInfo(const Function &F, MachineFrameInfo &MFI,
+                           const yaml::MachineFunction &YamlMF,
+                           DenseMap<unsigned, int> &StackObjectSlots,
+                           DenseMap<unsigned, int> &FixedStackObjectSlots);
+
+  bool initializeConstantPool(MachineConstantPool &ConstantPool,
+                              const yaml::MachineFunction &YamlMF,
+                              const MachineFunction &MF,
+                              DenseMap<unsigned, unsigned> &ConstantPoolSlots);
+
+  bool initializeJumpTableInfo(MachineFunction &MF,
+                               const yaml::MachineJumpTable &YamlJTI,
+                               PerFunctionMIParsingState &PFS);
 
 private:
   /// Return a MIR diagnostic converted from an MI string diagnostic.
@@ -108,6 +134,14 @@ private:
 
   /// Create an empty function with the given name.
   void createDummyFunction(StringRef Name, Module &M);
+
+  void initNames2RegClasses(const MachineFunction &MF);
+
+  /// Check if the given identifier is a name of a register class.
+  ///
+  /// Return null if the name isn't a register class.
+  const TargetRegisterClass *getRegClass(const MachineFunction &MF,
+                                         StringRef Name);
 };
 
 } // end namespace llvm
@@ -121,6 +155,12 @@ MIRParserImpl::MIRParserImpl(std::unique_ptr<MemoryBuffer> Contents,
 bool MIRParserImpl::error(const Twine &Message) {
   Context.diagnose(DiagnosticInfoMIRParser(
       DS_Error, SMDiagnostic(Filename, SourceMgr::DK_Error, Message.str())));
+  return true;
+}
+
+bool MIRParserImpl::error(SMLoc Loc, const Twine &Message) {
+  Context.diagnose(DiagnosticInfoMIRParser(
+      DS_Error, SM.GetMessage(Loc, SourceMgr::DK_Error, Message)));
   return true;
 }
 
@@ -232,19 +272,33 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
     MF.setAlignment(YamlMF.Alignment);
   MF.setExposesReturnsTwice(YamlMF.ExposesReturnsTwice);
   MF.setHasInlineAsm(YamlMF.HasInlineAsm);
-  if (initializeRegisterInfo(MF.getRegInfo(), YamlMF))
-    return true;
-
   PerFunctionMIParsingState PFS;
+  if (initializeRegisterInfo(MF, MF.getRegInfo(), YamlMF,
+                             PFS.VirtualRegisterSlots))
+    return true;
+  if (initializeFrameInfo(*MF.getFunction(), *MF.getFrameInfo(), YamlMF,
+                          PFS.StackObjectSlots, PFS.FixedStackObjectSlots))
+    return true;
+  if (!YamlMF.Constants.empty()) {
+    auto *ConstantPool = MF.getConstantPool();
+    assert(ConstantPool && "Constant pool must be created");
+    if (initializeConstantPool(*ConstantPool, YamlMF, MF,
+                               PFS.ConstantPoolSlots))
+      return true;
+  }
+
   const auto &F = *MF.getFunction();
   for (const auto &YamlMBB : YamlMF.BasicBlocks) {
     const BasicBlock *BB = nullptr;
-    if (!YamlMBB.Name.empty()) {
+    const yaml::StringValue &Name = YamlMBB.Name;
+    if (!Name.Value.empty()) {
       BB = dyn_cast_or_null<BasicBlock>(
-          F.getValueSymbolTable().lookup(YamlMBB.Name));
+          F.getValueSymbolTable().lookup(Name.Value));
       if (!BB)
-        return error(Twine("basic block '") + YamlMBB.Name +
-                     "' is not defined in the function '" + MF.getName() + "'");
+        return error(Name.SourceRange.Start,
+                     Twine("basic block '") + Name.Value +
+                         "' is not defined in the function '" + MF.getName() +
+                         "'");
     }
     auto *MBB = MF.CreateMachineBasicBlock(BB);
     MF.insert(MF.end(), MBB);
@@ -255,6 +309,14 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
                    Twine(YamlMBB.ID));
   }
 
+  if (YamlMF.BasicBlocks.empty())
+    return error(Twine("machine function '") + Twine(MF.getName()) +
+                 "' requires at least one machine basic block in its body");
+  // Initialize the jump table after creating all the MBBs so that the MBB
+  // references can be resolved.
+  if (!YamlMF.JumpTableInfo.Entries.empty() &&
+      initializeJumpTableInfo(MF, YamlMF.JumpTableInfo, PFS))
+    return true;
   // Initialize the machine basic blocks after creating them all so that the
   // machine instructions parser can resolve the MBB references.
   unsigned I = 0;
@@ -284,6 +346,14 @@ bool MIRParserImpl::initializeMachineBasicBlock(
     // TODO: Report an error when adding the same successor more than once.
     MBB.addSuccessor(SuccMBB);
   }
+  // Parse the liveins.
+  for (const auto &LiveInSource : YamlMBB.LiveIns) {
+    unsigned Reg = 0;
+    if (parseNamedRegisterReference(Reg, SM, MF, LiveInSource.Value, PFS,
+                                    IRSlots, Error))
+      return error(Error, LiveInSource.SourceRange);
+    MBB.addLiveIn(Reg);
+  }
   // Parse the instructions.
   for (const auto &MISource : YamlMBB.Instructions) {
     MachineInstr *MI = nullptr;
@@ -295,7 +365,9 @@ bool MIRParserImpl::initializeMachineBasicBlock(
 }
 
 bool MIRParserImpl::initializeRegisterInfo(
-    MachineRegisterInfo &RegInfo, const yaml::MachineFunction &YamlMF) {
+    const MachineFunction &MF, MachineRegisterInfo &RegInfo,
+    const yaml::MachineFunction &YamlMF,
+    DenseMap<unsigned, unsigned> &VirtualRegisterSlots) {
   assert(RegInfo.isSSA());
   if (!YamlMF.IsSSA)
     RegInfo.leaveSSA();
@@ -303,6 +375,122 @@ bool MIRParserImpl::initializeRegisterInfo(
   if (!YamlMF.TracksRegLiveness)
     RegInfo.invalidateLiveness();
   RegInfo.enableSubRegLiveness(YamlMF.TracksSubRegLiveness);
+
+  // Parse the virtual register information.
+  for (const auto &VReg : YamlMF.VirtualRegisters) {
+    const auto *RC = getRegClass(MF, VReg.Class.Value);
+    if (!RC)
+      return error(VReg.Class.SourceRange.Start,
+                   Twine("use of undefined register class '") +
+                       VReg.Class.Value + "'");
+    unsigned Reg = RegInfo.createVirtualRegister(RC);
+    // TODO: Report an error when the same virtual register with the same ID is
+    // redefined.
+    VirtualRegisterSlots.insert(std::make_pair(VReg.ID, Reg));
+  }
+  return false;
+}
+
+bool MIRParserImpl::initializeFrameInfo(
+    const Function &F, MachineFrameInfo &MFI,
+    const yaml::MachineFunction &YamlMF,
+    DenseMap<unsigned, int> &StackObjectSlots,
+    DenseMap<unsigned, int> &FixedStackObjectSlots) {
+  const yaml::MachineFrameInfo &YamlMFI = YamlMF.FrameInfo;
+  MFI.setFrameAddressIsTaken(YamlMFI.IsFrameAddressTaken);
+  MFI.setReturnAddressIsTaken(YamlMFI.IsReturnAddressTaken);
+  MFI.setHasStackMap(YamlMFI.HasStackMap);
+  MFI.setHasPatchPoint(YamlMFI.HasPatchPoint);
+  MFI.setStackSize(YamlMFI.StackSize);
+  MFI.setOffsetAdjustment(YamlMFI.OffsetAdjustment);
+  if (YamlMFI.MaxAlignment)
+    MFI.ensureMaxAlignment(YamlMFI.MaxAlignment);
+  MFI.setAdjustsStack(YamlMFI.AdjustsStack);
+  MFI.setHasCalls(YamlMFI.HasCalls);
+  MFI.setMaxCallFrameSize(YamlMFI.MaxCallFrameSize);
+  MFI.setHasOpaqueSPAdjustment(YamlMFI.HasOpaqueSPAdjustment);
+  MFI.setHasVAStart(YamlMFI.HasVAStart);
+  MFI.setHasMustTailInVarArgFunc(YamlMFI.HasMustTailInVarArgFunc);
+
+  // Initialize the fixed frame objects.
+  for (const auto &Object : YamlMF.FixedStackObjects) {
+    int ObjectIdx;
+    if (Object.Type != yaml::FixedMachineStackObject::SpillSlot)
+      ObjectIdx = MFI.CreateFixedObject(Object.Size, Object.Offset,
+                                        Object.IsImmutable, Object.IsAliased);
+    else
+      ObjectIdx = MFI.CreateFixedSpillStackObject(Object.Size, Object.Offset);
+    MFI.setObjectAlignment(ObjectIdx, Object.Alignment);
+    // TODO: Report an error when objects are redefined.
+    FixedStackObjectSlots.insert(std::make_pair(Object.ID, ObjectIdx));
+  }
+
+  // Initialize the ordinary frame objects.
+  for (const auto &Object : YamlMF.StackObjects) {
+    int ObjectIdx;
+    const AllocaInst *Alloca = nullptr;
+    const yaml::StringValue &Name = Object.Name;
+    if (!Name.Value.empty()) {
+      Alloca = dyn_cast_or_null<AllocaInst>(
+          F.getValueSymbolTable().lookup(Name.Value));
+      if (!Alloca)
+        return error(Name.SourceRange.Start,
+                     "alloca instruction named '" + Name.Value +
+                         "' isn't defined in the function '" + F.getName() +
+                         "'");
+    }
+    if (Object.Type == yaml::MachineStackObject::VariableSized)
+      ObjectIdx = MFI.CreateVariableSizedObject(Object.Alignment, Alloca);
+    else
+      ObjectIdx = MFI.CreateStackObject(
+          Object.Size, Object.Alignment,
+          Object.Type == yaml::MachineStackObject::SpillSlot, Alloca);
+    MFI.setObjectOffset(ObjectIdx, Object.Offset);
+    // TODO: Report an error when objects are redefined.
+    StackObjectSlots.insert(std::make_pair(Object.ID, ObjectIdx));
+  }
+  return false;
+}
+
+bool MIRParserImpl::initializeConstantPool(
+    MachineConstantPool &ConstantPool, const yaml::MachineFunction &YamlMF,
+    const MachineFunction &MF,
+    DenseMap<unsigned, unsigned> &ConstantPoolSlots) {
+  const auto &M = *MF.getFunction()->getParent();
+  SMDiagnostic Error;
+  for (const auto &YamlConstant : YamlMF.Constants) {
+    const Constant *Value = dyn_cast_or_null<Constant>(
+        parseConstantValue(YamlConstant.Value.Value, Error, M));
+    if (!Value)
+      return error(Error, YamlConstant.Value.SourceRange);
+    unsigned Alignment =
+        YamlConstant.Alignment
+            ? YamlConstant.Alignment
+            : M.getDataLayout().getPrefTypeAlignment(Value->getType());
+    // TODO: Report an error when the same constant pool value ID is redefined.
+    ConstantPoolSlots.insert(std::make_pair(
+        YamlConstant.ID, ConstantPool.getConstantPoolIndex(Value, Alignment)));
+  }
+  return false;
+}
+
+bool MIRParserImpl::initializeJumpTableInfo(
+    MachineFunction &MF, const yaml::MachineJumpTable &YamlJTI,
+    PerFunctionMIParsingState &PFS) {
+  MachineJumpTableInfo *JTI = MF.getOrCreateJumpTableInfo(YamlJTI.Kind);
+  SMDiagnostic Error;
+  for (const auto &Entry : YamlJTI.Entries) {
+    std::vector<MachineBasicBlock *> Blocks;
+    for (const auto &MBBSource : Entry.Blocks) {
+      MachineBasicBlock *MBB = nullptr;
+      if (parseMBBReference(MBB, SM, MF, MBBSource.Value, PFS, IRSlots, Error))
+        return error(Error, MBBSource.SourceRange);
+      Blocks.push_back(MBB);
+    }
+    unsigned Index = JTI->createJumpTableIndex(Blocks);
+    // TODO: Report an error when the same jump table slot ID is redefined.
+    PFS.JumpTableSlots.insert(std::make_pair(Entry.ID, Index));
+  }
   return false;
 }
 
@@ -351,6 +539,26 @@ SMDiagnostic MIRParserImpl::diagFromLLVMAssemblyDiag(const SMDiagnostic &Error,
   return SMDiagnostic(SM, Loc, Filename, Line, Column, Error.getKind(),
                       Error.getMessage(), LineStr, Error.getRanges(),
                       Error.getFixIts());
+}
+
+void MIRParserImpl::initNames2RegClasses(const MachineFunction &MF) {
+  if (!Names2RegClasses.empty())
+    return;
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  for (unsigned I = 0, E = TRI->getNumRegClasses(); I < E; ++I) {
+    const auto *RC = TRI->getRegClass(I);
+    Names2RegClasses.insert(
+        std::make_pair(StringRef(TRI->getRegClassName(RC)).lower(), RC));
+  }
+}
+
+const TargetRegisterClass *MIRParserImpl::getRegClass(const MachineFunction &MF,
+                                                      StringRef Name) {
+  initNames2RegClasses(MF);
+  auto RegClassInfo = Names2RegClasses.find(Name);
+  if (RegClassInfo == Names2RegClasses.end())
+    return nullptr;
+  return RegClassInfo->getValue();
 }
 
 MIRParser::MIRParser(std::unique_ptr<MIRParserImpl> Impl)

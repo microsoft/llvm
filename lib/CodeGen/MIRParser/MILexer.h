@@ -35,21 +35,36 @@ struct MIToken {
     comma,
     equal,
     underscore,
+    colon,
+    exclaim,
 
     // Keywords
     kw_implicit,
     kw_implicit_define,
     kw_dead,
+    kw_killed,
+    kw_undef,
+    kw_frame_setup,
+    kw_debug_location,
+    kw_cfi_def_cfa_offset,
 
     // Identifier tokens
     Identifier,
     NamedRegister,
     MachineBasicBlock,
+    StackObject,
+    FixedStackObject,
     NamedGlobalValue,
+    QuotedNamedGlobalValue,
     GlobalValue,
+    ExternalSymbol,
+    QuotedExternalSymbol,
 
     // Other tokens
-    IntegerLiteral
+    IntegerLiteral,
+    VirtualRegister,
+    ConstantPoolItem,
+    JumpTableIndex
   };
 
 private:
@@ -71,11 +86,13 @@ public:
   bool isError() const { return Kind == Error; }
 
   bool isRegister() const {
-    return Kind == NamedRegister || Kind == underscore;
+    return Kind == NamedRegister || Kind == underscore ||
+           Kind == VirtualRegister;
   }
 
   bool isRegisterFlag() const {
-    return Kind == kw_implicit || Kind == kw_implicit_define || Kind == kw_dead;
+    return Kind == kw_implicit || Kind == kw_implicit_define ||
+           Kind == kw_dead || Kind == kw_killed || Kind == kw_undef;
   }
 
   bool is(TokenKind K) const { return Kind == K; }
@@ -84,13 +101,36 @@ public:
 
   StringRef::iterator location() const { return Range.begin(); }
 
-  StringRef stringValue() const { return Range.drop_front(StringOffset); }
+  bool isStringValueQuoted() const {
+    return Kind == QuotedNamedGlobalValue || Kind == QuotedExternalSymbol;
+  }
+
+  /// Return the token's raw string value.
+  ///
+  /// If the string value is quoted, this method returns that quoted string as
+  /// it is, without unescaping the string value.
+  StringRef rawStringValue() const { return Range.drop_front(StringOffset); }
+
+  /// Return token's string value.
+  ///
+  /// Expects the string value to be unquoted.
+  StringRef stringValue() const {
+    assert(!isStringValueQuoted() && "String value is quoted");
+    return Range.drop_front(StringOffset);
+  }
+
+  /// Unescapes the token's string value.
+  ///
+  /// Expects the string value to be quoted.
+  void unescapeQuotedStringValue(std::string &Str) const;
 
   const APSInt &integerValue() const { return IntVal; }
 
   bool hasIntegerValue() const {
     return Kind == IntegerLiteral || Kind == MachineBasicBlock ||
-           Kind == GlobalValue;
+           Kind == StackObject || Kind == FixedStackObject ||
+           Kind == GlobalValue || Kind == VirtualRegister ||
+           Kind == ConstantPoolItem || Kind == JumpTableIndex;
   }
 };
 

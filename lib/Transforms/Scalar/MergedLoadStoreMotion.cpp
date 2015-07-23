@@ -241,7 +241,7 @@ bool MergedLoadStoreMotion::isLoadHoistBarrierInRange(const Instruction& Start,
                                                       const Instruction& End,
                                                       LoadInst* LI) {
   MemoryLocation Loc = MemoryLocation::get(LI);
-  return AA->canInstructionRangeModRef(Start, End, Loc, AliasAnalysis::Mod);
+  return AA->canInstructionRangeModRef(Start, End, Loc, MRI_Mod);
 }
 
 ///
@@ -300,10 +300,6 @@ void MergedLoadStoreMotion::hoistInstruction(BasicBlock *BB,
 
   // Merged instruction
   Instruction *HoistedInst = HoistCand->clone();
-
-  // Notify AA of the new value.
-  if (isa<LoadInst>(HoistCand))
-    AA->copyValue(HoistCand, HoistedInst);
 
   // Hoist instruction.
   HoistedInst->insertBefore(HoistPt);
@@ -402,7 +398,7 @@ bool MergedLoadStoreMotion::mergeLoads(BasicBlock *BB) {
 bool MergedLoadStoreMotion::isStoreSinkBarrierInRange(const Instruction &Start,
                                                       const Instruction &End,
                                                       MemoryLocation Loc) {
-  return AA->canInstructionRangeModRef(Start, End, Loc, AliasAnalysis::ModRef);
+  return AA->canInstructionRangeModRef(Start, End, Loc, MRI_ModRef);
 }
 
 ///
@@ -450,18 +446,8 @@ PHINode *MergedLoadStoreMotion::getPHIOperand(BasicBlock *BB, StoreInst *S0,
                             BB->begin());
     NewPN->addIncoming(Opd1, S0->getParent());
     NewPN->addIncoming(Opd2, S1->getParent());
-    if (NewPN->getType()->getScalarType()->isPointerTy()) {
-      // Notify AA of the new value.
-      AA->copyValue(Opd1, NewPN);
-      AA->copyValue(Opd2, NewPN);
-      // AA needs to be informed when a PHI-use of the pointer value is added
-      for (unsigned I = 0, E = NewPN->getNumIncomingValues(); I != E; ++I) {
-        unsigned J = PHINode::getOperandNumForIncomingValue(I);
-        AA->addEscapingUse(NewPN->getOperandUse(J));
-      }
-      if (MD)
-        MD->invalidateCachedPointerInfo(NewPN);
-    }
+    if (MD && NewPN->getType()->getScalarType()->isPointerTy())
+      MD->invalidateCachedPointerInfo(NewPN);
   }
   return NewPN;
 }
@@ -491,7 +477,6 @@ bool MergedLoadStoreMotion::sinkStore(BasicBlock *BB, StoreInst *S0,
     // Create the new store to be inserted at the join point.
     StoreInst *SNew = (StoreInst *)(S0->clone());
     Instruction *ANew = A0->clone();
-    AA->copyValue(S0, SNew);
     SNew->insertBefore(InsertPt);
     ANew->insertBefore(SNew);
 
