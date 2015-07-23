@@ -55,78 +55,6 @@ public:
   typedef typename std::conditional<ELFT::Is64Bits,
                                     uint64_t, uint32_t>::type uintX_t;
 
-  /// \brief Iterate over constant sized entities.
-  template <class EntT>
-  class ELFEntityIterator {
-  public:
-    typedef ptrdiff_t difference_type;
-    typedef EntT value_type;
-    typedef std::forward_iterator_tag iterator_category;
-    typedef value_type &reference;
-    typedef value_type *pointer;
-
-    /// \brief Default construct iterator.
-    ELFEntityIterator() : EntitySize(0), Current(nullptr) {}
-    ELFEntityIterator(uintX_t EntSize, const char *Start)
-        : EntitySize(EntSize), Current(Start) {}
-
-    reference operator *() {
-      assert(Current && "Attempted to dereference an invalid iterator!");
-      return *reinterpret_cast<pointer>(Current);
-    }
-
-    pointer operator ->() {
-      assert(Current && "Attempted to dereference an invalid iterator!");
-      return reinterpret_cast<pointer>(Current);
-    }
-
-    bool operator ==(const ELFEntityIterator &Other) {
-      return Current == Other.Current;
-    }
-
-    bool operator !=(const ELFEntityIterator &Other) {
-      return !(*this == Other);
-    }
-
-    ELFEntityIterator &operator ++() {
-      assert(Current && "Attempted to increment an invalid iterator!");
-      Current += EntitySize;
-      return *this;
-    }
-
-    ELFEntityIterator &operator+(difference_type n) {
-      assert(Current && "Attempted to increment an invalid iterator!");
-      Current += (n * EntitySize);
-      return *this;
-    }
-
-    ELFEntityIterator &operator-(difference_type n) {
-      assert(Current && "Attempted to subtract an invalid iterator!");
-      Current -= (n * EntitySize);
-      return *this;
-    }
-
-    ELFEntityIterator operator ++(int) {
-      ELFEntityIterator Tmp = *this;
-      ++*this;
-      return Tmp;
-    }
-
-    difference_type operator -(const ELFEntityIterator &Other) const {
-      assert(EntitySize == Other.EntitySize &&
-             "Subtracting iterators of different EntitySize!");
-      return (Current - Other.Current) / EntitySize;
-    }
-
-    const char *get() const { return Current; }
-
-    uintX_t getEntSize() const { return EntitySize; }
-
-  private:
-    uintX_t EntitySize;
-    const char *Current;
-  };
-
   typedef Elf_Ehdr_Impl<ELFT> Elf_Ehdr;
   typedef Elf_Shdr_Impl<ELFT> Elf_Shdr;
   typedef Elf_Sym_Impl<ELFT> Elf_Sym;
@@ -251,30 +179,34 @@ public:
     return make_range(section_begin(), section_end());
   }
 
-  const Elf_Sym *symbol_begin() const;
-  const Elf_Sym *symbol_end() const;
-  Elf_Sym_Range symbols() const {
-    return make_range(symbol_begin(), symbol_end());
+  const Elf_Sym *symbol_begin(const Elf_Shdr *Sec) const {
+    if (!Sec)
+      return nullptr;
+    if (Sec->sh_entsize != sizeof(Elf_Sym))
+      report_fatal_error("Invalid symbol size");
+    return reinterpret_cast<const Elf_Sym *>(base() + Sec->sh_offset);
   }
+  const Elf_Sym *symbol_end(const Elf_Shdr *Sec) const {
+    if (!Sec)
+      return nullptr;
+    uint64_t Size = Sec->sh_size;
+    if (Size % sizeof(Elf_Sym))
+      report_fatal_error("Invalid symbol table size");
+    return symbol_begin(Sec) + Size / sizeof(Elf_Sym);
+  }
+  Elf_Sym_Range symbols(const Elf_Shdr *Sec) const {
+    return make_range(symbol_begin(Sec), symbol_end(Sec));
+  }
+
+  const Elf_Sym *symbol_begin() const { return symbol_begin(dot_symtab_sec); }
+  const Elf_Sym *symbol_end() const { return symbol_end(dot_symtab_sec); }
+  Elf_Sym_Range symbols() const { return symbols(dot_symtab_sec); }
 
   const Elf_Sym *dynamic_symbol_begin() const {
-    if (!DotDynSymSec)
-      return nullptr;
-    if (DotDynSymSec->sh_entsize != sizeof(Elf_Sym))
-      report_fatal_error("Invalid symbol size");
-    return reinterpret_cast<const Elf_Sym *>(base() + DotDynSymSec->sh_offset);
+    return symbol_begin(DotDynSymSec);
   }
-
-  const Elf_Sym *dynamic_symbol_end() const {
-    if (!DotDynSymSec)
-      return nullptr;
-    return reinterpret_cast<const Elf_Sym *>(base() + DotDynSymSec->sh_offset +
-                                             DotDynSymSec->sh_size);
-  }
-
-  Elf_Sym_Range dynamic_symbols() const {
-    return make_range(dynamic_symbol_begin(), dynamic_symbol_end());
-  }
+  const Elf_Sym *dynamic_symbol_end() const { return symbol_end(DotDynSymSec); }
+  Elf_Sym_Range dynamic_symbols() const { return symbols(DotDynSymSec); }
 
   typedef iterator_range<const Elf_Rela *> Elf_Rela_Range;
 
@@ -336,7 +268,10 @@ public:
   const Elf_Ehdr *getHeader() const { return Header; }
   ErrorOr<const Elf_Shdr *> getSection(const Elf_Sym *symb) const;
   ErrorOr<const Elf_Shdr *> getSection(uint32_t Index) const;
-  const Elf_Sym *getSymbol(uint32_t index) const;
+
+  const Elf_Sym *getSymbol(const Elf_Shdr *Sec, uint32_t Index) const {
+    return &*(symbol_begin(Sec) + Index);
+  }
 
   ErrorOr<StringRef> getSectionName(const Elf_Shdr *Section) const;
   ErrorOr<ArrayRef<uint8_t> > getSectionContents(const Elf_Shdr *Sec) const;
@@ -444,12 +379,6 @@ ELFFile<ELFT>::getSection(const Elf_Sym *symb) const {
   if (Index == ELF::SHN_UNDEF || Index >= ELF::SHN_LORESERVE)
     return nullptr;
   return getSection(symb->st_shndx);
-}
-
-template <class ELFT>
-const typename ELFFile<ELFT>::Elf_Sym *
-ELFFile<ELFT>::getSymbol(uint32_t Index) const {
-  return &*(symbol_begin() + Index);
 }
 
 template <class ELFT>
@@ -672,23 +601,6 @@ const typename ELFFile<ELFT>::Elf_Shdr *ELFFile<ELFT>::section_begin() const {
 template <class ELFT>
 const typename ELFFile<ELFT>::Elf_Shdr *ELFFile<ELFT>::section_end() const {
   return section_begin() + getNumSections();
-}
-
-template <class ELFT>
-const typename ELFFile<ELFT>::Elf_Sym *ELFFile<ELFT>::symbol_begin() const {
-  if (!dot_symtab_sec)
-    return nullptr;
-  if (dot_symtab_sec->sh_entsize != sizeof(Elf_Sym))
-    report_fatal_error("Invalid symbol size");
-  return reinterpret_cast<const Elf_Sym *>(base() + dot_symtab_sec->sh_offset);
-}
-
-template <class ELFT>
-const typename ELFFile<ELFT>::Elf_Sym *ELFFile<ELFT>::symbol_end() const {
-  if (!dot_symtab_sec)
-    return nullptr;
-  return reinterpret_cast<const Elf_Sym *>(base() + dot_symtab_sec->sh_offset +
-                                           dot_symtab_sec->sh_size);
 }
 
 template <class ELFT>

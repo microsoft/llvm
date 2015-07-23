@@ -527,7 +527,7 @@ StringRef NonRelocatableStringpool::internString(StringRef S) {
   std::pair<uint32_t, StringMapEntryBase *> Entry(0, nullptr);
   auto InsertResult = Strings.insert(std::make_pair(S, Entry));
   return InsertResult.first->getKey();
-};
+}
 
 /// \brief The Dwarf streaming logic
 ///
@@ -3027,7 +3027,8 @@ bool DwarfLinker::link(const DebugMap &Map) {
 
     if (Options.Verbose)
       outs() << "DEBUG MAP OBJECT: " << Obj->getObjectFilename() << "\n";
-    auto ErrOrObj = BinHolder.GetObjectFile(Obj->getObjectFilename());
+    auto ErrOrObj =
+        BinHolder.GetObjectFile(Obj->getObjectFilename(), Obj->getTimestamp());
     if (std::error_code EC = ErrOrObj.getError()) {
       reportWarning(Twine(Obj->getObjectFilename()) + ": " + EC.message());
       continue;

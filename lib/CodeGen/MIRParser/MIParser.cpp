@@ -112,6 +112,8 @@ public:
   bool parseConstantPoolIndexOperand(MachineOperand &Dest);
   bool parseJumpTableIndexOperand(MachineOperand &Dest);
   bool parseExternalSymbolOperand(MachineOperand &Dest);
+  bool parseMDNode(MDNode *&Node);
+  bool parseMetadataOperand(MachineOperand &Dest);
   bool parseCFIOffset(int &Offset);
   bool parseCFIOperand(MachineOperand &Dest);
   bool parseMachineOperand(MachineOperand &Dest);
@@ -203,7 +205,7 @@ bool MIParser::parse(MachineInstr *&MI) {
   // TODO: Parse the bundle instruction flags and memory operands.
 
   // Parse the remaining machine operands.
-  while (Token.isNot(MIToken::Eof)) {
+  while (Token.isNot(MIToken::Eof) && Token.isNot(MIToken::kw_debug_location)) {
     auto Loc = Token.location();
     if (parseMachineOperand(MO))
       return true;
@@ -215,6 +217,17 @@ bool MIParser::parse(MachineInstr *&MI) {
     lex();
   }
 
+  DebugLoc DebugLocation;
+  if (Token.is(MIToken::kw_debug_location)) {
+    lex();
+    if (Token.isNot(MIToken::exclaim))
+      return error("expected a metadata node after 'debug-location'");
+    MDNode *Node = nullptr;
+    if (parseMDNode(Node))
+      return true;
+    DebugLocation = DebugLoc(Node);
+  }
+
   const auto &MCID = MF.getSubtarget().getInstrInfo()->get(OpCode);
   if (!MCID.isVariadic()) {
     // FIXME: Move the implicit operand verification to the machine verifier.
@@ -223,7 +236,7 @@ bool MIParser::parse(MachineInstr *&MI) {
   }
 
   // TODO: Check for extraneous machine operands.
-  MI = MF.CreateMachineInstr(MCID, DebugLoc(), /*NoImplicit=*/true);
+  MI = MF.CreateMachineInstr(MCID, DebugLocation, /*NoImplicit=*/true);
   MI->setFlags(Flags);
   for (const auto &Operand : Operands)
     MI->addOperand(MF, Operand.Operand);
@@ -575,6 +588,31 @@ bool MIParser::parseExternalSymbolOperand(MachineOperand &Dest) {
   return false;
 }
 
+bool MIParser::parseMDNode(MDNode *&Node) {
+  assert(Token.is(MIToken::exclaim));
+  auto Loc = Token.location();
+  lex();
+  if (Token.isNot(MIToken::IntegerLiteral) || Token.integerValue().isSigned())
+    return error("expected metadata id after '!'");
+  unsigned ID;
+  if (getUnsigned(ID))
+    return true;
+  auto NodeInfo = IRSlots.MetadataNodes.find(ID);
+  if (NodeInfo == IRSlots.MetadataNodes.end())
+    return error(Loc, "use of undefined metadata '!" + Twine(ID) + "'");
+  lex();
+  Node = NodeInfo->second.get();
+  return false;
+}
+
+bool MIParser::parseMetadataOperand(MachineOperand &Dest) {
+  MDNode *Node = nullptr;
+  if (parseMDNode(Node))
+    return true;
+  Dest = MachineOperand::CreateMetadata(Node);
+  return false;
+}
+
 bool MIParser::parseCFIOffset(int &Offset) {
   if (Token.isNot(MIToken::IntegerLiteral))
     return error("expected a cfi offset");
@@ -628,6 +666,8 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
   case MIToken::ExternalSymbol:
   case MIToken::QuotedExternalSymbol:
     return parseExternalSymbolOperand(Dest);
+  case MIToken::exclaim:
+    return parseMetadataOperand(Dest);
   case MIToken::kw_cfi_def_cfa_offset:
     return parseCFIOperand(Dest);
   case MIToken::Error:

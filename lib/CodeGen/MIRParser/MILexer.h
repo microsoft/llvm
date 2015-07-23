@@ -36,6 +36,7 @@ struct MIToken {
     equal,
     underscore,
     colon,
+    exclaim,
 
     // Keywords
     kw_implicit,
@@ -44,6 +45,7 @@ struct MIToken {
     kw_killed,
     kw_undef,
     kw_frame_setup,
+    kw_debug_location,
     kw_cfi_def_cfa_offset,
 
     // Identifier tokens
