@@ -101,13 +101,16 @@ namespace yaml {
 struct VirtualRegisterDefinition {
   unsigned ID;
   StringValue Class;
-  // TODO: Serialize the virtual register hints.
+  StringValue PreferredRegister;
+  // TODO: Serialize the target specific register hints.
 };
 
 template <> struct MappingTraits<VirtualRegisterDefinition> {
   static void mapping(IO &YamlIO, VirtualRegisterDefinition &Reg) {
     YamlIO.mapRequired("id", Reg.ID);
     YamlIO.mapRequired("class", Reg.Class);
+    YamlIO.mapOptional("preferred-register", Reg.PreferredRegister,
+                       StringValue()); // Don't print out when it's empty.
   }
 
   static const bool flow = true;
@@ -156,6 +159,7 @@ struct MachineStackObject {
   int64_t Offset = 0;
   uint64_t Size = 0;
   unsigned Alignment = 0;
+  StringValue CalleeSavedRegister;
 };
 
 template <> struct ScalarEnumerationTraits<MachineStackObject::ObjectType> {
@@ -178,6 +182,8 @@ template <> struct MappingTraits<MachineStackObject> {
     if (Object.Type != MachineStackObject::VariableSized)
       YamlIO.mapRequired("size", Object.Size);
     YamlIO.mapOptional("alignment", Object.Alignment);
+    YamlIO.mapOptional("callee-saved-register", Object.CalleeSavedRegister,
+                       StringValue()); // Don't print it out when it's empty.
   }
 
   static const bool flow = true;
@@ -194,6 +200,7 @@ struct FixedMachineStackObject {
   unsigned Alignment = 0;
   bool IsImmutable = false;
   bool IsAliased = false;
+  StringValue CalleeSavedRegister;
 };
 
 template <>
@@ -218,6 +225,8 @@ template <> struct MappingTraits<FixedMachineStackObject> {
       YamlIO.mapOptional("isImmutable", Object.IsImmutable);
       YamlIO.mapOptional("isAliased", Object.IsAliased);
     }
+    YamlIO.mapOptional("callee-saved-register", Object.CalleeSavedRegister,
+                       StringValue()); // Don't print it out when it's empty.
   }
 
   static const bool flow = true;
@@ -293,7 +302,6 @@ struct MachineFrameInfo {
   bool HasCalls = false;
   // TODO: Serialize StackProtectorIdx and FunctionContextIdx
   unsigned MaxCallFrameSize = 0;
-  // TODO: Serialize callee saved info.
   // TODO: Serialize local frame objects.
   bool HasOpaqueSPAdjustment = false;
   bool HasVAStart = false;
