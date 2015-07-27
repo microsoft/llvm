@@ -79,7 +79,8 @@ public:
   void convert(ModuleSlotTracker &MST, yaml::MachineBasicBlock &YamlMBB,
                const MachineBasicBlock &MBB);
   void convertStackObjects(yaml::MachineFunction &MF,
-                           const MachineFrameInfo &MFI);
+                           const MachineFrameInfo &MFI,
+                           const TargetRegisterInfo *TRI);
 
 private:
   void initRegisterMaskIds(const MachineFunction &MF);
@@ -140,6 +141,12 @@ static void printReg(unsigned Reg, raw_ostream &OS,
     llvm_unreachable("Can't print this kind of register yet");
 }
 
+static void printReg(unsigned Reg, yaml::StringValue &Dest,
+                     const TargetRegisterInfo *TRI) {
+  raw_string_ostream OS(Dest.Value);
+  printReg(Reg, OS, TRI);
+}
+
 void MIRPrinter::print(const MachineFunction &MF) {
   initRegisterMaskIds(MF);
 
@@ -150,7 +157,8 @@ void MIRPrinter::print(const MachineFunction &MF) {
   YamlMF.HasInlineAsm = MF.hasInlineAsm();
   convert(YamlMF, MF.getRegInfo(), MF.getSubtarget().getRegisterInfo());
   convert(YamlMF.FrameInfo, *MF.getFrameInfo());
-  convertStackObjects(YamlMF, *MF.getFrameInfo());
+  convertStackObjects(YamlMF, *MF.getFrameInfo(),
+                      MF.getSubtarget().getRegisterInfo());
   if (const auto *ConstantPool = MF.getConstantPool())
     convert(YamlMF, *ConstantPool);
 
@@ -188,6 +196,9 @@ void MIRPrinter::convert(yaml::MachineFunction &MF,
     VReg.ID = I;
     VReg.Class =
         StringRef(TRI->getRegClassName(RegInfo.getRegClass(Reg))).lower();
+    unsigned PreferredReg = RegInfo.getSimpleHint(Reg);
+    if (PreferredReg)
+      printReg(PreferredReg, VReg.PreferredRegister, TRI);
     MF.VirtualRegisters.push_back(VReg);
   }
 }
@@ -210,7 +221,8 @@ void MIRPrinter::convert(yaml::MachineFrameInfo &YamlMFI,
 }
 
 void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
-                                     const MachineFrameInfo &MFI) {
+                                     const MachineFrameInfo &MFI,
+                                     const TargetRegisterInfo *TRI) {
   // Process fixed stack objects.
   unsigned ID = 0;
   for (int I = MFI.getObjectIndexBegin(); I < 0; ++I) {
@@ -255,6 +267,19 @@ void MIRPrinter::convertStackObjects(yaml::MachineFunction &MF,
     MF.StackObjects.push_back(YamlObject);
     StackObjectOperandMapping.insert(std::make_pair(
         I, FrameIndexOperand::create(YamlObject.Name.Value, ID++)));
+  }
+
+  for (const auto &CSInfo : MFI.getCalleeSavedInfo()) {
+    yaml::StringValue Reg;
+    printReg(CSInfo.getReg(), Reg, TRI);
+    auto StackObjectInfo = StackObjectOperandMapping.find(CSInfo.getFrameIdx());
+    assert(StackObjectInfo != StackObjectOperandMapping.end() &&
+           "Invalid stack object index");
+    const FrameIndexOperand &StackObject = StackObjectInfo->second;
+    if (StackObject.IsFixed)
+      MF.FixedStackObjects[StackObject.ID].CalleeSavedRegister = Reg;
+    else
+      MF.StackObjects[StackObject.ID].CalleeSavedRegister = Reg;
   }
 }
 

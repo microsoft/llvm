@@ -415,7 +415,6 @@ determinePointerReadAttrs(Argument *A,
                                                        
   SmallVector<Use*, 32> Worklist;
   SmallSet<Use*, 32> Visited;
-  int Count = 0;
 
   // inalloca arguments are always clobbered by the call.
   if (A->hasInAllocaAttr())
@@ -425,9 +424,6 @@ determinePointerReadAttrs(Argument *A,
   // We don't need to track IsWritten. If A is written to, return immediately.
 
   for (Use &U : A->uses()) {
-    if (Count++ >= 20)
-      return Attribute::None;
-
     Visited.insert(&U);
     Worklist.push_back(&U);
   }
