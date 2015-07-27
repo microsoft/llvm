@@ -17,6 +17,7 @@
 
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/IR/CallingConv.h"
+#include "llvm/IR/Function.h"
 
 namespace llvm {
 
@@ -40,6 +41,15 @@ inline bool CC_X86_AnyReg_Error(unsigned &, MVT &, MVT &,
                    "stackmap and patchpoint intrinsics.");
   // gracefully fallback to X86 C calling convention on Release builds.
   return false;
+}
+
+inline bool hasCLRSecretParameterAttribute(unsigned ValNo, CCState &State) {
+  // CLR_SecretParameter is only valid when computing register allocation
+  // for function prologs.
+  assert(State.getCallOrPrologue() != ParmContext::Call);
+
+  const Function *Func = State.getMachineFunction().getFunction();
+  return Func->getAttributes().hasAttribute(ValNo + 1, "CLR_SecretParameter");
 }
 
 } // End llvm namespace

@@ -2099,6 +2099,39 @@ static unsigned getFusedLdStOpcode(EVT &LdVT, unsigned Opc) {
   llvm_unreachable("unrecognized size for LdVT");
 }
 
+static SDNode *AddGlueToNode(SDNode *N, SDValue Glue, SelectionDAG *DAG) {
+  SDNode *GlueNode = Glue.getNode();
+
+  assert(GlueNode != N);
+  assert(N->getOperand(N->getNumOperands() - 1).getValueType() != MVT::Glue);
+  assert(N->getValueType(N->getNumValues() - 1) != MVT::Glue);
+
+  SmallVector<EVT, 2> VTs(N->value_begin(), N->value_end());
+  VTs.push_back(MVT::Glue);
+
+  SmallVector<SDValue, 8> Ops(N->op_begin(), N->op_end());
+  if (GlueNode != nullptr)
+    Ops.push_back(Glue);
+
+  SDVTList VTList = DAG->getVTList(VTs);
+  MachineSDNode::mmo_iterator Begin = nullptr, End = nullptr;
+  MachineSDNode *MN = dyn_cast<MachineSDNode>(N);
+
+  // Copy memory references.
+  if (MN != nullptr) {
+    Begin = MN->memoperands_begin();
+    End = MN->memoperands_end();
+  }
+
+  SDNode *MorphedNode = DAG->MorphNodeTo(N, N->getOpcode(), VTList, Ops);
+
+  // Reset memory references
+  if (MN != nullptr)
+    MN->setMemRefs(Begin, End);
+
+  return MorphedNode;
+}
+
 /// SelectGather - Customized ISel for GATHER operations.
 ///
 SDNode *X86DAGToDAGISel::SelectGather(SDNode *Node, unsigned Opc) {
@@ -2873,6 +2906,146 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
     ReplaceUses(SDValue(StoredVal.getNode(), 1), SDValue(Result, 0));
 
     return Result;
+  }
+  case ISD::GC_TRANSITION_START: {
+    // Operands to this node:
+    // 0) Chain
+    // 1-2) Return address buffer
+    // 3-4) GC mode pointer
+    // 5-6) Trap flag pointer
+    // 7-8) Trap helper address
+    // 9) Glue (optional)
+
+    SDLoc SDL(Node);
+
+    // Add a pseudo-instruction to be lowered later on that will stash the
+    // address of the instruction following the call into the return address
+    // buffer.
+    //
+    // We use a temporary store in order to lower the incoming pointers to
+    // target address operands.
+    SDValue RAAddr = Node->getOperand(1);
+    const Value *RAAddrV =
+        cast<SrcValueSDNode>(Node->getOperand(2))->getValue();
+    SDValue RAStore = CurDAG->getStore(SDValue(Node->getOperand(0)),
+                                       SDL,
+                                       CurDAG->getConstant(0, SDL, MVT::i64),
+                                       RAAddr,
+                                       MachinePointerInfo(RAAddrV), false,
+                                       false, 0);
+    MemSDNode *RAStoreNode = cast<MemSDNode>(RAStore.getNode());
+
+    SDValue Base, Scale, Index, Disp, Segment;
+    if (!SelectAddr(RAStoreNode, RAAddr, Base, Scale, Index, Disp, Segment))
+      llvm_unreachable("failed to select address!");
+
+    MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
+    MemOp[0] = RAStoreNode->getMemOperand();
+    SDVTList VTs = CurDAG->getVTList(MVT::Other, MVT::Glue);
+
+    SmallVector<SDValue, 7> GCTransitionRAOps{
+        Base, Scale, Index, Disp, Segment,Node->getOperand(0)};
+    if (Node->getGluedNode())
+      GCTransitionRAOps.push_back(Node->getOperand(Node->getNumOperands() - 1));
+
+    MachineSDNode *GCTransitionRA =
+        CurDAG->getMachineNode(X86::GC_TRANSITION_RA, SDL, VTs,
+                               GCTransitionRAOps);
+    GCTransitionRA->setMemRefs(MemOp, MemOp + 1);
+
+    CurDAG->DeleteNode(RAStoreNode);
+
+    // Disable the CoreCLR GC's preemptive mode
+    SDValue GCAddr = Node->getOperand(3);
+    const Value *GCAddrV =
+        cast<SrcValueSDNode>(Node->getOperand(4))->getValue();
+    SDValue GCStore = CurDAG->getStore(SDValue(GCTransitionRA, 0), SDL,
+                                       CurDAG->getConstant(0, SDL, MVT::i8),
+                                       GCAddr,
+                                       MachinePointerInfo(GCAddrV), false,
+                                       false, 0);
+
+    SDNode *StoreNode = SelectCode(GCStore.getNode());
+    assert(StoreNode != nullptr);
+    StoreNode = AddGlueToNode(StoreNode, SDValue(GCTransitionRA, 1), CurDAG);
+
+    ReplaceUses(SDValue(Node, 0), SDValue(StoreNode, 0));
+    ReplaceUses(SDValue(Node, 1), SDValue(StoreNode, 1));
+
+    // We already called ReplaceUses.
+    return nullptr;
+  }
+  case ISD::GC_TRANSITION_END: {
+    // Operands to this node:
+    // 0) Chain
+    // 1-2) Return address buffer
+    // 3-4) GC mode pointer
+    // 5-6) Trap flag pointer
+    // 7-8) Trap helper address
+    // 9) Glue
+
+    assert(Node->getGluedNode());
+
+    SDLoc SDL(Node);
+
+    // Enable the CoreCLR GC's preemptive mode
+    SDValue GCAddr = Node->getOperand(3);
+    const Value *GCAddrV =
+        cast<SrcValueSDNode>(Node->getOperand(4))->getValue();
+
+    SDValue GCStore = CurDAG->getStore(Node->getOperand(0), SDL,
+                                       CurDAG->getConstant(1, SDL, MVT::i8),
+                                       GCAddr,
+                                       MachinePointerInfo(GCAddrV), false,
+                                       false, 0);
+    SDNode *StoreNode = SelectCode(GCStore.getNode());
+    assert(StoreNode != nullptr);
+
+    StoreNode = AddGlueToNode(StoreNode,
+                              Node->getOperand(Node->getNumOperands() - 1),
+                              CurDAG);
+
+    // Check to see if this thread needs to be trapped for a GC
+    SDValue TrapAddr = Node->getOperand(5);
+    const Value *TrapAddrV =
+        cast<SrcValueSDNode>(Node->getOperand(6))->getValue();
+    SDValue TrapLoad = CurDAG->getLoad(MVT::i32, SDL,
+                                       SDValue(StoreNode, 0), TrapAddr,
+                                       MachinePointerInfo(TrapAddrV), false,
+                                       false, false, 0);
+    MemSDNode *TrapLoadNode = cast<MemSDNode>(TrapLoad.getNode());
+
+    SDValue Base, Scale, Index, Disp, Segment;
+    if (!SelectAddr(TrapLoadNode, TrapAddr, Base, Scale, Index, Disp, Segment))
+      llvm_unreachable("failed to select address!");
+
+    MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
+    MemOp[0] = TrapLoadNode->getMemOperand();
+    SDVTList CMPVTs = CurDAG->getVTList(MVT::i32, MVT::Other, MVT::Glue);
+
+    SDValue Comparand = CurDAG->getTargetConstant(0, SDL, MVT::i8);
+    const SDValue CMPOps[] = {Base, Scale, Index, Disp, Segment, Comparand,
+                              SDValue(StoreNode, 0), SDValue(StoreNode, 1)};
+    MachineSDNode *TrapCMPNode = CurDAG->getMachineNode(X86::CMP32mi8,
+                                                        SDL, CMPVTs,
+                                                        CMPOps);
+    TrapCMPNode->setMemRefs(MemOp, MemOp + 1);
+
+    CurDAG->DeleteNode(TrapLoadNode);
+
+    // Add a pseudo-instruction to conditionally perform the trap.
+    SDVTList VTs = CurDAG->getVTList(MVT::Other, MVT::Glue);
+    const SDValue PauseOps[] = {SDValue(TrapCMPNode, 0), Node->getOperand(7),
+                                SDValue(TrapCMPNode, 1),
+                                SDValue(TrapCMPNode, 2)};
+    MachineSDNode *GCTransitionPause =
+        CurDAG->getMachineNode(X86::GC_TRANSITION_PAUSE, SDL, VTs, PauseOps);
+
+    ReplaceUses(SDValue(Node, 0), SDValue(GCTransitionPause, 0));
+    ReplaceUses(SDValue(Node, 1), SDValue(GCTransitionPause, 1));
+
+    // We already called ReplaceUses.
+    return nullptr;
   }
   }
 
