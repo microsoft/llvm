@@ -19,6 +19,7 @@
 
 namespace llvm {
 
+class BasicBlock;
 class MachineBasicBlock;
 class MachineInstr;
 class MachineFunction;
@@ -49,6 +50,17 @@ bool parseNamedRegisterReference(unsigned &Reg, SourceMgr &SM,
                                  const PerFunctionMIParsingState &PFS,
                                  const SlotMapping &IRSlots,
                                  SMDiagnostic &Error);
+
+bool parseVirtualRegisterReference(unsigned &Reg, SourceMgr &SM,
+                                   MachineFunction &MF, StringRef Src,
+                                   const PerFunctionMIParsingState &PFS,
+                                   const SlotMapping &IRSlots,
+                                   SMDiagnostic &Error);
+
+bool parseIRBlockReference(const BasicBlock *&BB, SourceMgr &SM,
+                           MachineFunction &MF, StringRef Src,
+                           const PerFunctionMIParsingState &PFS,
+                           const SlotMapping &IRSlots, SMDiagnostic &Error);
 
 } // end namespace llvm
 

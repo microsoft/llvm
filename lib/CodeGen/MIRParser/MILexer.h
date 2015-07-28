@@ -47,6 +47,7 @@ struct MIToken {
     kw_frame_setup,
     kw_debug_location,
     kw_cfi_offset,
+    kw_cfi_def_cfa_register,
     kw_cfi_def_cfa_offset,
 
     // Identifier tokens
@@ -65,7 +66,8 @@ struct MIToken {
     IntegerLiteral,
     VirtualRegister,
     ConstantPoolItem,
-    JumpTableIndex
+    JumpTableIndex,
+    IRBlock,
   };
 
 private:
@@ -131,7 +133,8 @@ public:
     return Kind == IntegerLiteral || Kind == MachineBasicBlock ||
            Kind == StackObject || Kind == FixedStackObject ||
            Kind == GlobalValue || Kind == VirtualRegister ||
-           Kind == ConstantPoolItem || Kind == JumpTableIndex;
+           Kind == ConstantPoolItem || Kind == JumpTableIndex ||
+           Kind == IRBlock;
   }
 };
 

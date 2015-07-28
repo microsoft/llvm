@@ -292,6 +292,7 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
   for (const auto &YamlMBB : YamlMF.BasicBlocks) {
     const BasicBlock *BB = nullptr;
     const yaml::StringValue &Name = YamlMBB.Name;
+    const yaml::StringValue &IRBlock = YamlMBB.IRBlock;
     if (!Name.Value.empty()) {
       BB = dyn_cast_or_null<BasicBlock>(
           F.getValueSymbolTable().lookup(Name.Value));
@@ -300,6 +301,12 @@ bool MIRParserImpl::initializeMachineFunction(MachineFunction &MF) {
                      Twine("basic block '") + Name.Value +
                          "' is not defined in the function '" + MF.getName() +
                          "'");
+    }
+    if (!IRBlock.Value.empty()) {
+      // TODO: Report an error when both name and ir block are specified.
+      SMDiagnostic Error;
+      if (parseIRBlockReference(BB, SM, MF, IRBlock.Value, PFS, IRSlots, Error))
+        return error(Error, IRBlock.SourceRange);
     }
     auto *MBB = MF.CreateMachineBasicBlock(BB);
     MF.insert(MF.end(), MBB);
@@ -401,6 +408,21 @@ bool MIRParserImpl::initializeRegisterInfo(MachineFunction &MF,
         return error(Error, VReg.PreferredRegister.SourceRange);
       RegInfo.setSimpleHint(Reg, PreferredReg);
     }
+  }
+
+  // Parse the liveins.
+  for (const auto &LiveIn : YamlMF.LiveIns) {
+    unsigned Reg = 0;
+    if (parseNamedRegisterReference(Reg, SM, MF, LiveIn.Register.Value, PFS,
+                                    IRSlots, Error))
+      return error(Error, LiveIn.Register.SourceRange);
+    unsigned VReg = 0;
+    if (!LiveIn.VirtualRegister.Value.empty()) {
+      if (parseVirtualRegisterReference(
+              VReg, SM, MF, LiveIn.VirtualRegister.Value, PFS, IRSlots, Error))
+        return error(Error, LiveIn.VirtualRegister.SourceRange);
+    }
+    RegInfo.addLiveIn(Reg, VReg);
   }
   return false;
 }

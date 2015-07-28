@@ -116,9 +116,26 @@ template <> struct MappingTraits<VirtualRegisterDefinition> {
   static const bool flow = true;
 };
 
+struct MachineFunctionLiveIn {
+  StringValue Register;
+  StringValue VirtualRegister;
+};
+
+template <> struct MappingTraits<MachineFunctionLiveIn> {
+  static void mapping(IO &YamlIO, MachineFunctionLiveIn &LiveIn) {
+    YamlIO.mapRequired("reg", LiveIn.Register);
+    YamlIO.mapOptional(
+        "virtual-reg", LiveIn.VirtualRegister,
+        StringValue()); // Don't print the virtual register when it's empty.
+  }
+
+  static const bool flow = true;
+};
+
 struct MachineBasicBlock {
   unsigned ID;
   StringValue Name;
+  StringValue IRBlock;
   unsigned Alignment = 0;
   bool IsLandingPad = false;
   bool AddressTaken = false;
@@ -133,6 +150,8 @@ template <> struct MappingTraits<MachineBasicBlock> {
     YamlIO.mapRequired("id", MBB.ID);
     YamlIO.mapOptional("name", MBB.Name,
                        StringValue()); // Don't print out an empty name.
+    YamlIO.mapOptional("ir-block", MBB.IRBlock,
+                       StringValue()); // Don't print out an empty BB reference.
     YamlIO.mapOptional("alignment", MBB.Alignment);
     YamlIO.mapOptional("isLandingPad", MBB.IsLandingPad);
     YamlIO.mapOptional("addressTaken", MBB.AddressTaken);
@@ -266,6 +285,7 @@ template <> struct MappingTraits<MachineJumpTable::Entry> {
 } // end namespace yaml
 } // end namespace llvm
 
+LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineFunctionLiveIn)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::VirtualRegisterDefinition)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineBasicBlock)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::yaml::MachineStackObject)
@@ -337,8 +357,8 @@ struct MachineFunction {
   bool TracksRegLiveness = false;
   bool TracksSubRegLiveness = false;
   std::vector<VirtualRegisterDefinition> VirtualRegisters;
+  std::vector<MachineFunctionLiveIn> LiveIns;
   // TODO: Serialize the various register masks.
-  // TODO: Serialize live in registers.
   // Frame information
   MachineFrameInfo FrameInfo;
   std::vector<FixedMachineStackObject> FixedStackObjects;
@@ -359,6 +379,7 @@ template <> struct MappingTraits<MachineFunction> {
     YamlIO.mapOptional("tracksRegLiveness", MF.TracksRegLiveness);
     YamlIO.mapOptional("tracksSubRegLiveness", MF.TracksSubRegLiveness);
     YamlIO.mapOptional("registers", MF.VirtualRegisters);
+    YamlIO.mapOptional("liveins", MF.LiveIns);
     YamlIO.mapOptional("frameInfo", MF.FrameInfo);
     YamlIO.mapOptional("fixedStack", MF.FixedStackObjects);
     YamlIO.mapOptional("stack", MF.StackObjects);

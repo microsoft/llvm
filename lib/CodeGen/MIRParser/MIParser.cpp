@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -77,6 +78,8 @@ class MIParser {
   StringMap<const uint32_t *> Names2RegMasks;
   /// Maps from subregister names to subregister indices.
   StringMap<unsigned> Names2SubRegIndices;
+  /// Maps from slot numbers to function's unnamed basic blocks.
+  DenseMap<unsigned, const BasicBlock *> Slots2BasicBlocks;
 
 public:
   MIParser(SourceMgr &SM, MachineFunction &MF, SMDiagnostic &Error,
@@ -96,8 +99,10 @@ public:
   bool error(StringRef::iterator Loc, const Twine &Msg);
 
   bool parse(MachineInstr *&MI);
-  bool parseMBB(MachineBasicBlock *&MBB);
-  bool parseNamedRegister(unsigned &Reg);
+  bool parseStandaloneMBB(MachineBasicBlock *&MBB);
+  bool parseStandaloneNamedRegister(unsigned &Reg);
+  bool parseStandaloneVirtualRegister(unsigned &Reg);
+  bool parseStandaloneIRBlockReference(const BasicBlock *&BB);
 
   bool parseRegister(unsigned &Reg);
   bool parseRegisterFlag(unsigned &Flags);
@@ -159,6 +164,10 @@ private:
   ///
   /// Return 0 if the name isn't a subregister index class.
   unsigned getSubRegIndex(StringRef Name);
+
+  void initSlots2BasicBlocks();
+
+  const BasicBlock *getIRBlock(unsigned Slot);
 };
 
 } // end anonymous namespace
@@ -264,7 +273,7 @@ bool MIParser::parse(MachineInstr *&MI) {
   return false;
 }
 
-bool MIParser::parseMBB(MachineBasicBlock *&MBB) {
+bool MIParser::parseStandaloneMBB(MachineBasicBlock *&MBB) {
   lex();
   if (Token.isNot(MIToken::MachineBasicBlock))
     return error("expected a machine basic block reference");
@@ -277,7 +286,7 @@ bool MIParser::parseMBB(MachineBasicBlock *&MBB) {
   return false;
 }
 
-bool MIParser::parseNamedRegister(unsigned &Reg) {
+bool MIParser::parseStandaloneNamedRegister(unsigned &Reg) {
   lex();
   if (Token.isNot(MIToken::NamedRegister))
     return error("expected a named register");
@@ -286,6 +295,35 @@ bool MIParser::parseNamedRegister(unsigned &Reg) {
   lex();
   if (Token.isNot(MIToken::Eof))
     return error("expected end of string after the register reference");
+  return false;
+}
+
+bool MIParser::parseStandaloneVirtualRegister(unsigned &Reg) {
+  lex();
+  if (Token.isNot(MIToken::VirtualRegister))
+    return error("expected a virtual register");
+  if (parseRegister(Reg))
+    return 0;
+  lex();
+  if (Token.isNot(MIToken::Eof))
+    return error("expected end of string after the register reference");
+  return false;
+}
+
+bool MIParser::parseStandaloneIRBlockReference(const BasicBlock *&BB) {
+  lex();
+  if (Token.isNot(MIToken::IRBlock))
+    return error("expected an IR block reference");
+  unsigned SlotNumber = 0;
+  if (getUnsigned(SlotNumber))
+    return true;
+  BB = getIRBlock(SlotNumber);
+  if (!BB)
+    return error(Twine("use of undefined IR block '%ir-block.") +
+                 Twine(SlotNumber) + "'");
+  lex();
+  if (Token.isNot(MIToken::Eof))
+    return error("expected end of string after the IR block reference");
   return false;
 }
 
@@ -675,6 +713,12 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
     CFIIndex =
         MMI.addFrameInst(MCCFIInstruction::createOffset(nullptr, Reg, Offset));
     break;
+  case MIToken::kw_cfi_def_cfa_register:
+    if (parseCFIRegister(Reg))
+      return true;
+    CFIIndex =
+        MMI.addFrameInst(MCCFIInstruction::createDefCfaRegister(nullptr, Reg));
+    break;
   case MIToken::kw_cfi_def_cfa_offset:
     if (parseCFIOffset(Offset))
       return true;
@@ -723,6 +767,7 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
   case MIToken::exclaim:
     return parseMetadataOperand(Dest);
   case MIToken::kw_cfi_offset:
+  case MIToken::kw_cfi_def_cfa_register:
   case MIToken::kw_cfi_def_cfa_offset:
     return parseCFIOperand(Dest);
   case MIToken::Error:
@@ -822,6 +867,30 @@ unsigned MIParser::getSubRegIndex(StringRef Name) {
   return SubRegInfo->getValue();
 }
 
+void MIParser::initSlots2BasicBlocks() {
+  if (!Slots2BasicBlocks.empty())
+    return;
+  const auto &F = *MF.getFunction();
+  ModuleSlotTracker MST(F.getParent());
+  MST.incorporateFunction(F);
+  for (auto &BB : F) {
+    if (BB.hasName())
+      continue;
+    int Slot = MST.getLocalSlot(&BB);
+    if (Slot == -1)
+      continue;
+    Slots2BasicBlocks.insert(std::make_pair(unsigned(Slot), &BB));
+  }
+}
+
+const BasicBlock *MIParser::getIRBlock(unsigned Slot) {
+  initSlots2BasicBlocks();
+  auto BlockInfo = Slots2BasicBlocks.find(Slot);
+  if (BlockInfo == Slots2BasicBlocks.end())
+    return nullptr;
+  return BlockInfo->second;
+}
+
 bool llvm::parseMachineInstr(MachineInstr *&MI, SourceMgr &SM,
                              MachineFunction &MF, StringRef Src,
                              const PerFunctionMIParsingState &PFS,
@@ -833,7 +902,7 @@ bool llvm::parseMBBReference(MachineBasicBlock *&MBB, SourceMgr &SM,
                              MachineFunction &MF, StringRef Src,
                              const PerFunctionMIParsingState &PFS,
                              const SlotMapping &IRSlots, SMDiagnostic &Error) {
-  return MIParser(SM, MF, Error, Src, PFS, IRSlots).parseMBB(MBB);
+  return MIParser(SM, MF, Error, Src, PFS, IRSlots).parseStandaloneMBB(MBB);
 }
 
 bool llvm::parseNamedRegisterReference(unsigned &Reg, SourceMgr &SM,
@@ -841,5 +910,24 @@ bool llvm::parseNamedRegisterReference(unsigned &Reg, SourceMgr &SM,
                                        const PerFunctionMIParsingState &PFS,
                                        const SlotMapping &IRSlots,
                                        SMDiagnostic &Error) {
-  return MIParser(SM, MF, Error, Src, PFS, IRSlots).parseNamedRegister(Reg);
+  return MIParser(SM, MF, Error, Src, PFS, IRSlots)
+      .parseStandaloneNamedRegister(Reg);
+}
+
+bool llvm::parseVirtualRegisterReference(unsigned &Reg, SourceMgr &SM,
+                                         MachineFunction &MF, StringRef Src,
+                                         const PerFunctionMIParsingState &PFS,
+                                         const SlotMapping &IRSlots,
+                                         SMDiagnostic &Error) {
+  return MIParser(SM, MF, Error, Src, PFS, IRSlots)
+      .parseStandaloneVirtualRegister(Reg);
+}
+
+bool llvm::parseIRBlockReference(const BasicBlock *&BB, SourceMgr &SM,
+                                 MachineFunction &MF, StringRef Src,
+                                 const PerFunctionMIParsingState &PFS,
+                                 const SlotMapping &IRSlots,
+                                 SMDiagnostic &Error) {
+  return MIParser(SM, MF, Error, Src, PFS, IRSlots)
+      .parseStandaloneIRBlockReference(BB);
 }
