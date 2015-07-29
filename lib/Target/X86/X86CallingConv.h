@@ -43,15 +43,6 @@ inline bool CC_X86_AnyReg_Error(unsigned &, MVT &, MVT &,
   return false;
 }
 
-inline bool hasCLRSecretParameterAttribute(unsigned ValNo, CCState &State) {
-  // CLR_SecretParameter is only valid when computing register allocation
-  // for function prologs.
-  assert(State.getCallOrPrologue() != ParmContext::Call);
-
-  const Function *Func = State.getMachineFunction().getFunction();
-  return Func->getAttributes().hasAttribute(ValNo + 1, "CLR_SecretParameter");
-}
-
 } // End llvm namespace
 
 #endif
