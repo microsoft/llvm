@@ -125,6 +125,7 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("frame-setup", MIToken::kw_frame_setup)
       .Case("debug-location", MIToken::kw_debug_location)
       .Case(".cfi_offset", MIToken::kw_cfi_offset)
+      .Case(".cfi_def_cfa_register", MIToken::kw_cfi_def_cfa_register)
       .Case(".cfi_def_cfa_offset", MIToken::kw_cfi_def_cfa_offset)
       .Default(MIToken::Identifier);
 }
@@ -216,6 +217,10 @@ static Cursor maybeLexFixedStackObject(Cursor C, MIToken &Token) {
 
 static Cursor maybeLexConstantPoolItem(Cursor C, MIToken &Token) {
   return maybeLexIndex(C, Token, "%const.", MIToken::ConstantPoolItem);
+}
+
+static Cursor maybeLexIRBlock(Cursor C, MIToken &Token) {
+  return maybeLexIndex(C, Token, "%ir-block.", MIToken::IRBlock);
 }
 
 static Cursor lexVirtualRegister(Cursor C, MIToken &Token) {
@@ -349,6 +354,8 @@ StringRef llvm::lexMIToken(
   if (Cursor R = maybeLexFixedStackObject(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexConstantPoolItem(C, Token))
+    return R.remaining();
+  if (Cursor R = maybeLexIRBlock(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexRegister(C, Token))
     return R.remaining();
