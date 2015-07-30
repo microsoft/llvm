@@ -543,11 +543,14 @@ analyzeLoopUnrollCost(const Loop *L, unsigned TripCount, ScalarEvolution &SE,
   // unrolling.
   unsigned RolledDynamicCost = 0;
 
+  DEBUG(dbgs() << "Starting LoopUnroll profitability analysis...\n");
+
   // Simulate execution of each iteration of the loop counting instructions,
   // which would be simplified.
   // Since the same load will take different values on different iterations,
   // we literally have to go through all loop's iterations.
   for (unsigned Iteration = 0; Iteration < TripCount; ++Iteration) {
+    DEBUG(dbgs() << " Analyzing iteration " << Iteration << "\n");
     SimplifiedValues.clear();
     UnrolledInstAnalyzer Analyzer(Iteration, SimplifiedValues, L, SE);
 
@@ -568,14 +571,24 @@ analyzeLoopUnrollCost(const Loop *L, unsigned TripCount, ScalarEvolution &SE,
         // unrolled cost.
         if (!Analyzer.visit(I))
           UnrolledCost += InstCost;
+        else {
+          DEBUG(dbgs() << "  " << I
+                       << " would be simplified if loop is unrolled.\n");
+          (void)0;
+        }
 
         // Also track this instructions expected cost when executing the rolled
         // loop form.
         RolledDynamicCost += InstCost;
 
         // If unrolled body turns out to be too big, bail out.
-        if (UnrolledCost > MaxUnrolledLoopSize)
+        if (UnrolledCost > MaxUnrolledLoopSize) {
+          DEBUG(dbgs() << "  Exceeded threshold.. exiting.\n"
+                       << "  UnrolledCost: " << UnrolledCost
+                       << ", MaxUnrolledLoopSize: " << MaxUnrolledLoopSize
+                       << "\n");
           return None;
+        }
       }
 
       TerminatorInst *TI = BB->getTerminator();
@@ -586,16 +599,30 @@ analyzeLoopUnrollCost(const Loop *L, unsigned TripCount, ScalarEvolution &SE,
         if (BI->isConditional()) {
           if (Constant *SimpleCond =
                   SimplifiedValues.lookup(BI->getCondition())) {
-            BBWorklist.insert(BI->getSuccessor(
-                cast<ConstantInt>(SimpleCond)->isZero() ? 1 : 0));
+            BasicBlock *Succ = nullptr;
+            // Just take the first successor if condition is undef
+            if (isa<UndefValue>(SimpleCond))
+              Succ = BI->getSuccessor(0);
+            else
+              Succ = BI->getSuccessor(
+                  cast<ConstantInt>(SimpleCond)->isZero() ? 1 : 0);
+            if (L->contains(Succ))
+              BBWorklist.insert(Succ);
             continue;
           }
         }
       } else if (SwitchInst *SI = dyn_cast<SwitchInst>(TI)) {
         if (Constant *SimpleCond =
                 SimplifiedValues.lookup(SI->getCondition())) {
-          BBWorklist.insert(
-              SI->getSuccessor(cast<ConstantInt>(SimpleCond)->getSExtValue()));
+          BasicBlock *Succ = nullptr;
+          // Just take the first successor if condition is undef
+          if (isa<UndefValue>(SimpleCond))
+            Succ = SI->getSuccessor(0);
+          else
+            Succ = SI->findCaseValue(cast<ConstantInt>(SimpleCond))
+                       .getCaseSuccessor();
+          if (L->contains(Succ))
+            BBWorklist.insert(Succ);
           continue;
         }
       }
@@ -608,9 +635,15 @@ analyzeLoopUnrollCost(const Loop *L, unsigned TripCount, ScalarEvolution &SE,
 
     // If we found no optimization opportunities on the first iteration, we
     // won't find them on later ones too.
-    if (UnrolledCost == RolledDynamicCost)
+    if (UnrolledCost == RolledDynamicCost) {
+      DEBUG(dbgs() << "  No opportunities found.. exiting.\n"
+                   << "  UnrolledCost: " << UnrolledCost << "\n");
       return None;
+    }
   }
+  DEBUG(dbgs() << "Analysis finished:\n"
+               << "UnrolledCost: " << UnrolledCost << ", "
+               << "RolledDynamicCost: " << RolledDynamicCost << "\n");
   return {{UnrolledCost, RolledDynamicCost}};
 }
 

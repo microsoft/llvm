@@ -981,6 +981,13 @@ bool MipsFastISel::selectSelect(const Instruction *I) {
   if (!Src1Reg || !Src2Reg || !CondReg)
     return false;
 
+  unsigned ZExtCondReg = createResultReg(&Mips::GPR32RegClass);
+  if (!ZExtCondReg)
+    return false;
+
+  if (!emitIntExt(MVT::i1, CondReg, MVT::i32, ZExtCondReg, true))
+    return false;
+
   unsigned ResultReg = createResultReg(RC);
   unsigned TempReg = createResultReg(RC);
 
@@ -989,7 +996,7 @@ bool MipsFastISel::selectSelect(const Instruction *I) {
 
   emitInst(TargetOpcode::COPY, TempReg).addReg(Src2Reg);
   emitInst(CondMovOpc, ResultReg)
-    .addReg(Src1Reg).addReg(CondReg).addReg(TempReg);
+    .addReg(Src1Reg).addReg(ZExtCondReg).addReg(TempReg);
   updateValueMap(I, ResultReg);
   return true;
 }
@@ -1238,6 +1245,10 @@ bool MipsFastISel::fastLowerCall(CallLoweringInfo &CLI) {
   const Value *Callee = CLI.Callee;
   MCSymbol *Symbol = CLI.Symbol;
 
+  // Do not handle FastCC.
+  if (CC == CallingConv::Fast)
+    return false;
+
   // Allow SelectionDAG isel to handle tail calls.
   if (IsTailCall)
     return false;
@@ -1415,6 +1426,11 @@ bool MipsFastISel::selectRet(const Instruction *I) {
 
   if (Ret->getNumOperands() > 0) {
     CallingConv::ID CC = F.getCallingConv();
+
+    // Do not handle FastCC.
+    if (CC == CallingConv::Fast)
+      return false;
+
     SmallVector<ISD::OutputArg, 4> Outs;
     GetReturnInfo(F.getReturnType(), F.getAttributes(), Outs, TLI, DL);
 

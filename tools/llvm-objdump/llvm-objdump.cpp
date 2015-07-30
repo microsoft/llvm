@@ -137,6 +137,13 @@ SectionHeadersShorter("h", cl::desc("Alias for --section-headers"),
                       cl::aliasopt(SectionHeaders));
 
 cl::list<std::string>
+llvm::FilterSections("section", cl::desc("Operate on the specified sections only. "
+                                         "With -macho dump segment,section"));
+cl::alias
+static FilterSectionsj("j", cl::desc("Alias for --section"),
+                 cl::aliasopt(llvm::FilterSections));
+
+cl::list<std::string>
 llvm::MAttrs("mattr",
   cl::CommaSeparated,
   cl::desc("Target specific attributes"),
@@ -171,6 +178,71 @@ cl::opt<bool> PrintFaultMaps("fault-map-section",
 
 static StringRef ToolName;
 static int ReturnValue = EXIT_SUCCESS;
+
+namespace {
+typedef std::function<bool(llvm::object::SectionRef const &)> FilterPredicate;
+
+class SectionFilterIterator {
+public:
+  SectionFilterIterator(FilterPredicate P,
+                        llvm::object::section_iterator const &I,
+                        llvm::object::section_iterator const &E)
+      : Predicate(P), Iterator(I), End(E) {
+    ScanPredicate();
+  }
+  llvm::object::SectionRef operator*() const { return *Iterator; }
+  SectionFilterIterator &operator++() {
+    ++Iterator;
+    ScanPredicate();
+    return *this;
+  }
+  bool operator!=(SectionFilterIterator const &Other) const {
+    return Iterator != Other.Iterator;
+  }
+
+private:
+  void ScanPredicate() {
+    while (Iterator != End && !Predicate(*Iterator)) {
+      ++Iterator;
+    }
+  }
+  FilterPredicate Predicate;
+  llvm::object::section_iterator Iterator;
+  llvm::object::section_iterator End;
+};
+
+class SectionFilter {
+public:
+  SectionFilter(FilterPredicate P, llvm::object::ObjectFile const &O)
+      : Predicate(P), Object(O) {}
+  SectionFilterIterator begin() {
+    return SectionFilterIterator(Predicate, Object.section_begin(),
+                                 Object.section_end());
+  }
+  SectionFilterIterator end() {
+    return SectionFilterIterator(Predicate, Object.section_end(),
+                                 Object.section_end());
+  }
+
+private:
+  FilterPredicate Predicate;
+  llvm::object::ObjectFile const &Object;
+};
+SectionFilter ToolSectionFilter(llvm::object::ObjectFile const &O) {
+  return SectionFilter([](llvm::object::SectionRef const &S) {
+                         if(FilterSections.empty())
+                           return true;
+                         llvm::StringRef String;
+                         std::error_code error = S.getName(String);
+                         if (error)
+                           return false;
+                         return std::find(FilterSections.begin(),
+                                          FilterSections.end(),
+                                          String) != FilterSections.end();
+                       },
+                       O);
+}
+}
 
 bool llvm::error(std::error_code EC) {
   if (!EC)
@@ -478,7 +550,7 @@ static void printRelocationTargetName(const MachOObjectFile *O,
 
     // If we couldn't find a symbol that this relocation refers to, try
     // to find a section beginning instead.
-    for (const SectionRef &Section : O->sections()) {
+    for (const SectionRef &Section : ToolSectionFilter(*O)) {
       std::error_code ec;
 
       StringRef Name;
@@ -813,7 +885,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
   // in RelocSecs contain the relocations for section S.
   std::error_code EC;
   std::map<SectionRef, SmallVector<SectionRef, 1>> SectionRelocMap;
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     section_iterator Sec2 = Section.getRelocatedSection();
     if (Sec2 != Obj->section_end())
       SectionRelocMap[*Sec2].push_back(Section);
@@ -843,7 +915,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
     array_pod_sort(AllSymbols.begin(), AllSymbols.end());
   }
 
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     if (!DisassembleAll && (!Section.isText() || Section.isVirtual()))
       continue;
 
@@ -1011,7 +1083,7 @@ void llvm::PrintRelocations(const ObjectFile *Obj) {
   if (!Obj->isRelocatableObject())
     return;
 
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     if (Section.relocation_begin() == Section.relocation_end())
       continue;
     StringRef secname;
@@ -1039,7 +1111,7 @@ void llvm::PrintSectionHeaders(const ObjectFile *Obj) {
   outs() << "Sections:\n"
             "Idx Name          Size      Address          Type\n";
   unsigned i = 0;
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     StringRef Name;
     if (error(Section.getName(Name)))
       return;
@@ -1058,7 +1130,7 @@ void llvm::PrintSectionHeaders(const ObjectFile *Obj) {
 
 void llvm::PrintSectionContents(const ObjectFile *Obj) {
   std::error_code EC;
-  for (const SectionRef &Section : Obj->sections()) {
+  for (const SectionRef &Section : ToolSectionFilter(*Obj)) {
     StringRef Name;
     StringRef Contents;
     if (error(Section.getName(Name)))
@@ -1336,7 +1408,7 @@ void llvm::printRawClangAST(const ObjectFile *Obj) {
   }
 
   Optional<object::SectionRef> ClangASTSection;
-  for (auto Sec : Obj->sections()) {
+  for (auto Sec : ToolSectionFilter(*Obj)) {
     StringRef Name;
     Sec.getName(Name);
     if (Name == ClangASTSectionName) {
@@ -1371,7 +1443,7 @@ static void printFaultMaps(const ObjectFile *Obj) {
 
   Optional<object::SectionRef> FaultMapSection;
 
-  for (auto Sec : Obj->sections()) {
+  for (auto Sec : ToolSectionFilter(*Obj)) {
     StringRef Name;
     Sec.getName(Name);
     if (Name == FaultMapSectionName) {
@@ -1545,7 +1617,7 @@ int main(int argc, char **argv) {
       && !(DylibsUsed && MachOOpt)
       && !(DylibId && MachOOpt)
       && !(ObjcMetaData && MachOOpt)
-      && !(DumpSections.size() != 0 && MachOOpt)
+      && !(FilterSections.size() != 0 && MachOOpt)
       && !PrintFaultMaps) {
     cl::PrintHelpMessage();
     return 2;

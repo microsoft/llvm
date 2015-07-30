@@ -6660,6 +6660,10 @@ static SDValue lowerVectorShuffleAsBlend(SDLoc DL, MVT VT, SDValue V1,
     assert((VT.getSizeInBits() == 128 || Subtarget->hasAVX2()) &&
            "256-bit byte-blends require AVX2 support!");
 
+    // Attempt to lower to a bitmask if we can. VPAND is faster than VPBLENDVB.
+    if (SDValue Masked = lowerVectorShuffleAsBitMask(DL, VT, V1, V2, Mask, DAG))
+      return Masked;
+
     // Scale the blend by the number of bytes per element.
     int Scale = VT.getScalarSizeInBits() / 8;
 
@@ -9067,6 +9071,10 @@ static SDValue lowerV16I8VectorShuffle(SDValue Op, SDValue V1, SDValue V2,
     if (SDValue V = tryToWidenViaDuplication())
       return V;
   }
+
+  if (SDValue Masked =
+          lowerVectorShuffleAsBitMask(DL, MVT::v16i8, V1, V2, Mask, DAG))
+    return Masked;
 
   // Use dedicated unpack instructions for masks that match their pattern.
   if (isShuffleEquivalent(V1, V2, Mask, {// Low half.
@@ -11634,6 +11642,8 @@ X86TargetLowering::LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const {
   auto PtrVT = getPointerTy(DAG.getDataLayout());
 
   if (Subtarget->isTargetELF()) {
+    if (DAG.getTarget().Options.EmulatedTLS)
+      return LowerToTLSEmulatedModel(GA, DAG);
     TLSModel::Model model = DAG.getTarget().getTLSModel(GV);
     switch (model) {
       case TLSModel::GeneralDynamic:
@@ -13295,8 +13305,8 @@ SDValue X86TargetLowering::getRecipEstimate(SDValue Op,
 /// This is because we still need one division to calculate the reciprocal and
 /// then we need two multiplies by that reciprocal as replacements for the
 /// original divisions.
-bool X86TargetLowering::combineRepeatedFPDivisors(unsigned NumUsers) const {
-  return NumUsers > 1;
+unsigned X86TargetLowering::combineRepeatedFPDivisors() const {
+  return 2;
 }
 
 static bool isAllOnes(SDValue V) {
@@ -17272,12 +17282,12 @@ static SDValue LowerScalarImmediateShift(SDValue Op, SelectionDAG &DAG,
         }
         if (Op.getOpcode() == ISD::SRA) {
           if (ShiftAmt == 7) {
-            // R s>> 7  ===  R s< 0
+            // ashr(R, 7)  === cmp_slt(R, 0)
             SDValue Zeros = getZeroVector(VT, Subtarget, DAG, dl);
             return DAG.getNode(X86ISD::PCMPGT, dl, VT, Zeros, R);
           }
 
-          // R s>> a === ((R u>> a) ^ m) - m
+          // ashr(R, Amt) === sub(xor(lshr(R, Amt), Mask), Mask)
           SDValue Res = DAG.getNode(ISD::SRL, dl, VT, R, Amt);
           SmallVector<SDValue, 32> V(NumElts,
                                      DAG.getConstant(128 >> ShiftAmt, dl,
@@ -17294,34 +17304,50 @@ static SDValue LowerScalarImmediateShift(SDValue Op, SelectionDAG &DAG,
 
   // Special case in 32-bit mode, where i64 is expanded into high and low parts.
   if (!Subtarget->is64Bit() &&
-      (VT == MVT::v2i64 || (Subtarget->hasInt256() && VT == MVT::v4i64)) &&
-      Amt.getOpcode() == ISD::BITCAST &&
-      Amt.getOperand(0).getOpcode() == ISD::BUILD_VECTOR) {
+      (VT == MVT::v2i64 || (Subtarget->hasInt256() && VT == MVT::v4i64))) {
+
+    // Peek through any splat that was introduced for i64 shift vectorization.
+    int SplatIndex = -1;
+    if (ShuffleVectorSDNode *SVN = dyn_cast<ShuffleVectorSDNode>(Amt.getNode()))
+      if (SVN->isSplat()) {
+        SplatIndex = SVN->getSplatIndex();
+        Amt = Amt.getOperand(0);
+        assert(SplatIndex < (int)VT.getVectorNumElements() &&
+               "Splat shuffle referencing second operand");
+      }
+
+    if (Amt.getOpcode() != ISD::BITCAST ||
+        Amt.getOperand(0).getOpcode() != ISD::BUILD_VECTOR)
+      return SDValue();
+
     Amt = Amt.getOperand(0);
     unsigned Ratio = Amt.getSimpleValueType().getVectorNumElements() /
                      VT.getVectorNumElements();
     unsigned RatioInLog2 = Log2_32_Ceil(Ratio);
     uint64_t ShiftAmt = 0;
+    unsigned BaseOp = (SplatIndex < 0 ? 0 : SplatIndex * Ratio);
     for (unsigned i = 0; i != Ratio; ++i) {
-      ConstantSDNode *C = dyn_cast<ConstantSDNode>(Amt.getOperand(i));
+      ConstantSDNode *C = dyn_cast<ConstantSDNode>(Amt.getOperand(i + BaseOp));
       if (!C)
         return SDValue();
       // 6 == Log2(64)
       ShiftAmt |= C->getZExtValue() << (i * (1 << (6 - RatioInLog2)));
     }
-    // Check remaining shift amounts.
-    for (unsigned i = Ratio; i != Amt.getNumOperands(); i += Ratio) {
-      uint64_t ShAmt = 0;
-      for (unsigned j = 0; j != Ratio; ++j) {
-        ConstantSDNode *C =
-          dyn_cast<ConstantSDNode>(Amt.getOperand(i + j));
-        if (!C)
+
+    // Check remaining shift amounts (if not a splat).
+    if (SplatIndex < 0) {
+      for (unsigned i = Ratio; i != Amt.getNumOperands(); i += Ratio) {
+        uint64_t ShAmt = 0;
+        for (unsigned j = 0; j != Ratio; ++j) {
+          ConstantSDNode *C = dyn_cast<ConstantSDNode>(Amt.getOperand(i + j));
+          if (!C)
+            return SDValue();
+          // 6 == Log2(64)
+          ShAmt |= C->getZExtValue() << (j * (1 << (6 - RatioInLog2)));
+        }
+        if (ShAmt != ShiftAmt)
           return SDValue();
-        // 6 == Log2(64)
-        ShAmt |= C->getZExtValue() << (j * (1 << (6 - RatioInLog2)));
       }
-      if (ShAmt != ShiftAmt)
-        return SDValue();
     }
 
     if (SupportedVectorShiftWithImm(VT, Subtarget, Op.getOpcode()))
@@ -17445,6 +17471,19 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget* Subtarget,
     SDValue R0 = DAG.getNode(Op->getOpcode(), dl, VT, R, Amt0);
     SDValue R1 = DAG.getNode(Op->getOpcode(), dl, VT, R, Amt1);
     return DAG.getVectorShuffle(VT, dl, R0, R1, {0, 3});
+  }
+
+  // i64 vector arithmetic shift can be emulated with the transform:
+  // M = lshr(SIGN_BIT, Amt)
+  // ashr(R, Amt) === sub(xor(lshr(R, Amt), M), M)
+  if ((VT == MVT::v2i64 || (VT == MVT::v4i64 && Subtarget->hasInt256())) &&
+      Op.getOpcode() == ISD::SRA) {
+    SDValue S = DAG.getConstant(APInt::getSignBit(64), dl, VT);
+    SDValue M = DAG.getNode(ISD::SRL, dl, VT, S, Amt);
+    R = DAG.getNode(ISD::SRL, dl, VT, R, Amt);
+    R = DAG.getNode(ISD::XOR, dl, VT, R, M);
+    R = DAG.getNode(ISD::SUB, dl, VT, R, M);
+    return R;
   }
 
   // If possible, lower this packed shift into a vector multiply instead of

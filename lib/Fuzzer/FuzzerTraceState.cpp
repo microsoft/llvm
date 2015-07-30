@@ -138,7 +138,9 @@ static bool ComputeCmp(size_t CmpSize, size_t CmpType, uint64_t Arg1,
   if (CmpSize == 4) return ComputeCmp<uint32_t, int32_t>(CmpType, Arg1, Arg2);
   if (CmpSize == 2) return ComputeCmp<uint16_t, int16_t>(CmpType, Arg1, Arg2);
   if (CmpSize == 1) return ComputeCmp<uint8_t, int8_t>(CmpType, Arg1, Arg2);
-  assert(0 && "unsupported type size");
+  // Other size, ==
+  if (CmpType == ICMP_EQ) return Arg1 == Arg2;
+  assert(0 && "unsupported cmp and type size combination");
   return true;
 }
 
@@ -392,6 +394,28 @@ void dfsan_weak_hook_memcmp(void *caller_pc, const void *s1, const void *s2,
   dfsan_label L1 = dfsan_read_label(s1, n);
   dfsan_label L2 = dfsan_read_label(s2, n);
   TS->DFSanCmpCallback(PC, n, fuzzer::ICMP_EQ, S1, S2, L1, L2);
+}
+
+void dfsan_weak_hook_strncmp(void *caller_pc, const char *s1, const char *s2,
+                             size_t n, dfsan_label s1_label,
+                             dfsan_label s2_label, dfsan_label n_label) {
+  dfsan_weak_hook_memcmp(caller_pc, s1, s2, n, s1_label, s2_label, n_label);
+}
+
+void __sanitizer_weak_hook_memcmp(void *caller_pc, const void *s1,
+                                  const void *s2, size_t n) {
+  if (!TS) return;
+  uintptr_t PC = reinterpret_cast<uintptr_t>(caller_pc);
+  uint64_t S1 = 0, S2 = 0;
+  // Simplification: handle only first 8 bytes.
+  memcpy(&S1, s1, std::min(n, sizeof(S1)));
+  memcpy(&S2, s2, std::min(n, sizeof(S2)));
+  TS->TraceCmpCallback(PC, n, fuzzer::ICMP_EQ, S1, S2);
+}
+
+void __sanitizer_weak_hook_strncmp(void *caller_pc, const char *s1,
+                                   const char *s2, size_t n) {
+  __sanitizer_weak_hook_memcmp(caller_pc, s1, s2, n);
 }
 
 void __sanitizer_cov_trace_cmp(uint64_t SizeAndType, uint64_t Arg1,

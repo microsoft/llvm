@@ -37,6 +37,8 @@ struct MIToken {
     underscore,
     colon,
     exclaim,
+    lparen,
+    rparen,
 
     // Keywords
     kw_implicit,
@@ -49,6 +51,9 @@ struct MIToken {
     kw_cfi_offset,
     kw_cfi_def_cfa_register,
     kw_cfi_def_cfa_offset,
+    kw_cfi_def_cfa,
+    kw_blockaddress,
+    kw_target_index,
 
     // Identifier tokens
     Identifier,
@@ -67,6 +72,8 @@ struct MIToken {
     VirtualRegister,
     ConstantPoolItem,
     JumpTableIndex,
+    NamedIRBlock,
+    QuotedNamedIRBlock,
     IRBlock,
   };
 
@@ -105,7 +112,8 @@ public:
   StringRef::iterator location() const { return Range.begin(); }
 
   bool isStringValueQuoted() const {
-    return Kind == QuotedNamedGlobalValue || Kind == QuotedExternalSymbol;
+    return Kind == QuotedNamedGlobalValue || Kind == QuotedExternalSymbol ||
+           Kind == QuotedNamedIRBlock;
   }
 
   /// Return the token's raw string value.
