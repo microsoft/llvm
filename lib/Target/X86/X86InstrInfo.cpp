@@ -959,18 +959,9 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::DPPDrri,         X86::DPPDrmi,       TB_ALIGN_16 },
     { X86::DPPSrri,         X86::DPPSrmi,       TB_ALIGN_16 },
 
-    // FIXME: We should not be folding Fs* scalar loads into vector
-    // instructions because the vector instructions require vector-sized
-    // loads. Lowering should create vector-sized instructions (the Fv*
-    // variants below) to allow load folding.
-    { X86::FsANDNPDrr,      X86::FsANDNPDrm,    TB_ALIGN_16 },
-    { X86::FsANDNPSrr,      X86::FsANDNPSrm,    TB_ALIGN_16 },
-    { X86::FsANDPDrr,       X86::FsANDPDrm,     TB_ALIGN_16 },
-    { X86::FsANDPSrr,       X86::FsANDPSrm,     TB_ALIGN_16 },
-    { X86::FsORPDrr,        X86::FsORPDrm,      TB_ALIGN_16 },
-    { X86::FsORPSrr,        X86::FsORPSrm,      TB_ALIGN_16 },
-    { X86::FsXORPDrr,       X86::FsXORPDrm,     TB_ALIGN_16 },
-    { X86::FsXORPSrr,       X86::FsXORPSrm,     TB_ALIGN_16 },
+    // Do not fold Fs* scalar logical op loads because there are no scalar
+    // load variants for these instructions. When folded, the load is required
+    // to be 128-bits, so the load size would not match.
 
     { X86::FvANDNPDrr,      X86::FvANDNPDrm,    TB_ALIGN_16 },
     { X86::FvANDNPSrr,      X86::FvANDNPSrm,    TB_ALIGN_16 },
@@ -6357,8 +6348,8 @@ static bool hasReassocSibling(const MachineInstr &Inst, bool &Commuted) {
 // TODO: There are many more machine instruction opcodes to match:
 //       1. Other data types (integer, vectors)
 //       2. Other math / logic operations (and, or)
-static bool isAssociativeAndCommutative(unsigned Opcode) {
-  switch (Opcode) {
+static bool isAssociativeAndCommutative(const MachineInstr &Inst) {
+  switch (Inst.getOpcode()) {
   case X86::ADDSDrr:
   case X86::ADDSSrr:
   case X86::VADDSDrr:
@@ -6367,7 +6358,7 @@ static bool isAssociativeAndCommutative(unsigned Opcode) {
   case X86::MULSSrr:
   case X86::VMULSDrr:
   case X86::VMULSSrr:
-    return true;
+    return Inst.getParent()->getParent()->getTarget().Options.UnsafeFPMath;
   default:
     return false;
   }
@@ -6383,7 +6374,7 @@ static bool isReassocCandidate(const MachineInstr &Inst, bool &Commuted) {
   // 2. The instruction must have virtual register definitions for its
   //    operands in the same basic block.
   // 3. The instruction must have a reassociable sibling.
-  if (isAssociativeAndCommutative(Inst.getOpcode()) &&
+  if (isAssociativeAndCommutative(Inst) &&
       hasVirtualRegDefsInBasicBlock(Inst, Inst.getParent()) &&
       hasReassocSibling(Inst, Commuted))
     return true;
@@ -6400,9 +6391,6 @@ static bool isReassocCandidate(const MachineInstr &Inst, bool &Commuted) {
 //    that pattern.
 bool X86InstrInfo::getMachineCombinerPatterns(MachineInstr &Root,
         SmallVectorImpl<MachineCombinerPattern::MC_PATTERN> &Patterns) const {
-  if (!Root.getParent()->getParent()->getTarget().Options.UnsafeFPMath)
-    return false;
-
   // TODO: There is nothing x86-specific here except the instruction type.
   // This logic could be hoisted into the machine combiner pass itself.
 

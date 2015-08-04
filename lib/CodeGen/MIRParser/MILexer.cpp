@@ -114,6 +114,26 @@ static Cursor lexStringConstant(
   return C;
 }
 
+static Cursor lexName(
+    Cursor C, MIToken &Token, MIToken::TokenKind Type,
+    MIToken::TokenKind QuotedType, unsigned PrefixLength,
+    function_ref<void(StringRef::iterator Loc, const Twine &)> ErrorCallback) {
+  auto Range = C;
+  C.advance(PrefixLength);
+  if (C.peek() == '"') {
+    if (Cursor R = lexStringConstant(C, ErrorCallback)) {
+      Token = MIToken(QuotedType, Range.upto(R), PrefixLength);
+      return R;
+    }
+    Token = MIToken(MIToken::Error, Range.remaining());
+    return Range;
+  }
+  while (isIdentifierChar(C.peek()))
+    C.advance();
+  Token = MIToken(Type, Range.upto(C), PrefixLength);
+  return C;
+}
+
 static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
   return StringSwitch<MIToken::TokenKind>(Identifier)
       .Case("_", MIToken::underscore)
@@ -124,7 +144,12 @@ static MIToken::TokenKind getIdentifierKind(StringRef Identifier) {
       .Case("undef", MIToken::kw_undef)
       .Case("frame-setup", MIToken::kw_frame_setup)
       .Case("debug-location", MIToken::kw_debug_location)
+      .Case(".cfi_offset", MIToken::kw_cfi_offset)
+      .Case(".cfi_def_cfa_register", MIToken::kw_cfi_def_cfa_register)
       .Case(".cfi_def_cfa_offset", MIToken::kw_cfi_def_cfa_offset)
+      .Case(".cfi_def_cfa", MIToken::kw_cfi_def_cfa)
+      .Case("blockaddress", MIToken::kw_blockaddress)
+      .Case("target-index", MIToken::kw_target_index)
       .Default(MIToken::Identifier);
 }
 
@@ -217,6 +242,18 @@ static Cursor maybeLexConstantPoolItem(Cursor C, MIToken &Token) {
   return maybeLexIndex(C, Token, "%const.", MIToken::ConstantPoolItem);
 }
 
+static Cursor maybeLexIRBlock(
+    Cursor C, MIToken &Token,
+    function_ref<void(StringRef::iterator Loc, const Twine &)> ErrorCallback) {
+  const StringRef Rule = "%ir-block.";
+  if (!C.remaining().startswith(Rule))
+    return None;
+  if (isdigit(C.peek(Rule.size())))
+    return maybeLexIndex(C, Token, Rule, MIToken::IRBlock);
+  return lexName(C, Token, MIToken::NamedIRBlock, MIToken::QuotedNamedIRBlock,
+                 Rule.size(), ErrorCallback);
+}
+
 static Cursor lexVirtualRegister(Cursor C, MIToken &Token) {
   auto Range = C;
   C.advance(); // Skip '%'
@@ -239,26 +276,6 @@ static Cursor maybeLexRegister(Cursor C, MIToken &Token) {
     C.advance();
   Token = MIToken(MIToken::NamedRegister, Range.upto(C),
                   /*StringOffset=*/1); // Drop the '%'
-  return C;
-}
-
-static Cursor lexName(
-    Cursor C, MIToken &Token, MIToken::TokenKind Type,
-    MIToken::TokenKind QuotedType, unsigned PrefixLength,
-    function_ref<void(StringRef::iterator Loc, const Twine &)> ErrorCallback) {
-  auto Range = C;
-  C.advance(PrefixLength);
-  if (C.peek() == '"') {
-    if (Cursor R = lexStringConstant(C, ErrorCallback)) {
-      Token = MIToken(QuotedType, Range.upto(R), PrefixLength);
-      return R;
-    }
-    Token = MIToken(MIToken::Error, Range.remaining());
-    return Range;
-  }
-  while (isIdentifierChar(C.peek()))
-    C.advance();
-  Token = MIToken(Type, Range.upto(C), PrefixLength);
   return C;
 }
 
@@ -313,6 +330,10 @@ static MIToken::TokenKind symbolToken(char C) {
     return MIToken::colon;
   case '!':
     return MIToken::exclaim;
+  case '(':
+    return MIToken::lparen;
+  case ')':
+    return MIToken::rparen;
   default:
     return MIToken::Error;
   }
@@ -348,6 +369,8 @@ StringRef llvm::lexMIToken(
   if (Cursor R = maybeLexFixedStackObject(C, Token))
     return R.remaining();
   if (Cursor R = maybeLexConstantPoolItem(C, Token))
+    return R.remaining();
+  if (Cursor R = maybeLexIRBlock(C, Token, ErrorCallback))
     return R.remaining();
   if (Cursor R = maybeLexRegister(C, Token))
     return R.remaining();

@@ -40,23 +40,6 @@ using namespace llvm;
 STATISTIC(NumTailCalls, "Number of tail calls");
 STATISTIC(NumShiftInserts, "Number of vector shift inserts");
 
-namespace {
-enum AlignMode {
-  StrictAlign,
-  NoStrictAlign
-};
-}
-
-static cl::opt<AlignMode>
-Align(cl::desc("Load/store alignment support"),
-      cl::Hidden, cl::init(NoStrictAlign),
-      cl::values(
-          clEnumValN(StrictAlign,   "aarch64-strict-align",
-                     "Disallow all unaligned memory accesses"),
-          clEnumValN(NoStrictAlign, "aarch64-no-strict-align",
-                     "Allow unaligned memory accesses"),
-          clEnumValEnd));
-
 // Place holder until extr generation is tested fully.
 static cl::opt<bool>
 EnableAArch64ExtrGeneration("aarch64-extr-generation", cl::Hidden,
@@ -515,9 +498,9 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
 
   setMinFunctionAlignment(2);
 
-  RequireStrictAlign = (Align == StrictAlign);
-
   setHasExtractBitsInsn(true);
+
+  setOperationAction(ISD::INTRINSIC_WO_CHAIN, MVT::Other, Custom);
 
   if (Subtarget->hasNEON()) {
     // FIXME: v1f64 shouldn't be legal if we can avoid it, because it leads to
@@ -783,6 +766,18 @@ void AArch64TargetLowering::computeKnownBitsForTargetNode(
 MVT AArch64TargetLowering::getScalarShiftAmountTy(const DataLayout &DL,
                                                   EVT) const {
   return MVT::i64;
+}
+
+bool AArch64TargetLowering::allowsMisalignedMemoryAccesses(EVT VT,
+                                                           unsigned AddrSpace,
+                                                           unsigned Align,
+                                                           bool *Fast) const {
+  if (Subtarget->requiresStrictAlign())
+    return false;
+  // FIXME: True for Cyclone, but not necessary others.
+  if (Fast)
+    *Fast = true;
+  return true;
 }
 
 FastISel *
@@ -2158,6 +2153,19 @@ static SDValue LowerMUL(SDValue Op, SelectionDAG &DAG) {
                                DAG.getNode(ISD::BITCAST, DL, Op1VT, N01), Op1));
 }
 
+SDValue AArch64TargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
+                                                     SelectionDAG &DAG) const {
+  unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
+  SDLoc dl(Op);
+  switch (IntNo) {
+  default: return SDValue();    // Don't custom lower most intrinsics.
+  case Intrinsic::aarch64_thread_pointer: {
+    EVT PtrVT = getPointerTy(DAG.getDataLayout());
+    return DAG.getNode(AArch64ISD::THREAD_POINTER, dl, PtrVT);
+  }
+  }
+}
+
 SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
                                               SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
@@ -2259,6 +2267,8 @@ SDValue AArch64TargetLowering::LowerOperation(SDValue Op,
     return LowerFSINCOS(Op, DAG);
   case ISD::MUL:
     return LowerMUL(Op, DAG);
+  case ISD::INTRINSIC_WO_CHAIN:
+    return LowerINTRINSIC_WO_CHAIN(Op, DAG);
   }
 }
 
@@ -3387,6 +3397,10 @@ AArch64TargetLowering::LowerELFGlobalTLSAddress(SDValue Op,
   const GlobalAddressSDNode *GA = cast<GlobalAddressSDNode>(Op);
 
   TLSModel::Model Model = getTargetMachine().getTLSModel(GA->getGlobal());
+
+  if (DAG.getTarget().Options.EmulatedTLS)
+    return LowerToTLSEmulatedModel(GA, DAG);
+
   if (!EnableAArch64ELFLocalDynamicTLSGeneration) {
     if (Model == TLSModel::LocalDynamic)
       Model = TLSModel::GeneralDynamic;
@@ -6440,26 +6454,20 @@ static bool getVShiftImm(SDValue Op, unsigned ElementBits, int64_t &Cnt) {
 ///   0 <= Value <= ElementBits for a long left shift.
 static bool isVShiftLImm(SDValue Op, EVT VT, bool isLong, int64_t &Cnt) {
   assert(VT.isVector() && "vector shift count is not a vector type");
-  unsigned ElementBits = VT.getVectorElementType().getSizeInBits();
+  int64_t ElementBits = VT.getVectorElementType().getSizeInBits();
   if (!getVShiftImm(Op, ElementBits, Cnt))
     return false;
   return (Cnt >= 0 && (isLong ? Cnt - 1 : Cnt) < ElementBits);
 }
 
 /// isVShiftRImm - Check if this is a valid build_vector for the immediate
-/// operand of a vector shift right operation.  For a shift opcode, the value
-/// is positive, but for an intrinsic the value count must be negative. The
-/// absolute value must be in the range:
-///   1 <= |Value| <= ElementBits for a right shift; or
-///   1 <= |Value| <= ElementBits/2 for a narrow right shift.
-static bool isVShiftRImm(SDValue Op, EVT VT, bool isNarrow, bool isIntrinsic,
-                         int64_t &Cnt) {
+/// operand of a vector shift right operation. The value must be in the range:
+///   1 <= Value <= ElementBits for a right shift; or
+static bool isVShiftRImm(SDValue Op, EVT VT, bool isNarrow, int64_t &Cnt) {
   assert(VT.isVector() && "vector shift count is not a vector type");
-  unsigned ElementBits = VT.getVectorElementType().getSizeInBits();
+  int64_t ElementBits = VT.getVectorElementType().getSizeInBits();
   if (!getVShiftImm(Op, ElementBits, Cnt))
     return false;
-  if (isIntrinsic)
-    Cnt = -Cnt;
   return (Cnt >= 1 && Cnt <= (isNarrow ? ElementBits / 2 : ElementBits));
 }
 
@@ -6488,8 +6496,7 @@ SDValue AArch64TargetLowering::LowerVectorSRA_SRL_SHL(SDValue Op,
   case ISD::SRA:
   case ISD::SRL:
     // Right shift immediate
-    if (isVShiftRImm(Op.getOperand(1), VT, false, false, Cnt) &&
-        Cnt < EltSize) {
+    if (isVShiftRImm(Op.getOperand(1), VT, false, Cnt) && Cnt < EltSize) {
       unsigned Opc =
           (Op.getOpcode() == ISD::SRA) ? AArch64ISD::VASHR : AArch64ISD::VLSHR;
       return DAG.getNode(Opc, DL, VT, Op.getOperand(0),
@@ -9413,10 +9420,10 @@ bool AArch64TargetLowering::useLoadStackGuardNode() const {
   return true;
 }
 
-bool AArch64TargetLowering::combineRepeatedFPDivisors(unsigned NumUsers) const {
+unsigned AArch64TargetLowering::combineRepeatedFPDivisors() const {
   // Combine multiple FDIVs with the same divisor into multiple FMULs by the
   // reciprocal if there are three or more FDIVs.
-  return NumUsers > 2;
+  return 3;
 }
 
 TargetLoweringBase::LegalizeTypeAction

@@ -494,6 +494,9 @@ model is not supported, or if a better choice of model can be made.
 A model can also be specified in a alias, but then it only governs how
 the alias is accessed. It will not have any effect in the aliasee.
 
+For platforms without linker support of ELF TLS model, the -femulated-tls
+flag can be used to generate GCC compatible emulated TLS code.
+
 .. _namedtypes:
 
 Structure Types
@@ -3906,12 +3909,12 @@ specifies the argument position, and this variable will be included in the
 
 .. code-block:: llvm
 
-    !0 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 0,
+    !0 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1,
                           scope: !3, file: !2, line: 7, type: !3,
                           flags: DIFlagArtificial)
-    !1 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "x", arg: 1,
+    !1 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "x", arg: 2,
                           scope: !4, file: !2, line: 7, type: !3)
-    !1 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "y",
+    !2 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "y",
                           scope: !5, file: !2, line: 7, type: !3)
 
 DIExpression

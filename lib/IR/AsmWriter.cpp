@@ -232,8 +232,7 @@ static UseListOrderStack predictUseListOrder(const Module *M) {
   // We want to visit the functions backward now so we can list function-local
   // constants in the last Function they're used in.  Module-level constants
   // have already been visited above.
-  for (auto I = M->rbegin(), E = M->rend(); I != E; ++I) {
-    const Function &F = *I;
+  for (const Function &F : make_range(M->rbegin(), M->rend())) {
     if (F.isDeclaration())
       continue;
     for (const BasicBlock &BB : F)
@@ -701,6 +700,11 @@ void ModuleSlotTracker::incorporateFunction(const Function &F) {
     Machine->purgeFunction();
   Machine->incorporateFunction(&F);
   this->F = &F;
+}
+
+int ModuleSlotTracker::getLocalSlot(const Value *V) {
+  assert(F && "No function incorporated");
+  return Machine->getLocalSlot(V);
 }
 
 static SlotTracker *createSlotTracker(const Module *M) {
@@ -1336,10 +1340,7 @@ static void WriteConstantInternal(raw_ostream &Out, const Constant *CV,
     Out << " (";
 
     if (const GEPOperator *GEP = dyn_cast<GEPOperator>(CE)) {
-      TypePrinter.print(
-          cast<PointerType>(GEP->getPointerOperandType()->getScalarType())
-              ->getElementType(),
-          Out);
+      TypePrinter.print(GEP->getSourceElementType(), Out);
       Out << ", ";
     }
 

@@ -4,14 +4,14 @@ RUN: LLVMFuzzer-SimpleTest 2>&1 | FileCheck %s
 
 RUN: not LLVMFuzzer-InfiniteTest -timeout=2 2>&1 | FileCheck %s --check-prefix=InfiniteTest
 InfiniteTest: ALARM: working on the last Unit for
-InfiniteTest: CRASHED; file written to timeout
+InfiniteTest: Test unit written to timeout-
 
 RUN: not LLVMFuzzer-TimeoutTest -timeout=5 2>&1 | FileCheck %s --check-prefix=TimeoutTest
 TimeoutTest: ALARM: working on the last Unit for
-TimeoutTest: CRASHED; file written to timeout
+TimeoutTest: Test unit written to timeout-
 
 RUN: not LLVMFuzzer-NullDerefTest 2>&1 | FileCheck %s --check-prefix=NullDerefTest
-NullDerefTest: CRASHED; file written to crash-
+NullDerefTest: Test unit written to crash-
 
 RUN: not LLVMFuzzer-FullCoverageSetTest -timeout=15 -seed=1 -mutate_depth=2 -use_full_coverage_set=1 2>&1 | FileCheck %s
 
@@ -25,3 +25,9 @@ RUN: not LLVMFuzzer-CxxTokensTest -seed=1 -timeout=15 -tokens=%S/../cxx_fuzzer_t
 
 RUN: not LLVMFuzzer-UserSuppliedFuzzerTest -seed=1 -timeout=15 2>&1 | FileCheck %s
 
+RUN: not LLVMFuzzer-MemcmpTest -use_traces=1 -seed=1 -runs=10000    2>&1 | FileCheck %s
+RUN:     LLVMFuzzer-MemcmpTest               -seed=1 -runs=1000000  2>&1 | FileCheck %s --check-prefix=Done1000000
+Done1000000: Done 1000000 runs in
+
+RUN: not LLVMFuzzer-StrncmpTest -use_traces=1 -seed=1 -runs=10000    2>&1 | FileCheck %s
+RUN:     LLVMFuzzer-StrncmpTest               -seed=1 -runs=1000000  2>&1 | FileCheck %s --check-prefix=Done1000000

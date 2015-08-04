@@ -180,6 +180,13 @@ public:
     GlobalMRI = ModRefInfo(GlobalMRI | NewMRI);
   }
 
+  /// Clear a global's ModRef info. Should be used when a global is being
+  /// deleted.
+  void eraseModRefInfoForGlobal(const GlobalValue &GV) {
+    if (AlignedMap *P = Info.getPointer())
+      P->Map.erase(&GV);
+  }
+
 private:
   /// All of the information is encoded into a single pointer, with a three bit
   /// integer in the low three bits. The high bit provides a flag for when this
@@ -215,11 +222,13 @@ class GlobalsModRef : public ModulePass, public AliasAnalysis {
 
     void deleted() override {
       Value *V = getValPtr();
+      if (auto *F = dyn_cast<Function>(V))
+        GMR.FunctionInfos.erase(F);
+
       if (GlobalValue *GV = dyn_cast<GlobalValue>(V)) {
         if (GMR.NonAddressTakenGlobals.erase(GV)) {
           // This global might be an indirect global.  If so, remove it and
-          // remove
-          // any AllocRelatedValues for it.
+          // remove any AllocRelatedValues for it.
           if (GMR.IndirectGlobals.erase(GV)) {
             // Remove any entries in AllocsForIndirectGlobals for this global.
             for (auto I = GMR.AllocsForIndirectGlobals.begin(),
@@ -228,6 +237,11 @@ class GlobalsModRef : public ModulePass, public AliasAnalysis {
               if (I->second == GV)
                 GMR.AllocsForIndirectGlobals.erase(I);
           }
+
+          // Scan the function info we have collected and remove this global
+          // from all of them.
+          for (auto &FIPair : GMR.FunctionInfos)
+            FIPair.second.eraseModRefInfoForGlobal(*GV);
         }
       }
 
@@ -361,11 +375,13 @@ Pass *llvm::createGlobalsModRefPass() { return new GlobalsModRef(); }
 /// (really, their address passed to something nontrivial), record this fact,
 /// and record the functions that they are used directly in.
 void GlobalsModRef::AnalyzeGlobals(Module &M) {
+  SmallPtrSet<Function *, 64> TrackedFunctions;
   for (Function &F : M)
     if (F.hasLocalLinkage())
       if (!AnalyzeUsesOfPointer(&F)) {
         // Remember that we are tracking this global.
         NonAddressTakenGlobals.insert(&F);
+        TrackedFunctions.insert(&F);
         Handles.emplace_front(*this, &F);
         Handles.front().I = Handles.begin();
         ++NumNonAddrTakenFunctions;
@@ -381,12 +397,22 @@ void GlobalsModRef::AnalyzeGlobals(Module &M) {
         Handles.emplace_front(*this, &GV);
         Handles.front().I = Handles.begin();
 
-        for (Function *Reader : Readers)
+        for (Function *Reader : Readers) {
+          if (TrackedFunctions.insert(Reader).second) {
+            Handles.emplace_front(*this, Reader);
+            Handles.front().I = Handles.begin();
+          }
           FunctionInfos[Reader].addModRefInfoForGlobal(GV, MRI_Ref);
+        }
 
         if (!GV.isConstant()) // No need to keep track of writers to constants
-          for (Function *Writer : Writers)
+          for (Function *Writer : Writers) {
+            if (TrackedFunctions.insert(Writer).second) {
+              Handles.emplace_front(*this, Writer);
+              Handles.front().I = Handles.begin();
+            }
             FunctionInfos[Writer].addModRefInfoForGlobal(GV, MRI_Mod);
+          }
         ++NumNonAddrTakenGlobalVars;
 
         // If this global holds a pointer type, see if it is an indirect global.
@@ -674,6 +700,52 @@ AliasResult GlobalsModRef::alias(const MemoryLocation &LocA,
     if (EnableUnsafeGlobalsModRefAliasResults)
       if ((GV1 || GV2) && GV1 != GV2)
         return NoAlias;
+
+    // There are particular cases where we can conclude no-alias between
+    // a non-addr-taken global and some other underlying object. Specifically,
+    // a non-addr-taken global is known to not be escaped from any function. It
+    // is also incorrect for a transformation to introduce an escape of
+    // a global in a way that is observable when it was not there previously.
+    // One function being transformed to introduce an escape which could
+    // possibly be observed (via loading from a global or the return value for
+    // example) within another function is never safe. If the observation is
+    // made through non-atomic operations on different threads, it is
+    // a data-race and UB. If the observation is well defined, by being
+    // observed the transformation would have changed program behavior by
+    // introducing the observed escape, making it an invalid transform.
+    //
+    // This property does require that transformations which *temporarily*
+    // escape a global that was not previously escaped, prior to restoring
+    // it, cannot rely on the results of GMR::alias. This seems a reasonable
+    // restriction, although currently there is no way to enforce it. There is
+    // also no realistic optimization pass that would make this mistake. The
+    // closest example is a transformation pass which does reg2mem of SSA
+    // values but stores them into global variables temporarily before
+    // restoring the global variable's value. This could be useful to expose
+    // "benign" races for example. However, it seems reasonable to require that
+    // a pass which introduces escapes of global variables in this way to
+    // either not trust AA results while the escape is active, or to be forced
+    // to operate as a module pass that cannot co-exist with an alias analysis
+    // such as GMR.
+    if ((GV1 || GV2) && GV1 != GV2) {
+      const Value *UV = GV1 ? UV2 : UV1;
+
+      // In order to know that the underlying object cannot alias the
+      // non-addr-taken global, we must know that it would have to be an
+      // escape. Thus if the underlying object is a function argument, a load
+      // from a global, or the return of a function, it cannot alias.
+      if (isa<Argument>(UV) || isa<CallInst>(UV) || isa<InvokeInst>(UV)) {
+        // Arguments to functions or returns from functions are inherently
+        // escaping, so we can immediately classify those as not aliasing any
+        // non-addr-taken globals.
+        return NoAlias;
+      } else if (auto *LI = dyn_cast<LoadInst>(UV)) {
+        // A pointer loaded from a global would have been captured, and we know
+        // that GV is non-addr-taken, so no alias.
+        if (isa<GlobalValue>(LI->getPointerOperand()))
+          return NoAlias;
+      }
+    }
 
     // Otherwise if they are both derived from the same addr-taken global, we
     // can't know the two accesses don't overlap.

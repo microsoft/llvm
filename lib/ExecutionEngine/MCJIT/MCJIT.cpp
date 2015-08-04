@@ -68,7 +68,7 @@ MCJIT::createJIT(std::unique_ptr<Module> M,
 MCJIT::MCJIT(std::unique_ptr<Module> M, std::unique_ptr<TargetMachine> TM,
              std::shared_ptr<MCJITMemoryManager> MemMgr,
              std::shared_ptr<RuntimeDyld::SymbolResolver> Resolver)
-    : ExecutionEngine(*TM->getDataLayout(), std::move(M)), TM(std::move(TM)),
+    : ExecutionEngine(TM->createDataLayout(), std::move(M)), TM(std::move(TM)),
       Ctx(nullptr), MemMgr(std::move(MemMgr)),
       Resolver(*this, std::move(Resolver)), Dyld(*this->MemMgr, this->Resolver),
       ObjCache(nullptr) {
@@ -270,6 +270,12 @@ void MCJIT::finalizeModule(Module *M) {
 RuntimeDyld::SymbolInfo MCJIT::findExistingSymbol(const std::string &Name) {
   SmallString<128> FullName;
   Mangler::getNameWithPrefix(FullName, Name, getDataLayout());
+
+  if (void *Addr = getPointerToGlobalIfAvailable(FullName))
+    return RuntimeDyld::SymbolInfo(static_cast<uint64_t>(
+                                     reinterpret_cast<uintptr_t>(Addr)),
+                                   JITSymbolFlags::Exported);
+
   return Dyld.getSymbol(FullName);
 }
 
