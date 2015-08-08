@@ -48,7 +48,7 @@ attributes #1 = { nounwind readnone }
 !llvm.module.flags = !{!10, !11}
 !llvm.ident = !{!12}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "no-discriminators", directory: ".")
 !2 = !{}
 !3 = !{!4}
@@ -63,7 +63,7 @@ attributes #1 = { nounwind readnone }
 ; CHECK: !{i32 2, !"Dwarf Version", i32 2}
 !11 = !{i32 1, !"Debug Info Version", i32 3}
 !12 = !{!"clang version 3.5.0 "}
-!13 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "i", line: 1, arg: 1, scope: !4, file: !5, type: !9)
+!13 = !DILocalVariable(name: "i", line: 1, arg: 1, scope: !4, file: !5, type: !9)
 !14 = !DILocation(line: 1, scope: !4)
 !15 = !DILocation(line: 2, scope: !16)
 ; CHECK: ![[ENTRY]] = !DILocation(line: 2, scope: ![[BLOCK:[0-9]+]])

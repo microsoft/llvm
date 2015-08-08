@@ -203,8 +203,8 @@ static void findLiveSetAtInst(Instruction *inst, GCPtrLivenessData &Data,
 // TODO: Once we can get to the GCStrategy, this becomes
 // Optional<bool> isGCManagedPointer(const Value *V) const override {
 
-static bool isGCPointerType(const Type *T) {
-  if (const PointerType *PT = dyn_cast<PointerType>(T))
+static bool isGCPointerType(Type *T) {
+  if (auto *PT = dyn_cast<PointerType>(T))
     // For the sake of this example GC, we arbitrarily pick addrspace(1) as our
     // GC managed heap.  We know that a pointer into this heap needs to be
     // updated and that no other pointer does.
@@ -2325,7 +2325,7 @@ void RewriteStatepointsForGC::stripDereferenceabilityInfoFromBody(Function &F) {
   LLVMContext &Ctx = F.getContext();
   MDBuilder Builder(Ctx);
 
-  for (Instruction &I : inst_range(F)) {
+  for (Instruction &I : instructions(F)) {
     if (const MDNode *MD = I.getMetadata(LLVMContext::MD_tbaa)) {
       assert(MD->getNumOperands() < 5 && "unrecognized metadata shape!");
       bool IsImmutableTBAA =
@@ -2399,7 +2399,7 @@ bool RewriteStatepointsForGC::runOnFunction(Function &F) {
   // when rewriting.  We'll delete the unreachable ones in a moment.
   SmallVector<CallSite, 64> ParsePointNeeded;
   bool HasUnreachableStatepoint = false;
-  for (Instruction &I : inst_range(F)) {
+  for (Instruction &I : instructions(F)) {
     // TODO: only the ones with the flag set!
     if (isStatepoint(I)) {
       if (DT.isReachableFromEntry(I.getParent()))

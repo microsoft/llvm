@@ -38,7 +38,7 @@ declare void @llvm.dbg.value(metadata, i64, metadata, metadata) nounwind readnon
 
 !0 = !DISubprogram(name: "idamax", line: 112, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, file: !25, scope: !1, type: !3)
 !1 = !DIFile(filename: "/Volumes/Lalgate/work/llvm/projects/llvm-test/SingleSource/Benchmarks/CoyoteBench/lpbench.c", directory: "/private/tmp")
-!2 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 2.9 (trunk 127169)", isOptimized: true, emissionKind: 0, file: !25, enums: !8, retainedTypes: !8, subprograms: !8)
+!2 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 2.9 (trunk 127169)", isOptimized: true, emissionKind: 0, file: !25, enums: !8, retainedTypes: !8, subprograms: !8)
 !3 = !DISubroutineType(types: !4)
 !4 = !{!5}
 !5 = !DIBasicType(tag: DW_TAG_base_type, name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
@@ -55,7 +55,7 @@ declare void @llvm.dbg.value(metadata, i64, metadata, metadata) nounwind readnon
 !16 = !DILocation(line: 284, column: 10, scope: !17)
 !17 = distinct !DILexicalBlock(line: 282, column: 9, file: !25, scope: !12)
 !18 = !{double undef}
-!19 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "temp", line: 268, scope: !14, file: !1, type: !20)
+!19 = !DILocalVariable(name: "temp", line: 268, scope: !14, file: !1, type: !20)
 !20 = !DIBasicType(tag: DW_TAG_base_type, name: "double", size: 64, align: 64, encoding: DW_ATE_float)
 !21 = !DILocation(line: 286, column: 14, scope: !22)
 !22 = distinct !DILexicalBlock(line: 285, column: 13, file: !25, scope: !17)

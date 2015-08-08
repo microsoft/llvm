@@ -31,7 +31,7 @@ attributes #1 = { nounwind readnone }
 !llvm.module.flags = !{!15, !16, !17}
 !llvm.ident = !{!18}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.7.0 (trunk 227686)", isOptimized: true, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !6, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.7.0 (trunk 227686)", isOptimized: true, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !6, globals: !2, imports: !2)
 !1 = !DIFile(filename: "foo.c", directory: "")
 !2 = !{}
 !3 = !{!4}
@@ -44,7 +44,7 @@ attributes #1 = { nounwind readnone }
 !10 = !DISubroutineType(types: !11)
 !11 = !{null}
 !12 = !{!13}
-!13 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "a", line: 2, scope: !7, file: !9, type: !14)
+!13 = !DILocalVariable(name: "a", line: 2, scope: !7, file: !9, type: !14)
 !14 = !DIBasicType(tag: DW_TAG_base_type, name: "float", size: 32, align: 32, encoding: DW_ATE_float)
 !15 = !{i32 2, !"Dwarf Version", i32 2}
 !16 = !{i32 2, !"Debug Info Version", i32 3}

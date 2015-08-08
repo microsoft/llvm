@@ -48,7 +48,7 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata)
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!8, !9}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "", isOptimized: false, subprograms: !3)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "", isOptimized: false, subprograms: !3)
 !1 = !DIFile(filename: "test.c", directory: "/home/user/clang/build")
 !2 = !{}
 !3 = !{!4}
@@ -58,7 +58,7 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata)
 !7 = !DIBasicType(name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
 !8 = !{i32 2, !"Dwarf Version", i32 4}
 !9 = !{i32 2, !"Debug Info Version", i32 3}
-!10 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "x", scope: !4, file: !1, line: 3, type: !7)
+!10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 3, type: !7)
 !11 = !DIExpression()
 !12 = !DILocation(line: 3, column: 9, scope: !4)
 !13 = !DILocation(line: 4, column: 9, scope: !14)

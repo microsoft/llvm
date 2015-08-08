@@ -58,7 +58,7 @@ attributes #3 = { nounwind }
 !llvm.module.flags = !{!8, !9, !10}
 !llvm.ident = !{!11}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.6.0 (trunk 223120) (llvm/trunk 223119)", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.6.0 (trunk 223120) (llvm/trunk 223119)", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "block.c", directory: "/tmp")
 !2 = !{}
 !3 = !{!4}
@@ -70,7 +70,7 @@ attributes #3 = { nounwind }
 !9 = !{i32 2, !"Debug Info Version", i32 3}
 !10 = !{i32 1, !"PIC Level", i32 2}
 !11 = !{!"clang version 3.6.0 (trunk 223120) (llvm/trunk 223119)"}
-!12 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "x", line: 4, scope: !4, file: !5, type: !13)
+!12 = !DILocalVariable(name: "x", line: 4, scope: !4, file: !5, type: !13)
 !13 = !DICompositeType(tag: DW_TAG_structure_type, size: 224, flags: DIFlagBlockByrefStruct, file: !1, scope: !5, elements: !14)
 !14 = !{!15, !17, !18, !20, !21}
 !15 = !DIDerivedType(tag: DW_TAG_member, name: "__isa", size: 64, align: 64, file: !1, scope: !5, baseType: !16)

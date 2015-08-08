@@ -20,15 +20,7 @@
 // Helper macros for defining get() overrides.
 #define DEFINE_MDNODE_GET_UNPACK_IMPL(...) __VA_ARGS__
 #define DEFINE_MDNODE_GET_UNPACK(ARGS) DEFINE_MDNODE_GET_UNPACK_IMPL ARGS
-#define DEFINE_MDNODE_GET(CLASS, FORMAL, ARGS)                                 \
-  static CLASS *get(LLVMContext &Context, DEFINE_MDNODE_GET_UNPACK(FORMAL)) {  \
-    return getImpl(Context, DEFINE_MDNODE_GET_UNPACK(ARGS), Uniqued);          \
-  }                                                                            \
-  static CLASS *getIfExists(LLVMContext &Context,                              \
-                            DEFINE_MDNODE_GET_UNPACK(FORMAL)) {                \
-    return getImpl(Context, DEFINE_MDNODE_GET_UNPACK(ARGS), Uniqued,           \
-                   /* ShouldCreate */ false);                                  \
-  }                                                                            \
+#define DEFINE_MDNODE_GET_DISTINCT_TEMPORARY(CLASS, FORMAL, ARGS)              \
   static CLASS *getDistinct(LLVMContext &Context,                              \
                             DEFINE_MDNODE_GET_UNPACK(FORMAL)) {                \
     return getImpl(Context, DEFINE_MDNODE_GET_UNPACK(ARGS), Distinct);         \
@@ -38,6 +30,16 @@
     return Temp##CLASS(                                                        \
         getImpl(Context, DEFINE_MDNODE_GET_UNPACK(ARGS), Temporary));          \
   }
+#define DEFINE_MDNODE_GET(CLASS, FORMAL, ARGS)                                 \
+  static CLASS *get(LLVMContext &Context, DEFINE_MDNODE_GET_UNPACK(FORMAL)) {  \
+    return getImpl(Context, DEFINE_MDNODE_GET_UNPACK(ARGS), Uniqued);          \
+  }                                                                            \
+  static CLASS *getIfExists(LLVMContext &Context,                              \
+                            DEFINE_MDNODE_GET_UNPACK(FORMAL)) {                \
+    return getImpl(Context, DEFINE_MDNODE_GET_UNPACK(ARGS), Uniqued,           \
+                   /* ShouldCreate */ false);                                  \
+  }                                                                            \
+  DEFINE_MDNODE_GET_DISTINCT_TEMPORARY(CLASS, FORMAL, ARGS)
 
 namespace llvm {
 
@@ -934,7 +936,9 @@ class DICompileUnit : public DIScope {
       : DIScope(C, DICompileUnitKind, Storage, dwarf::DW_TAG_compile_unit, Ops),
         SourceLanguage(SourceLanguage), IsOptimized(IsOptimized),
         RuntimeVersion(RuntimeVersion), EmissionKind(EmissionKind),
-        DWOId(DWOId) {}
+        DWOId(DWOId) {
+    assert(Storage != Uniqued);
+  }
   ~DICompileUnit() = default;
 
   static DICompileUnit *
@@ -971,20 +975,22 @@ class DICompileUnit : public DIScope {
         getGlobalVariables(), getImportedEntities(), DWOId);
   }
 
+  static void get() = delete;
+  static void getIfExists() = delete;
+
 public:
-  DEFINE_MDNODE_GET(DICompileUnit,
-                    (unsigned SourceLanguage, DIFile *File, StringRef Producer,
-                     bool IsOptimized, StringRef Flags, unsigned RuntimeVersion,
-                     StringRef SplitDebugFilename, unsigned EmissionKind,
-                     DICompositeTypeArray EnumTypes, DITypeArray RetainedTypes,
-                     DISubprogramArray Subprograms,
-                     DIGlobalVariableArray GlobalVariables,
-                     DIImportedEntityArray ImportedEntities, uint64_t DWOId),
-                    (SourceLanguage, File, Producer, IsOptimized, Flags,
-                     RuntimeVersion, SplitDebugFilename, EmissionKind,
-                     EnumTypes, RetainedTypes, Subprograms, GlobalVariables,
-                     ImportedEntities, DWOId))
-  DEFINE_MDNODE_GET(
+  DEFINE_MDNODE_GET_DISTINCT_TEMPORARY(
+      DICompileUnit,
+      (unsigned SourceLanguage, DIFile *File, StringRef Producer,
+       bool IsOptimized, StringRef Flags, unsigned RuntimeVersion,
+       StringRef SplitDebugFilename, unsigned EmissionKind,
+       DICompositeTypeArray EnumTypes, DITypeArray RetainedTypes,
+       DISubprogramArray Subprograms, DIGlobalVariableArray GlobalVariables,
+       DIImportedEntityArray ImportedEntities, uint64_t DWOId),
+      (SourceLanguage, File, Producer, IsOptimized, Flags, RuntimeVersion,
+       SplitDebugFilename, EmissionKind, EnumTypes, RetainedTypes, Subprograms,
+       GlobalVariables, ImportedEntities, DWOId))
+  DEFINE_MDNODE_GET_DISTINCT_TEMPORARY(
       DICompileUnit,
       (unsigned SourceLanguage, Metadata *File, MDString *Producer,
        bool IsOptimized, MDString *Flags, unsigned RuntimeVersion,
@@ -1750,15 +1756,13 @@ public:
 };
 
 /// \brief Base class for variables.
-///
-/// TODO: Hardcode to DW_TAG_variable.
 class DIVariable : public DINode {
   unsigned Line;
 
 protected:
-  DIVariable(LLVMContext &C, unsigned ID, StorageType Storage, unsigned Tag,
-             unsigned Line, ArrayRef<Metadata *> Ops)
-      : DINode(C, ID, Storage, Tag, Ops), Line(Line) {}
+  DIVariable(LLVMContext &C, unsigned ID, StorageType Storage, unsigned Line,
+             ArrayRef<Metadata *> Ops)
+      : DINode(C, ID, Storage, dwarf::DW_TAG_variable, Ops), Line(Line) {}
   ~DIVariable() = default;
 
 public:
@@ -1803,8 +1807,7 @@ class DIGlobalVariable : public DIVariable {
   DIGlobalVariable(LLVMContext &C, StorageType Storage, unsigned Line,
                    bool IsLocalToUnit, bool IsDefinition,
                    ArrayRef<Metadata *> Ops)
-      : DIVariable(C, DIGlobalVariableKind, Storage, dwarf::DW_TAG_variable,
-                   Line, Ops),
+      : DIVariable(C, DIGlobalVariableKind, Storage, Line, Ops),
         IsLocalToUnit(IsLocalToUnit), IsDefinition(IsDefinition) {}
   ~DIGlobalVariable() = default;
 
@@ -1876,8 +1879,6 @@ public:
 
 /// \brief Local variable.
 ///
-/// TODO: Split between arguments and otherwise.
-/// TODO: Use \c DW_TAG_variable instead of fake tags.
 /// TODO: Split up flags.
 class DILocalVariable : public DIVariable {
   friend class LLVMContextImpl;
@@ -1886,42 +1887,42 @@ class DILocalVariable : public DIVariable {
   unsigned Arg;
   unsigned Flags;
 
-  DILocalVariable(LLVMContext &C, StorageType Storage, unsigned Tag,
-                  unsigned Line, unsigned Arg, unsigned Flags,
-                  ArrayRef<Metadata *> Ops)
-      : DIVariable(C, DILocalVariableKind, Storage, Tag, Line, Ops), Arg(Arg),
+  DILocalVariable(LLVMContext &C, StorageType Storage, unsigned Line,
+                  unsigned Arg, unsigned Flags, ArrayRef<Metadata *> Ops)
+      : DIVariable(C, DILocalVariableKind, Storage, Line, Ops), Arg(Arg),
         Flags(Flags) {}
   ~DILocalVariable() = default;
 
-  static DILocalVariable *getImpl(LLVMContext &Context, unsigned Tag,
-                                  DIScope *Scope, StringRef Name, DIFile *File,
-                                  unsigned Line, DITypeRef Type, unsigned Arg,
-                                  unsigned Flags, StorageType Storage,
+  static DILocalVariable *getImpl(LLVMContext &Context, DIScope *Scope,
+                                  StringRef Name, DIFile *File, unsigned Line,
+                                  DITypeRef Type, unsigned Arg, unsigned Flags,
+                                  StorageType Storage,
                                   bool ShouldCreate = true) {
-    return getImpl(Context, Tag, Scope, getCanonicalMDString(Context, Name),
-                   File, Line, Type, Arg, Flags, Storage, ShouldCreate);
+    return getImpl(Context, Scope, getCanonicalMDString(Context, Name), File,
+                   Line, Type, Arg, Flags, Storage, ShouldCreate);
   }
-  static DILocalVariable *
-  getImpl(LLVMContext &Context, unsigned Tag, Metadata *Scope, MDString *Name,
-          Metadata *File, unsigned Line, Metadata *Type, unsigned Arg,
-          unsigned Flags, StorageType Storage, bool ShouldCreate = true);
+  static DILocalVariable *getImpl(LLVMContext &Context, Metadata *Scope,
+                                  MDString *Name, Metadata *File, unsigned Line,
+                                  Metadata *Type, unsigned Arg, unsigned Flags,
+                                  StorageType Storage,
+                                  bool ShouldCreate = true);
 
   TempDILocalVariable cloneImpl() const {
-    return getTemporary(getContext(), getTag(), getScope(), getName(),
-                        getFile(), getLine(), getType(), getArg(), getFlags());
+    return getTemporary(getContext(), getScope(), getName(), getFile(),
+                        getLine(), getType(), getArg(), getFlags());
   }
 
 public:
   DEFINE_MDNODE_GET(DILocalVariable,
-                    (unsigned Tag, DILocalScope *Scope, StringRef Name,
-                     DIFile *File, unsigned Line, DITypeRef Type, unsigned Arg,
+                    (DILocalScope * Scope, StringRef Name, DIFile *File,
+                     unsigned Line, DITypeRef Type, unsigned Arg,
                      unsigned Flags),
-                    (Tag, Scope, Name, File, Line, Type, Arg, Flags))
+                    (Scope, Name, File, Line, Type, Arg, Flags))
   DEFINE_MDNODE_GET(DILocalVariable,
-                    (unsigned Tag, Metadata *Scope, MDString *Name,
-                     Metadata *File, unsigned Line, Metadata *Type,
-                     unsigned Arg, unsigned Flags),
-                    (Tag, Scope, Name, File, Line, Type, Arg, Flags))
+                    (Metadata * Scope, MDString *Name, Metadata *File,
+                     unsigned Line, Metadata *Type, unsigned Arg,
+                     unsigned Flags),
+                    (Scope, Name, File, Line, Type, Arg, Flags))
 
   TempDILocalVariable clone() const { return cloneImpl(); }
 
@@ -1932,6 +1933,7 @@ public:
     return cast<DILocalScope>(DIVariable::getScope());
   }
 
+  bool isParameter() const { return Arg; }
   unsigned getArg() const { return Arg; }
   unsigned getFlags() const { return Flags; }
 

@@ -356,12 +356,24 @@ bool MIRParserImpl::initializeMachineBasicBlock(
   MBB.setIsLandingPad(YamlMBB.IsLandingPad);
   SMDiagnostic Error;
   // Parse the successors.
+  const auto &Weights = YamlMBB.SuccessorWeights;
+  bool HasWeights = !Weights.empty();
+  if (HasWeights && Weights.size() != YamlMBB.Successors.size()) {
+    bool IsFew = Weights.size() < YamlMBB.Successors.size();
+    return error(IsFew ? Weights.back().SourceRange.End
+                       : Weights[YamlMBB.Successors.size()].SourceRange.Start,
+                 Twine("too ") + (IsFew ? "few" : "many") +
+                     " successor weights, expected " +
+                     Twine(YamlMBB.Successors.size()) + ", have " +
+                     Twine(Weights.size()));
+  }
+  size_t SuccessorIndex = 0;
   for (const auto &MBBSource : YamlMBB.Successors) {
     MachineBasicBlock *SuccMBB = nullptr;
     if (parseMBBReference(SuccMBB, MBBSource, MF, PFS))
       return true;
     // TODO: Report an error when adding the same successor more than once.
-    MBB.addSuccessor(SuccMBB);
+    MBB.addSuccessor(SuccMBB, HasWeights ? Weights[SuccessorIndex++].Value : 0);
   }
   // Parse the liveins.
   for (const auto &LiveInSource : YamlMBB.LiveIns) {
@@ -402,9 +414,11 @@ bool MIRParserImpl::initializeRegisterInfo(MachineFunction &MF,
                    Twine("use of undefined register class '") +
                        VReg.Class.Value + "'");
     unsigned Reg = RegInfo.createVirtualRegister(RC);
-    // TODO: Report an error when the same virtual register with the same ID is
-    // redefined.
-    PFS.VirtualRegisterSlots.insert(std::make_pair(VReg.ID, Reg));
+    if (!PFS.VirtualRegisterSlots.insert(std::make_pair(VReg.ID.Value, Reg))
+             .second)
+      return error(VReg.ID.SourceRange.Start,
+                   Twine("redefinition of virtual register '%") +
+                       Twine(VReg.ID.Value) + "'");
     if (!VReg.PreferredRegister.Value.empty()) {
       unsigned PreferredReg = 0;
       if (parseNamedRegisterReference(PreferredReg, SM, MF,
@@ -545,9 +559,12 @@ bool MIRParserImpl::initializeConstantPool(
         YamlConstant.Alignment
             ? YamlConstant.Alignment
             : M.getDataLayout().getPrefTypeAlignment(Value->getType());
-    // TODO: Report an error when the same constant pool value ID is redefined.
-    ConstantPoolSlots.insert(std::make_pair(
-        YamlConstant.ID, ConstantPool.getConstantPoolIndex(Value, Alignment)));
+    unsigned Index = ConstantPool.getConstantPoolIndex(Value, Alignment);
+    if (!ConstantPoolSlots.insert(std::make_pair(YamlConstant.ID.Value, Index))
+             .second)
+      return error(YamlConstant.ID.SourceRange.Start,
+                   Twine("redefinition of constant pool item '%const.") +
+                       Twine(YamlConstant.ID.Value) + "'");
   }
   return false;
 }
@@ -556,7 +573,6 @@ bool MIRParserImpl::initializeJumpTableInfo(
     MachineFunction &MF, const yaml::MachineJumpTable &YamlJTI,
     PerFunctionMIParsingState &PFS) {
   MachineJumpTableInfo *JTI = MF.getOrCreateJumpTableInfo(YamlJTI.Kind);
-  SMDiagnostic Error;
   for (const auto &Entry : YamlJTI.Entries) {
     std::vector<MachineBasicBlock *> Blocks;
     for (const auto &MBBSource : Entry.Blocks) {
@@ -566,8 +582,11 @@ bool MIRParserImpl::initializeJumpTableInfo(
       Blocks.push_back(MBB);
     }
     unsigned Index = JTI->createJumpTableIndex(Blocks);
-    // TODO: Report an error when the same jump table slot ID is redefined.
-    PFS.JumpTableSlots.insert(std::make_pair(Entry.ID, Index));
+    if (!PFS.JumpTableSlots.insert(std::make_pair(Entry.ID.Value, Index))
+             .second)
+      return error(Entry.ID.SourceRange.Start,
+                   Twine("redefinition of jump table entry '%jump-table.") +
+                       Twine(Entry.ID.Value) + "'");
   }
   return false;
 }

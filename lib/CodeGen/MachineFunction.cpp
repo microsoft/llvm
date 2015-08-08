@@ -79,12 +79,17 @@ MachineFunction::MachineFunction(const Function *F, const TargetMachine &TM,
   Alignment = STI->getTargetLowering()->getMinFunctionAlignment();
 
   // FIXME: Shouldn't use pref alignment if explicit alignment is set on Fn.
+  // FIXME: Use Function::optForSize().
   if (!Fn->hasFnAttribute(Attribute::OptimizeForSize))
     Alignment = std::max(Alignment,
                          STI->getTargetLowering()->getPrefFunctionAlignment());
 
   FunctionNumber = FunctionNum;
   JumpTableInfo = nullptr;
+
+  assert(TM.isCompatibleDataLayout(getDataLayout()) &&
+         "Can't create a MachineFunction using a Module with a "
+         "Target-incompatible DataLayout attached\n");
 }
 
 MachineFunction::~MachineFunction() {

@@ -43,7 +43,7 @@ attributes #1 = { nounwind readnone }
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!15, !20}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !13, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !13, globals: !2, imports: !2)
 !1 = !DIFile(filename: "member-order.cpp", directory: "/tmp/dbginfo")
 !2 = !{}
 !3 = !{!4}
@@ -59,7 +59,7 @@ attributes #1 = { nounwind readnone }
 !13 = !{!14}
 !14 = !DISubprogram(name: "f1", linkageName: "_ZN3foo2f1Ev", line: 6, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 6, file: !1, scope: null, type: !7, function: void (%struct.foo*)* @_ZN3foo2f1Ev, declaration: !6, variables: !2)
 !15 = !{i32 2, !"Dwarf Version", i32 4}
-!16 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !14, type: !17)
+!16 = !DILocalVariable(name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !14, type: !17)
 !17 = !DIDerivedType(tag: DW_TAG_pointer_type, size: 64, align: 64, baseType: !"_ZTS3foo")
 !18 = !DILocation(line: 0, scope: !14)
 !19 = !DILocation(line: 7, scope: !14)

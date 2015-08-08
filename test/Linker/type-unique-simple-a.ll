@@ -1,4 +1,4 @@
-; REQUIRES: object-emission
+; REQUIRES: object-emission, native
 
 ; RUN: llvm-link %s %p/type-unique-simple-b.ll -S -o %t
 ; RUN: cat %t | FileCheck %s -check-prefix=LINK
@@ -68,7 +68,7 @@ attributes #1 = { nounwind readnone }
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!14, !20}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 (http://llvm.org/git/clang.git c23b1db6268c8e7ce64026d57d1510c1aac200a0) (http://llvm.org/git/llvm.git 09b98fe3978eddefc2145adc1056cf21580ce945)", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !9, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 (http://llvm.org/git/clang.git c23b1db6268c8e7ce64026d57d1510c1aac200a0) (http://llvm.org/git/llvm.git 09b98fe3978eddefc2145adc1056cf21580ce945)", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !9, globals: !2, imports: !2)
 !1 = !DIFile(filename: "foo.cpp", directory: "/Users/mren/c_testing/type_unique_air/simple")
 !2 = !{}
 !3 = !{!4}
@@ -83,9 +83,9 @@ attributes #1 = { nounwind readnone }
 !12 = !DISubroutineType(types: !13)
 !13 = !{null, !8}
 !14 = !{i32 2, !"Dwarf Version", i32 2}
-!15 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "a", line: 3, arg: 1, scope: !10, file: !11, type: !8)
+!15 = !DILocalVariable(name: "a", line: 3, arg: 1, scope: !10, file: !11, type: !8)
 !16 = !DILocation(line: 3, scope: !10)
-!17 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "t", line: 4, scope: !10, file: !11, type: !4)
+!17 = !DILocalVariable(name: "t", line: 4, scope: !10, file: !11, type: !4)
 !18 = !DILocation(line: 4, scope: !10)
 !19 = !DILocation(line: 5, scope: !10)
 !20 = !{i32 1, !"Debug Info Version", i32 3}

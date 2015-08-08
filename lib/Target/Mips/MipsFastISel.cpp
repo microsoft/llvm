@@ -267,6 +267,9 @@ unsigned MipsFastISel::emitLogicalOp(unsigned ISDOpc, MVT RetVT,
 }
 
 unsigned MipsFastISel::fastMaterializeAlloca(const AllocaInst *AI) {
+  if (!TargetSupported)
+    return 0;
+
   assert(TLI.getValueType(DL, AI->getType(), true) == MVT::i32 &&
          "Alloca should always return a pointer.");
 
@@ -290,12 +293,7 @@ unsigned MipsFastISel::materializeInt(const Constant *C, MVT VT) {
     return 0;
   const TargetRegisterClass *RC = &Mips::GPR32RegClass;
   const ConstantInt *CI = cast<ConstantInt>(C);
-  int64_t Imm;
-  if ((VT != MVT::i1) && CI->isNegative())
-    Imm = CI->getSExtValue();
-  else
-    Imm = CI->getZExtValue();
-  return materialize32BitInt(Imm, RC);
+  return materialize32BitInt(CI->getZExtValue(), RC);
 }
 
 unsigned MipsFastISel::materialize32BitInt(int64_t Imm,
@@ -382,6 +380,9 @@ unsigned MipsFastISel::materializeExternalCallSym(MCSymbol *Sym) {
 // Materialize a constant into a register, and return the register
 // number (or zero if we failed to handle it).
 unsigned MipsFastISel::fastMaterializeConstant(const Constant *C) {
+  if (!TargetSupported)
+    return 0;
+
   EVT CEVT = TLI.getValueType(DL, C->getType(), true);
 
   // Only handle simple types.
@@ -1239,6 +1240,9 @@ bool MipsFastISel::finishCall(CallLoweringInfo &CLI, MVT RetVT,
 }
 
 bool MipsFastISel::fastLowerCall(CallLoweringInfo &CLI) {
+  if (!TargetSupported)
+    return false;
+
   CallingConv::ID CC = CLI.CallConv;
   bool IsTailCall = CLI.IsTailCall;
   bool IsVarArg = CLI.IsVarArg;
@@ -1323,6 +1327,9 @@ bool MipsFastISel::fastLowerCall(CallLoweringInfo &CLI) {
 }
 
 bool MipsFastISel::fastLowerIntrinsicCall(const IntrinsicInst *II) {
+  if (!TargetSupported)
+    return false;
+
   switch (II->getIntrinsicID()) {
   default:
     return false;

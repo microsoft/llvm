@@ -47,7 +47,7 @@ attributes #2 = { nounwind readnone }
 !llvm.module.flags = !{!12, !13}
 !llvm.ident = !{!14}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.6.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.6.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "dbg.cpp", directory: "/tmp/dbginfo")
 !2 = !{}
 !3 = !{!4, !8}
@@ -64,7 +64,7 @@ attributes #2 = { nounwind readnone }
 !14 = !{!"clang version 3.6.0 "}
 !15 = !DILocation(line: 5, column: 3, scope: !4)
 !16 = !DILocation(line: 6, column: 1, scope: !4)
-!17 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "", line: 1, arg: 1, scope: !8, file: !5, type: !11)
+!17 = !DILocalVariable(name: "", line: 1, arg: 1, scope: !8, file: !5, type: !11)
 !18 = !DIExpression()
 !19 = !DILocation(line: 1, column: 19, scope: !8)
 !20 = !DILocation(line: 2, column: 1, scope: !8)

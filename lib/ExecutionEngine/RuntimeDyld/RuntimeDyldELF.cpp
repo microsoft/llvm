@@ -104,7 +104,7 @@ void DyldELFObject<ELFT>::updateSymbolAddress(const SymbolRef &SymRef,
   sym->st_value = static_cast<addr_type>(Addr);
 }
 
-class LoadedELFObjectInfo
+class LoadedELFObjectInfo final
     : public RuntimeDyld::LoadedObjectInfoHelper<LoadedELFObjectInfo> {
 public:
   LoadedELFObjectInfo(RuntimeDyldImpl &RTDyld, ObjSectionToIDMap ObjSecToIDMap)
@@ -845,8 +845,9 @@ void RuntimeDyldELF::findOPDEntrySection(const ELFObjectFileBase &Obj,
       if (Rel.Addend != (int64_t)TargetSymbolOffset)
         continue;
 
-      section_iterator tsi(Obj.section_end());
-      check(TargetSymbol->getSection(tsi));
+      ErrorOr<section_iterator> TSIOrErr = TargetSymbol->getSection();
+      check(TSIOrErr.getError());
+      section_iterator tsi = *TSIOrErr;
       bool IsCode = tsi->isText();
       Rel.SectionID = findOrEmitSection(Obj, (*tsi), IsCode, LocalSections);
       Rel.Addend = (intptr_t)Addend;
@@ -885,6 +886,26 @@ static inline uint16_t applyPPChighest(uint64_t value) {
 
 static inline uint16_t applyPPChighesta (uint64_t value) {
   return ((value + 0x8000) >> 48) & 0xffff;
+}
+
+void RuntimeDyldELF::resolvePPC32Relocation(const SectionEntry &Section,
+                                            uint64_t Offset, uint64_t Value,
+                                            uint32_t Type, int64_t Addend) {
+  uint8_t *LocalAddress = Section.Address + Offset;
+  switch (Type) {
+  default:
+    llvm_unreachable("Relocation type not implemented yet!");
+    break;
+  case ELF::R_PPC_ADDR16_LO:
+    writeInt16BE(LocalAddress, applyPPClo(Value + Addend));
+    break;
+  case ELF::R_PPC_ADDR16_HI:
+    writeInt16BE(LocalAddress, applyPPChi(Value + Addend));
+    break;
+  case ELF::R_PPC_ADDR16_HA:
+    writeInt16BE(LocalAddress, applyPPCha(Value + Addend));
+    break;
+  }
 }
 
 void RuntimeDyldELF::resolvePPC64Relocation(const SectionEntry &Section,
@@ -1075,6 +1096,9 @@ void RuntimeDyldELF::resolveRelocation(const SectionEntry &Section,
     else
       llvm_unreachable("Mips ABI not handled");
     break;
+  case Triple::ppc:
+    resolvePPC32Relocation(Section, Offset, Value, Type, Addend);
+    break;
   case Triple::ppc64: // Fall through.
   case Triple::ppc64le:
     resolvePPC64Relocation(Section, Offset, Value, Type, Addend);
@@ -1139,8 +1163,7 @@ relocation_iterator RuntimeDyldELF::processRelocationRef(
       // TODO: Now ELF SymbolRef::ST_Debug = STT_SECTION, it's not obviously
       // and can be changed by another developers. Maybe best way is add
       // a new symbol type ST_Section to SymbolRef and use it.
-      section_iterator si(Obj.section_end());
-      Symbol->getSection(si);
+      section_iterator si = *Symbol->getSection();
       if (si == Obj.section_end())
         llvm_unreachable("Symbol section not found, bad object file format!");
       DEBUG(dbgs() << "\t\tThis is section symbol\n");

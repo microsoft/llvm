@@ -600,6 +600,7 @@ bool LoopUnswitch::UnswitchIfProfitable(Value *LoopCond, Constant *Val,
   }
 
   // Do not do non-trivial unswitch while optimizing for size.
+  // FIXME: Use Function::optForSize().
   if (OptimizeForSize || F->hasFnAttribute(Attribute::OptimizeForSize))
     return false;
 
@@ -656,6 +657,7 @@ static void copyMetadata(Instruction *DstInst, const Instruction *SrcInst,
         }
       }
       // fallthrough.
+    case LLVMContext::MD_make_implicit:
     case LLVMContext::MD_dbg:
       DstInst->setMetadata(MD.first, MD.second);
     }

@@ -1,4 +1,4 @@
-; REQUIRES: object-emission
+; REQUIRES: object-emission, native
 ;
 ; RUN: llvm-link %s %p/type-unique-odr-b.ll -S -o - | %llc_dwarf -filetype=obj -O0 | llvm-dwarfdump -debug-dump=info - | FileCheck %s
 ;
@@ -73,7 +73,7 @@ attributes #1 = { nounwind readnone }
 !llvm.module.flags = !{!20, !21}
 !llvm.ident = !{!22}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !14, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !14, globals: !2, imports: !2)
 !1 = !DIFile(filename: "<unknown>", directory: "")
 !2 = !{}
 !3 = !{!4}
@@ -96,6 +96,6 @@ attributes #1 = { nounwind readnone }
 !21 = !{i32 1, !"Debug Info Version", i32 3}
 !22 = !{!"clang version 3.5.0 "}
 !23 = !DILocation(line: 11, scope: !15)
-!24 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "a", line: 8, scope: !19, file: !16, type: !"_ZTS1A")
+!24 = !DILocalVariable(name: "a", line: 8, scope: !19, file: !16, type: !"_ZTS1A")
 !25 = !DILocation(line: 8, scope: !19)
 !26 = !DILocation(line: 9, scope: !19)

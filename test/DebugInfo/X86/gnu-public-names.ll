@@ -300,7 +300,7 @@ attributes #1 = { nounwind readnone }
 !llvm.module.flags = !{!48, !49}
 !llvm.ident = !{!50}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, file: !1, producer: "clang version 3.7.0 (trunk 234897) (llvm/trunk 234911)", isOptimized: false, runtimeVersion: 0, emissionKind: 1, enums: !2, retainedTypes: !3, subprograms: !19, globals: !31, imports: !44)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, file: !1, producer: "clang version 3.7.0 (trunk 234897) (llvm/trunk 234911)", isOptimized: false, runtimeVersion: 0, emissionKind: 1, enums: !2, retainedTypes: !3, subprograms: !19, globals: !31, imports: !44)
 !1 = !DIFile(filename: "gnu-public-names.cpp", directory: "/tmp/dbginfo")
 !2 = !{}
 !3 = !{!4, !15}
@@ -351,7 +351,7 @@ attributes #1 = { nounwind readnone }
 !48 = !{i32 2, !"Dwarf Version", i32 4}
 !49 = !{i32 2, !"Debug Info Version", i32 3}
 !50 = !{!"clang version 3.7.0 (trunk 234897) (llvm/trunk 234911)"}
-!51 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1, scope: !20, type: !52, flags: DIFlagArtificial | DIFlagObjectPointer)
+!51 = !DILocalVariable(name: "this", arg: 1, scope: !20, type: !52, flags: DIFlagArtificial | DIFlagObjectPointer)
 !52 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !"_ZTS1C", size: 64, align: 64)
 !53 = !DIExpression()
 !54 = !DILocation(line: 0, scope: !20)

@@ -90,7 +90,7 @@ attributes #1 = { nounwind readnone }
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!38}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.3 (http://llvm.org/git/clang.git a09cd8103a6a719cb2628cdf0c91682250a17bd2) (http://llvm.org/git/llvm.git 47d03cec0afca0c01ae42b82916d1d731716cd20)", isOptimized: false, emissionKind: 0, file: !37, enums: !1, retainedTypes: !1, subprograms: !2, globals: !24, imports:  !1)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.3 (http://llvm.org/git/clang.git a09cd8103a6a719cb2628cdf0c91682250a17bd2) (http://llvm.org/git/llvm.git 47d03cec0afca0c01ae42b82916d1d731716cd20)", isOptimized: false, emissionKind: 0, file: !37, enums: !1, retainedTypes: !1, subprograms: !2, globals: !24, imports:  !1)
 !1 = !{}
 !2 = !{!3, !18, !19, !20}
 !3 = !DISubprogram(name: "member_function", linkageName: "_ZN1C15member_functionEv", line: 9, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 9, file: !4, scope: null, type: !5, function: void (%struct.C*)* @_ZN1C15member_functionEv, declaration: !12, variables: !1)
@@ -118,7 +118,7 @@ attributes #1 = { nounwind readnone }
 !25 = !DIGlobalVariable(name: "static_member_variable", linkageName: "_ZN1C22static_member_variableE", line: 7, isLocal: false, isDefinition: true, scope: !8, file: !4, type: !11, variable: i32* @_ZN1C22static_member_variableE, declaration: !10)
 !26 = !DIGlobalVariable(name: "global_variable", line: 17, isLocal: false, isDefinition: true, scope: null, file: !4, type: !8, variable: %struct.C* @global_variable)
 !27 = !DIGlobalVariable(name: "global_namespace_variable", linkageName: "_ZN2ns25global_namespace_variableE", line: 27, isLocal: false, isDefinition: true, scope: !21, file: !4, type: !11, variable: i32* @_ZN2ns25global_namespace_variableE)
-!28 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", line: 9, arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !3, file: !4, type: !29)
+!28 = !DILocalVariable(name: "this", line: 9, arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !3, file: !4, type: !29)
 !29 = !DIDerivedType(tag: DW_TAG_pointer_type, size: 64, align: 64, baseType: !8)
 !30 = !DILocation(line: 9, scope: !3)
 !31 = !DILocation(line: 10, scope: !3)

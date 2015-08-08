@@ -52,7 +52,7 @@ declare i32 @printf(i8*, ...)
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!30}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.2 ", isOptimized: false, emissionKind: 0, file: !29, enums: !1, retainedTypes: !1, subprograms: !3, globals: !1, imports:  !1)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.2 ", isOptimized: false, emissionKind: 0, file: !29, enums: !1, retainedTypes: !1, subprograms: !3, globals: !1, imports:  !1)
 !1 = !{}
 !3 = !{!5, !11, !14}
 !5 = !DISubprogram(name: "populate_array", line: 4, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 4, file: !29, scope: !6, type: !7, function: void (i32*, i32)* @populate_array, variables: !1)
@@ -67,12 +67,12 @@ declare i32 @printf(i8*, ...)
 !14 = !DISubprogram(name: "main", line: 18, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 18, file: !29, scope: !6, type: !15, function: i32 ()* @main, variables: !1)
 !15 = !DISubroutineType(types: !16)
 !16 = !{!10}
-!17 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "main_arr", line: 19, scope: !18, file: !6, type: !19)
+!17 = !DILocalVariable(name: "main_arr", line: 19, scope: !18, file: !6, type: !19)
 !18 = distinct !DILexicalBlock(line: 18, column: 16, file: !29, scope: !14)
 !19 = !DICompositeType(tag: DW_TAG_array_type, size: 3200, align: 32, baseType: !10, elements: !{!20})
 !20 = !DISubrange(count: 99)
 !22 = !DILocation(line: 19, column: 7, scope: !18)
-!23 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "val", line: 20, scope: !18, file: !6, type: !10)
+!23 = !DILocalVariable(name: "val", line: 20, scope: !18, file: !6, type: !10)
 !24 = !DILocation(line: 20, column: 7, scope: !18)
 !25 = !DILocation(line: 22, column: 3, scope: !18)
 !26 = !DILocation(line: 23, column: 9, scope: !18)

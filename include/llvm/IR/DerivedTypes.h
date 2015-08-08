@@ -153,8 +153,8 @@ public:
   /// getTypeAtIndex - Given an index value into the type, return the type of
   /// the element.
   ///
-  Type *getTypeAtIndex(const Value *V);
-  Type *getTypeAtIndex(unsigned Idx);
+  Type *getTypeAtIndex(const Value *V) const;
+  Type *getTypeAtIndex(unsigned Idx) const;
   bool indexValid(const Value *V) const;
   bool indexValid(unsigned Idx) const;
 
@@ -250,7 +250,7 @@ public:
   bool isOpaque() const { return (getSubclassData() & SCDB_HasBody) == 0; }
 
   /// isSized - Return true if this is a sized type.
-  bool isSized(SmallPtrSetImpl<const Type*> *Visited = nullptr) const;
+  bool isSized(SmallPtrSetImpl<Type*> *Visited = nullptr) const;
   
   /// hasName - Return true if this is a named struct that has a non-empty name.
   bool hasName() const { return SymbolTableEntry != nullptr; }

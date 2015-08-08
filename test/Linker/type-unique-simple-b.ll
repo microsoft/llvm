@@ -38,7 +38,7 @@ attributes #3 = { "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "n
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!17, !26}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 (http://llvm.org/git/clang.git c23b1db6268c8e7ce64026d57d1510c1aac200a0) (http://llvm.org/git/llvm.git 09b98fe3978eddefc2145adc1056cf21580ce945)", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !9, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 (http://llvm.org/git/clang.git c23b1db6268c8e7ce64026d57d1510c1aac200a0) (http://llvm.org/git/llvm.git 09b98fe3978eddefc2145adc1056cf21580ce945)", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !9, globals: !2, imports: !2)
 !1 = !DIFile(filename: "bar.cpp", directory: "/Users/mren/c_testing/type_unique_air/simple")
 !2 = !{}
 !3 = !{!4}
@@ -56,9 +56,9 @@ attributes #3 = { "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "n
 !15 = !DISubroutineType(types: !16)
 !16 = !{!8}
 !17 = !{i32 2, !"Dwarf Version", i32 2}
-!18 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "a", line: 4, arg: 1, scope: !10, file: !11, type: !8)
+!18 = !DILocalVariable(name: "a", line: 4, arg: 1, scope: !10, file: !11, type: !8)
 !19 = !DILocation(line: 4, scope: !10)
-!20 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "t", line: 5, scope: !10, file: !11, type: !4)
+!20 = !DILocalVariable(name: "t", line: 5, scope: !10, file: !11, type: !4)
 !21 = !DILocation(line: 5, scope: !10)
 !22 = !DILocation(line: 6, scope: !10)
 !23 = !DILocation(line: 8, scope: !14)

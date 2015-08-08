@@ -36,7 +36,7 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata) #1
 !llvm.module.flags = !{!7, !8}
 !llvm.ident = !{!9}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "clang", isOptimized: false, runtimeVersion: 0, emissionKind: 1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "clang", isOptimized: false, runtimeVersion: 0, emissionKind: 1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "file.c", directory: "/dir")
 !2 = !{}
 !3 = !{!4}
@@ -46,7 +46,7 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata) #1
 !7 = !{i32 2, !"Dwarf Version", i32 4}
 !8 = !{i32 2, !"Debug Info Version", i32 3}
 !9 = !{!"clang"}
-!10 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "x", scope: !4, file: !1, line: 8, type: !11)
+!10 = !DILocalVariable(name: "x", scope: !4, file: !1, line: 8, type: !11)
 !11 = !DIDerivedType(tag: DW_TAG_typedef, name: "SS", baseType: !12)
 !12 = !DICompositeType(tag: DW_TAG_structure_type, name: "S", size: 64, align: 64, elements: !13)
 !13 = !{!14}

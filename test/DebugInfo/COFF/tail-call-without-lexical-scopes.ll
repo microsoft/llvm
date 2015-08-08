@@ -62,7 +62,7 @@ attributes #2 = { nounwind }
 !llvm.module.flags = !{!8, !9}
 !llvm.ident = !{!10}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: true, emissionKind: 2, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: true, emissionKind: 2, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "test.cpp", directory: "D:\5C")
 !2 = !{}
 !3 = !{!4, !7}
@@ -70,7 +70,7 @@ attributes #2 = { nounwind }
 !5 = !DIFile(filename: "test.cpp", directory: "D:C")
 !6 = !DISubroutineType(types: !2)
 !7 = !DISubprogram(name: "bar", line: 3, isLocal: true, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 3, file: !1, scope: !5, type: !6, variables: !2)
-!8 = !{i32 2, !"Dwarf Version", i32 4}
+!8 = !{i32 2, !"CodeView", i32 1}
 !9 = !{i32 1, !"Debug Info Version", i32 3}
 !10 = !{!"clang version 3.5.0 "}
 !11 = !DILocation(line: 8, scope: !4)
