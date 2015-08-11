@@ -79,7 +79,7 @@ LimitFPPrecision("limit-float-precision",
                  cl::init(0));
 
 static cl::opt<bool>
-EnableFMFInDAG("enable-fmf-dag", cl::init(false), cl::Hidden,
+EnableFMFInDAG("enable-fmf-dag", cl::init(true), cl::Hidden,
                 cl::desc("Enable fast-math-flags for DAG nodes"));
 
 // Limit the width of DAG chains. This is important in general to prevent
@@ -1156,6 +1156,30 @@ SDValue SelectionDAGBuilder::getValueImpl(const Value *V) {
   }
 
   llvm_unreachable("Can't get register for value!");
+}
+
+void SelectionDAGBuilder::visitCleanupRet(const CleanupReturnInst &I) {
+  report_fatal_error("visitCleanupRet not yet implemented!");
+}
+
+void SelectionDAGBuilder::visitCatchEndPad(const CatchEndPadInst &I) {
+  report_fatal_error("visitCatchEndPad not yet implemented!");
+}
+
+void SelectionDAGBuilder::visitCatchRet(const CatchReturnInst &I) {
+  report_fatal_error("visitCatchRet not yet implemented!");
+}
+
+void SelectionDAGBuilder::visitCatchPad(const CatchPadInst &I) {
+  report_fatal_error("visitCatchPad not yet implemented!");
+}
+
+void SelectionDAGBuilder::visitTerminatePad(const TerminatePadInst &TPI) {
+  report_fatal_error("visitTerminatePad not yet implemented!");
+}
+
+void SelectionDAGBuilder::visitCleanupPad(const CleanupPadInst &CPI) {
+  report_fatal_error("visitCleanupPad not yet implemented!");
 }
 
 void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
@@ -4227,8 +4251,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
       if (const BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
         Address = BCI->getOperand(0);
       // Parameters are handled specially.
-      bool isParameter = Variable->getTag() == dwarf::DW_TAG_arg_variable ||
-                         isa<Argument>(Address);
+      bool isParameter = Variable->isParameter() || isa<Argument>(Address);
 
       const AllocaInst *AI = dyn_cast<AllocaInst>(Address);
 

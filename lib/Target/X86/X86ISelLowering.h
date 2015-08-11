@@ -1051,7 +1051,7 @@ namespace llvm {
     LoadInst *
     lowerIdempotentRMWIntoFencedLoad(AtomicRMWInst *AI) const override;
 
-    bool needsCmpXchgNb(const Type *MemType) const;
+    bool needsCmpXchgNb(Type *MemType) const;
 
     MachineBasicBlock *EmitGCTransitionRA(MachineInstr *MI,
                                           MachineBasicBlock *MBB) const;

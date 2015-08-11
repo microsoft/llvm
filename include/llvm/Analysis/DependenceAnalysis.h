@@ -69,6 +69,9 @@ namespace llvm {
   /// as singly-linked lists, with the "next" fields stored in the dependence
   /// itelf.
   class Dependence {
+  protected:
+    Dependence(const Dependence &) = default;
+
   public:
     Dependence(Instruction *Source,
                Instruction *Destination) :
@@ -216,11 +219,15 @@ namespace llvm {
   /// (for output, flow, and anti dependences), the dependence implies an
   /// ordering, where the source must precede the destination; in contrast,
   /// input dependences are unordered.
-  class FullDependence : public Dependence {
+  class FullDependence final : public Dependence {
   public:
     FullDependence(Instruction *Src, Instruction *Dst, bool LoopIndependent,
                    unsigned Levels);
-    ~FullDependence() override { delete[] DV; }
+
+    FullDependence(FullDependence &&RHS)
+        : Dependence(RHS), Levels(RHS.Levels),
+          LoopIndependent(RHS.LoopIndependent), Consistent(RHS.Consistent),
+          DV(std::move(RHS.DV)) {}
 
     /// isLoopIndependent - Returns true if this is a loop-independent
     /// dependence.
@@ -268,7 +275,7 @@ namespace llvm {
     unsigned short Levels;
     bool LoopIndependent;
     bool Consistent; // Init to true, then refine.
-    DVEntry *DV;
+    std::unique_ptr<DVEntry[]> DV;
     friend class DependenceAnalysis;
   };
 

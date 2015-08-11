@@ -170,6 +170,7 @@ public:
     MSVC,
     Itanium,
     Cygnus,
+    AMDOpenCL,
     CoreCLR,
     LastEnvironmentType = CoreCLR
   };
