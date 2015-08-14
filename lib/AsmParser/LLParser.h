@@ -55,22 +55,24 @@ namespace llvm {
       t_InlineAsm,                // Value in FTy/StrVal/StrVal2/UIntVal.
       t_ConstantStruct,           // Value in ConstantStructElts.
       t_PackedConstantStruct      // Value in ConstantStructElts.
-    } Kind;
+    } Kind = t_LocalID;
 
     LLLexer::LocTy Loc;
     unsigned UIntVal;
     FunctionType *FTy;
     std::string StrVal, StrVal2;
     APSInt APSIntVal;
-    APFloat APFloatVal;
+    APFloat APFloatVal{0.0};
     Constant *ConstantVal;
-    Constant **ConstantStructElts;
+    std::unique_ptr<Constant *[]> ConstantStructElts;
 
-    ValID() : Kind(t_LocalID), APFloatVal(0.0) {}
-    ~ValID() {
-      if (Kind == t_ConstantStruct || Kind == t_PackedConstantStruct)
-        delete [] ConstantStructElts;
-    }
+    ValID() = default;
+    ValID(ValID &&RHS)
+        : Kind(RHS.Kind), Loc(RHS.Loc), UIntVal(RHS.UIntVal), FTy(RHS.FTy),
+          StrVal(std::move(RHS.StrVal)), StrVal2(std::move(RHS.StrVal2)),
+          APSIntVal(std::move(RHS.APSIntVal)),
+          APFloatVal(std::move(RHS.APFloatVal)), ConstantVal(RHS.ConstantVal),
+          ConstantStructElts(std::move(RHS.ConstantStructElts)) {}
 
     bool operator<(const ValID &RHS) const {
       if (Kind == t_LocalID || Kind == t_GlobalID)
@@ -385,6 +387,9 @@ namespace llvm {
                             bool IsMustTailCall = false,
                             bool InVarArgsFunc = false);
 
+    bool ParseExceptionArgs(SmallVectorImpl<Value *> &Args,
+                            PerFunctionState &PFS);
+
     // Constant Parsing.
     bool ParseValID(ValID &ID, PerFunctionState *PFS = nullptr);
     bool ParseGlobalValue(Type *Ty, Constant *&V);
@@ -445,6 +450,12 @@ namespace llvm {
     bool ParseIndirectBr(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseInvoke(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseResume(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseCleanupRet(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseCatchRet(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseCatchPad(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseTerminatePad(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseCleanupPad(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseCatchEndPad(Instruction *&Inst, PerFunctionState &PFS);
 
     bool ParseArithmetic(Instruction *&I, PerFunctionState &PFS, unsigned Opc,
                          unsigned OperandType);

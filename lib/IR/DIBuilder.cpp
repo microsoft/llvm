@@ -602,18 +602,20 @@ DIGlobalVariable *DIBuilder::createTempGlobalVariableFwdDecl(
       .release();
 }
 
-DILocalVariable *DIBuilder::createLocalVariable(
-    unsigned Tag, DIScope *Scope, StringRef Name, DIFile *File, unsigned LineNo,
-    DIType *Ty, bool AlwaysPreserve, unsigned Flags, unsigned ArgNo) {
+static DILocalVariable *createLocalVariable(
+    LLVMContext &VMContext,
+    DenseMap<MDNode *, std::vector<TrackingMDNodeRef>> &PreservedVariables,
+    DIScope *Scope, StringRef Name, unsigned ArgNo, DIFile *File,
+    unsigned LineNo, DIType *Ty, bool AlwaysPreserve, unsigned Flags) {
   // FIXME: Why getNonCompileUnitScope()?
   // FIXME: Why is "!Context" okay here?
   // FIXME: Why doesn't this check for a subprogram or lexical block (AFAICT
   // the only valid scopes)?
   DIScope *Context = getNonCompileUnitScope(Scope);
 
-  auto *Node = DILocalVariable::get(
-      VMContext, Tag, cast_or_null<DILocalScope>(Context), Name, File, LineNo,
-      DITypeRef::get(Ty), ArgNo, Flags);
+  auto *Node =
+      DILocalVariable::get(VMContext, cast_or_null<DILocalScope>(Context), Name,
+                           File, LineNo, DITypeRef::get(Ty), ArgNo, Flags);
   if (AlwaysPreserve) {
     // The optimizer may remove local variables. If there is an interest
     // to preserve variable info in such situation then stash it in a
@@ -623,6 +625,23 @@ DILocalVariable *DIBuilder::createLocalVariable(
     PreservedVariables[Fn].emplace_back(Node);
   }
   return Node;
+}
+
+DILocalVariable *DIBuilder::createAutoVariable(DIScope *Scope, StringRef Name,
+                                               DIFile *File, unsigned LineNo,
+                                               DIType *Ty, bool AlwaysPreserve,
+                                               unsigned Flags) {
+  return createLocalVariable(VMContext, PreservedVariables, Scope, Name,
+                             /* ArgNo */ 0, File, LineNo, Ty, AlwaysPreserve,
+                             Flags);
+}
+
+DILocalVariable *DIBuilder::createParameterVariable(
+    DIScope *Scope, StringRef Name, unsigned ArgNo, DIFile *File,
+    unsigned LineNo, DIType *Ty, bool AlwaysPreserve, unsigned Flags) {
+  assert(ArgNo && "Expected non-zero argument number for parameter");
+  return createLocalVariable(VMContext, PreservedVariables, Scope, Name, ArgNo,
+                             File, LineNo, Ty, AlwaysPreserve, Flags);
 }
 
 DIExpression *DIBuilder::createExpression(ArrayRef<uint64_t> Addr) {
