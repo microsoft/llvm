@@ -547,7 +547,7 @@ public:
 class StringInit : public TypedInit {
   std::string Value;
 
-  explicit StringInit(const std::string &V)
+  explicit StringInit(StringRef V)
     : TypedInit(IK_StringInit, StringRecTy::get()), Value(V) {}
 
   StringInit(const StringInit &Other) = delete;
@@ -836,8 +836,6 @@ public:
 class VarInit : public TypedInit {
   Init *VarName;
 
-  explicit VarInit(const std::string &VN, RecTy *T)
-      : TypedInit(IK_VarInit, T), VarName(StringInit::get(VN)) {}
   explicit VarInit(Init *VN, RecTy *T)
       : TypedInit(IK_VarInit, T), VarName(VN) {}
 

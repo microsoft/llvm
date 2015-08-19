@@ -519,7 +519,7 @@ static Value *tryFactorization(InstCombiner::BuilderTy *Builder,
           if (isa<OverflowingBinaryOperator>(Op1))
             HasNSW &= Op1->hasNoSignedWrap();
 
-        // We can propogate 'nsw' if we know that
+        // We can propagate 'nsw' if we know that
         //  %Y = mul nsw i16 %X, C
         //  %Z = add nsw i16 %Y, %X
         // =>
@@ -2995,8 +2995,6 @@ combineInstructionsOverFunction(Function &F, InstCombineWorklist &Worklist,
                                 AliasAnalysis *AA, AssumptionCache &AC,
                                 TargetLibraryInfo &TLI, DominatorTree &DT,
                                 LoopInfo *LI = nullptr) {
-  // Minimizing size?
-  bool MinimizeSize = F.hasFnAttribute(Attribute::MinSize);
   auto &DL = F.getParent()->getDataLayout();
 
   /// Builder - This is an IRBuilder that automatically inserts new
@@ -3019,7 +3017,7 @@ combineInstructionsOverFunction(Function &F, InstCombineWorklist &Worklist,
     if (prepareICWorklistFromFunction(F, DL, &TLI, Worklist))
       Changed = true;
 
-    InstCombiner IC(Worklist, &Builder, MinimizeSize,
+    InstCombiner IC(Worklist, &Builder, F.optForMinSize(),
                     AA, &AC, &TLI, &DT, DL, LI);
     if (IC.run())
       Changed = true;

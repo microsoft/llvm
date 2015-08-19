@@ -969,7 +969,7 @@ bool AArch64FastISel::simplifyAddress(Address &Addr, MVT VT) {
 
   // Cannot encode an offset register and an immediate offset in the same
   // instruction. Fold the immediate offset into the load/store instruction and
-  // emit an additonal add to take care of the offset register.
+  // emit an additional add to take care of the offset register.
   if (!ImmediateOffsetNeedsLowering && Addr.getOffset() && Addr.getOffsetReg())
     RegisterOffsetNeedsLowering = true;
 
@@ -1058,8 +1058,8 @@ void AArch64FastISel::addLoadStoreOperands(Address &Addr,
     // FIXME: We shouldn't be using getObjectSize/getObjectAlignment.  The size
     // and alignment should be based on the VT.
     MMO = FuncInfo.MF->getMachineMemOperand(
-      MachinePointerInfo::getFixedStack(FI, Offset), Flags,
-      MFI.getObjectSize(FI), MFI.getObjectAlignment(FI));
+        MachinePointerInfo::getFixedStack(*FuncInfo.MF, FI, Offset), Flags,
+        MFI.getObjectSize(FI), MFI.getObjectAlignment(FI));
     // Now add the rest of the operands.
     MIB.addFrameIndex(FI).addImm(Offset);
   } else {
@@ -3021,8 +3021,8 @@ bool AArch64FastISel::processCallArgs(CallLoweringInfo &CLI,
 
       unsigned Alignment = DL.getABITypeAlignment(ArgVal->getType());
       MachineMemOperand *MMO = FuncInfo.MF->getMachineMemOperand(
-        MachinePointerInfo::getStack(Addr.getOffset()),
-        MachineMemOperand::MOStore, ArgVT.getStoreSize(), Alignment);
+          MachinePointerInfo::getStack(*FuncInfo.MF, Addr.getOffset()),
+          MachineMemOperand::MOStore, ArgVT.getStoreSize(), Alignment);
 
       if (!emitStore(ArgVT, ArgReg, Addr, MMO))
         return false;

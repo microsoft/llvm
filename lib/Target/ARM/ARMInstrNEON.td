@@ -587,11 +587,6 @@ def SDTARMVMULL   : SDTypeProfile<1, 2, [SDTCisInt<0>, SDTCisInt<1>,
 def NEONvmulls    : SDNode<"ARMISD::VMULLs", SDTARMVMULL>;
 def NEONvmullu    : SDNode<"ARMISD::VMULLu", SDTARMVMULL>;
 
-def SDTARMFMAX    : SDTypeProfile<1, 2, [SDTCisVT<0, f32>, SDTCisSameAs<0, 1>,
-                                         SDTCisSameAs<0, 2>]>;
-def NEONfmax      : SDNode<"ARMISD::FMAX", SDTARMFMAX>;
-def NEONfmin      : SDNode<"ARMISD::FMIN", SDTARMFMAX>;
-
 def NEONimmAllZerosV: PatLeaf<(NEONvmovImm (i32 timm)), [{
   ConstantSDNode *ConstVal = cast<ConstantSDNode>(N->getOperand(0));
   unsigned EltBits = 0;
@@ -5037,20 +5032,20 @@ defm VMAXu    : N3VInt_QHS<1, 0, 0b0110, 0, N3RegFrm,
                            "vmax", "u", int_arm_neon_vmaxu, 1>;
 def  VMAXfd   : N3VDInt<0, 0, 0b00, 0b1111, 0, N3RegFrm, IIC_VBIND,
                         "vmax", "f32",
-                        v2f32, v2f32, int_arm_neon_vmaxs, 1>;
+                        v2f32, v2f32, fmaxnan, 1>;
 def  VMAXfq   : N3VQInt<0, 0, 0b00, 0b1111, 0, N3RegFrm, IIC_VBINQ,
                         "vmax", "f32",
-                        v4f32, v4f32, int_arm_neon_vmaxs, 1>;
+                        v4f32, v4f32, fmaxnan, 1>;
 
 // VMAXNM
 let PostEncoderMethod = "NEONThumb2V8PostEncoder", DecoderNamespace = "v8NEON" in {
   def VMAXNMND  : N3VDIntnp<0b00110, 0b00, 0b1111, 0, 1,
                             N3RegFrm, NoItinerary, "vmaxnm", "f32",
-                            v2f32, v2f32, int_arm_neon_vmaxnm, 1>,
+                            v2f32, v2f32, fmaxnum, 1>,
                             Requires<[HasV8, HasNEON]>;
   def VMAXNMNQ  : N3VQIntnp<0b00110, 0b00, 0b1111, 1, 1,
                             N3RegFrm, NoItinerary, "vmaxnm", "f32",
-                            v4f32, v4f32, int_arm_neon_vmaxnm, 1>,
+                            v4f32, v4f32, fmaxnum, 1>,
                             Requires<[HasV8, HasNEON]>;
 }
 
@@ -5063,20 +5058,20 @@ defm VMINu    : N3VInt_QHS<1, 0, 0b0110, 1, N3RegFrm,
                            "vmin", "u", int_arm_neon_vminu, 1>;
 def  VMINfd   : N3VDInt<0, 0, 0b10, 0b1111, 0, N3RegFrm, IIC_VBIND,
                         "vmin", "f32",
-                        v2f32, v2f32, int_arm_neon_vmins, 1>;
+                        v2f32, v2f32, fminnan, 1>;
 def  VMINfq   : N3VQInt<0, 0, 0b10, 0b1111, 0, N3RegFrm, IIC_VBINQ,
                         "vmin", "f32",
-                        v4f32, v4f32, int_arm_neon_vmins, 1>;
+                        v4f32, v4f32, fminnan, 1>;
 
 // VMINNM
 let PostEncoderMethod = "NEONThumb2V8PostEncoder", DecoderNamespace = "v8NEON" in {
   def VMINNMND  : N3VDIntnp<0b00110, 0b10, 0b1111, 0, 1,
                             N3RegFrm, NoItinerary, "vminnm", "f32",
-                            v2f32, v2f32, int_arm_neon_vminnm, 1>,
+                            v2f32, v2f32, fminnum, 1>,
                             Requires<[HasV8, HasNEON]>;
   def VMINNMNQ  : N3VQIntnp<0b00110, 0b10, 0b1111, 1, 1,
                             N3RegFrm, NoItinerary, "vminnm", "f32",
-                            v4f32, v4f32, int_arm_neon_vminnm, 1>,
+                            v4f32, v4f32, fminnum, 1>,
                             Requires<[HasV8, HasNEON]>;
 }
 
@@ -6343,8 +6338,8 @@ def : N3VSMulOpPat<fmul, fsub, VFMSfd>,
       Requires<[HasVFP4, UseNEONForFP, UseFusedMAC]>;
 def : N2VSPat<fabs, VABSfd>;
 def : N2VSPat<fneg, VNEGfd>;
-def : N3VSPat<NEONfmax, VMAXfd>;
-def : N3VSPat<NEONfmin, VMINfd>;
+def : N3VSPat<fmaxnan, VMAXfd>, Requires<[HasNEON]>;
+def : N3VSPat<fminnan, VMINfd>, Requires<[HasNEON]>;
 def : NVCVTFIPat<fp_to_sint, VCVTf2sd>;
 def : NVCVTFIPat<fp_to_uint, VCVTf2ud>;
 def : NVCVTIFPat<sint_to_fp, VCVTs2fd>;

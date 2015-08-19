@@ -1360,6 +1360,9 @@ std::error_code BitcodeReader::parseTypeTableBody() {
     case bitc::TYPE_CODE_X86_MMX:   // X86_MMX
       ResultTy = Type::getX86_MMXTy(Context);
       break;
+    case bitc::TYPE_CODE_TOKEN:     // TOKEN
+      ResultTy = Type::getTokenTy(Context);
+      break;
     case bitc::TYPE_CODE_INTEGER: { // INTEGER: [width]
       if (Record.size() < 1)
         return error("Invalid record");
@@ -3844,12 +3847,18 @@ std::error_code BitcodeReader::parseFunctionBody(Function *F) {
       break;
     }
     case bitc::FUNC_CODE_INST_CATCHRET: { // CATCHRET: [bb#]
-      if (Record.size() != 1)
+      if (Record.size() != 1 && Record.size() != 3)
         return error("Invalid record");
-      BasicBlock *BB = getBasicBlock(Record[0]);
+      unsigned Idx = 0;
+      BasicBlock *BB = getBasicBlock(Record[Idx++]);
       if (!BB)
         return error("Invalid record");
-      I = CatchReturnInst::Create(BB);
+      Value *RetVal = nullptr;
+      if (Record.size() == 3 &&
+          getValueTypePair(Record, Idx, NextValueNo, RetVal))
+        return error("Invalid record");
+
+      I = CatchReturnInst::Create(BB, RetVal);
       InstructionList.push_back(I);
       break;
     }

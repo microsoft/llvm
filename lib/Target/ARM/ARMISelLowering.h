@@ -173,12 +173,6 @@ namespace llvm {
       // BUILD_VECTOR for this purpose.
       BUILD_VECTOR,
 
-      // Floating-point max and min:
-      FMAX,
-      FMIN,
-      VMAXNM,
-      VMINNM,
-
       // Bit-field insert
       BFI,
 

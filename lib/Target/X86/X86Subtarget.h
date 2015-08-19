@@ -410,6 +410,10 @@ public:
     return TargetTriple.isKnownWindowsMSVCEnvironment();
   }
 
+  bool isTargetWindowsCoreCLR() const {
+    return TargetTriple.isWindowsCoreCLREnvironment();
+  }
+
   bool isTargetWindowsCygwin() const {
     return TargetTriple.isWindowsCygwinEnvironment();
   }

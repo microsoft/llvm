@@ -372,7 +372,7 @@ public:
   /// \brief A memcheck which made up of a pair of grouped pointers.
   ///
   /// These *have* to be const for now, since checks are generated from
-  /// CheckingPtrGroups in LAI::addRuntimeCheck which is a const member
+  /// CheckingPtrGroups in LAI::addRuntimeChecks which is a const member
   /// function.  FIXME: once check-generation is moved inside this class (after
   /// the PtrPartition hack is removed), we could drop const.
   typedef std::pair<const CheckingPtrGroup *, const CheckingPtrGroup *>
@@ -384,12 +384,12 @@ public:
                       bool UseDependencies);
 
   /// \brief Returns the checks that generateChecks created.
-  const SmallVectorImpl<PointerCheck> &getChecks() const { return Checks; }
+  const SmallVector<PointerCheck, 4> &getChecks() const { return Checks; }
 
   /// \brief Decide if we need to add a check between two groups of pointers,
   /// according to needsChecking.
-  bool needsChecking(const CheckingPtrGroup &M, const CheckingPtrGroup &N,
-                     const SmallVectorImpl<int> *PtrPartition) const;
+  bool needsChecking(const CheckingPtrGroup &M,
+                     const CheckingPtrGroup &N) const;
 
   /// \brief Returns the number of run-time checks required according to
   /// needsChecking.
@@ -421,12 +421,7 @@ public:
 
   /// \brief Decide whether we need to issue a run-time check for pointer at
   /// index \p I and \p J to prove their independence.
-  ///
-  /// If \p PtrPartition is set, it contains the partition number for
-  /// pointers (-1 if the pointer belongs to multiple partitions).  In this
-  /// case omit checks between pointers belonging to the same partition.
-  bool needsChecking(unsigned I, unsigned J,
-                     const SmallVectorImpl<int> *PtrPartition = nullptr) const;
+  bool needsChecking(unsigned I, unsigned J) const;
 
 private:
   /// \brief Groups pointers such that a single memcheck is required
@@ -437,13 +432,8 @@ private:
                    bool UseDependencies);
 
   /// Generate the checks and return them.
-  ///
-  /// \p PtrToPartition contains the partition number for pointers.  If passed,
-  /// omit checks between pointers belonging to the same partition.  Partition
-  /// number -1 means that the pointer is used in multiple partitions.  In this
-  /// case we can't safely omit the check.
   SmallVector<PointerCheck, 4>
-  generateChecks(const SmallVectorImpl<int> *PtrPartition = nullptr) const;
+  generateChecks() const;
 
   /// Holds a pointer to the ScalarEvolution analysis.
   ScalarEvolution *SE;
@@ -506,7 +496,7 @@ public:
   /// instruction generated in possibly a sequence of instructions and the
   /// second value is the final comparator value or NULL if no check is needed.
   std::pair<Instruction *, Instruction *>
-  addRuntimeCheck(Instruction *Loc) const;
+  addRuntimeChecks(Instruction *Loc) const;
 
   /// \brief Generete the instructions for the checks in \p PointerChecks.
   ///
@@ -514,9 +504,9 @@ public:
   /// instruction generated in possibly a sequence of instructions and the
   /// second value is the final comparator value or NULL if no check is needed.
   std::pair<Instruction *, Instruction *>
-  addRuntimeCheck(Instruction *Loc,
-                  const SmallVectorImpl<RuntimePointerChecking::PointerCheck>
-                      &PointerChecks) const;
+  addRuntimeChecks(Instruction *Loc,
+                   const SmallVectorImpl<RuntimePointerChecking::PointerCheck>
+                       &PointerChecks) const;
 
   /// \brief The diagnostics report generated for the analysis.  E.g. why we
   /// couldn't analyze the loop.

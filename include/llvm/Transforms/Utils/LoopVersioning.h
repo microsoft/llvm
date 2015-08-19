@@ -31,10 +31,16 @@ class LoopInfo;
 /// already has a preheader.
 class LoopVersioning {
 public:
+  /// \brief Expects MemCheck, LoopAccessInfo, Loop, LoopInfo, DominatorTree
+  /// as input. It uses runtime check provided by user.
   LoopVersioning(SmallVector<RuntimePointerChecking::PointerCheck, 4> Checks,
                  const LoopAccessInfo &LAI, Loop *L, LoopInfo *LI,
-                 DominatorTree *DT,
-                 const SmallVector<int, 8> *PtrToPartition = nullptr);
+                 DominatorTree *DT);
+
+  /// \brief Expects LoopAccessInfo, Loop, LoopInfo, DominatorTree as input.
+  /// It uses default runtime check provided by LoopAccessInfo.
+  LoopVersioning(const LoopAccessInfo &LAInfo, Loop *L, LoopInfo *LI,
+                 DominatorTree *DT);
 
   /// \brief Performs the CFG manipulation part of versioning the loop including
   /// the DominatorTree and LoopInfo updates.
@@ -49,7 +55,7 @@ public:
   ///        analyze L
   ///        if versioning is necessary version L
   ///        transform L
-  void versionLoop(Pass *P);
+  void versionLoop();
 
   /// \brief Adds the necessary PHI nodes for the versioned loops based on the
   /// loop-defined values used outside of the loop.

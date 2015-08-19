@@ -443,26 +443,28 @@ unsigned MachinePointerInfo::getAddrSpace() const {
 
 /// getConstantPool - Return a MachinePointerInfo record that refers to the
 /// constant pool.
-MachinePointerInfo MachinePointerInfo::getConstantPool() {
-  return MachinePointerInfo(PseudoSourceValue::getConstantPool());
+MachinePointerInfo MachinePointerInfo::getConstantPool(MachineFunction &MF) {
+  return MachinePointerInfo(MF.getPSVManager().getConstantPool());
 }
 
 /// getFixedStack - Return a MachinePointerInfo record that refers to the
 /// the specified FrameIndex.
-MachinePointerInfo MachinePointerInfo::getFixedStack(int FI, int64_t offset) {
-  return MachinePointerInfo(PseudoSourceValue::getFixedStack(FI), offset);
+MachinePointerInfo MachinePointerInfo::getFixedStack(MachineFunction &MF,
+                                                     int FI, int64_t Offset) {
+  return MachinePointerInfo(MF.getPSVManager().getFixedStack(FI), Offset);
 }
 
-MachinePointerInfo MachinePointerInfo::getJumpTable() {
-  return MachinePointerInfo(PseudoSourceValue::getJumpTable());
+MachinePointerInfo MachinePointerInfo::getJumpTable(MachineFunction &MF) {
+  return MachinePointerInfo(MF.getPSVManager().getJumpTable());
 }
 
-MachinePointerInfo MachinePointerInfo::getGOT() {
-  return MachinePointerInfo(PseudoSourceValue::getGOT());
+MachinePointerInfo MachinePointerInfo::getGOT(MachineFunction &MF) {
+  return MachinePointerInfo(MF.getPSVManager().getGOT());
 }
 
-MachinePointerInfo MachinePointerInfo::getStack(int64_t Offset) {
-  return MachinePointerInfo(PseudoSourceValue::getStack(), Offset);
+MachinePointerInfo MachinePointerInfo::getStack(MachineFunction &MF,
+                                                int64_t Offset) {
+  return MachinePointerInfo(MF.getPSVManager().getStack(), Offset);
 }
 
 MachineMemOperand::MachineMemOperand(MachinePointerInfo ptrinfo, unsigned f,
@@ -1499,6 +1501,10 @@ bool MachineInstr::hasUnmodeledSideEffects() const {
   }
 
   return false;
+}
+
+bool MachineInstr::isLoadFoldBarrier() const {
+  return mayStore() || isCall() || hasUnmodeledSideEffects();
 }
 
 /// allDefsAreDead - Return true if all the defs of this instruction are dead.

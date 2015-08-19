@@ -85,23 +85,31 @@ public:
 
   RecurrenceDescriptor()
       : StartValue(nullptr), LoopExitInstr(nullptr), Kind(RK_NoRecurrence),
-        MinMaxKind(MRK_Invalid) {}
+        MinMaxKind(MRK_Invalid), UnsafeAlgebraInst(nullptr) {}
 
   RecurrenceDescriptor(Value *Start, Instruction *Exit, RecurrenceKind K,
-                       MinMaxRecurrenceKind MK)
-      : StartValue(Start), LoopExitInstr(Exit), Kind(K), MinMaxKind(MK) {}
+                       MinMaxRecurrenceKind MK,
+                       Instruction *UAI /*Unsafe Algebra Inst*/)
+      : StartValue(Start), LoopExitInstr(Exit), Kind(K), MinMaxKind(MK),
+        UnsafeAlgebraInst(UAI) {}
 
   /// This POD struct holds information about a potential recurrence operation.
   class InstDesc {
 
   public:
-    InstDesc(bool IsRecur, Instruction *I)
-        : IsRecurrence(IsRecur), PatternLastInst(I), MinMaxKind(MRK_Invalid) {}
+    InstDesc(bool IsRecur, Instruction *I, Instruction *UAI = nullptr)
+        : IsRecurrence(IsRecur), PatternLastInst(I), MinMaxKind(MRK_Invalid),
+          UnsafeAlgebraInst(UAI) {}
 
-    InstDesc(Instruction *I, MinMaxRecurrenceKind K)
-        : IsRecurrence(true), PatternLastInst(I), MinMaxKind(K) {}
+    InstDesc(Instruction *I, MinMaxRecurrenceKind K, Instruction *UAI = nullptr)
+        : IsRecurrence(true), PatternLastInst(I), MinMaxKind(K),
+          UnsafeAlgebraInst(UAI) {}
 
     bool isRecurrence() { return IsRecurrence; }
+
+    bool hasUnsafeAlgebra() { return UnsafeAlgebraInst != nullptr; }
+
+    Instruction *getUnsafeAlgebraInst() { return UnsafeAlgebraInst; }
 
     MinMaxRecurrenceKind getMinMaxKind() { return MinMaxKind; }
 
@@ -115,6 +123,8 @@ public:
     Instruction *PatternLastInst;
     // If this is a min/max pattern the comparison predicate.
     MinMaxRecurrenceKind MinMaxKind;
+    // Recurrence has unsafe algebra.
+    Instruction *UnsafeAlgebraInst;
   };
 
   /// Returns a struct describing if the instruction 'I' can be a recurrence
@@ -125,7 +135,7 @@ public:
   static InstDesc isRecurrenceInstr(Instruction *I, RecurrenceKind Kind,
                                     InstDesc &Prev, bool HasFunNoNaNAttr);
 
-  /// Returns true if instuction I has multiple uses in Insts
+  /// Returns true if instruction I has multiple uses in Insts
   static bool hasMultipleUsesOf(Instruction *I,
                                 SmallPtrSetImpl<Instruction *> &Insts);
 
@@ -167,6 +177,13 @@ public:
 
   Instruction *getLoopExitInstr() { return LoopExitInstr; }
 
+  /// Returns true if the recurrence has unsafe algebra which requires a relaxed
+  /// floating-point model.
+  bool hasUnsafeAlgebra() { return UnsafeAlgebraInst != nullptr; }
+
+  /// Returns first unsafe algebra instruction in the PHI node's use-chain.
+  Instruction *getUnsafeAlgebraInst() { return UnsafeAlgebraInst; }
+
 private:
   // The starting value of the recurrence.
   // It does not have to be zero!
@@ -177,6 +194,8 @@ private:
   RecurrenceKind Kind;
   // If this a min/max recurrence the kind of recurrence.
   MinMaxRecurrenceKind MinMaxKind;
+  // First occurance of unasfe algebra in the PHI's use-chain.
+  Instruction *UnsafeAlgebraInst;
 };
 
 BasicBlock *InsertPreheaderForLoop(Loop *L, Pass *P);
@@ -253,7 +272,7 @@ bool promoteLoopAccessesToScalars(AliasSet &, SmallVectorImpl<BasicBlock*> &,
                                   LICMSafetyInfo *);
 
 /// \brief Computes safety information for a loop
-/// checks loop body & header for the possiblity of may throw
+/// checks loop body & header for the possibility of may throw
 /// exception, it takes LICMSafetyInfo and loop as argument.
 /// Updates safety information in LICMSafetyInfo argument.
 void computeLICMSafetyInfo(LICMSafetyInfo *, Loop *);
@@ -262,6 +281,9 @@ void computeLICMSafetyInfo(LICMSafetyInfo *, Loop *);
 /// variable. Returns true if this is an induction PHI along with the step
 /// value.
 bool isInductionPHI(PHINode *, ScalarEvolution *, ConstantInt *&);
+
+/// \brief Returns the instructions that use values defined in the loop.
+SmallVector<Instruction *, 8> findDefsUsedOutsideOfLoop(Loop *L);
 }
 
 #endif

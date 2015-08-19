@@ -211,7 +211,7 @@ bool GlobalMerge::doMerge(SmallVectorImpl<GlobalVariable*> &Globals,
 
   // If we want to be smarter, look at all uses of each global, to try to
   // discover all sets of globals used together, and how many times each of
-  // these sets occured.
+  // these sets occurred.
   //
   // Keep this reasonably efficient, by having an append-only list of all sets
   // discovered so far (UsedGlobalSet), and mapping each "together-ness" unit of
@@ -306,8 +306,7 @@ bool GlobalMerge::doMerge(SmallVectorImpl<GlobalVariable*> &Globals,
         Function *ParentFn = I->getParent()->getParent();
 
         // If we're only optimizing for size, ignore non-minsize functions.
-        if (OnlyOptimizeForSize &&
-            !ParentFn->hasFnAttribute(Attribute::MinSize))
+        if (OnlyOptimizeForSize && !ParentFn->optForMinSize())
           continue;
 
         size_t UGSIdx = GlobalUsesByFunction[ParentFn];
@@ -429,8 +428,6 @@ bool GlobalMerge::doMerge(SmallVectorImpl<GlobalVariable *> &Globals,
     std::vector<Type*> Tys;
     std::vector<Constant*> Inits;
 
-    bool HasExternal = false;
-    GlobalVariable *TheFirstExternal = 0;
     for (j = i; j != -1; j = GlobalSet.find_next(j)) {
       Type *Ty = Globals[j]->getType()->getElementType();
       MergedSize += DL.getTypeAllocSize(Ty);
@@ -439,30 +436,14 @@ bool GlobalMerge::doMerge(SmallVectorImpl<GlobalVariable *> &Globals,
       }
       Tys.push_back(Ty);
       Inits.push_back(Globals[j]->getInitializer());
-
-      if (Globals[j]->hasExternalLinkage() && !HasExternal) {
-        HasExternal = true;
-        TheFirstExternal = Globals[j];
-      }
     }
-
-    // If merged variables doesn't have external linkage, we needn't to expose
-    // the symbol after merging.
-    GlobalValue::LinkageTypes Linkage = HasExternal
-                                            ? GlobalValue::ExternalLinkage
-                                            : GlobalValue::InternalLinkage;
 
     StructType *MergedTy = StructType::get(M.getContext(), Tys);
     Constant *MergedInit = ConstantStruct::get(MergedTy, Inits);
 
-    // If merged variables have external linkage, we use symbol name of the
-    // first variable merged as the suffix of global symbol name. This would
-    // be able to avoid the link-time naming conflict for globalm symbols.
     GlobalVariable *MergedGV = new GlobalVariable(
-        M, MergedTy, isConst, Linkage, MergedInit,
-        HasExternal ? "_MergedGlobals_" + TheFirstExternal->getName()
-                    : "_MergedGlobals",
-        nullptr, GlobalVariable::NotThreadLocal, AddrSpace);
+        M, MergedTy, isConst, GlobalValue::PrivateLinkage, MergedInit,
+        "_MergedGlobals", nullptr, GlobalVariable::NotThreadLocal, AddrSpace);
 
     for (ssize_t k = i, idx = 0; k != j; k = GlobalSet.find_next(k)) {
       GlobalValue::LinkageTypes Linkage = Globals[k]->getLinkage();
@@ -477,8 +458,13 @@ bool GlobalMerge::doMerge(SmallVectorImpl<GlobalVariable *> &Globals,
       Globals[k]->replaceAllUsesWith(GEP);
       Globals[k]->eraseFromParent();
 
-      if (Linkage != GlobalValue::InternalLinkage) {
-        // Generate a new alias...
+      // When the linkage is not internal we must emit an alias for the original
+      // variable name as it may be accessed from another object. On non-Mach-O
+      // we can also emit an alias for internal linkage as it's safe to do so.
+      // It's not safe on Mach-O as the alias (and thus the portion of the
+      // MergedGlobals variable) may be dead stripped at link time.
+      if (Linkage != GlobalValue::InternalLinkage ||
+          !TM->getTargetTriple().isOSBinFormatMachO()) {
         auto *PTy = cast<PointerType>(GEP->getType());
         GlobalAlias::create(PTy, Linkage, Name, GEP, &M);
       }
