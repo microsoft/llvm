@@ -285,13 +285,16 @@ bool ARMSubtarget::enableAtomicExpand() const {
   return hasAnyDataBarrier() && !isThumb1Only();
 }
 
+bool ARMSubtarget::useStride4VFPs(const MachineFunction &MF) const {
+  return isSwift() && !MF.getFunction()->hasFnAttribute(Attribute::MinSize);
+}
+
 bool ARMSubtarget::useMovt(const MachineFunction &MF) const {
   // NOTE Windows on ARM needs to use mov.w/mov.t pairs to materialise 32-bit
   // immediates as it is inherently position independent, and may be out of
   // range otherwise.
   return !NoMovt && hasV6T2Ops() &&
-         (isTargetWindows() ||
-          !MF.getFunction()->hasFnAttribute(Attribute::MinSize));
+         (isTargetWindows() || !MF.getFunction()->optForMinSize());
 }
 
 bool ARMSubtarget::useFastISel() const {

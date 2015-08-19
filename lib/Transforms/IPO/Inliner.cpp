@@ -265,6 +265,7 @@ unsigned Inliner::getInlineThreshold(CallSite CS) const {
   // would decrease the threshold.
   Function *Caller = CS.getCaller();
   bool OptSize = Caller && !Caller->isDeclaration() &&
+                 // FIXME: Use Function::optForSize().
                  Caller->hasFnAttribute(Attribute::OptimizeForSize);
   if (!(InlineLimit.getNumOccurrences() > 0) && OptSize &&
       OptSizeThreshold < thres)
@@ -648,8 +649,8 @@ bool Inliner::removeDeadFunctions(CallGraph &CG, bool AlwaysInlineOnly) {
 
   // Scan for all of the functions, looking for ones that should now be removed
   // from the program.  Insert the dead ones in the FunctionsToRemove set.
-  for (auto I : CG) {
-    CallGraphNode *CGN = I.second;
+  for (const auto &I : CG) {
+    CallGraphNode *CGN = I.second.get();
     Function *F = CGN->getFunction();
     if (!F || F->isDeclaration())
       continue;

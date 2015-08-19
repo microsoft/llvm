@@ -165,6 +165,13 @@ RuntimePointerChecking::generateChecks(
   return Checks;
 }
 
+void RuntimePointerChecking::generateChecks(
+    MemoryDepChecker::DepCandidates &DepCands, bool UseDependencies) {
+  assert(Checks.empty() && "Checks is not empty");
+  groupChecks(DepCands, UseDependencies);
+  Checks = generateChecks();
+}
+
 bool RuntimePointerChecking::needsChecking(
     const CheckingPtrGroup &M, const CheckingPtrGroup &N,
     const SmallVectorImpl<int> *PtrPartition) const {
@@ -386,12 +393,10 @@ void RuntimePointerChecking::printChecks(
   }
 }
 
-void RuntimePointerChecking::print(
-    raw_ostream &OS, unsigned Depth,
-    const SmallVectorImpl<int> *PtrPartition) const {
+void RuntimePointerChecking::print(raw_ostream &OS, unsigned Depth) const {
 
   OS.indent(Depth) << "Run-time memory checks:\n";
-  printChecks(OS, generateChecks(PtrPartition), Depth);
+  printChecks(OS, Checks, Depth);
 
   OS.indent(Depth) << "Grouped accesses:\n";
   for (unsigned I = 0; I < CheckingGroups.size(); ++I) {
@@ -405,30 +410,6 @@ void RuntimePointerChecking::print(
                            << "\n";
     }
   }
-}
-
-unsigned RuntimePointerChecking::getNumberOfChecks(
-    const SmallVectorImpl<int> *PtrPartition) const {
-
-  unsigned NumPartitions = CheckingGroups.size();
-  unsigned CheckCount = 0;
-
-  for (unsigned I = 0; I < NumPartitions; ++I)
-    for (unsigned J = I + 1; J < NumPartitions; ++J)
-      if (needsChecking(CheckingGroups[I], CheckingGroups[J], PtrPartition))
-        CheckCount++;
-  return CheckCount;
-}
-
-bool RuntimePointerChecking::needsAnyChecking(
-    const SmallVectorImpl<int> *PtrPartition) const {
-  unsigned NumPointers = Pointers.size();
-
-  for (unsigned I = 0; I < NumPointers; ++I)
-    for (unsigned J = I + 1; J < NumPointers; ++J)
-      if (needsChecking(I, J, PtrPartition))
-        return true;
-  return false;
 }
 
 namespace {
@@ -652,9 +633,9 @@ bool AccessAnalysis::canCheckPtrAtRT(RuntimePointerChecking &RtCheck,
   }
 
   if (NeedRTCheck && CanDoRT)
-    RtCheck.groupChecks(DepCands, IsDepCheckNeeded);
+    RtCheck.generateChecks(DepCands, IsDepCheckNeeded);
 
-  DEBUG(dbgs() << "LAA: We need to do " << RtCheck.getNumberOfChecks(nullptr)
+  DEBUG(dbgs() << "LAA: We need to do " << RtCheck.getNumberOfChecks()
                << " pointer comparisons.\n");
 
   RtCheck.Need = NeedRTCheck;
@@ -830,11 +811,11 @@ static bool isNoWrapAddRec(Value *Ptr, const SCEVAddRecExpr *AR,
 /// \brief Check whether the access through \p Ptr has a constant stride.
 int llvm::isStridedPtr(ScalarEvolution *SE, Value *Ptr, const Loop *Lp,
                        const ValueToValueMap &StridesMap) {
-  const Type *Ty = Ptr->getType();
+  Type *Ty = Ptr->getType();
   assert(Ty->isPointerTy() && "Unexpected non-ptr");
 
   // Make sure that the pointer does not point to aggregate types.
-  const PointerType *PtrTy = cast<PointerType>(Ty);
+  auto *PtrTy = cast<PointerType>(Ty);
   if (PtrTy->getElementType()->isAggregateType()) {
     DEBUG(dbgs() << "LAA: Bad stride - Not a pointer to a scalar type"
           << *Ptr << "\n");
@@ -1737,11 +1718,11 @@ std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
 }
 
 std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
-    Instruction *Loc, const SmallVectorImpl<int> *PtrPartition) const {
+    Instruction *Loc) const {
   if (!PtrRtChecking.Need)
     return std::make_pair(nullptr, nullptr);
 
-  return addRuntimeCheck(Loc, PtrRtChecking.generateChecks(PtrPartition));
+  return addRuntimeCheck(Loc, PtrRtChecking.getChecks());
 }
 
 LoopAccessInfo::LoopAccessInfo(Loop *L, ScalarEvolution *SE,

@@ -1,4 +1,4 @@
-; REQUIRES: object-emission
+; REQUIRES: object-emission, native
 ;
 ; RUN: llvm-link %s %p/type-unique-type-array-b.ll -S -o - | %llc_dwarf -filetype=obj -O0 | llvm-dwarfdump -debug-dump=info - | FileCheck %s
 ;
@@ -92,7 +92,7 @@ attributes #3 = { nounwind }
 !llvm.module.flags = !{!21, !22}
 !llvm.ident = !{!23}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 (trunk 214102:214113M) (llvm/trunk 214102:214115M)", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !14, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 (trunk 214102:214113M) (llvm/trunk 214102:214115M)", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !14, globals: !2, imports: !2)
 !1 = !DIFile(filename: "a.cpp", directory: "/Users/manmanren/test-Nov/type_unique/rdar_di_array")
 !2 = !{}
 !3 = !{!4, !10}
@@ -116,14 +116,14 @@ attributes #3 = { nounwind }
 !21 = !{i32 2, !"Dwarf Version", i32 2}
 !22 = !{i32 2, !"Debug Info Version", i32 3}
 !23 = !{!"clang version 3.5.0 (trunk 214102:214113M) (llvm/trunk 214102:214115M)"}
-!24 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "a", line: 11, arg: 1, scope: !15, file: !16, type: !19)
+!24 = !DILocalVariable(name: "a", line: 11, arg: 1, scope: !15, file: !16, type: !19)
 !25 = !DILocation(line: 11, column: 14, scope: !15)
-!26 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "sa", line: 11, arg: 2, scope: !15, file: !16, type: !"_ZTS2SA")
+!26 = !DILocalVariable(name: "sa", line: 11, arg: 2, scope: !15, file: !16, type: !"_ZTS2SA")
 !27 = !DILocation(line: 11, column: 20, scope: !15)
 !28 = !DILocation(line: 12, column: 3, scope: !15)
 !29 = !DILocation(line: 13, column: 1, scope: !15)
-!30 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !20, type: !19)
+!30 = !DILocalVariable(name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !20, type: !19)
 !31 = !DILocation(line: 0, scope: !20)
-!32 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "a", line: 7, arg: 2, scope: !20, file: !16, type: !"_ZTS2SA")
+!32 = !DILocalVariable(name: "a", line: 7, arg: 2, scope: !20, file: !16, type: !"_ZTS2SA")
 !33 = !DILocation(line: 7, column: 17, scope: !20)
 !34 = !DILocation(line: 8, column: 3, scope: !20)

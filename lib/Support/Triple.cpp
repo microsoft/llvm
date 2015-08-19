@@ -196,6 +196,7 @@ const char *Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   case MSVC: return "msvc";
   case Itanium: return "itanium";
   case Cygnus: return "cygnus";
+  case AMDOpenCL: return "amdopencl";
   case CoreCLR: return "coreclr";
   }
 
@@ -431,6 +432,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
     .StartsWith("msvc", Triple::MSVC)
     .StartsWith("itanium", Triple::Itanium)
     .StartsWith("cygnus", Triple::Cygnus)
+    .StartsWith("amdopencl", Triple::AMDOpenCL)
     .StartsWith("coreclr", Triple::CoreCLR)
     .Default(Triple::UnknownEnvironment);
 }

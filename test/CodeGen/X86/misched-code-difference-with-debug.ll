@@ -62,7 +62,7 @@ declare void @llvm.dbg.value(metadata, i64, metadata, metadata)
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!22, !23}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, file: !1, enums: !2, retainedTypes: !3, subprograms: !12, globals: !20, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, file: !1, enums: !2, retainedTypes: !3, subprograms: !12, globals: !20, imports: !2)
 !1 = !DIFile(filename: "test.cpp", directory: "")
 !2 = !{}
 !3 = !{!4}
@@ -80,8 +80,8 @@ declare void @llvm.dbg.value(metadata, i64, metadata, metadata)
 !15 = !DISubroutineType(types: !16)
 !16 = !{null}
 !17 = !{!18, !19}
-!18 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "c", line: 7, scope: !13, file: !14, type: !"_ZTS1C")
-!19 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "lc", line: 8, scope: !13, file: !14, type: !11)
+!18 = !DILocalVariable(name: "c", line: 7, scope: !13, file: !14, type: !"_ZTS1C")
+!19 = !DILocalVariable(name: "lc", line: 8, scope: !13, file: !14, type: !11)
 !20 = !{!21}
 !21 = !DIGlobalVariable(name: "argc", line: 1, isLocal: false, isDefinition: true, scope: null, file: !14, type: !11, variable: i8* @argc)
 !22 = !{i32 2, !"Dwarf Version", i32 4}

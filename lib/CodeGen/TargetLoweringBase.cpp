@@ -1571,6 +1571,12 @@ int TargetLoweringBase::InstructionOpcodeToISD(unsigned Opcode) const {
   case Invoke:         return 0;
   case Resume:         return 0;
   case Unreachable:    return 0;
+  case CleanupRet:     return 0;
+  case CatchEndPad:  return 0;
+  case CatchRet:       return 0;
+  case CatchPad:     return 0;
+  case TerminatePad: return 0;
+  case CleanupPad:   return 0;
   case Add:            return ISD::ADD;
   case FAdd:           return ISD::FADD;
   case Sub:            return ISD::SUB;
@@ -1628,13 +1634,13 @@ int TargetLoweringBase::InstructionOpcodeToISD(unsigned Opcode) const {
   llvm_unreachable("Unknown instruction type encountered!");
 }
 
-std::pair<unsigned, MVT>
+std::pair<int, MVT>
 TargetLoweringBase::getTypeLegalizationCost(const DataLayout &DL,
                                             Type *Ty) const {
   LLVMContext &C = Ty->getContext();
   EVT MTy = getValueType(DL, Ty);
 
-  unsigned Cost = 1;
+  int Cost = 1;
   // We keep legalizing the type until we find a legal kind. We assume that
   // the only operation that costs anything is the split. After splitting
   // we need to handle two types.

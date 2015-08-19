@@ -35,14 +35,14 @@ declare void @llvm.dbg.value(metadata, i64, metadata, metadata) nounwind readnon
 !llvm.dbg.cu = !{!0, !9}
 !llvm.module.flags = !{!33}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.2 (trunk 156513)", isOptimized: true, emissionKind: 1, file: !32, enums: !1, retainedTypes: !1, subprograms: !3, globals: !1, imports: !1)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.2 (trunk 156513)", isOptimized: true, emissionKind: 1, file: !32, enums: !1, retainedTypes: !1, subprograms: !3, globals: !1, imports: !1)
 !1 = !{}
 !3 = !{!5}
 !5 = !DISubprogram(name: "foo", line: 5, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 5, file: !32, scope: !6, type: !7, function: void ()* @foo, variables: !1)
 !6 = !DIFile(filename: "foo.c", directory: "/tmp")
 !7 = !DISubroutineType(types: !8)
 !8 = !{null}
-!9 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.2 (trunk 156513)", isOptimized: true, emissionKind: 1, file: !32, enums: !1, retainedTypes: !1, subprograms: !10, globals: !1, imports: !1)
+!9 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.2 (trunk 156513)", isOptimized: true, emissionKind: 1, file: !32, enums: !1, retainedTypes: !1, subprograms: !10, globals: !1, imports: !1)
 !10 = !{!12}
 !12 = !DISubprogram(name: "main", line: 11, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 11, file: !32, scope: !6, type: !13, function: i32 (i32, i8**)* @main, variables: !19)
 !13 = !DISubroutineType(types: !14)
@@ -52,8 +52,8 @@ declare void @llvm.dbg.value(metadata, i64, metadata, metadata) nounwind readnon
 !17 = !DIDerivedType(tag: DW_TAG_pointer_type, size: 32, align: 32, baseType: !18)
 !18 = !DIBasicType(tag: DW_TAG_base_type, name: "char", size: 8, align: 8, encoding: DW_ATE_signed_char)
 !19 = !{!21, !22}
-!21 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "argc", line: 11, arg: 1, scope: !12, file: !6, type: !15)
-!22 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "argv", line: 11, arg: 2, scope: !12, file: !6, type: !16)
+!21 = !DILocalVariable(name: "argc", line: 11, arg: 1, scope: !12, file: !6, type: !15)
+!22 = !DILocalVariable(name: "argv", line: 11, arg: 2, scope: !12, file: !6, type: !16)
 !23 = !DILocation(line: 6, column: 3, scope: !24)
 !24 = distinct !DILexicalBlock(line: 5, column: 16, file: !32, scope: !5)
 !25 = !DILocation(line: 7, column: 1, scope: !24)

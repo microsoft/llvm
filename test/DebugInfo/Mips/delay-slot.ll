@@ -13,12 +13,14 @@
 ; CHECK: Address            Line   Column File   ISA Discriminator Flags
 ; CHECK: ------------------ ------ ------ ------ --- ------------- -------------
 ; CHECK: 0x0000000000000000      1      0      1   0             0  is_stmt
-; CHECK: 0x0000000000000000      1      0      1   0             0  is_stmt prologue_end
-; CHECK: 0x0000000000000008      2      0      1   0             0  is_stmt
-; CHECK: 0x0000000000000020      3      0      1   0             0  is_stmt
-; CHECK: 0x0000000000000030      4      0      1   0             0  is_stmt
-; CHECK: 0x0000000000000040      5      0      1   0             0  is_stmt
-; CHECK: 0x0000000000000050      5      0      1   0             0  is_stmt end_sequence
+; FIXME: The next address probably ought to be 0x0000000000000004 but there's
+;        a constant initialization before the prologue's end.
+; CHECK: 0x0000000000000008      2      0      1   0             0  is_stmt prologue_end
+; CHECK: 0x0000000000000028      3      0      1   0             0  is_stmt
+; CHECK: 0x0000000000000038      4      0      1   0             0  is_stmt
+; CHECK: 0x0000000000000048      5      0      1   0             0  is_stmt
+; CHECK: 0x0000000000000058      5      0      1   0             0  is_stmt end_sequence
+
 
 target datalayout = "E-m:m-p:32:32-i8:8:32-i16:16:32-i64:64-n32-S64"
 target triple = "mips--linux-gnu"
@@ -54,7 +56,7 @@ attributes #1 = { nounwind readnone }
 !llvm.module.flags = !{!9, !10}
 !llvm.ident = !{!11}
 
-!0 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "test.c", directory: "/tmp")
 !2 = !{}
 !3 = !{!4}
@@ -66,7 +68,7 @@ attributes #1 = { nounwind readnone }
 !9 = !{i32 2, !"Dwarf Version", i32 4}
 !10 = !{i32 2, !"Debug Info Version", i32 3}
 !11 = !{!"clang version 3.5.0"}
-!12 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "x", line: 1, arg: 1, scope: !4, file: !5, type: !8)
+!12 = !DILocalVariable(name: "x", line: 1, arg: 1, scope: !4, file: !5, type: !8)
 !13 = !DILocation(line: 1, scope: !4)
 !14 = !DILocation(line: 2, scope: !15)
 !15 = distinct !DILexicalBlock(line: 2, column: 0, file: !1, scope: !4)

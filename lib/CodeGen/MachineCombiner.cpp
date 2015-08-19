@@ -204,7 +204,7 @@ unsigned MachineCombiner::getLatency(MachineInstr *Root, MachineInstr *NewRoot,
           NewRoot, NewRoot->findRegisterDefOperandIdx(MO.getReg()), UseMO,
           UseMO->findRegisterUseOperandIdx(MO.getReg()));
     } else {
-      LatencyOp = TSchedModel.computeInstrLatency(NewRoot->getOpcode());
+      LatencyOp = TSchedModel.computeInstrLatency(NewRoot);
     }
     NewRootLatency = std::max(NewRootLatency, LatencyOp);
   }
@@ -427,6 +427,7 @@ bool MachineCombiner::runOnMachineFunction(MachineFunction &MF) {
   Traces = &getAnalysis<MachineTraceMetrics>();
   MinInstr = 0;
 
+  // FIXME: Use Function::optForSize().
   OptSize = MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
 
   DEBUG(dbgs() << getPassName() << ": " << MF.getName() << '\n');

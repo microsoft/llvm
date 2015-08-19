@@ -24,6 +24,8 @@ namespace WebAssemblyISD {
 
 enum {
   FIRST_NUMBER = ISD::BUILTIN_OP_END,
+  RETURN,
+  ARGUMENT,
 
   // add memory opcodes starting at ISD::FIRST_TARGET_MEMORY_OPCODE here...
 };
@@ -42,6 +44,8 @@ private:
   /// Keep a pointer to the WebAssemblySubtarget around so that we can make the
   /// right decision when generating code for different targets.
   const WebAssemblySubtarget *Subtarget;
+
+  MVT getScalarShiftAmountTy(const DataLayout &DL, EVT) const override;
 
   bool CanLowerReturn(CallingConv::ID CallConv, MachineFunction &MF,
                       bool isVarArg,

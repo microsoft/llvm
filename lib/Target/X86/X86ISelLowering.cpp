@@ -1720,14 +1720,12 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
 
   computeRegisterProperties(Subtarget->getRegisterInfo());
 
-  // On Darwin, -Os means optimize for size without hurting performance,
-  // do not reduce the limit.
   MaxStoresPerMemset = 16; // For @llvm.memset -> sequence of stores
-  MaxStoresPerMemsetOptSize = Subtarget->isTargetDarwin() ? 16 : 8;
+  MaxStoresPerMemsetOptSize = 8;
   MaxStoresPerMemcpy = 8; // For @llvm.memcpy -> sequence of stores
-  MaxStoresPerMemcpyOptSize = Subtarget->isTargetDarwin() ? 8 : 4;
+  MaxStoresPerMemcpyOptSize = 4;
   MaxStoresPerMemmove = 8; // For @llvm.memmove -> sequence of stores
-  MaxStoresPerMemmoveOptSize = Subtarget->isTargetDarwin() ? 8 : 4;
+  MaxStoresPerMemmoveOptSize = 4;
   setPrefLoopAlignment(4); // 2^4 bytes.
 
   // Predictable cmov don't hurt on atom because it's in-order.
@@ -5188,6 +5186,7 @@ static SDValue LowerVectorBroadcast(SDValue Op, const X86Subtarget* Subtarget,
   // it may be detrimental to overall size. There needs to be a way to detect
   // that condition to know if this is truly a size win.
   const Function *F = DAG.getMachineFunction().getFunction();
+  // FIXME: Use Function::optForSize().
   bool OptForSize = F->hasFnAttribute(Attribute::OptimizeForSize);
 
   // Handle broadcasting a single constant scalar from the constant pool
@@ -11117,8 +11116,7 @@ SDValue X86TargetLowering::LowerINSERT_VECTOR_ELT(SDValue Op,
       // Bits [3:0] of the constant are the zero mask. The DAG Combiner may
       //   combine either bitwise AND or insert of float 0.0 to set these bits.
 
-      const Function *F = DAG.getMachineFunction().getFunction();
-      bool MinSize = F->hasFnAttribute(Attribute::MinSize);
+      bool MinSize = DAG.getMachineFunction().getFunction()->optForMinSize();
       if (IdxVal == 0 && (!MinSize || !MayFoldLoad(N1))) {
         // If this is an insertion of 32-bits into the low 32-bits of
         // a vector, we prefer to generate a blend with immediate rather
@@ -13194,8 +13192,7 @@ SDValue X86TargetLowering::EmitCmp(SDValue Op0, SDValue Op1, unsigned X86CC,
     // if we're optimizing for size, however, as that'll allow better folding
     // of memory operations.
     if (Op0.getValueType() != MVT::i32 && Op0.getValueType() != MVT::i64 &&
-        !DAG.getMachineFunction().getFunction()->hasFnAttribute(
-            Attribute::MinSize) &&
+        !DAG.getMachineFunction().getFunction()->optForMinSize() &&
         !Subtarget->isAtom()) {
       unsigned ExtendOp =
           isX86CCUnsigned(X86CC) ? ISD::ZERO_EXTEND : ISD::SIGN_EXTEND;
@@ -17970,7 +17967,7 @@ static SDValue LowerXALUO(SDValue Op, SelectionDAG &DAG) {
 /// the corresponding cmpxchg8b or cmpxchg16b instruction is available.
 /// Used to know whether to use cmpxchg8/16b when expanding atomic operations
 /// (otherwise we leave them alone to become __sync_fetch_and_... calls).
-bool X86TargetLowering::needsCmpXchgNb(const Type *MemType) const {
+bool X86TargetLowering::needsCmpXchgNb(Type *MemType) const {
   unsigned OpWidth = MemType->getPrimitiveSizeInBits();
 
   if (OpWidth == 64)
@@ -17995,7 +17992,7 @@ bool X86TargetLowering::shouldExpandAtomicLoadInIR(LoadInst *LI) const {
 TargetLoweringBase::AtomicRMWExpansionKind
 X86TargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const {
   unsigned NativeWidth = Subtarget->is64Bit() ? 64 : 32;
-  const Type *MemType = AI->getType();
+  Type *MemType = AI->getType();
 
   // If the operand is too big, we must see if cmpxchg8/16b is available
   // and default to library calls otherwise.
@@ -18041,7 +18038,7 @@ static bool hasMFENCE(const X86Subtarget& Subtarget) {
 LoadInst *
 X86TargetLowering::lowerIdempotentRMWIntoFencedLoad(AtomicRMWInst *AI) const {
   unsigned NativeWidth = Subtarget->is64Bit() ? 64 : 32;
-  const Type *MemType = AI->getType();
+  Type *MemType = AI->getType();
   // Accesses larger than the native width are turned into cmpxchg/libcalls, so
   // there is no benefit in turning such RMWs into loads, and it is actually
   // harmful as it introduces a mfence.
@@ -20112,6 +20109,39 @@ static bool checkAndUpdateEFLAGSKill(MachineBasicBlock::iterator SelectItr,
   return true;
 }
 
+// Return true if it is OK for this CMOV pseudo-opcode to be cascaded
+// together with other CMOV pseudo-opcodes into a single basic-block with
+// conditional jump around it.
+static bool isCMOVPseudo(MachineInstr *MI) {
+  switch (MI->getOpcode()) {
+  case X86::CMOV_FR32:
+  case X86::CMOV_FR64:
+  case X86::CMOV_GR8:
+  case X86::CMOV_GR16:
+  case X86::CMOV_GR32:
+  case X86::CMOV_RFP32:
+  case X86::CMOV_RFP64:
+  case X86::CMOV_RFP80:
+  case X86::CMOV_V2F64:
+  case X86::CMOV_V2I64:
+  case X86::CMOV_V4F32:
+  case X86::CMOV_V4F64:
+  case X86::CMOV_V4I64:
+  case X86::CMOV_V16F32:
+  case X86::CMOV_V8F32:
+  case X86::CMOV_V8F64:
+  case X86::CMOV_V8I64:
+  case X86::CMOV_V8I1:
+  case X86::CMOV_V16I1:
+  case X86::CMOV_V32I1:
+  case X86::CMOV_V64I1:
+    return true;
+
+  default:
+    return false;
+  }
+}
+
 MachineBasicBlock *
 X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
                                      MachineBasicBlock *BB) const {
@@ -20135,8 +20165,41 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   MachineBasicBlock *thisMBB = BB;
   MachineFunction *F = BB->getParent();
 
-  // We also lower double CMOVs:
+  // This code lowers all pseudo-CMOV instructions. Generally it lowers these
+  // as described above, by inserting a BB, and then making a PHI at the join
+  // point to select the true and false operands of the CMOV in the PHI.
+  //
+  // The code also handles two different cases of multiple CMOV opcodes
+  // in a row.
+  //
+  // Case 1:
+  // In this case, there are multiple CMOVs in a row, all which are based on
+  // the same condition setting (or the exact opposite condition setting).
+  // In this case we can lower all the CMOVs using a single inserted BB, and
+  // then make a number of PHIs at the join point to model the CMOVs. The only
+  // trickiness here, is that in a case like:
+  //
+  // t2 = CMOV cond1 t1, f1
+  // t3 = CMOV cond1 t2, f2
+  //
+  // when rewriting this into PHIs, we have to perform some renaming on the
+  // temps since you cannot have a PHI operand refer to a PHI result earlier
+  // in the same block.  The "simple" but wrong lowering would be:
+  //
+  // t2 = PHI t1(BB1), f1(BB2)
+  // t3 = PHI t2(BB1), f2(BB2)
+  //
+  // but clearly t2 is not defined in BB1, so that is incorrect. The proper
+  // renaming is to note that on the path through BB1, t2 is really just a
+  // copy of t1, and do that renaming, properly generating:
+  //
+  // t2 = PHI t1(BB1), f1(BB2)
+  // t3 = PHI t1(BB1), f2(BB2)
+  //
+  // Case 2, we lower cascaded CMOVs such as
+  //
   //   (CMOV (CMOV F, T, cc1), T, cc2)
+  //
   // to two successives branches.  For that, we look for another CMOV as the
   // following instruction.
   //
@@ -20202,19 +20265,42 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   // .LBB5_4:
   //         retq
   //
-  MachineInstr *NextCMOV = nullptr;
+  MachineInstr *CascadedCMOV = nullptr;
+  MachineInstr *LastCMOV = MI;
+  X86::CondCode CC = X86::CondCode(MI->getOperand(3).getImm());
+  X86::CondCode OppCC = X86::GetOppositeBranchCondition(CC);
   MachineBasicBlock::iterator NextMIIt =
       std::next(MachineBasicBlock::iterator(MI));
-  if (NextMIIt != BB->end() && NextMIIt->getOpcode() == MI->getOpcode() &&
+
+  // Check for case 1, where there are multiple CMOVs with the same condition
+  // first.  Of the two cases of multiple CMOV lowerings, case 1 reduces the
+  // number of jumps the most.
+
+  if (isCMOVPseudo(MI)) {
+    // See if we have a string of CMOVS with the same condition.
+    while (NextMIIt != BB->end() &&
+           isCMOVPseudo(NextMIIt) &&
+           (NextMIIt->getOperand(3).getImm() == CC ||
+            NextMIIt->getOperand(3).getImm() == OppCC)) {
+      LastCMOV = &*NextMIIt;
+      ++NextMIIt;
+    }
+  }
+
+  // This checks for case 2, but only do this if we didn't already find
+  // case 1, as indicated by LastCMOV == MI.
+  if (LastCMOV == MI &&
+      NextMIIt != BB->end() && NextMIIt->getOpcode() == MI->getOpcode() &&
       NextMIIt->getOperand(2).getReg() == MI->getOperand(2).getReg() &&
-      NextMIIt->getOperand(1).getReg() == MI->getOperand(0).getReg())
-    NextCMOV = &*NextMIIt;
+      NextMIIt->getOperand(1).getReg() == MI->getOperand(0).getReg()) {
+    CascadedCMOV = &*NextMIIt;
+  }
 
   MachineBasicBlock *jcc1MBB = nullptr;
 
-  // If we have a double CMOV, we lower it to two successive branches to
+  // If we have a cascaded CMOV, we lower it to two successive branches to
   // the same block.  EFLAGS is used by both, so mark it as live in the second.
-  if (NextCMOV) {
+  if (CascadedCMOV) {
     jcc1MBB = F->CreateMachineBasicBlock(LLVM_BB);
     F->insert(It, jcc1MBB);
     jcc1MBB->addLiveIn(X86::EFLAGS);
@@ -20229,7 +20315,7 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   // live into the sink and copy blocks.
   const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
 
-  MachineInstr *LastEFLAGSUser = NextCMOV ? NextCMOV : MI;
+  MachineInstr *LastEFLAGSUser = CascadedCMOV ? CascadedCMOV : LastCMOV;
   if (!LastEFLAGSUser->killsRegister(X86::EFLAGS) &&
       !checkAndUpdateEFLAGSKill(LastEFLAGSUser, BB, TRI)) {
     copy0MBB->addLiveIn(X86::EFLAGS);
@@ -20238,12 +20324,12 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
 
   // Transfer the remainder of BB and its successor edges to sinkMBB.
   sinkMBB->splice(sinkMBB->begin(), BB,
-                  std::next(MachineBasicBlock::iterator(MI)), BB->end());
+                  std::next(MachineBasicBlock::iterator(LastCMOV)), BB->end());
   sinkMBB->transferSuccessorsAndUpdatePHIs(BB);
 
   // Add the true and fallthrough blocks as its successors.
-  if (NextCMOV) {
-    // The fallthrough block may be jcc1MBB, if we have a double CMOV.
+  if (CascadedCMOV) {
+    // The fallthrough block may be jcc1MBB, if we have a cascaded CMOV.
     BB->addSuccessor(jcc1MBB);
 
     // In that case, jcc1MBB will itself fallthrough the copy0MBB, and
@@ -20258,13 +20344,12 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   BB->addSuccessor(sinkMBB);
 
   // Create the conditional branch instruction.
-  unsigned Opc =
-    X86::GetCondBranchFromCond((X86::CondCode)MI->getOperand(3).getImm());
+  unsigned Opc = X86::GetCondBranchFromCond(CC);
   BuildMI(BB, DL, TII->get(Opc)).addMBB(sinkMBB);
 
-  if (NextCMOV) {
+  if (CascadedCMOV) {
     unsigned Opc2 = X86::GetCondBranchFromCond(
-        (X86::CondCode)NextCMOV->getOperand(3).getImm());
+        (X86::CondCode)CascadedCMOV->getOperand(3).getImm());
     BuildMI(jcc1MBB, DL, TII->get(Opc2)).addMBB(sinkMBB);
   }
 
@@ -20276,25 +20361,102 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   //  sinkMBB:
   //   %Result = phi [ %FalseValue, copy0MBB ], [ %TrueValue, thisMBB ]
   //  ...
-  MachineInstrBuilder MIB =
-      BuildMI(*sinkMBB, sinkMBB->begin(), DL, TII->get(X86::PHI),
-              MI->getOperand(0).getReg())
-          .addReg(MI->getOperand(1).getReg()).addMBB(copy0MBB)
-          .addReg(MI->getOperand(2).getReg()).addMBB(thisMBB);
+  MachineBasicBlock::iterator MIItBegin = MachineBasicBlock::iterator(MI);
+  MachineBasicBlock::iterator MIItEnd =
+    std::next(MachineBasicBlock::iterator(LastCMOV));
+  MachineBasicBlock::iterator SinkInsertionPoint = sinkMBB->begin();
+  DenseMap<unsigned, std::pair<unsigned, unsigned>> RegRewriteTable;
+  MachineInstrBuilder MIB;
 
-  // If we have a double CMOV, the second Jcc provides the same incoming
+  // As we are creating the PHIs, we have to be careful if there is more than
+  // one.  Later CMOVs may reference the results of earlier CMOVs, but later
+  // PHIs have to reference the individual true/false inputs from earlier PHIs.
+  // That also means that PHI construction must work forward from earlier to
+  // later, and that the code must maintain a mapping from earlier PHI's
+  // destination registers, and the registers that went into the PHI.
+
+  for (MachineBasicBlock::iterator MIIt = MIItBegin; MIIt != MIItEnd; ++MIIt) {
+    unsigned DestReg = MIIt->getOperand(0).getReg();
+    unsigned Op1Reg = MIIt->getOperand(1).getReg();
+    unsigned Op2Reg = MIIt->getOperand(2).getReg();
+
+    // If this CMOV we are generating is the opposite condition from
+    // the jump we generated, then we have to swap the operands for the
+    // PHI that is going to be generated.
+    if (MIIt->getOperand(3).getImm() == OppCC)
+        std::swap(Op1Reg, Op2Reg);
+
+    if (RegRewriteTable.find(Op1Reg) != RegRewriteTable.end())
+      Op1Reg = RegRewriteTable[Op1Reg].first;
+
+    if (RegRewriteTable.find(Op2Reg) != RegRewriteTable.end())
+      Op2Reg = RegRewriteTable[Op2Reg].second;
+
+    MIB = BuildMI(*sinkMBB, SinkInsertionPoint, DL,
+                  TII->get(X86::PHI), DestReg)
+          .addReg(Op1Reg).addMBB(copy0MBB)
+          .addReg(Op2Reg).addMBB(thisMBB);
+
+    // Add this PHI to the rewrite table.
+    RegRewriteTable[DestReg] = std::make_pair(Op1Reg, Op2Reg);
+  }
+
+  // If we have a cascaded CMOV, the second Jcc provides the same incoming
   // value as the first Jcc (the True operand of the SELECT_CC/CMOV nodes).
-  if (NextCMOV) {
+  if (CascadedCMOV) {
     MIB.addReg(MI->getOperand(2).getReg()).addMBB(jcc1MBB);
     // Copy the PHI result to the register defined by the second CMOV.
     BuildMI(*sinkMBB, std::next(MachineBasicBlock::iterator(MIB.getInstr())),
-            DL, TII->get(TargetOpcode::COPY), NextCMOV->getOperand(0).getReg())
+            DL, TII->get(TargetOpcode::COPY),
+            CascadedCMOV->getOperand(0).getReg())
         .addReg(MI->getOperand(0).getReg());
-    NextCMOV->eraseFromParent();
+    CascadedCMOV->eraseFromParent();
   }
 
-  MI->eraseFromParent();   // The pseudo instruction is gone now.
+  // Now remove the CMOV(s).
+  for (MachineBasicBlock::iterator MIIt = MIItBegin; MIIt != MIItEnd; )
+    (MIIt++)->eraseFromParent();
+
   return sinkMBB;
+}
+
+MachineBasicBlock *
+X86TargetLowering::EmitLoweredAtomicFP(MachineInstr *MI,
+                                       MachineBasicBlock *BB) const {
+  // Combine the following atomic floating-point modification pattern:
+  //   a.store(reg OP a.load(acquire), release)
+  // Transform them into:
+  //   OPss (%gpr), %xmm
+  //   movss %xmm, (%gpr)
+  // Or sd equivalent for 64-bit operations.
+  unsigned MOp, FOp;
+  switch (MI->getOpcode()) {
+  default: llvm_unreachable("unexpected instr type for EmitLoweredAtomicFP");
+  case X86::RELEASE_FADD32mr: MOp = X86::MOVSSmr; FOp = X86::ADDSSrm; break;
+  case X86::RELEASE_FADD64mr: MOp = X86::MOVSDmr; FOp = X86::ADDSDrm; break;
+  }
+  const X86InstrInfo *TII = Subtarget->getInstrInfo();
+  DebugLoc DL = MI->getDebugLoc();
+  MachineRegisterInfo &MRI = BB->getParent()->getRegInfo();
+  unsigned MSrc = MI->getOperand(0).getReg();
+  unsigned VSrc = MI->getOperand(5).getReg();
+  MachineInstrBuilder MIM = BuildMI(*BB, MI, DL, TII->get(MOp))
+                                .addReg(/*Base=*/MSrc)
+                                .addImm(/*Scale=*/1)
+                                .addReg(/*Index=*/0)
+                                .addImm(0)
+                                .addReg(0);
+  MachineInstr *MIO = BuildMI(*BB, (MachineInstr *)MIM, DL, TII->get(FOp),
+                              MRI.createVirtualRegister(MRI.getRegClass(VSrc)))
+                          .addReg(VSrc)
+                          .addReg(/*Base=*/MSrc)
+                          .addImm(/*Scale=*/1)
+                          .addReg(/*Index=*/0)
+                          .addImm(/*Disp=*/0)
+                          .addReg(/*Segment=*/0);
+  MIM.addReg(MIO->getOperand(0).getReg(), RegState::Kill);
+  MI->eraseFromParent(); // The pseudo instruction is gone now.
+  return BB;
 }
 
 MachineBasicBlock *
@@ -20828,28 +20990,32 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   case X86::TLSCall_32:
   case X86::TLSCall_64:
     return EmitLoweredTLSCall(MI, BB);
-  case X86::CMOV_GR8:
   case X86::CMOV_FR32:
   case X86::CMOV_FR64:
-  case X86::CMOV_V4F32:
-  case X86::CMOV_V2F64:
-  case X86::CMOV_V2I64:
-  case X86::CMOV_V8F32:
-  case X86::CMOV_V4F64:
-  case X86::CMOV_V4I64:
-  case X86::CMOV_V16F32:
-  case X86::CMOV_V8F64:
-  case X86::CMOV_V8I64:
+  case X86::CMOV_GR8:
   case X86::CMOV_GR16:
   case X86::CMOV_GR32:
   case X86::CMOV_RFP32:
   case X86::CMOV_RFP64:
   case X86::CMOV_RFP80:
+  case X86::CMOV_V2F64:
+  case X86::CMOV_V2I64:
+  case X86::CMOV_V4F32:
+  case X86::CMOV_V4F64:
+  case X86::CMOV_V4I64:
+  case X86::CMOV_V16F32:
+  case X86::CMOV_V8F32:
+  case X86::CMOV_V8F64:
+  case X86::CMOV_V8I64:
   case X86::CMOV_V8I1:
   case X86::CMOV_V16I1:
   case X86::CMOV_V32I1:
   case X86::CMOV_V64I1:
     return EmitLoweredSelect(MI, BB);
+
+  case X86::RELEASE_FADD32mr:
+  case X86::RELEASE_FADD64mr:
+    return EmitLoweredAtomicFP(MI, BB);
 
   case X86::FP32_TO_INT16_IN_MEM:
   case X86::FP32_TO_INT32_IN_MEM:
@@ -24131,6 +24297,7 @@ static SDValue PerformOrCombine(SDNode *N, SelectionDAG &DAG,
 
   // fold (or (x << c) | (y >> (64 - c))) ==> (shld64 x, y, c)
   MachineFunction &MF = DAG.getMachineFunction();
+  // FIXME: Use Function::optForSize().
   bool OptForSize =
       MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
 

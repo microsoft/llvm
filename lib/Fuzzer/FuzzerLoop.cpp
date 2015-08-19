@@ -14,6 +14,7 @@
 #include <algorithm>
 
 namespace fuzzer {
+static const size_t kMaxUnitSizeToPrint = 4096;
 
 // Only one Fuzzer per process.
 static Fuzzer *F;
@@ -68,7 +69,8 @@ void Fuzzer::AlarmCallback() {
     Printf("ALARM: working on the last Unit for %zd seconds\n", Seconds);
     Printf("       and the timeout value is %d (use -timeout=N to change)\n",
            Options.UnitTimeoutSec);
-    Print(CurrentUnit, "\n");
+    if (CurrentUnit.size() <= kMaxUnitSizeToPrint)
+      Print(CurrentUnit, "\n");
     PrintUnitInASCIIOrTokens(CurrentUnit, "\n");
     WriteUnitToFileWithPrefix(CurrentUnit, "timeout-");
     exit(1);
@@ -157,11 +159,13 @@ size_t Fuzzer::RunOne(const Unit &U) {
   auto UnitStopTime = system_clock::now();
   auto TimeOfUnit =
       duration_cast<seconds>(UnitStopTime - UnitStartTime).count();
-  if (TimeOfUnit > TimeOfLongestUnitInSeconds) {
+  if (TimeOfUnit > TimeOfLongestUnitInSeconds &&
+      TimeOfUnit >= Options.ReportSlowUnits) {
     TimeOfLongestUnitInSeconds = TimeOfUnit;
-    Printf("Longest unit: %zd s:\n", TimeOfLongestUnitInSeconds);
-    Print(U, "\n");
-    WriteUnitToFileWithPrefix(U, "long-running-unit-");
+    Printf("Slowest unit: %zd s:\n", TimeOfLongestUnitInSeconds);
+    if (U.size() <= kMaxUnitSizeToPrint)
+      Print(U, "\n");
+    WriteUnitToFileWithPrefix(U, "slow-unit-");
   }
   return Res;
 }
@@ -252,8 +256,11 @@ void Fuzzer::WriteToOutputCorpus(const Unit &U) {
 void Fuzzer::WriteUnitToFileWithPrefix(const Unit &U, const char *Prefix) {
   std::string Path = Prefix + Hash(U);
   WriteToFile(U, Path);
-  Printf("Test unit written to %s\nBase64: ", Path.c_str());
-  PrintFileAsBase64(Path);
+  Printf("Test unit written to %s\n", Path.c_str());
+  if (U.size() <= kMaxUnitSizeToPrint) {
+    Printf("Base64: ");
+    PrintFileAsBase64(Path);
+  }
 }
 
 void Fuzzer::SaveCorpus() {

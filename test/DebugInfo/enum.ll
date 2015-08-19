@@ -53,7 +53,7 @@ attributes #1 = { nounwind readnone }
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!19, !24}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !11, subprograms: !12, globals: !17, imports: !11)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.4 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !11, subprograms: !12, globals: !17, imports: !11)
 !1 = !DIFile(filename: "enum.cpp", directory: "/tmp")
 !2 = !{!3, !8}
 !3 = !DICompositeType(tag: DW_TAG_enumeration_type, name: "e1", line: 1, size: 64, align: 64, file: !1, elements: !4)
@@ -73,7 +73,7 @@ attributes #1 = { nounwind readnone }
 !17 = !{!18}
 !18 = !DIGlobalVariable(name: "a", line: 1, isLocal: false, isDefinition: true, scope: null, file: !14, type: !3, variable: i64* @a)
 !19 = !{i32 2, !"Dwarf Version", i32 3}
-!20 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "b", line: 4, scope: !13, file: !14, type: !21)
+!20 = !DILocalVariable(name: "b", line: 4, scope: !13, file: !14, type: !21)
 !21 = !DIBasicType(tag: DW_TAG_base_type, name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
 !22 = !DILocation(line: 4, scope: !13)
 !23 = !DILocation(line: 5, scope: !13)

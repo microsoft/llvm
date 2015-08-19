@@ -4875,8 +4875,7 @@ MachineInstr *X86InstrInfo::foldMemoryOperandImpl(
   // For CPUs that favor the register form of a call or push,
   // do not fold loads into calls or pushes, unless optimizing for size
   // aggressively.
-  if (isCallRegIndirect && 
-      !MF.getFunction()->hasFnAttribute(Attribute::MinSize) &&
+  if (isCallRegIndirect && !MF.getFunction()->optForMinSize() &&
       (MI->getOpcode() == X86::CALL32r || MI->getOpcode() == X86::CALL64r ||
        MI->getOpcode() == X86::PUSH16r || MI->getOpcode() == X86::PUSH32r ||
        MI->getOpcode() == X86::PUSH64r))
@@ -5242,6 +5241,7 @@ MachineInstr *X86InstrInfo::foldMemoryOperandImpl(
 
   // Unless optimizing for size, don't fold to avoid partial
   // register update stalls
+  // FIXME: Use Function::optForSize().
   if (!MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize) &&
       hasPartialRegUpdate(MI->getOpcode()))
     return nullptr;
@@ -5351,6 +5351,7 @@ MachineInstr *X86InstrInfo::foldMemoryOperandImpl(
 
   // Unless optimizing for size, don't fold to avoid partial
   // register update stalls
+  // FIXME: Use Function::optForSize().
   if (!MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize) &&
       hasPartialRegUpdate(MI->getOpcode()))
     return nullptr;
@@ -6298,14 +6299,30 @@ hasHighOperandLatency(const TargetSchedModel &SchedModel,
   return isHighLatencyDef(DefMI->getOpcode());
 }
 
-static bool hasVirtualRegDefsInBasicBlock(const MachineInstr &Inst,
-                                          const MachineBasicBlock *MBB) {
-  assert(Inst.getNumOperands() == 3 && "Reassociation needs binary operators");
+static bool hasReassociableOperands(const MachineInstr &Inst,
+                                    const MachineBasicBlock *MBB) {
+  assert((Inst.getNumOperands() == 3 || Inst.getNumOperands() == 4) &&
+         "Reassociation needs binary operators");
   const MachineOperand &Op1 = Inst.getOperand(1);
   const MachineOperand &Op2 = Inst.getOperand(2);
   const MachineRegisterInfo &MRI = MBB->getParent()->getRegInfo();
 
-  // We need virtual register definitions.
+  // Integer binary math/logic instructions have a third source operand:
+  // the EFLAGS register. That operand must be both defined here and never
+  // used; ie, it must be dead. If the EFLAGS operand is live, then we can
+  // not change anything because rearranging the operands could affect other
+  // instructions that depend on the exact status flags (zero, sign, etc.)
+  // that are set by using these particular operands with this operation.
+  if (Inst.getNumOperands() == 4) {
+    assert(Inst.getOperand(3).isReg() &&
+           Inst.getOperand(3).getReg() == X86::EFLAGS &&
+           "Unexpected operand in reassociable instruction");
+    if (!Inst.getOperand(3).isDead())
+      return false;
+  }
+  
+  // We need virtual register definitions for the operands that we will
+  // reassociate.
   MachineInstr *MI1 = nullptr;
   MachineInstr *MI2 = nullptr;
   if (Op1.isReg() && TargetRegisterInfo::isVirtualRegister(Op1.getReg()))
@@ -6320,7 +6337,7 @@ static bool hasVirtualRegDefsInBasicBlock(const MachineInstr &Inst,
   return false;
 }
 
-static bool hasReassocSibling(const MachineInstr &Inst, bool &Commuted) {
+static bool hasReassociableSibling(const MachineInstr &Inst, bool &Commuted) {
   const MachineBasicBlock *MBB = Inst.getParent();
   const MachineRegisterInfo &MRI = MBB->getParent()->getRegInfo();
   MachineInstr *MI1 = MRI.getUniqueVRegDef(Inst.getOperand(1).getReg());
@@ -6338,7 +6355,7 @@ static bool hasReassocSibling(const MachineInstr &Inst, bool &Commuted) {
   //    operands in the same basic block as Inst.
   // 3. The previous instruction's result must only be used by Inst.
   if (MI1->getOpcode() == AssocOpcode &&
-      hasVirtualRegDefsInBasicBlock(*MI1, MBB) &&
+      hasReassociableOperands(*MI1, MBB) &&
       MRI.hasOneNonDBGUse(MI1->getOperand(0).getReg()))
     return true;
 
@@ -6350,6 +6367,10 @@ static bool hasReassocSibling(const MachineInstr &Inst, bool &Commuted) {
 //       2. Other math / logic operations (and, or)
 static bool isAssociativeAndCommutative(const MachineInstr &Inst) {
   switch (Inst.getOpcode()) {
+  case X86::IMUL16rr:
+  case X86::IMUL32rr:
+  case X86::IMUL64rr:
+    return true;
   case X86::ADDSDrr:
   case X86::ADDSSrr:
   case X86::VADDSDrr:
@@ -6369,14 +6390,14 @@ static bool isAssociativeAndCommutative(const MachineInstr &Inst) {
 /// If the instruction's operands must be commuted to have a previous
 /// instruction of the same type define the first source operand, Commuted will
 /// be set to true.
-static bool isReassocCandidate(const MachineInstr &Inst, bool &Commuted) {
+static bool isReassociationCandidate(const MachineInstr &Inst, bool &Commuted) {
   // 1. The operation must be associative and commutative.
   // 2. The instruction must have virtual register definitions for its
   //    operands in the same basic block.
   // 3. The instruction must have a reassociable sibling.
   if (isAssociativeAndCommutative(Inst) &&
-      hasVirtualRegDefsInBasicBlock(Inst, Inst.getParent()) &&
-      hasReassocSibling(Inst, Commuted))
+      hasReassociableOperands(Inst, Inst.getParent()) &&
+      hasReassociableSibling(Inst, Commuted))
     return true;
 
   return false;
@@ -6399,7 +6420,7 @@ bool X86InstrInfo::getMachineCombinerPatterns(MachineInstr &Root,
   //   C = B op Y (Root)
 
   bool Commute;
-  if (isReassocCandidate(Root, Commute)) {
+  if (isReassociationCandidate(Root, Commute)) {
     // We found a sequence of instructions that may be suitable for a
     // reassociation of operands to increase ILP. Specify each commutation
     // possibility for the Prev instruction in the sequence and let the
@@ -6415,6 +6436,44 @@ bool X86InstrInfo::getMachineCombinerPatterns(MachineInstr &Root,
   }
 
   return false;
+}
+
+/// This is an architecture-specific helper function of reassociateOps.
+/// Set special operand attributes for new instructions after reassociation.
+static void setSpecialOperandAttr(MachineInstr &OldMI1, MachineInstr &OldMI2,
+                                  MachineInstr &NewMI1, MachineInstr &NewMI2) {
+  // Integer instructions define an implicit EFLAGS source register operand as
+  // the third source (fourth total) operand.
+  if (OldMI1.getNumOperands() != 4 || OldMI2.getNumOperands() != 4)
+    return;
+
+  assert(NewMI1.getNumOperands() == 4 && NewMI2.getNumOperands() == 4 &&
+         "Unexpected instruction type for reassociation");
+  
+  MachineOperand &OldOp1 = OldMI1.getOperand(3);
+  MachineOperand &OldOp2 = OldMI2.getOperand(3);
+  MachineOperand &NewOp1 = NewMI1.getOperand(3);
+  MachineOperand &NewOp2 = NewMI2.getOperand(3);
+
+  assert(OldOp1.isReg() && OldOp1.getReg() == X86::EFLAGS && OldOp1.isDead() &&
+         "Must have dead EFLAGS operand in reassociable instruction");
+  assert(OldOp2.isReg() && OldOp2.getReg() == X86::EFLAGS && OldOp2.isDead() &&
+         "Must have dead EFLAGS operand in reassociable instruction");
+
+  (void)OldOp1;
+  (void)OldOp2;
+
+  assert(NewOp1.isReg() && NewOp1.getReg() == X86::EFLAGS &&
+         "Unexpected operand in reassociable instruction");
+  assert(NewOp2.isReg() && NewOp2.getReg() == X86::EFLAGS &&
+         "Unexpected operand in reassociable instruction");
+
+  // Mark the new EFLAGS operands as dead to be helpful to subsequent iterations
+  // of this pass or other passes. The EFLAGS operands must be dead in these new
+  // instructions because the EFLAGS operands in the original instructions must
+  // be dead in order for reassociation to occur.
+  NewOp1.setIsDead();
+  NewOp2.setIsDead();
 }
 
 /// Attempt the following reassociation to reduce critical path length:
@@ -6483,15 +6542,16 @@ static void reassociateOps(MachineInstr &Root, MachineInstr &Prev,
     BuildMI(*MF, Prev.getDebugLoc(), TII->get(Opcode), NewVR)
       .addReg(RegX, getKillRegState(KillX))
       .addReg(RegY, getKillRegState(KillY));
-  InsInstrs.push_back(MIB1);
-
   MachineInstrBuilder MIB2 =
     BuildMI(*MF, Root.getDebugLoc(), TII->get(Opcode), RegC)
       .addReg(RegA, getKillRegState(KillA))
       .addReg(NewVR, getKillRegState(true));
-  InsInstrs.push_back(MIB2);
 
-  // Record old instructions for deletion.
+  setSpecialOperandAttr(Root, Prev, *MIB1, *MIB2);
+
+  // Record new instructions for insertion and old instructions for deletion.
+  InsInstrs.push_back(MIB1);
+  InsInstrs.push_back(MIB2);
   DelInstrs.push_back(&Prev);
   DelInstrs.push_back(&Root);
 }
@@ -6519,6 +6579,41 @@ void X86InstrInfo::genAlternativeCodeSequence(
 
   reassociateOps(Root, *Prev, Pattern, InsInstrs, DelInstrs, InstIdxForVirtReg);
   return;
+}
+
+std::pair<unsigned, unsigned>
+X86InstrInfo::decomposeMachineOperandsTargetFlags(unsigned TF) const {
+  return std::make_pair(TF, 0u);
+}
+
+ArrayRef<std::pair<unsigned, const char *>>
+X86InstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
+  using namespace X86II;
+  static std::pair<unsigned, const char *> TargetFlags[] = {
+      {MO_GOT_ABSOLUTE_ADDRESS, "x86-got-absolute-address"},
+      {MO_PIC_BASE_OFFSET, "x86-pic-base-offset"},
+      {MO_GOT, "x86-got"},
+      {MO_GOTOFF, "x86-gotoff"},
+      {MO_GOTPCREL, "x86-gotpcrel"},
+      {MO_PLT, "x86-plt"},
+      {MO_TLSGD, "x86-tlsgd"},
+      {MO_TLSLD, "x86-tlsld"},
+      {MO_TLSLDM, "x86-tlsldm"},
+      {MO_GOTTPOFF, "x86-gottpoff"},
+      {MO_INDNTPOFF, "x86-indntpoff"},
+      {MO_TPOFF, "x86-tpoff"},
+      {MO_DTPOFF, "x86-dtpoff"},
+      {MO_NTPOFF, "x86-ntpoff"},
+      {MO_GOTNTPOFF, "x86-gotntpoff"},
+      {MO_DLLIMPORT, "x86-dllimport"},
+      {MO_DARWIN_STUB, "x86-darwin-stub"},
+      {MO_DARWIN_NONLAZY, "x86-darwin-nonlazy"},
+      {MO_DARWIN_NONLAZY_PIC_BASE, "x86-darwin-nonlazy-pic-base"},
+      {MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE, "x86-darwin-hidden-nonlazy-pic-base"},
+      {MO_TLVP, "x86-tlvp"},
+      {MO_TLVP_PIC_BASE, "x86-tlvp-pic-base"},
+      {MO_SECREL, "x86-secrel"}};
+  return makeArrayRef(TargetFlags);
 }
 
 namespace {

@@ -53,7 +53,7 @@ attributes #2 = { nounwind readnone }
 !llvm.module.flags = !{!12, !13}
 !llvm.ident = !{!14}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.6.0 (trunk 223522)", isOptimized: true, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.6.0 (trunk 223522)", isOptimized: true, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "test.cpp", directory: "/home/kromanova/ngh/ToT_latest/llvm/test/DebugInfo")
 !2 = !{}
 !3 = !{!4}
@@ -63,7 +63,7 @@ attributes #2 = { nounwind readnone }
 !7 = !{!8}
 !8 = !DIBasicType(tag: DW_TAG_base_type, name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
 !9 = !{!10}
-!10 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "c", line: 5, scope: !4, file: !5, type: !11)
+!10 = !DILocalVariable(name: "c", line: 5, scope: !4, file: !5, type: !11)
 !11 = !DIDerivedType(tag: DW_TAG_volatile_type, baseType: !8)
 !12 = !{i32 2, !"Dwarf Version", i32 2}
 !13 = !{i32 2, !"Debug Info Version", i32 3}

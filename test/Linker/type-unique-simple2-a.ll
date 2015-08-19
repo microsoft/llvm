@@ -1,4 +1,4 @@
-; REQUIRES: object-emission
+; REQUIRES: object-emission, native
 ;
 ; RUN: llvm-link %s %p/type-unique-simple2-b.ll -S -o - | %llc_dwarf -filetype=obj -O0 | llvm-dwarfdump -debug-dump=info - | FileCheck %s
 ;
@@ -80,7 +80,7 @@ attributes #4 = { nounwind readnone }
 !llvm.module.flags = !{!35, !36}
 !llvm.ident = !{!37}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !26, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !3, subprograms: !26, globals: !2, imports: !2)
 !1 = !DIFile(filename: "<unknown>", directory: "")
 !2 = !{}
 !3 = !{!4}
@@ -116,11 +116,11 @@ attributes #4 = { nounwind readnone }
 !36 = !{i32 1, !"Debug Info Version", i32 3}
 !37 = !{!"clang version 3.5 "}
 !38 = !DILocation(line: 3, scope: !27)
-!39 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !31, type: !40)
+!39 = !DILocalVariable(name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !31, type: !40)
 !40 = !DIDerivedType(tag: DW_TAG_pointer_type, size: 64, align: 64, baseType: !"_ZTS1A")
 !41 = !DILocation(line: 0, scope: !31)
 !42 = !DILocation(line: 2, scope: !43)
 !43 = !DILexicalBlockFile(discriminator: 0, file: !5, scope: !31)
-!44 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !34, type: !40)
+!44 = !DILocalVariable(name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !34, type: !40)
 !45 = !DILocation(line: 0, scope: !34)
 !46 = !DILocation(line: 2, scope: !34)

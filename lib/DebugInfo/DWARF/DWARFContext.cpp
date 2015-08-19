@@ -685,13 +685,19 @@ DWARFContextInMemory::DWARFContextInMemory(const object::ObjectFile &Obj,
           }
           SymAddr = *SymAddrOrErr;
           // Also remember what section this symbol is in for later
-          Sym->getSection(RSec);
+          RSec = *Sym->getSection();
         } else if (auto *MObj = dyn_cast<MachOObjectFile>(&Obj)) {
           // MachO also has relocations that point to sections and
           // scattered relocations.
-          // FIXME: We are not handling scattered relocations, do we have to?
-          RSec = MObj->getRelocationSection(Reloc.getRawDataRefImpl());
-          SymAddr = RSec->getAddress();
+          auto RelocInfo = MObj->getRelocation(Reloc.getRawDataRefImpl());
+          if (MObj->isRelocationScattered(RelocInfo)) {
+            // FIXME: it's not clear how to correctly handle scattered
+            // relocations.
+            continue;
+          } else {
+            RSec = MObj->getRelocationSection(Reloc.getRawDataRefImpl());
+            SymAddr = RSec->getAddress();
+          }
         }
 
         // If we are given load addresses for the sections, we need to adjust:

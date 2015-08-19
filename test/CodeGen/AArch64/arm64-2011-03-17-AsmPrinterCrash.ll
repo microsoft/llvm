@@ -24,7 +24,7 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata) nounwind readnone
 !0 = !DIGlobalVariable(name: "vsplive", line: 617, isLocal: true, isDefinition: true, scope: !1, file: !2, type: !6)
 !1 = !DISubprogram(name: "drt_vsprintf", line: 616, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, file: !20, scope: !2, type: !4)
 !2 = !DIFile(filename: "print.i", directory: "/Volumes/Ebi/echeng/radars/r9146594")
-!3 = !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.0 (http://llvm.org/git/clang.git git:/git/puzzlebox/clang.git/ c4d1aea01c4444eb81bdbf391f1be309127c3cf1)", isOptimized: true, emissionKind: 0, file: !20, enums: !21, retainedTypes: !21)
+!3 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.0 (http://llvm.org/git/clang.git git:/git/puzzlebox/clang.git/ c4d1aea01c4444eb81bdbf391f1be309127c3cf1)", isOptimized: true, emissionKind: 0, file: !20, enums: !21, retainedTypes: !21)
 !4 = !DISubroutineType(types: !5)
 !5 = !{!6}
 !6 = !DIBasicType(tag: DW_TAG_base_type, name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
@@ -37,7 +37,7 @@ declare void @llvm.dbg.declare(metadata, metadata, metadata) nounwind readnone
 !13 = !DILocation(line: 653, column: 5, scope: !14)
 !14 = distinct !DILexicalBlock(line: 652, column: 35, file: !20, scope: !15)
 !15 = distinct !DILexicalBlock(line: 616, column: 1, file: !20, scope: !1)
-!16 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "do_tab_convert", line: 853, scope: !17, file: !2, type: !6)
+!16 = !DILocalVariable(name: "do_tab_convert", line: 853, scope: !17, file: !2, type: !6)
 !17 = distinct !DILexicalBlock(line: 850, column: 12, file: !20, scope: !14)
 !18 = !DILocation(line: 853, column: 11, scope: !17)
 !19 = !DILocation(line: 853, column: 29, scope: !17)
