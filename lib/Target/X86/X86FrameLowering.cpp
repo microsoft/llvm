@@ -1172,7 +1172,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       // other way around.
       unsigned Opm = Uses64BitFramePtr ? X86::MOV64mr : X86::MOV32mr;
       unsigned IgnoredFrameReg;
-      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(Opm)), BasePtr, true,
+      addRegOffset(BuildMI(*MBB, MBBI, DL, TII.get(Opm)), BasePtr, true,
                    getFrameIndexReference(MF, X86FI->getSEHFramePtrSaveIndex(),
                                           IgnoredFrameReg))
           .addReg(FramePtr)
