@@ -2168,6 +2168,26 @@ The label type represents code labels.
 
       label
 
+.. _t_token:
+
+Token Type
+^^^^^^^^^^
+
+:Overview:
+
+The token type is used when a value is associated with an instruction
+but all uses of the value must not attempt to introspect or obscure it.
+As such, it is not appropriate to have a :ref:`phi <i_phi>` or
+:ref:`select <i_select>` of type token.
+
+:Syntax:
+
+::
+
+      token
+
+
+
 .. _t_metadata:
 
 Metadata Type
@@ -4279,6 +4299,18 @@ operand which is the string ``llvm.loop.unroll.runtime.disable``. For example:
 
    !0 = !{!"llvm.loop.unroll.runtime.disable"}
 
+'``llvm.loop.unroll.enable``' Metadata
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This metadata suggests that the loop should be fully unrolled if the trip count
+is known at compile time and partially unrolled if the trip count is not known
+at compile time. The metadata has a single operand which is the string
+``llvm.loop.unroll.enable``.  For example:
+
+.. code-block:: llvm
+
+   !0 = !{!"llvm.loop.unroll.enable"}
+
 '``llvm.loop.unroll.full``' Metadata
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -5252,7 +5284,7 @@ Syntax:
 
 ::
 
-      catchret label <normal>
+      catchret <type> <value> to label <normal>
 
 Overview:
 """""""""
@@ -5276,6 +5308,7 @@ whose unwinding was interrupted with a
 The :ref:`personality function <personalityfn>` gets a chance to execute
 arbitrary code to, for example, run a C++ destructor.
 Control then transfers to ``normal``.
+It may be passed an optional, personality specific, value.
 
 Example:
 """"""""
@@ -6792,7 +6825,7 @@ Example:
 
       %ptr = alloca i32                               ; yields i32*:ptr
       store i32 3, i32* %ptr                          ; yields void
-      %val = load i32* %ptr                           ; yields i32:val = i32 3
+      %val = load i32, i32* %ptr                      ; yields i32:val = i32 3
 
 .. _i_fence:
 

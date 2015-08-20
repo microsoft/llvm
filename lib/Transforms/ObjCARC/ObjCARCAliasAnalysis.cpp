@@ -22,17 +22,14 @@
 
 #include "ObjCARC.h"
 #include "ObjCARCAliasAnalysis.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/PassAnalysisSupport.h"
 #include "llvm/PassSupport.h"
 
 #define DEBUG_TYPE "objc-arc-aa"
-
-namespace llvm {
-  class Function;
-  class Value;
-}
 
 using namespace llvm;
 using namespace llvm::objcarc;
@@ -51,8 +48,7 @@ bool ObjCARCAliasAnalysis::doInitialization(Module &M) {
   return true;
 }
 
-void
-ObjCARCAliasAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
+void ObjCARCAliasAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AliasAnalysis::getAnalysisUsage(AU);
 }

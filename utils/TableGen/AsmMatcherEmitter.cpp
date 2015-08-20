@@ -884,12 +884,13 @@ void MatchableInfo::tokenizeAsmString(const AsmMatcherInfo &Info) {
         InTok = false;
       }
 
-      // If this isn't "${", treat like a normal token.
+      // If this isn't "${", start new identifier looking like "$xxx"
       if (i + 1 == String.size() || String[i + 1] != '{') {
         Prev = i;
         break;
       }
 
+      // If this is "${" find the next "}" and make an identifier like "${xxx}"
       StringRef::iterator End = std::find(String.begin() + i, String.end(),'}');
       assert(End != String.end() && "Missing brace in operand reference!");
       size_t EndPos = End - String.begin();
@@ -1973,7 +1974,7 @@ static void emitConvertFuncs(CodeGenTarget &Target, StringRef ClassName,
       continue;
 
     // Add the row to the table.
-    ConversionTable.push_back(ConversionRow);
+    ConversionTable.push_back(std::move(ConversionRow));
   }
 
   // Finish up the converter driver function.
@@ -1993,10 +1994,8 @@ static void emitConvertFuncs(CodeGenTarget &Target, StringRef ClassName,
 
   // Output the instruction conversion kind enum.
   OS << "enum InstructionConversionKind {\n";
-  for (SetVector<std::string>::const_iterator
-         i = InstructionConversionKinds.begin(),
-         e = InstructionConversionKinds.end(); i != e; ++i)
-    OS << "  " << *i << ",\n";
+  for (const std::string &Signature : InstructionConversionKinds)
+    OS << "  " << Signature << ",\n";
   OS << "  CVT_NUM_SIGNATURES\n";
   OS << "};\n\n";
 

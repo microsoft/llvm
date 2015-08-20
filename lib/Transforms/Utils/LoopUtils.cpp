@@ -201,7 +201,8 @@ bool RecurrenceDescriptor::AddReductionVar(PHINode *Phi, RecurrenceKind Kind,
 
   // Save the description of this reduction variable.
   RecurrenceDescriptor RD(RdxStart, ExitInstruction, Kind,
-                          ReduxDesc.getMinMaxKind());
+                          ReduxDesc.getMinMaxKind(),
+                          ReduxDesc.getUnsafeAlgebraInst());
 
   RedDes = RD;
 
@@ -263,7 +264,10 @@ RecurrenceDescriptor::InstDesc
 RecurrenceDescriptor::isRecurrenceInstr(Instruction *I, RecurrenceKind Kind,
                                         InstDesc &Prev, bool HasFunNoNaNAttr) {
   bool FP = I->getType()->isFloatingPointTy();
-  bool FastMath = FP && I->hasUnsafeAlgebra();
+  Instruction *UAI = Prev.getUnsafeAlgebraInst();
+  if (!UAI && FP && !I->hasUnsafeAlgebra())
+    UAI = I; // Found an unsafe (unvectorizable) algebra instruction.
+
   switch (I->getOpcode()) {
   default:
     return InstDesc(false, I);
@@ -284,10 +288,10 @@ RecurrenceDescriptor::isRecurrenceInstr(Instruction *I, RecurrenceKind Kind,
   case Instruction::Xor:
     return InstDesc(Kind == RK_IntegerXor, I);
   case Instruction::FMul:
-    return InstDesc(Kind == RK_FloatMult && FastMath, I);
+    return InstDesc(Kind == RK_FloatMult, I, UAI);
   case Instruction::FSub:
   case Instruction::FAdd:
-    return InstDesc(Kind == RK_FloatAdd && FastMath, I);
+    return InstDesc(Kind == RK_FloatAdd, I, UAI);
   case Instruction::FCmp:
   case Instruction::ICmp:
   case Instruction::Select:
@@ -496,4 +500,23 @@ bool llvm::isInductionPHI(PHINode *Phi, ScalarEvolution *SE,
     return false;
   StepValue = ConstantInt::getSigned(CV->getType(), CVSize / Size);
   return true;
+}
+
+/// \brief Returns the instructions that use values defined in the loop.
+SmallVector<Instruction *, 8> llvm::findDefsUsedOutsideOfLoop(Loop *L) {
+  SmallVector<Instruction *, 8> UsedOutside;
+
+  for (auto *Block : L->getBlocks())
+    // FIXME: I believe that this could use copy_if if the Inst reference could
+    // be adapted into a pointer.
+    for (auto &Inst : *Block) {
+      auto Users = Inst.users();
+      if (std::any_of(Users.begin(), Users.end(), [&](User *U) {
+            auto *Use = cast<Instruction>(U);
+            return !L->contains(Use->getParent());
+          }))
+        UsedOutside.push_back(&Inst);
+    }
+
+  return UsedOutside;
 }

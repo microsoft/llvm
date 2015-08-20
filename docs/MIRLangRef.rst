@@ -64,22 +64,21 @@ Machine Functions
 The remaining YAML documents contain the machine functions. This is an example
 of such YAML document:
 
-.. code-block:: yaml
+.. code-block:: llvm
 
      ---
      name:            inc
      tracksRegLiveness: true
      liveins:
        - { reg: '%rdi' }
-     body:
-       - id:              0
-         name:            entry
-         liveins:         [ '%rdi' ]
-         instructions:
-           - '%eax = MOV32rm %rdi, 1, _, 0, _'
-           - '%eax = INC32r killed %eax, implicit-def dead %eflags'
-           - 'MOV32mr killed %rdi, 1, _, 0, _, %eax'
-           - 'RETQ %eax'
+     body: |
+       bb.0.entry:
+         liveins: %rdi
+
+         %eax = MOV32rm %rdi, 1, _, 0, _
+         %eax = INC32r killed %eax, implicit-def dead %eflags
+         MOV32mr killed %rdi, 1, _, 0, _, %eax
+         RETQ %eax
      ...
 
 The document above consists of attributes that represent the various
@@ -88,12 +87,119 @@ properties and data structures in a machine function.
 The attribute ``name`` is required, and its value should be identical to the
 name of a function that this machine function is based on.
 
-The attribute ``body`` contains a list of YAML mappings that represent the
-function's machine basic blocks.
+The attribute ``body`` is a `YAML block literal string`_. Its value represents
+the function's machine basic blocks and their machine instructions.
 
-The first machine basic block in the ``body`` list above contains the attribute
-``instructions``. This attribute stores a list of string literals which
-represent the machine instructions for that basic block.
+Machine Instructions Format Reference
+=====================================
+
+The machine basic blocks and their instructions are represented using a custom,
+human readable serialization language. This language is used in the
+`YAML block literal string`_ that corresponds to the machine function's body.
+
+A source string that uses this language contains a list of machine basic
+blocks, which are described in the section below.
+
+Machine Basic Blocks
+--------------------
+
+A machine basic block is defined in a single block definition source construct
+that contains the block's ID.
+The example below defines two blocks that have an ID of zero and one:
+
+.. code-block:: llvm
+
+    bb.0:
+      <instructions>
+    bb.1:
+      <instructions>
+
+A machine basic block can also have a name. It should be specified after the ID
+in the block's definition:
+
+.. code-block:: llvm
+
+    bb.0.entry:       ; This block's name is "entry"
+       <instructions>
+
+The block's name should be identical to the name of the IR block that this
+machine block is based on.
+
+Block References
+^^^^^^^^^^^^^^^^
+
+The machine basic blocks are identified by their ID numbers. Individual
+blocks are referenced using the following syntax:
+
+.. code-block:: llvm
+
+    %bb.<id>[.<name>]
+
+Examples:
+
+.. code-block:: llvm
+
+    %bb.0
+    %bb.1.then
+
+Successors
+^^^^^^^^^^
+
+The machine basic block's successors have to be specified before any of the
+instructions:
+
+.. code-block:: llvm
+
+    bb.0.entry:
+      successors: %bb.1.then, %bb.2.else
+      <instructions>
+    bb.1.then:
+      <instructions>
+    bb.2.else:
+      <instructions>
+
+The branch weights can be specified in brackets after the successor blocks.
+The example below defines a block that has two successors with branch weights
+of 32 and 16:
+
+.. code-block:: llvm
+
+    bb.0.entry:
+      successors: %bb.1.then(32), %bb.2.else(16)
+
+Live In Registers
+^^^^^^^^^^^^^^^^^
+
+The machine basic block's live in registers have to be specified before any of
+the instructions:
+
+.. code-block:: llvm
+
+    bb.0.entry:
+      liveins: %edi, %esi
+
+The list of live in registers and successors can be empty. The language also
+allows multiple live in register and successor lists - they are combined into
+one list by the parser.
+
+Miscellaneous Attributes
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The attributes ``IsAddressTaken``, ``IsLandingPad`` and ``Alignment`` can be
+specified in brackets after the block's definition:
+
+.. code-block:: llvm
+
+    bb.0.entry (address-taken):
+      <instructions>
+    bb.2.else (align 4):
+      <instructions>
+    bb.3(landing-pad, align 4):
+      <instructions>
+
+.. TODO: Describe the way the reference to an unnamed LLVM IR block can be
+   preserved.
+
 
 .. TODO: Describe the parsers default behaviour when optional YAML attributes
    are missing.
@@ -104,8 +210,6 @@ represent the machine instructions for that basic block.
    definitions.
 .. TODO: Describe the syntax of the register operand flags and the subregisters.
 .. TODO: Describe the machine function's YAML flag attributes.
-.. TODO: Describe the machine basic block's YAML flag, successors and livein
-   attributes. Describe the syntax for the machine basic block operands.
 .. TODO: Describe the syntax for the global value, external symbol and register
    mask machine operands.
 .. TODO: Describe the frame information YAML mapping.

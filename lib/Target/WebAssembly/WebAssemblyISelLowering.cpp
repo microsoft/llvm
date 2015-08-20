@@ -92,6 +92,8 @@ int DiagnosticInfoUnsupported::KindID = 0;
 WebAssemblyTargetLowering::WebAssemblyTargetLowering(
     const TargetMachine &TM, const WebAssemblySubtarget &STI)
     : TargetLowering(TM), Subtarget(&STI) {
+  // Booleans always contain 0 or 1.
+  setBooleanContents(ZeroOrOneBooleanContent);
   // WebAssembly does not produce floating-point exceptions on normal floating
   // point operations.
   setHasFloatingPointExceptions(false);
@@ -108,12 +110,31 @@ WebAssemblyTargetLowering::WebAssemblyTargetLowering(
   // Compute derived properties from the register classes.
   computeRegisterProperties(Subtarget->getRegisterInfo());
 
-  // FIXME: setOperationAction...
+  // FIXME: many setOperationAction are missing...
+
+  for (auto T : {MVT::f32, MVT::f64}) {
+    // Don't expand the floating-point types to constant pools.
+    setOperationAction(ISD::ConstantFP, T, Legal);
+    // Expand floating-point comparisons.
+    for (auto CC : {ISD::SETO, ISD::SETUO, ISD::SETUEQ, ISD::SETONE,
+                    ISD::SETULT, ISD::SETULE, ISD::SETUGT, ISD::SETUGE})
+      setCondCodeAction(CC, T, Expand);
+  }
 }
 
 MVT WebAssemblyTargetLowering::getScalarShiftAmountTy(const DataLayout &DL,
                                                       EVT VT) const {
   return VT.getSimpleVT();
+}
+
+const char *
+WebAssemblyTargetLowering::getTargetNodeName(unsigned Opcode) const {
+  switch (static_cast<WebAssemblyISD::NodeType>(Opcode)) {
+  case WebAssemblyISD::FIRST_NUMBER: break;
+  case WebAssemblyISD::RETURN: return "WebAssemblyISD::RETURN";
+  case WebAssemblyISD::ARGUMENT: return "WebAssemblyISD::ARGUMENT";
+  }
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//

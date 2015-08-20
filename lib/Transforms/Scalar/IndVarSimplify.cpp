@@ -108,10 +108,10 @@ namespace {
     void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<LoopInfoWrapperPass>();
-      AU.addRequired<ScalarEvolution>();
+      AU.addRequired<ScalarEvolutionWrapperPass>();
       AU.addRequiredID(LoopSimplifyID);
       AU.addRequiredID(LCSSAID);
-      AU.addPreserved<ScalarEvolution>();
+      AU.addPreserved<ScalarEvolutionWrapperPass>();
       AU.addPreservedID(LoopSimplifyID);
       AU.addPreservedID(LCSSAID);
       AU.setPreservesCFG();
@@ -138,8 +138,7 @@ namespace {
     void SinkUnusedInvariants(Loop *L);
 
     Value *ExpandSCEVIfNeeded(SCEVExpander &Rewriter, const SCEV *S, Loop *L,
-                              Instruction *InsertPt, Type *Ty,
-                              bool &IsHighCostExpansion);
+                              Instruction *InsertPt, Type *Ty);
   };
 }
 
@@ -148,7 +147,7 @@ INITIALIZE_PASS_BEGIN(IndVarSimplify, "indvars",
                 "Induction Variable Simplification", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_DEPENDENCY(LCSSA)
 INITIALIZE_PASS_END(IndVarSimplify, "indvars",
@@ -503,47 +502,13 @@ struct RewritePhi {
 
 Value *IndVarSimplify::ExpandSCEVIfNeeded(SCEVExpander &Rewriter, const SCEV *S,
                                           Loop *L, Instruction *InsertPt,
-                                          Type *ResultTy,
-                                          bool &IsHighCostExpansion) {
-  using namespace llvm::PatternMatch;
-
-  if (!Rewriter.isHighCostExpansion(S, L)) {
-    IsHighCostExpansion = false;
-    return Rewriter.expandCodeFor(S, ResultTy, InsertPt);
-  }
-
+                                          Type *ResultTy) {
   // Before expanding S into an expensive LLVM expression, see if we can use an
-  // already existing value as the expansion for S.  There is potential to make
-  // this significantly smarter, but this simple heuristic already gets some
-  // interesting cases.
-
-  SmallVector<BasicBlock *, 4> Latches;
-  L->getLoopLatches(Latches);
-
-  for (BasicBlock *BB : Latches) {
-    ICmpInst::Predicate Pred;
-    Instruction *LHS, *RHS;
-    BasicBlock *TrueBB, *FalseBB;
-
-    if (!match(BB->getTerminator(),
-               m_Br(m_ICmp(Pred, m_Instruction(LHS), m_Instruction(RHS)),
-                    TrueBB, FalseBB)))
-      continue;
-
-    if (SE->getSCEV(LHS) == S && DT->dominates(LHS, InsertPt)) {
-      IsHighCostExpansion = false;
-      return LHS;
-    }
-
-    if (SE->getSCEV(RHS) == S && DT->dominates(RHS, InsertPt)) {
-      IsHighCostExpansion = false;
-      return RHS;
-    }
-  }
+  // already existing value as the expansion for S.
+  if (Value *RetValue = Rewriter.findExistingExpansion(S, InsertPt, L))
+    return RetValue;
 
   // We didn't find anything, fall back to using SCEVExpander.
-  assert(Rewriter.isHighCostExpansion(S, L) && "this should not have changed!");
-  IsHighCostExpansion = true;
   return Rewriter.expandCodeFor(S, ResultTy, InsertPt);
 }
 
@@ -679,9 +644,9 @@ void IndVarSimplify::RewriteLoopExitValues(Loop *L, SCEVExpander &Rewriter) {
             continue;
         }
 
-        bool HighCost = false;
-        Value *ExitVal = ExpandSCEVIfNeeded(Rewriter, ExitValue, L, Inst,
-                                            PN->getType(), HighCost);
+        bool HighCost = Rewriter.isHighCostExpansion(ExitValue, L, Inst);
+        Value *ExitVal =
+            ExpandSCEVIfNeeded(Rewriter, ExitValue, L, Inst, PN->getType());
 
         DEBUG(dbgs() << "INDVARS: RLEV: AfterLoopVal = " << *ExitVal << '\n'
                      << "  LoopVal = " << *Inst << "\n");
@@ -1994,7 +1959,7 @@ bool IndVarSimplify::runOnLoop(Loop *L, LPPassManager &LPM) {
     return false;
 
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-  SE = &getAnalysis<ScalarEvolution>();
+  SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto *TLIP = getAnalysisIfAvailable<TargetLibraryInfoWrapperPass>();
   TLI = TLIP ? &TLIP->getTLI() : nullptr;

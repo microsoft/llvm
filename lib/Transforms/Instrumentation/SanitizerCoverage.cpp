@@ -375,6 +375,9 @@ void SanitizerCoverageModule::InjectTraceForSwitch(
       IRBuilder<> IRB(I);
       SmallVector<Constant *, 16> Initializers;
       Value *Cond = SI->getCondition();
+      if (Cond->getType()->getScalarSizeInBits() >
+          Int64Ty->getScalarSizeInBits())
+        continue;
       Initializers.push_back(ConstantInt::get(Int64Ty, SI->getNumCases()));
       Initializers.push_back(
           ConstantInt::get(Int64Ty, Cond->getType()->getScalarSizeInBits()));
@@ -434,21 +437,17 @@ void SanitizerCoverageModule::InjectCoverageAtBlock(Function &F, BasicBlock &BB,
   // locations.
   if (isa<UnreachableInst>(BB.getTerminator()))
     return;
-  BasicBlock::iterator IP = BB.getFirstInsertionPt(), BE = BB.end();
-  // Skip static allocas at the top of the entry block so they don't become
-  // dynamic when we split the block.  If we used our optimized stack layout,
-  // then there will only be one alloca and it will come first.
-  for (; IP != BE; ++IP) {
-    AllocaInst *AI = dyn_cast<AllocaInst>(IP);
-    if (!AI || !AI->isStaticAlloca())
-      break;
-  }
+  BasicBlock::iterator IP = BB.getFirstInsertionPt();
 
   bool IsEntryBB = &BB == &F.getEntryBlock();
   DebugLoc EntryLoc;
   if (IsEntryBB) {
     if (auto SP = getDISubprogram(&F))
       EntryLoc = DebugLoc::get(SP->getScopeLine(), 0, SP);
+    // Keep static allocas and llvm.localescape calls in the entry block.  Even
+    // if we aren't splitting the block, it's nice for allocas to be before
+    // calls.
+    IP = PrepareToSplitEntryBlock(BB, IP);
   } else {
     EntryLoc = IP->getDebugLoc();
   }

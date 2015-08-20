@@ -81,8 +81,11 @@ void Fuzzer::PrintStats(const char *Where, size_t Cov, const char *End) {
   if (!Options.Verbosity) return;
   size_t Seconds = secondsSinceProcessStartUp();
   size_t ExecPerSec = (Seconds ? TotalNumberOfRuns / Seconds : 0);
-  Printf("#%zd\t%s cov %zd bits %zd units %zd exec/s %zd %s", TotalNumberOfRuns,
-         Where, Cov, TotalBits(), Corpus.size(), ExecPerSec, End);
+  Printf("#%zd\t%s cov: %zd bits: %zd units: %zd exec/s: %zd",
+         TotalNumberOfRuns, Where, Cov, TotalBits(), Corpus.size(), ExecPerSec);
+  if (TotalNumberOfExecutedTraceBasedMutations)
+    Printf(" tbm: %zd", TotalNumberOfExecutedTraceBasedMutations);
+  Printf("%s", End);
 }
 
 void Fuzzer::RereadOutputCorpus() {
@@ -170,9 +173,11 @@ size_t Fuzzer::RunOne(const Unit &U) {
   return Res;
 }
 
-void Fuzzer::RunOneAndUpdateCorpus(const Unit &U) {
+void Fuzzer::RunOneAndUpdateCorpus(Unit &U) {
   if (TotalNumberOfRuns >= Options.MaxNumberOfRuns)
     return;
+  if (Options.OnlyASCII)
+    ToASCII(U);
   ReportNewCoverage(RunOne(U), U);
 }
 
@@ -251,6 +256,11 @@ void Fuzzer::WriteToOutputCorpus(const Unit &U) {
   WriteToFile(U, Path);
   if (Options.Verbosity >= 2)
     Printf("Written to %s\n", Path.c_str());
+#ifdef DEBUG
+  if (Options.OnlyASCII)
+    for (auto X : U)
+      assert(isprint(X) || isspace(X));
+#endif
 }
 
 void Fuzzer::WriteUnitToFileWithPrefix(const Unit &U, const char *Prefix) {
@@ -303,9 +313,18 @@ void Fuzzer::MutateAndTestOne(Unit *U) {
     U->resize(NewSize);
     RunOneAndUpdateCorpus(*U);
     size_t NumTraceBasedMutations = StopTraceRecording();
-    for (size_t j = 0; j < NumTraceBasedMutations; j++) {
-      ApplyTraceBasedMutation(j, U);
-      RunOneAndUpdateCorpus(*U);
+    size_t TBMWidth =
+        std::min((size_t)Options.TBMWidth, NumTraceBasedMutations);
+    size_t TBMDepth =
+        std::min((size_t)Options.TBMDepth, NumTraceBasedMutations);
+    Unit BackUp = *U;
+    for (size_t w = 0; w < TBMWidth; w++) {
+      *U = BackUp;
+      for (size_t d = 0; d < TBMDepth; d++) {
+        TotalNumberOfExecutedTraceBasedMutations++;
+        ApplyTraceBasedMutation(USF.GetRand()(NumTraceBasedMutations), U);
+        RunOneAndUpdateCorpus(*U);
+      }
     }
   }
 }

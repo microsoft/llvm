@@ -149,8 +149,7 @@ void RuntimePointerChecking::insert(Loop *Lp, Value *Ptr, bool WritePtr,
 }
 
 SmallVector<RuntimePointerChecking::PointerCheck, 4>
-RuntimePointerChecking::generateChecks(
-    const SmallVectorImpl<int> *PtrPartition) const {
+RuntimePointerChecking::generateChecks() const {
   SmallVector<PointerCheck, 4> Checks;
 
   for (unsigned I = 0; I < CheckingGroups.size(); ++I) {
@@ -158,7 +157,7 @@ RuntimePointerChecking::generateChecks(
       const RuntimePointerChecking::CheckingPtrGroup &CGI = CheckingGroups[I];
       const RuntimePointerChecking::CheckingPtrGroup &CGJ = CheckingGroups[J];
 
-      if (needsChecking(CGI, CGJ, PtrPartition))
+      if (needsChecking(CGI, CGJ))
         Checks.push_back(std::make_pair(&CGI, &CGJ));
     }
   }
@@ -172,12 +171,11 @@ void RuntimePointerChecking::generateChecks(
   Checks = generateChecks();
 }
 
-bool RuntimePointerChecking::needsChecking(
-    const CheckingPtrGroup &M, const CheckingPtrGroup &N,
-    const SmallVectorImpl<int> *PtrPartition) const {
+bool RuntimePointerChecking::needsChecking(const CheckingPtrGroup &M,
+                                           const CheckingPtrGroup &N) const {
   for (unsigned I = 0, EI = M.Members.size(); EI != I; ++I)
     for (unsigned J = 0, EJ = N.Members.size(); EJ != J; ++J)
-      if (needsChecking(M.Members[I], N.Members[J], PtrPartition))
+      if (needsChecking(M.Members[I], N.Members[J]))
         return true;
   return false;
 }
@@ -350,8 +348,7 @@ bool RuntimePointerChecking::arePointersInSamePartition(
           PtrToPartition[PtrIdx1] == PtrToPartition[PtrIdx2]);
 }
 
-bool RuntimePointerChecking::needsChecking(
-    unsigned I, unsigned J, const SmallVectorImpl<int> *PtrPartition) const {
+bool RuntimePointerChecking::needsChecking(unsigned I, unsigned J) const {
   const PointerInfo &PointerI = Pointers[I];
   const PointerInfo &PointerJ = Pointers[J];
 
@@ -365,10 +362,6 @@ bool RuntimePointerChecking::needsChecking(
 
   // Only need to check pointers in the same alias set.
   if (PointerI.AliasSetId != PointerJ.AliasSetId)
-    return false;
-
-  // If PtrPartition is set omit checks between pointers of the same partition.
-  if (PtrPartition && arePointersInSamePartition(*PtrPartition, I, J))
     return false;
 
   return true;
@@ -1658,7 +1651,7 @@ static SmallVector<std::pair<PointerBounds, PointerBounds>, 4> expandBounds(
   return ChecksWithBounds;
 }
 
-std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
+std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeChecks(
     Instruction *Loc,
     const SmallVectorImpl<RuntimePointerChecking::PointerCheck> &PointerChecks)
     const {
@@ -1717,12 +1710,12 @@ std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
   return std::make_pair(FirstInst, Check);
 }
 
-std::pair<Instruction *, Instruction *> LoopAccessInfo::addRuntimeCheck(
-    Instruction *Loc) const {
+std::pair<Instruction *, Instruction *>
+LoopAccessInfo::addRuntimeChecks(Instruction *Loc) const {
   if (!PtrRtChecking.Need)
     return std::make_pair(nullptr, nullptr);
 
-  return addRuntimeCheck(Loc, PtrRtChecking.getChecks());
+  return addRuntimeChecks(Loc, PtrRtChecking.getChecks());
 }
 
 LoopAccessInfo::LoopAccessInfo(Loop *L, ScalarEvolution *SE,
@@ -1801,7 +1794,7 @@ void LoopAccessAnalysis::print(raw_ostream &OS, const Module *M) const {
 }
 
 bool LoopAccessAnalysis::runOnFunction(Function &F) {
-  SE = &getAnalysis<ScalarEvolution>();
+  SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   auto *TLIP = getAnalysisIfAvailable<TargetLibraryInfoWrapperPass>();
   TLI = TLIP ? &TLIP->getTLI() : nullptr;
   AA = &getAnalysis<AliasAnalysis>();
@@ -1812,7 +1805,7 @@ bool LoopAccessAnalysis::runOnFunction(Function &F) {
 }
 
 void LoopAccessAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
-    AU.addRequired<ScalarEvolution>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
     AU.addRequired<AliasAnalysis>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<LoopInfoWrapperPass>();
@@ -1826,7 +1819,7 @@ static const char laa_name[] = "Loop Access Analysis";
 
 INITIALIZE_PASS_BEGIN(LoopAccessAnalysis, LAA_NAME, laa_name, false, true)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(LoopAccessAnalysis, LAA_NAME, laa_name, false, true)

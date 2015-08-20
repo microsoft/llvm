@@ -492,16 +492,12 @@ static void trackRegDefsUses(const MachineInstr *MI, BitVector &ModifiedRegs,
 }
 
 static bool inBoundsForPair(bool IsUnscaled, int Offset, int OffsetStride) {
-  if (!IsUnscaled && (Offset > 63 || Offset < -64))
-    return false;
-  if (IsUnscaled) {
-    // Convert the byte-offset used by unscaled into an "element" offset used
-    // by the scaled pair load/store instructions.
-    int ElemOffset = Offset / OffsetStride;
-    if (ElemOffset > 63 || ElemOffset < -64)
-      return false;
-  }
-  return true;
+  // Convert the byte-offset used by unscaled into an "element" offset used
+  // by the scaled pair load/store instructions.
+  if (IsUnscaled)
+    Offset /= OffsetStride;
+
+  return Offset <= 63 && Offset >= -64;
 }
 
 // Do alignment, specialized to power of 2 and for signed ints,
@@ -555,11 +551,12 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
 
   // Early exit if the first instruction modifies the base register.
   // e.g., ldr x0, [x0]
-  // Early exit if the offset if not possible to match. (6 bits of positive
-  // range, plus allow an extra one in case we find a later insn that matches
-  // with Offset-1
   if (FirstMI->modifiesRegister(BaseReg, TRI))
     return E;
+
+  // Early exit if the offset if not possible to match. (6 bits of positive
+  // range, plus allow an extra one in case we find a later insn that matches
+  // with Offset-1)
   int OffsetStride =
       IsUnscaled && EnableAArch64UnscaledMemOp ? getMemSize(FirstMI) : 1;
   if (!inBoundsForPair(IsUnscaled, Offset, OffsetStride))
@@ -597,6 +594,7 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
     }
 
     if (CanMergeOpc && getLdStOffsetOp(MI).isImm()) {
+      assert(MI->mayLoadOrStore() && "Expected memory operation.");
       // If we've found another instruction with the same opcode, check to see
       // if the base and offset are compatible with our starting instruction.
       // These instructions all have scaled immediate operands, so we just
@@ -622,8 +620,7 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
         bool MIIsUnscaled = isUnscaledLdSt(MI);
         if (!inBoundsForPair(MIIsUnscaled, MinOffset, OffsetStride)) {
           trackRegDefsUses(MI, ModifiedRegs, UsedRegs, TRI);
-          if (MI->mayLoadOrStore())
-            MemInsns.push_back(MI);
+          MemInsns.push_back(MI);
           continue;
         }
         // If the alignment requirements of the paired (scaled) instruction
@@ -632,8 +629,7 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
         if (IsUnscaled && EnableAArch64UnscaledMemOp &&
             (alignTo(MinOffset, OffsetStride) != MinOffset)) {
           trackRegDefsUses(MI, ModifiedRegs, UsedRegs, TRI);
-          if (MI->mayLoadOrStore())
-            MemInsns.push_back(MI);
+          MemInsns.push_back(MI);
           continue;
         }
         // If the destination register of the loads is the same register, bail
@@ -641,8 +637,7 @@ AArch64LoadStoreOpt::findMatchingInsn(MachineBasicBlock::iterator I,
         // registers the same is UNPREDICTABLE and will result in an exception.
         if (MayLoad && Reg == getLdStRegOp(MI).getReg()) {
           trackRegDefsUses(MI, ModifiedRegs, UsedRegs, TRI);
-          if (MI->mayLoadOrStore())
-            MemInsns.push_back(MI);
+          MemInsns.push_back(MI);
           continue;
         }
 

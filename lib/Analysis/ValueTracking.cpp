@@ -43,7 +43,7 @@ const unsigned MaxDepth = 6;
 
 /// Enable an experimental feature to leverage information about dominating
 /// conditions to compute known bits.  The individual options below control how
-/// hard we search.  The defaults are choosen to be fairly aggressive.  If you
+/// hard we search.  The defaults are chosen to be fairly aggressive.  If you
 /// run into compile time problems when testing, scale them back and report
 /// your findings.
 static cl::opt<bool> EnableDomConditions("value-tracking-dom-conditions",
@@ -2545,7 +2545,7 @@ Value *llvm::FindInsertedValue(Value *V, ArrayRef<unsigned> idx_range,
       }
 
       // This insert value inserts something else than what we are looking for.
-      // See if the (aggregrate) value inserted into has the value we are
+      // See if the (aggregate) value inserted into has the value we are
       // looking for, then.
       if (*req_idx != *i)
         return FindInsertedValue(I->getAggregateOperand(), idx_range,
@@ -2560,7 +2560,7 @@ Value *llvm::FindInsertedValue(Value *V, ArrayRef<unsigned> idx_range,
   }
 
   if (ExtractValueInst *I = dyn_cast<ExtractValueInst>(V)) {
-    // If we're extracting a value from an aggregrate that was extracted from
+    // If we're extracting a value from an aggregate that was extracted from
     // something else, we can extract from that something else directly instead.
     // However, we will need to chain I's indices with the requested indices.
 
@@ -2935,20 +2935,44 @@ static bool isDereferenceableFromAttribute(const Value *V, const DataLayout &DL,
   return isDereferenceableFromAttribute(V, Offset, Ty, DL, CtxI, DT, TLI);
 }
 
-/// Return true if Value is always a dereferenceable pointer.
-///
+static bool isAligned(const Value *Base, APInt Offset, unsigned Align,
+                      const DataLayout &DL) {
+  APInt BaseAlign(Offset.getBitWidth(), 0);
+  if (const AllocaInst *AI = dyn_cast<AllocaInst>(Base))
+    BaseAlign = AI->getAlignment();
+  else if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(Base))
+    BaseAlign = GV->getAlignment();
+  else if (const Argument *A = dyn_cast<Argument>(Base))
+    BaseAlign = A->getParamAlignment();
+
+  if (!BaseAlign) {
+    Type *Ty = Base->getType()->getPointerElementType();
+    BaseAlign = DL.getABITypeAlignment(Ty);
+  }
+
+  APInt Alignment(Offset.getBitWidth(), Align);
+
+  assert(Alignment.isPowerOf2() && "must be a power of 2!");
+  return BaseAlign.uge(Alignment) && !(Offset & (Alignment-1));
+}
+
+static bool isAligned(const Value *Base, unsigned Align, const DataLayout &DL) {
+  APInt Offset(DL.getTypeStoreSizeInBits(Base->getType()), 0);
+  return isAligned(Base, Offset, Align, DL);
+}
+
 /// Test if V is always a pointer to allocated and suitably aligned memory for
 /// a simple load or store.
-static bool isDereferenceablePointer(const Value *V, const DataLayout &DL,
-                                     const Instruction *CtxI,
-                                     const DominatorTree *DT,
-                                     const TargetLibraryInfo *TLI,
-                                     SmallPtrSetImpl<const Value *> &Visited) {
+static bool isDereferenceableAndAlignedPointer(
+    const Value *V, unsigned Align, const DataLayout &DL,
+    const Instruction *CtxI, const DominatorTree *DT,
+    const TargetLibraryInfo *TLI, SmallPtrSetImpl<const Value *> &Visited) {
   // Note that it is not safe to speculate into a malloc'd region because
   // malloc may return null.
 
-  // These are obviously ok.
-  if (isa<AllocaInst>(V)) return true;
+  // These are obviously ok if aligned.
+  if (isa<AllocaInst>(V))
+    return isAligned(V, Align, DL);
 
   // It's not always safe to follow a bitcast, for example:
   //   bitcast i8* (alloca i8) to i32*
@@ -2963,21 +2987,22 @@ static bool isDereferenceablePointer(const Value *V, const DataLayout &DL,
     if (STy->isSized() && DTy->isSized() &&
         (DL.getTypeStoreSize(STy) >= DL.getTypeStoreSize(DTy)) &&
         (DL.getABITypeAlignment(STy) >= DL.getABITypeAlignment(DTy)))
-      return isDereferenceablePointer(BC->getOperand(0), DL, CtxI,
-                                      DT, TLI, Visited);
+      return isDereferenceableAndAlignedPointer(BC->getOperand(0), Align, DL,
+                                                CtxI, DT, TLI, Visited);
   }
 
   // Global variables which can't collapse to null are ok.
   if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(V))
-    return !GV->hasExternalWeakLinkage();
+    if (!GV->hasExternalWeakLinkage())
+      return isAligned(V, Align, DL);
 
   // byval arguments are okay.
   if (const Argument *A = dyn_cast<Argument>(V))
     if (A->hasByValAttr())
-      return true;
-    
+      return isAligned(V, Align, DL);
+
   if (isDereferenceableFromAttribute(V, DL, CtxI, DT, TLI))
-    return true;
+    return isAligned(V, Align, DL);
 
   // For GEPs, determine if the indexing lands within the allocated object.
   if (const GEPOperator *GEP = dyn_cast<GEPOperator>(V)) {
@@ -2985,61 +3010,79 @@ static bool isDereferenceablePointer(const Value *V, const DataLayout &DL,
     Type *Ty = VTy->getPointerElementType();
     const Value *Base = GEP->getPointerOperand();
 
-    // Conservatively require that the base pointer be fully dereferenceable.
+    // Conservatively require that the base pointer be fully dereferenceable
+    // and aligned.
     if (!Visited.insert(Base).second)
       return false;
-    if (!isDereferenceablePointer(Base, DL, CtxI,
-                                  DT, TLI, Visited))
+    if (!isDereferenceableAndAlignedPointer(Base, Align, DL, CtxI, DT, TLI,
+                                            Visited))
       return false;
-    
+
     APInt Offset(DL.getPointerTypeSizeInBits(VTy), 0);
     if (!GEP->accumulateConstantOffset(DL, Offset))
       return false;
-    
-    // Check if the load is within the bounds of the underlying object.
+
+    // Check if the load is within the bounds of the underlying object
+    // and offset is aligned.
     uint64_t LoadSize = DL.getTypeStoreSize(Ty);
     Type *BaseType = Base->getType()->getPointerElementType();
-    return (Offset + LoadSize).ule(DL.getTypeAllocSize(BaseType));
+    assert(isPowerOf2_32(Align) && "must be a power of 2!");
+    return (Offset + LoadSize).ule(DL.getTypeAllocSize(BaseType)) && 
+           !(Offset & APInt(Offset.getBitWidth(), Align-1));
   }
 
   // For gc.relocate, look through relocations
   if (const IntrinsicInst *I = dyn_cast<IntrinsicInst>(V))
     if (I->getIntrinsicID() == Intrinsic::experimental_gc_relocate) {
       GCRelocateOperands RelocateInst(I);
-      return isDereferenceablePointer(RelocateInst.getDerivedPtr(), DL, CtxI,
-                                      DT, TLI, Visited);
+      return isDereferenceableAndAlignedPointer(
+          RelocateInst.getDerivedPtr(), Align, DL, CtxI, DT, TLI, Visited);
     }
 
   if (const AddrSpaceCastInst *ASC = dyn_cast<AddrSpaceCastInst>(V))
-    return isDereferenceablePointer(ASC->getOperand(0), DL, CtxI,
-                                    DT, TLI, Visited);
+    return isDereferenceableAndAlignedPointer(ASC->getOperand(0), Align, DL,
+                                              CtxI, DT, TLI, Visited);
 
   // If we don't know, assume the worst.
   return false;
 }
 
-bool llvm::isDereferenceablePointer(const Value *V, const DataLayout &DL,
-                                    const Instruction *CtxI,
-                                    const DominatorTree *DT,
-                                    const TargetLibraryInfo *TLI) {
+bool llvm::isDereferenceableAndAlignedPointer(const Value *V, unsigned Align,
+                                              const DataLayout &DL,
+                                              const Instruction *CtxI,
+                                              const DominatorTree *DT,
+                                              const TargetLibraryInfo *TLI) {
   // When dereferenceability information is provided by a dereferenceable
   // attribute, we know exactly how many bytes are dereferenceable. If we can
   // determine the exact offset to the attributed variable, we can use that
   // information here.
   Type *VTy = V->getType();
   Type *Ty = VTy->getPointerElementType();
+
+  // Require ABI alignment for loads without alignment specification
+  if (Align == 0)
+    Align = DL.getABITypeAlignment(Ty);
+
   if (Ty->isSized()) {
     APInt Offset(DL.getTypeStoreSizeInBits(VTy), 0);
     const Value *BV = V->stripAndAccumulateInBoundsConstantOffsets(DL, Offset);
-    
+
     if (Offset.isNonNegative())
-      if (isDereferenceableFromAttribute(BV, Offset, Ty, DL,
-                                         CtxI, DT, TLI))
+      if (isDereferenceableFromAttribute(BV, Offset, Ty, DL, CtxI, DT, TLI) &&
+          isAligned(BV, Offset, Align, DL))
         return true;
   }
 
   SmallPtrSet<const Value *, 32> Visited;
-  return ::isDereferenceablePointer(V, DL, CtxI, DT, TLI, Visited);
+  return ::isDereferenceableAndAlignedPointer(V, Align, DL, CtxI, DT, TLI,
+                                              Visited);
+}
+
+bool llvm::isDereferenceablePointer(const Value *V, const DataLayout &DL,
+                                    const Instruction *CtxI,
+                                    const DominatorTree *DT,
+                                    const TargetLibraryInfo *TLI) {
+  return isDereferenceableAndAlignedPointer(V, 1, DL, CtxI, DT, TLI);
 }
 
 bool llvm::isSafeToSpeculativelyExecute(const Value *V,
@@ -3092,7 +3135,8 @@ bool llvm::isSafeToSpeculativelyExecute(const Value *V,
         LI->getParent()->getParent()->hasFnAttribute(Attribute::SanitizeThread))
       return false;
     const DataLayout &DL = LI->getModule()->getDataLayout();
-    return isDereferenceablePointer(LI->getPointerOperand(), DL, CtxI, DT, TLI);
+    return isDereferenceableAndAlignedPointer(
+        LI->getPointerOperand(), LI->getAlignment(), DL, CtxI, DT, TLI);
   }
   case Instruction::Call: {
     if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(Inst)) {
@@ -3487,40 +3531,116 @@ bool llvm::isKnownNotFullPoison(const Instruction *PoisonI) {
   return false;
 }
 
-static SelectPatternFlavor matchSelectPattern(ICmpInst::Predicate Pred,
+static bool isKnownNonNaN(Value *V, FastMathFlags FMF) {
+  if (FMF.noNaNs())
+    return true;
+
+  if (auto *C = dyn_cast<ConstantFP>(V))
+    return !C->isNaN();
+  return false;
+}
+
+static bool isKnownNonZero(Value *V) {
+  if (auto *C = dyn_cast<ConstantFP>(V))
+    return !C->isZero();
+  return false;
+}
+
+static SelectPatternResult matchSelectPattern(CmpInst::Predicate Pred,
+                                              FastMathFlags FMF,
                                               Value *CmpLHS, Value *CmpRHS,
                                               Value *TrueVal, Value *FalseVal,
                                               Value *&LHS, Value *&RHS) {
   LHS = CmpLHS;
   RHS = CmpRHS;
 
-  // (icmp X, Y) ? X : Y
-  if (TrueVal == CmpLHS && FalseVal == CmpRHS) {
-    switch (Pred) {
-    default: return SPF_UNKNOWN; // Equality.
-    case ICmpInst::ICMP_UGT:
-    case ICmpInst::ICMP_UGE: return SPF_UMAX;
-    case ICmpInst::ICMP_SGT:
-    case ICmpInst::ICMP_SGE: return SPF_SMAX;
-    case ICmpInst::ICMP_ULT:
-    case ICmpInst::ICMP_ULE: return SPF_UMIN;
-    case ICmpInst::ICMP_SLT:
-    case ICmpInst::ICMP_SLE: return SPF_SMIN;
+  // If the predicate is an "or-equal"  (FP) predicate, then signed zeroes may
+  // return inconsistent results between implementations.
+  //   (0.0 <= -0.0) ? 0.0 : -0.0 // Returns 0.0
+  //   minNum(0.0, -0.0)          // May return -0.0 or 0.0 (IEEE 754-2008 5.3.1)
+  // Therefore we behave conservatively and only proceed if at least one of the
+  // operands is known to not be zero, or if we don't care about signed zeroes.
+  switch (Pred) {
+  default: break;
+  case CmpInst::FCMP_OGE: case CmpInst::FCMP_OLE:
+  case CmpInst::FCMP_UGE: case CmpInst::FCMP_ULE:
+    if (!FMF.noSignedZeros() && !isKnownNonZero(CmpLHS) &&
+        !isKnownNonZero(CmpRHS))
+      return {SPF_UNKNOWN, SPNB_NA, false};
+  }
+
+  SelectPatternNaNBehavior NaNBehavior = SPNB_NA;
+  bool Ordered = false;
+
+  // When given one NaN and one non-NaN input:
+  //   - maxnum/minnum (C99 fmaxf()/fminf()) return the non-NaN input.
+  //   - A simple C99 (a < b ? a : b) construction will return 'b' (as the
+  //     ordered comparison fails), which could be NaN or non-NaN.
+  // so here we discover exactly what NaN behavior is required/accepted.
+  if (CmpInst::isFPPredicate(Pred)) {
+    bool LHSSafe = isKnownNonNaN(CmpLHS, FMF);
+    bool RHSSafe = isKnownNonNaN(CmpRHS, FMF);
+
+    if (LHSSafe && RHSSafe) {
+      // Both operands are known non-NaN.
+      NaNBehavior = SPNB_RETURNS_ANY;
+    } else if (CmpInst::isOrdered(Pred)) {
+      // An ordered comparison will return false when given a NaN, so it
+      // returns the RHS.
+      Ordered = true;
+      if (LHSSafe)
+        // LHS is non-NaN, so if RHS is NaN then NaN will be returned.
+        NaNBehavior = SPNB_RETURNS_NAN;
+      else if (RHSSafe)
+        NaNBehavior = SPNB_RETURNS_OTHER;
+      else
+        // Completely unsafe.
+        return {SPF_UNKNOWN, SPNB_NA, false};
+    } else {
+      Ordered = false;
+      // An unordered comparison will return true when given a NaN, so it
+      // returns the LHS.
+      if (LHSSafe)
+        // LHS is non-NaN, so if RHS is NaN then non-NaN will be returned.
+        NaNBehavior = SPNB_RETURNS_OTHER;
+      else if (RHSSafe)
+        NaNBehavior = SPNB_RETURNS_NAN;
+      else
+        // Completely unsafe.
+        return {SPF_UNKNOWN, SPNB_NA, false};
     }
   }
 
-  // (icmp X, Y) ? Y : X
   if (TrueVal == CmpRHS && FalseVal == CmpLHS) {
+    std::swap(CmpLHS, CmpRHS);
+    Pred = CmpInst::getSwappedPredicate(Pred);
+    if (NaNBehavior == SPNB_RETURNS_NAN)
+      NaNBehavior = SPNB_RETURNS_OTHER;
+    else if (NaNBehavior == SPNB_RETURNS_OTHER)
+      NaNBehavior = SPNB_RETURNS_NAN;
+    Ordered = !Ordered;
+  }
+
+  // ([if]cmp X, Y) ? X : Y
+  if (TrueVal == CmpLHS && FalseVal == CmpRHS) {
     switch (Pred) {
-    default: return SPF_UNKNOWN; // Equality.
+    default: return {SPF_UNKNOWN, SPNB_NA, false}; // Equality.
     case ICmpInst::ICMP_UGT:
-    case ICmpInst::ICMP_UGE: return SPF_UMIN;
+    case ICmpInst::ICMP_UGE: return {SPF_UMAX, SPNB_NA, false};
     case ICmpInst::ICMP_SGT:
-    case ICmpInst::ICMP_SGE: return SPF_SMIN;
+    case ICmpInst::ICMP_SGE: return {SPF_SMAX, SPNB_NA, false};
     case ICmpInst::ICMP_ULT:
-    case ICmpInst::ICMP_ULE: return SPF_UMAX;
+    case ICmpInst::ICMP_ULE: return {SPF_UMIN, SPNB_NA, false};
     case ICmpInst::ICMP_SLT:
-    case ICmpInst::ICMP_SLE: return SPF_SMAX;
+    case ICmpInst::ICMP_SLE: return {SPF_SMIN, SPNB_NA, false};
+    case FCmpInst::FCMP_UGT:
+    case FCmpInst::FCMP_UGE:
+    case FCmpInst::FCMP_OGT:
+    case FCmpInst::FCMP_OGE: return {SPF_FMAXNUM, NaNBehavior, Ordered};
+    case FCmpInst::FCMP_ULT:
+    case FCmpInst::FCMP_ULE:
+    case FCmpInst::FCMP_OLT:
+    case FCmpInst::FCMP_OLE: return {SPF_FMINNUM, NaNBehavior, Ordered};
     }
   }
 
@@ -3531,13 +3651,13 @@ static SelectPatternFlavor matchSelectPattern(ICmpInst::Predicate Pred,
       // ABS(X) ==> (X >s 0) ? X : -X and (X >s -1) ? X : -X
       // NABS(X) ==> (X >s 0) ? -X : X and (X >s -1) ? -X : X
       if (Pred == ICmpInst::ICMP_SGT && (C1->isZero() || C1->isMinusOne())) {
-        return (CmpLHS == TrueVal) ? SPF_ABS : SPF_NABS;
+        return {(CmpLHS == TrueVal) ? SPF_ABS : SPF_NABS, SPNB_NA, false};
       }
 
       // ABS(X) ==> (X <s 0) ? -X : X and (X <s 1) ? -X : X
       // NABS(X) ==> (X <s 0) ? X : -X and (X <s 1) ? X : -X
       if (Pred == ICmpInst::ICMP_SLT && (C1->isZero() || C1->isOne())) {
-        return (CmpLHS == FalseVal) ? SPF_ABS : SPF_NABS;
+        return {(CmpLHS == FalseVal) ? SPF_ABS : SPF_NABS, SPNB_NA, false};
       }
     }
     
@@ -3548,17 +3668,17 @@ static SelectPatternFlavor matchSelectPattern(ICmpInst::Predicate Pred,
            match(CmpLHS, m_Not(m_Specific(TrueVal))))) {
         LHS = TrueVal;
         RHS = FalseVal;
-        return SPF_SMIN;
+        return {SPF_SMIN, SPNB_NA, false};
       }
     }
   }
 
   // TODO: (X > 4) ? X : 5   -->  (X >= 5) ? X : 5  -->  MAX(X, 5)
 
-  return SPF_UNKNOWN;
+  return {SPF_UNKNOWN, SPNB_NA, false};
 }
 
-static Constant *lookThroughCast(ICmpInst *CmpI, Value *V1, Value *V2,
+static Constant *lookThroughCast(CmpInst *CmpI, Value *V1, Value *V2,
                                  Instruction::CastOps *CastOp) {
   CastInst *CI = dyn_cast<CastInst>(V1);
   Constant *C = dyn_cast<Constant>(V2);
@@ -3580,39 +3700,60 @@ static Constant *lookThroughCast(ICmpInst *CmpI, Value *V1, Value *V2,
   if (isa<TruncInst>(CI))
     return ConstantExpr::getIntegerCast(C, CI->getSrcTy(), CmpI->isSigned());
 
+  if (isa<FPToUIInst>(CI))
+    return ConstantExpr::getUIToFP(C, CI->getSrcTy(), true);
+
+  if (isa<FPToSIInst>(CI))
+    return ConstantExpr::getSIToFP(C, CI->getSrcTy(), true);
+
+  if (isa<UIToFPInst>(CI))
+    return ConstantExpr::getFPToUI(C, CI->getSrcTy(), true);
+
+  if (isa<SIToFPInst>(CI))
+    return ConstantExpr::getFPToSI(C, CI->getSrcTy(), true);
+
+  if (isa<FPTruncInst>(CI))
+    return ConstantExpr::getFPExtend(C, CI->getSrcTy(), true);
+
+  if (isa<FPExtInst>(CI))
+    return ConstantExpr::getFPTrunc(C, CI->getSrcTy(), true);
+
   return nullptr;
 }
 
-SelectPatternFlavor llvm::matchSelectPattern(Value *V,
+SelectPatternResult llvm::matchSelectPattern(Value *V,
                                              Value *&LHS, Value *&RHS,
                                              Instruction::CastOps *CastOp) {
   SelectInst *SI = dyn_cast<SelectInst>(V);
-  if (!SI) return SPF_UNKNOWN;
+  if (!SI) return {SPF_UNKNOWN, SPNB_NA, false};
 
-  ICmpInst *CmpI = dyn_cast<ICmpInst>(SI->getCondition());
-  if (!CmpI) return SPF_UNKNOWN;
+  CmpInst *CmpI = dyn_cast<CmpInst>(SI->getCondition());
+  if (!CmpI) return {SPF_UNKNOWN, SPNB_NA, false};
 
-  ICmpInst::Predicate Pred = CmpI->getPredicate();
+  CmpInst::Predicate Pred = CmpI->getPredicate();
   Value *CmpLHS = CmpI->getOperand(0);
   Value *CmpRHS = CmpI->getOperand(1);
   Value *TrueVal = SI->getTrueValue();
   Value *FalseVal = SI->getFalseValue();
+  FastMathFlags FMF;
+  if (isa<FPMathOperator>(CmpI))
+    FMF = CmpI->getFastMathFlags();
 
   // Bail out early.
   if (CmpI->isEquality())
-    return SPF_UNKNOWN;
+    return {SPF_UNKNOWN, SPNB_NA, false};
 
   // Deal with type mismatches.
   if (CastOp && CmpLHS->getType() != TrueVal->getType()) {
     if (Constant *C = lookThroughCast(CmpI, TrueVal, FalseVal, CastOp))
-      return ::matchSelectPattern(Pred, CmpLHS, CmpRHS,
+      return ::matchSelectPattern(Pred, FMF, CmpLHS, CmpRHS,
                                   cast<CastInst>(TrueVal)->getOperand(0), C,
                                   LHS, RHS);
     if (Constant *C = lookThroughCast(CmpI, FalseVal, TrueVal, CastOp))
-      return ::matchSelectPattern(Pred, CmpLHS, CmpRHS,
+      return ::matchSelectPattern(Pred, FMF, CmpLHS, CmpRHS,
                                   C, cast<CastInst>(FalseVal)->getOperand(0),
                                   LHS, RHS);
   }
-  return ::matchSelectPattern(Pred, CmpLHS, CmpRHS, TrueVal, FalseVal,
+  return ::matchSelectPattern(Pred, FMF, CmpLHS, CmpRHS, TrueVal, FalseVal,
                               LHS, RHS);
 }

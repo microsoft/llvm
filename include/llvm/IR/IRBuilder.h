@@ -517,10 +517,9 @@ template<bool preserveNames = true, typename T = ConstantFolder,
 class IRBuilder : public IRBuilderBase, public Inserter {
   T Folder;
 public:
-  IRBuilder(LLVMContext &C, const T &F, const Inserter &I = Inserter(),
+  IRBuilder(LLVMContext &C, const T &F, Inserter I = Inserter(),
             MDNode *FPMathTag = nullptr)
-    : IRBuilderBase(C, FPMathTag), Inserter(I), Folder(F) {
-  }
+      : IRBuilderBase(C, FPMathTag), Inserter(std::move(I)), Folder(F) {}
 
   explicit IRBuilder(LLVMContext &C, MDNode *FPMathTag = nullptr)
     : IRBuilderBase(C, FPMathTag), Folder() {
@@ -673,16 +672,14 @@ public:
   }
 
   CleanupReturnInst *CreateCleanupRet(BasicBlock *UnwindBB = nullptr,
-                               Value *RetVal = nullptr) {
+                                      Value *RetVal = nullptr) {
     return Insert(CleanupReturnInst::Create(Context, RetVal, UnwindBB));
   }
 
   CatchPadInst *CreateCatchPad(Type *Ty, BasicBlock *NormalDest,
-                                   BasicBlock *UnwindDest,
-                                   ArrayRef<Value *> Args,
-                                   const Twine &Name = "") {
-    return Insert(CatchPadInst::Create(Ty, NormalDest, UnwindDest, Args),
-                  Name);
+                               BasicBlock *UnwindDest, ArrayRef<Value *> Args,
+                               const Twine &Name = "") {
+    return Insert(CatchPadInst::Create(Ty, NormalDest, UnwindDest, Args), Name);
   }
 
   CatchEndPadInst *CreateCatchEndPad(BasicBlock *UnwindBB = nullptr) {
@@ -690,18 +687,18 @@ public:
   }
 
   TerminatePadInst *CreateTerminatePad(BasicBlock *UnwindBB = nullptr,
-                                           ArrayRef<Value *> Args = {},
-                                           const Twine &Name = "") {
+                                       ArrayRef<Value *> Args = {},
+                                       const Twine &Name = "") {
     return Insert(TerminatePadInst::Create(Context, UnwindBB, Args), Name);
   }
 
   CleanupPadInst *CreateCleanupPad(Type *Ty, ArrayRef<Value *> Args,
-                                       const Twine &Name = "") {
+                                   const Twine &Name = "") {
     return Insert(CleanupPadInst::Create(Ty, Args), Name);
   }
 
-  CatchReturnInst *CreateCatchRet(BasicBlock *BB) {
-    return Insert(CatchReturnInst::Create(BB));
+  CatchReturnInst *CreateCatchRet(BasicBlock *BB, Value *RetVal = nullptr) {
+    return Insert(CatchReturnInst::Create(BB, RetVal));
   }
 
   UnreachableInst *CreateUnreachable() {
