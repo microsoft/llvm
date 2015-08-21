@@ -470,7 +470,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::EH_LABEL, MVT::Other, Expand);
   }
 
-  if (Subtarget->is64Bit()) {
+  if (Subtarget->isTarget64BitLP64()) {
     setExceptionPointerRegister(X86::RAX);
     setExceptionSelectorRegister(X86::RDX);
   } else {
@@ -7550,6 +7550,23 @@ static SDValue lowerVectorShuffleAsBroadcast(SDLoc DL, MVT VT, SDValue V,
 
   // Check if this is a broadcast of a scalar. We special case lowering
   // for scalars so that we can more effectively fold with loads.
+  // First, look through bitcast: if the original value has a larger element
+  // type than the shuffle, the broadcast element is in essence truncated.
+  // Make that explicit to ease folding.
+  if (V.getOpcode() == ISD::BITCAST && VT.isInteger()) {
+    EVT EltVT = VT.getVectorElementType();
+    SDValue V0 = V.getOperand(0);
+    EVT V0VT = V0.getValueType();
+
+    if (V0VT.isInteger() && V0VT.getVectorElementType().bitsGT(EltVT) &&
+        ((V0.getOpcode() == ISD::BUILD_VECTOR ||
+         (V0.getOpcode() == ISD::SCALAR_TO_VECTOR && BroadcastIdx == 0)))) {
+      V = DAG.getNode(ISD::TRUNCATE, DL, EltVT, V0.getOperand(BroadcastIdx));
+      BroadcastIdx = 0;
+    }
+  }
+
+  // Also check the simpler case, where we can directly reuse the scalar.
   if (V.getOpcode() == ISD::BUILD_VECTOR ||
       (V.getOpcode() == ISD::SCALAR_TO_VECTOR && BroadcastIdx == 0)) {
     V = V.getOperand(BroadcastIdx);
@@ -23602,18 +23619,34 @@ static SDValue PerformSHLCombine(SDNode *N, SelectionDAG &DAG) {
       N1C && N0.getOpcode() == ISD::AND &&
       N0.getOperand(1).getOpcode() == ISD::Constant) {
     SDValue N00 = N0.getOperand(0);
-    if (N00.getOpcode() == X86ISD::SETCC_CARRY ||
-        ((N00.getOpcode() == ISD::ANY_EXTEND ||
-          N00.getOpcode() == ISD::ZERO_EXTEND) &&
-         N00.getOperand(0).getOpcode() == X86ISD::SETCC_CARRY)) {
-      APInt Mask = cast<ConstantSDNode>(N0.getOperand(1))->getAPIntValue();
-      APInt ShAmt = N1C->getAPIntValue();
-      Mask = Mask.shl(ShAmt);
-      if (Mask != 0) {
-        SDLoc DL(N);
-        return DAG.getNode(ISD::AND, DL, VT,
-                           N00, DAG.getConstant(Mask, DL, VT));
-      }
+    APInt Mask = cast<ConstantSDNode>(N0.getOperand(1))->getAPIntValue();
+    APInt ShAmt = N1C->getAPIntValue();
+    Mask = Mask.shl(ShAmt);
+    bool MaskOK = false;
+    // We can handle cases concerning bit-widening nodes containing setcc_c if
+    // we carefully interrogate the mask to make sure we are semantics
+    // preserving.
+    // The transform is not safe if the result of C1 << C2 exceeds the bitwidth
+    // of the underlying setcc_c operation if the setcc_c was zero extended.
+    // Consider the following example:
+    //   zext(setcc_c)                 -> i32 0x0000FFFF
+    //   c1                            -> i32 0x0000FFFF
+    //   c2                            -> i32 0x00000001
+    //   (shl (and (setcc_c), c1), c2) -> i32 0x0001FFFE
+    //   (and setcc_c, (c1 << c2))     -> i32 0x0000FFFE
+    if (N00.getOpcode() == X86ISD::SETCC_CARRY) {
+      MaskOK = true;
+    } else if (N00.getOpcode() == ISD::SIGN_EXTEND &&
+               N00.getOperand(0).getOpcode() == X86ISD::SETCC_CARRY) {
+      MaskOK = true;
+    } else if ((N00.getOpcode() == ISD::ZERO_EXTEND ||
+                N00.getOpcode() == ISD::ANY_EXTEND) &&
+               N00.getOperand(0).getOpcode() == X86ISD::SETCC_CARRY) {
+      MaskOK = Mask.isIntN(N00.getOperand(0).getValueSizeInBits());
+    }
+    if (MaskOK && Mask != 0) {
+      SDLoc DL(N);
+      return DAG.getNode(ISD::AND, DL, VT, N00, DAG.getConstant(Mask, DL, VT));
     }
   }
 
@@ -24241,12 +24274,60 @@ static SDValue performIntegerAbsCombine(SDNode *N, SelectionDAG &DAG) {
   return SDValue();
 }
 
-// PerformXorCombine - Attempts to turn XOR nodes into BLSMSK nodes
+// Try to turn tests against the signbit in the form of:
+//   XOR(TRUNCATE(SRL(X, size(X)-1)), 1)
+// into:
+//   SETGT(X, -1)
+static SDValue foldXorTruncShiftIntoCmp(SDNode *N, SelectionDAG &DAG) {
+  // This is only worth doing if the output type is i8.
+  if (N->getValueType(0) != MVT::i8)
+    return SDValue();
+
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+
+  // We should be performing an xor against a truncated shift.
+  if (N0.getOpcode() != ISD::TRUNCATE || !N0.hasOneUse())
+    return SDValue();
+
+  // Make sure we are performing an xor against one.
+  if (!isa<ConstantSDNode>(N1) || !cast<ConstantSDNode>(N1)->isOne())
+    return SDValue();
+
+  // SetCC on x86 zero extends so only act on this if it's a logical shift.
+  SDValue Shift = N0.getOperand(0);
+  if (Shift.getOpcode() != ISD::SRL || !Shift.hasOneUse())
+    return SDValue();
+
+  // Make sure we are truncating from one of i16, i32 or i64.
+  EVT ShiftTy = Shift.getValueType();
+  if (ShiftTy != MVT::i16 && ShiftTy != MVT::i32 && ShiftTy != MVT::i64)
+    return SDValue();
+
+  // Make sure the shift amount extracts the sign bit.
+  if (!isa<ConstantSDNode>(Shift.getOperand(1)) ||
+      Shift.getConstantOperandVal(1) != ShiftTy.getSizeInBits() - 1)
+    return SDValue();
+
+  // Create a greater-than comparison against -1.
+  // N.B. Using SETGE against 0 works but we want a canonical looking
+  // comparison, using SETGT matches up with what TranslateX86CC.
+  SDLoc DL(N);
+  SDValue ShiftOp = Shift.getOperand(0);
+  EVT ShiftOpTy = ShiftOp.getValueType();
+  SDValue Cond = DAG.getSetCC(DL, MVT::i8, ShiftOp,
+                              DAG.getConstant(-1, DL, ShiftOpTy), ISD::SETGT);
+  return Cond;
+}
+
 static SDValue PerformXorCombine(SDNode *N, SelectionDAG &DAG,
                                  TargetLowering::DAGCombinerInfo &DCI,
                                  const X86Subtarget *Subtarget) {
   if (DCI.isBeforeLegalizeOps())
     return SDValue();
+
+  if (SDValue RV = foldXorTruncShiftIntoCmp(N, DAG))
+    return RV;
 
   if (Subtarget->hasCMov())
     if (SDValue RV = performIntegerAbsCombine(N, DAG))
@@ -26593,4 +26674,15 @@ int X86TargetLowering::getScalingFactorCost(const DataLayout &DL,
 
 bool X86TargetLowering::isTargetFTOL() const {
   return Subtarget->isTargetKnownWindowsMSVC() && !Subtarget->is64Bit();
+}
+
+bool X86TargetLowering::isIntDivCheap(EVT VT, bool OptSize) const {
+  // Integer division on x86 is expensive. However, when aggressively optimizing
+  // for code size, we prefer to use a div instruction, as it is usually smaller
+  // than the alternative sequence.
+  // The exception to this is vector division. Since x86 doesn't have vector
+  // integer division, leaving the division as-is is a loss even in terms of
+  // size, because it will have to be scalarized, while the alternative code
+  // sequence can be performed in vector form.
+  return OptSize && !VT.isVector();
 }

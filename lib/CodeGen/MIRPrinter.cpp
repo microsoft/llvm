@@ -116,7 +116,8 @@ public:
   void printStackObjectReference(int FrameIndex);
   void printOffset(int64_t Offset);
   void printTargetFlags(const MachineOperand &Op);
-  void print(const MachineOperand &Op, const TargetRegisterInfo *TRI);
+  void print(const MachineOperand &Op, const TargetRegisterInfo *TRI,
+             unsigned I, bool ShouldPrintRegisterTies, bool IsDef = false);
   void print(const MachineMemOperand &Op);
 
   void print(const MCCFIInstruction &CFI, const TargetRegisterInfo *TRI);
@@ -501,6 +502,23 @@ void MIPrinter::print(const MachineBasicBlock &MBB) {
     OS.indent(2) << "}\n";
 }
 
+/// Return true when an instruction has tied register that can't be determined
+/// by the instruction's descriptor.
+static bool hasComplexRegisterTies(const MachineInstr &MI) {
+  const MCInstrDesc &MCID = MI.getDesc();
+  for (unsigned I = 0, E = MI.getNumOperands(); I < E; ++I) {
+    const auto &Operand = MI.getOperand(I);
+    if (!Operand.isReg() || Operand.isDef())
+      // Ignore the defined registers as MCID marks only the uses as tied.
+      continue;
+    int ExpectedTiedIdx = MCID.getOperandConstraint(I, MCOI::TIED_TO);
+    int TiedIdx = Operand.isTied() ? int(MI.findTiedOperandIdx(I)) : -1;
+    if (ExpectedTiedIdx != TiedIdx)
+      return true;
+  }
+  return false;
+}
+
 void MIPrinter::print(const MachineInstr &MI) {
   const auto &SubTarget = MI.getParent()->getParent()->getSubtarget();
   const auto *TRI = SubTarget.getRegisterInfo();
@@ -510,13 +528,14 @@ void MIPrinter::print(const MachineInstr &MI) {
   if (MI.isCFIInstruction())
     assert(MI.getNumOperands() == 1 && "Expected 1 operand in CFI instruction");
 
+  bool ShouldPrintRegisterTies = hasComplexRegisterTies(MI);
   unsigned I = 0, E = MI.getNumOperands();
   for (; I < E && MI.getOperand(I).isReg() && MI.getOperand(I).isDef() &&
          !MI.getOperand(I).isImplicit();
        ++I) {
     if (I)
       OS << ", ";
-    print(MI.getOperand(I), TRI);
+    print(MI.getOperand(I), TRI, I, ShouldPrintRegisterTies, /*IsDef=*/true);
   }
 
   if (I)
@@ -531,7 +550,7 @@ void MIPrinter::print(const MachineInstr &MI) {
   for (; I < E; ++I) {
     if (NeedComma)
       OS << ", ";
-    print(MI.getOperand(I), TRI);
+    print(MI.getOperand(I), TRI, I, ShouldPrintRegisterTies);
     NeedComma = true;
   }
 
@@ -562,6 +581,13 @@ void MIPrinter::printMBBReference(const MachineBasicBlock &MBB) {
   }
 }
 
+static void printIRSlotNumber(raw_ostream &OS, int Slot) {
+  if (Slot == -1)
+    OS << "<badref>";
+  else
+    OS << Slot;
+}
+
 void MIPrinter::printIRBlockReference(const BasicBlock &BB) {
   OS << "%ir-block.";
   if (BB.hasName()) {
@@ -578,20 +604,26 @@ void MIPrinter::printIRBlockReference(const BasicBlock &BB) {
     CustomMST.incorporateFunction(*F);
     Slot = CustomMST.getLocalSlot(&BB);
   }
-  if (Slot == -1)
-    OS << "<badref>";
-  else
-    OS << Slot;
+  printIRSlotNumber(OS, Slot);
 }
 
 void MIPrinter::printIRValueReference(const Value &V) {
+  if (isa<GlobalValue>(V)) {
+    V.printAsOperand(OS, /*PrintType=*/false, MST);
+    return;
+  }
   OS << "%ir.";
   if (V.hasName()) {
     printLLVMNameWithoutPrefix(OS, V.getName());
     return;
   }
-  // TODO: Serialize the unnamed IR value references.
-  OS << "<unserializable ir value>";
+  if (isa<Constant>(V)) {
+    // Machine memory operands can load/store to/from constant value pointers.
+    // TODO: Serialize the constant values.
+    OS << "<unserializable ir value>";
+    return;
+  }
+  printIRSlotNumber(OS, MST.getLocalSlot(&V));
 }
 
 void MIPrinter::printStackObjectReference(int FrameIndex) {
@@ -688,13 +720,16 @@ static const char *getTargetIndexName(const MachineFunction &MF, int Index) {
   return nullptr;
 }
 
-void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
+void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI,
+                      unsigned I, bool ShouldPrintRegisterTies, bool IsDef) {
   printTargetFlags(Op);
   switch (Op.getType()) {
   case MachineOperand::MO_Register:
-    // FIXME: Serialize the tied register.
     if (Op.isImplicit())
       OS << (Op.isDef() ? "implicit-def " : "implicit ");
+    else if (!IsDef && Op.isDef())
+      // Print the 'def' flag only when the operand is defined after '='.
+      OS << "def ";
     if (Op.isInternalRead())
       OS << "internal ";
     if (Op.isDead())
@@ -711,6 +746,8 @@ void MIPrinter::print(const MachineOperand &Op, const TargetRegisterInfo *TRI) {
     // Print the sub register.
     if (Op.getSubReg() != 0)
       OS << ':' << TRI->getSubRegIndexName(Op.getSubReg());
+    if (ShouldPrintRegisterTies && Op.isTied() && !Op.isDef())
+      OS << "(tied-def " << Op.getParent()->findTiedOperandIdx(I) << ")";
     break;
   case MachineOperand::MO_Immediate:
     OS << Op.getImm();
@@ -839,11 +876,12 @@ void MIPrinter::print(const MachineMemOperand &Op) {
           cast<FixedStackPseudoSourceValue>(PVal)->getFrameIndex());
       break;
     case PseudoSourceValue::GlobalValueCallEntry:
+      OS << "call-entry ";
       cast<GlobalValuePseudoSourceValue>(PVal)->getValue()->printAsOperand(
           OS, /*PrintType=*/false, MST);
       break;
     case PseudoSourceValue::ExternalSymbolCallEntry:
-      OS << '$';
+      OS << "call-entry $";
       printLLVMNameWithoutPrefix(
           OS, cast<ExternalSymbolPseudoSourceValue>(PVal)->getSymbol());
       break;

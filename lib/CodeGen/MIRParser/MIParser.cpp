@@ -38,15 +38,20 @@ using namespace llvm;
 namespace {
 
 /// A wrapper struct around the 'MachineOperand' struct that includes a source
-/// range.
-struct MachineOperandWithLocation {
+/// range and other attributes.
+struct ParsedMachineOperand {
   MachineOperand Operand;
   StringRef::iterator Begin;
   StringRef::iterator End;
+  Optional<unsigned> TiedDefIdx;
 
-  MachineOperandWithLocation(const MachineOperand &Operand,
-                             StringRef::iterator Begin, StringRef::iterator End)
-      : Operand(Operand), Begin(Begin), End(End) {}
+  ParsedMachineOperand(const MachineOperand &Operand, StringRef::iterator Begin,
+                       StringRef::iterator End, Optional<unsigned> &TiedDefIdx)
+      : Operand(Operand), Begin(Begin), End(End), TiedDefIdx(TiedDefIdx) {
+    if (TiedDefIdx)
+      assert(Operand.isReg() && Operand.isUse() &&
+             "Only used register operands can be tied");
+  }
 };
 
 class MIParser {
@@ -68,6 +73,8 @@ class MIParser {
   StringMap<unsigned> Names2SubRegIndices;
   /// Maps from slot numbers to function's unnamed basic blocks.
   DenseMap<unsigned, const BasicBlock *> Slots2BasicBlocks;
+  /// Maps from slot numbers to function's unnamed values.
+  DenseMap<unsigned, const Value *> Slots2Values;
   /// Maps from target index names to target indices.
   StringMap<int> Names2TargetIndices;
   /// Maps from direct target flag names to the direct target flag values.
@@ -111,7 +118,9 @@ public:
   bool parseRegister(unsigned &Reg);
   bool parseRegisterFlag(unsigned &Flags);
   bool parseSubRegisterIndex(unsigned &SubReg);
-  bool parseRegisterOperand(MachineOperand &Dest, bool IsDef = false);
+  bool parseRegisterTiedDefIndex(unsigned &TiedDefIdx);
+  bool parseRegisterOperand(MachineOperand &Dest,
+                            Optional<unsigned> &TiedDefIdx, bool IsDef = false);
   bool parseImmediateOperand(MachineOperand &Dest);
   bool parseIRConstant(StringRef::iterator Loc, const Constant *&C);
   bool parseTypedImmediateOperand(MachineOperand &Dest);
@@ -136,12 +145,14 @@ public:
   bool parseBlockAddressOperand(MachineOperand &Dest);
   bool parseTargetIndexOperand(MachineOperand &Dest);
   bool parseLiveoutRegisterMaskOperand(MachineOperand &Dest);
-  bool parseMachineOperand(MachineOperand &Dest);
-  bool parseMachineOperandAndTargetFlags(MachineOperand &Dest);
+  bool parseMachineOperand(MachineOperand &Dest,
+                           Optional<unsigned> &TiedDefIdx);
+  bool parseMachineOperandAndTargetFlags(MachineOperand &Dest,
+                                         Optional<unsigned> &TiedDefIdx);
   bool parseOffset(int64_t &Offset);
   bool parseAlignment(unsigned &Alignment);
   bool parseOperandsOffset(MachineOperand &Op);
-  bool parseIRValue(Value *&V);
+  bool parseIRValue(const Value *&V);
   bool parseMemoryOperandFlag(unsigned &Flags);
   bool parseMemoryPseudoSourceValue(const PseudoSourceValue *&PSV);
   bool parseMachinePointerInfo(MachinePointerInfo &Dest);
@@ -174,7 +185,10 @@ private:
 
   bool parseInstruction(unsigned &OpCode, unsigned &Flags);
 
-  bool verifyImplicitOperands(ArrayRef<MachineOperandWithLocation> Operands,
+  bool assignRegisterTies(MachineInstr &MI,
+                          ArrayRef<ParsedMachineOperand> Operands);
+
+  bool verifyImplicitOperands(ArrayRef<ParsedMachineOperand> Operands,
                               const MCInstrDesc &MCID);
 
   void initNames2Regs();
@@ -199,6 +213,8 @@ private:
 
   const BasicBlock *getIRBlock(unsigned Slot);
   const BasicBlock *getIRBlock(unsigned Slot, const Function &F);
+
+  const Value *getIRValue(unsigned Slot);
 
   void initNames2TargetIndices();
 
@@ -549,12 +565,14 @@ bool MIParser::parseBasicBlocks() {
 bool MIParser::parse(MachineInstr *&MI) {
   // Parse any register operands before '='
   MachineOperand MO = MachineOperand::CreateImm(0);
-  SmallVector<MachineOperandWithLocation, 8> Operands;
+  SmallVector<ParsedMachineOperand, 8> Operands;
   while (Token.isRegister() || Token.isRegisterFlag()) {
     auto Loc = Token.location();
-    if (parseRegisterOperand(MO, /*IsDef=*/true))
+    Optional<unsigned> TiedDefIdx;
+    if (parseRegisterOperand(MO, TiedDefIdx, /*IsDef=*/true))
       return true;
-    Operands.push_back(MachineOperandWithLocation(MO, Loc, Token.location()));
+    Operands.push_back(
+        ParsedMachineOperand(MO, Loc, Token.location(), TiedDefIdx));
     if (Token.isNot(MIToken::comma))
       break;
     lex();
@@ -570,9 +588,11 @@ bool MIParser::parse(MachineInstr *&MI) {
   while (!Token.isNewlineOrEOF() && Token.isNot(MIToken::kw_debug_location) &&
          Token.isNot(MIToken::coloncolon) && Token.isNot(MIToken::lbrace)) {
     auto Loc = Token.location();
-    if (parseMachineOperandAndTargetFlags(MO))
+    Optional<unsigned> TiedDefIdx;
+    if (parseMachineOperandAndTargetFlags(MO, TiedDefIdx))
       return true;
-    Operands.push_back(MachineOperandWithLocation(MO, Loc, Token.location()));
+    Operands.push_back(
+        ParsedMachineOperand(MO, Loc, Token.location(), TiedDefIdx));
     if (Token.isNewlineOrEOF() || Token.is(MIToken::coloncolon) ||
         Token.is(MIToken::lbrace))
       break;
@@ -621,6 +641,8 @@ bool MIParser::parse(MachineInstr *&MI) {
   MI->setFlags(Flags);
   for (const auto &Operand : Operands)
     MI->addOperand(MF, Operand.Operand);
+  if (assignRegisterTies(*MI, Operands))
+    return true;
   if (MemOperands.empty())
     return false;
   MachineInstr::mmo_iterator MemRefs =
@@ -700,8 +722,8 @@ static std::string getRegisterName(const TargetRegisterInfo *TRI,
   return StringRef(TRI->getName(Reg)).lower();
 }
 
-bool MIParser::verifyImplicitOperands(
-    ArrayRef<MachineOperandWithLocation> Operands, const MCInstrDesc &MCID) {
+bool MIParser::verifyImplicitOperands(ArrayRef<ParsedMachineOperand> Operands,
+                                      const MCInstrDesc &MCID) {
   if (MCID.isCall())
     // We can't verify call instructions as they can contain arbitrary implicit
     // register and register mask operands.
@@ -816,6 +838,9 @@ bool MIParser::parseRegisterFlag(unsigned &Flags) {
   case MIToken::kw_implicit_define:
     Flags |= RegState::ImplicitDefine;
     break;
+  case MIToken::kw_def:
+    Flags |= RegState::Define;
+    break;
   case MIToken::kw_dead:
     Flags |= RegState::Dead;
     break;
@@ -858,7 +883,59 @@ bool MIParser::parseSubRegisterIndex(unsigned &SubReg) {
   return false;
 }
 
-bool MIParser::parseRegisterOperand(MachineOperand &Dest, bool IsDef) {
+bool MIParser::parseRegisterTiedDefIndex(unsigned &TiedDefIdx) {
+  if (!consumeIfPresent(MIToken::kw_tied_def))
+    return error("expected 'tied-def' after '('");
+  if (Token.isNot(MIToken::IntegerLiteral))
+    return error("expected an integer literal after 'tied-def'");
+  if (getUnsigned(TiedDefIdx))
+    return true;
+  lex();
+  if (expectAndConsume(MIToken::rparen))
+    return true;
+  return false;
+}
+
+bool MIParser::assignRegisterTies(MachineInstr &MI,
+                                  ArrayRef<ParsedMachineOperand> Operands) {
+  SmallVector<std::pair<unsigned, unsigned>, 4> TiedRegisterPairs;
+  for (unsigned I = 0, E = Operands.size(); I != E; ++I) {
+    if (!Operands[I].TiedDefIdx)
+      continue;
+    // The parser ensures that this operand is a register use, so we just have
+    // to check the tied-def operand.
+    unsigned DefIdx = Operands[I].TiedDefIdx.getValue();
+    if (DefIdx >= E)
+      return error(Operands[I].Begin,
+                   Twine("use of invalid tied-def operand index '" +
+                         Twine(DefIdx) + "'; instruction has only ") +
+                       Twine(E) + " operands");
+    const auto &DefOperand = Operands[DefIdx].Operand;
+    if (!DefOperand.isReg() || !DefOperand.isDef())
+      // FIXME: add note with the def operand.
+      return error(Operands[I].Begin,
+                   Twine("use of invalid tied-def operand index '") +
+                       Twine(DefIdx) + "'; the operand #" + Twine(DefIdx) +
+                       " isn't a defined register");
+    // Check that the tied-def operand wasn't tied elsewhere.
+    for (const auto &TiedPair : TiedRegisterPairs) {
+      if (TiedPair.first == DefIdx)
+        return error(Operands[I].Begin,
+                     Twine("the tied-def operand #") + Twine(DefIdx) +
+                         " is already tied with another register operand");
+    }
+    TiedRegisterPairs.push_back(std::make_pair(DefIdx, I));
+  }
+  // FIXME: Verify that for non INLINEASM instructions, the def and use tied
+  // indices must be less than tied max.
+  for (const auto &TiedPair : TiedRegisterPairs)
+    MI.tieOperands(TiedPair.first, TiedPair.second);
+  return false;
+}
+
+bool MIParser::parseRegisterOperand(MachineOperand &Dest,
+                                    Optional<unsigned> &TiedDefIdx,
+                                    bool IsDef) {
   unsigned Reg;
   unsigned Flags = IsDef ? RegState::Define : 0;
   while (Token.isRegisterFlag()) {
@@ -874,6 +951,12 @@ bool MIParser::parseRegisterOperand(MachineOperand &Dest, bool IsDef) {
   if (Token.is(MIToken::colon)) {
     if (parseSubRegisterIndex(SubReg))
       return true;
+  }
+  if ((Flags & RegState::Define) == 0 && consumeIfPresent(MIToken::lparen)) {
+    unsigned Idx;
+    if (parseRegisterTiedDefIndex(Idx))
+      return true;
+    TiedDefIdx = Idx;
   }
   Dest = MachineOperand::CreateReg(
       Reg, Flags & RegState::Define, Flags & RegState::Implicit,
@@ -1293,10 +1376,12 @@ bool MIParser::parseLiveoutRegisterMaskOperand(MachineOperand &Dest) {
   return false;
 }
 
-bool MIParser::parseMachineOperand(MachineOperand &Dest) {
+bool MIParser::parseMachineOperand(MachineOperand &Dest,
+                                   Optional<unsigned> &TiedDefIdx) {
   switch (Token.kind()) {
   case MIToken::kw_implicit:
   case MIToken::kw_implicit_define:
+  case MIToken::kw_def:
   case MIToken::kw_dead:
   case MIToken::kw_killed:
   case MIToken::kw_undef:
@@ -1306,7 +1391,7 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
   case MIToken::underscore:
   case MIToken::NamedRegister:
   case MIToken::VirtualRegister:
-    return parseRegisterOperand(Dest);
+    return parseRegisterOperand(Dest, TiedDefIdx);
   case MIToken::IntegerLiteral:
     return parseImmediateOperand(Dest);
   case MIToken::IntegerType:
@@ -1363,7 +1448,8 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest) {
   return false;
 }
 
-bool MIParser::parseMachineOperandAndTargetFlags(MachineOperand &Dest) {
+bool MIParser::parseMachineOperandAndTargetFlags(
+    MachineOperand &Dest, Optional<unsigned> &TiedDefIdx) {
   unsigned TF = 0;
   bool HasTargetFlags = false;
   if (Token.is(MIToken::kw_target_flags)) {
@@ -1395,7 +1481,7 @@ bool MIParser::parseMachineOperandAndTargetFlags(MachineOperand &Dest) {
       return true;
   }
   auto Loc = Token.location();
-  if (parseMachineOperand(Dest))
+  if (parseMachineOperand(Dest, TiedDefIdx))
     return true;
   if (!HasTargetFlags)
     return false;
@@ -1441,21 +1527,32 @@ bool MIParser::parseOperandsOffset(MachineOperand &Op) {
   return false;
 }
 
-bool MIParser::parseIRValue(Value *&V) {
+bool MIParser::parseIRValue(const Value *&V) {
   switch (Token.kind()) {
   case MIToken::NamedIRValue: {
     V = MF.getFunction()->getValueSymbolTable().lookup(Token.stringValue());
-    if (!V)
-      V = MF.getFunction()->getParent()->getValueSymbolTable().lookup(
-          Token.stringValue());
-    if (!V)
-      return error(Twine("use of undefined IR value '") + Token.range() + "'");
     break;
   }
-  // TODO: Parse unnamed IR value references.
+  case MIToken::IRValue: {
+    unsigned SlotNumber = 0;
+    if (getUnsigned(SlotNumber))
+      return true;
+    V = getIRValue(SlotNumber);
+    break;
+  }
+  case MIToken::NamedGlobalValue:
+  case MIToken::GlobalValue: {
+    GlobalValue *GV = nullptr;
+    if (parseGlobalValue(GV))
+      return true;
+    V = GV;
+    break;
+  }
   default:
     llvm_unreachable("The current token should be an IR block reference");
   }
+  if (!V)
+    return error(Twine("use of undefined IR value '") + Token.range() + "'");
   return false;
 }
 
@@ -1513,18 +1610,27 @@ bool MIParser::parseMemoryPseudoSourceValue(const PseudoSourceValue *&PSV) {
     // The token was already consumed, so use return here instead of break.
     return false;
   }
-  case MIToken::GlobalValue:
-  case MIToken::NamedGlobalValue: {
-    GlobalValue *GV = nullptr;
-    if (parseGlobalValue(GV))
-      return true;
-    PSV = MF.getPSVManager().getGlobalValueCallEntry(GV);
+  case MIToken::kw_call_entry: {
+    lex();
+    switch (Token.kind()) {
+    case MIToken::GlobalValue:
+    case MIToken::NamedGlobalValue: {
+      GlobalValue *GV = nullptr;
+      if (parseGlobalValue(GV))
+        return true;
+      PSV = MF.getPSVManager().getGlobalValueCallEntry(GV);
+      break;
+    }
+    case MIToken::ExternalSymbol:
+      PSV = MF.getPSVManager().getExternalSymbolCallEntry(
+          MF.createExternalSymbolName(Token.stringValue()));
+      break;
+    default:
+      return error(
+          "expected a global value or an external symbol after 'call-entry'");
+    }
     break;
   }
-  case MIToken::ExternalSymbol:
-    PSV = MF.getPSVManager().getExternalSymbolCallEntry(
-        MF.createExternalSymbolName(Token.stringValue()));
-    break;
   default:
     llvm_unreachable("The current token should be pseudo source value");
   }
@@ -1535,9 +1641,7 @@ bool MIParser::parseMemoryPseudoSourceValue(const PseudoSourceValue *&PSV) {
 bool MIParser::parseMachinePointerInfo(MachinePointerInfo &Dest) {
   if (Token.is(MIToken::kw_constant_pool) || Token.is(MIToken::kw_stack) ||
       Token.is(MIToken::kw_got) || Token.is(MIToken::kw_jump_table) ||
-      Token.is(MIToken::FixedStackObject) || Token.is(MIToken::GlobalValue) ||
-      Token.is(MIToken::NamedGlobalValue) ||
-      Token.is(MIToken::ExternalSymbol)) {
+      Token.is(MIToken::FixedStackObject) || Token.is(MIToken::kw_call_entry)) {
     const PseudoSourceValue *PSV = nullptr;
     if (parseMemoryPseudoSourceValue(PSV))
       return true;
@@ -1547,9 +1651,11 @@ bool MIParser::parseMachinePointerInfo(MachinePointerInfo &Dest) {
     Dest = MachinePointerInfo(PSV, Offset);
     return false;
   }
-  if (Token.isNot(MIToken::NamedIRValue))
+  if (Token.isNot(MIToken::NamedIRValue) && Token.isNot(MIToken::IRValue) &&
+      Token.isNot(MIToken::GlobalValue) &&
+      Token.isNot(MIToken::NamedGlobalValue))
     return error("expected an IR value reference");
-  Value *V = nullptr;
+  const Value *V = nullptr;
   if (parseIRValue(V))
     return true;
   if (!V->getType()->isPointerTy())
@@ -1753,6 +1859,37 @@ const BasicBlock *MIParser::getIRBlock(unsigned Slot, const Function &F) {
   DenseMap<unsigned, const BasicBlock *> CustomSlots2BasicBlocks;
   initSlots2BasicBlocks(F, CustomSlots2BasicBlocks);
   return getIRBlockFromSlot(Slot, CustomSlots2BasicBlocks);
+}
+
+static void mapValueToSlot(const Value *V, ModuleSlotTracker &MST,
+                           DenseMap<unsigned, const Value *> &Slots2Values) {
+  int Slot = MST.getLocalSlot(V);
+  if (Slot == -1)
+    return;
+  Slots2Values.insert(std::make_pair(unsigned(Slot), V));
+}
+
+/// Creates the mapping from slot numbers to function's unnamed IR values.
+static void initSlots2Values(const Function &F,
+                             DenseMap<unsigned, const Value *> &Slots2Values) {
+  ModuleSlotTracker MST(F.getParent(), /*ShouldInitializeAllMetadata=*/false);
+  MST.incorporateFunction(F);
+  for (const auto &Arg : F.args())
+    mapValueToSlot(&Arg, MST, Slots2Values);
+  for (const auto &BB : F) {
+    mapValueToSlot(&BB, MST, Slots2Values);
+    for (const auto &I : BB)
+      mapValueToSlot(&I, MST, Slots2Values);
+  }
+}
+
+const Value *MIParser::getIRValue(unsigned Slot) {
+  if (Slots2Values.empty())
+    initSlots2Values(*MF.getFunction(), Slots2Values);
+  auto ValueInfo = Slots2Values.find(Slot);
+  if (ValueInfo == Slots2Values.end())
+    return nullptr;
+  return ValueInfo->second;
 }
 
 void MIParser::initNames2TargetIndices() {
