@@ -164,16 +164,22 @@ void LTOCodeGenerator::setDebugInfo(lto_debug_model debug) {
   llvm_unreachable("Unknown debug format!");
 }
 
-void LTOCodeGenerator::setCodePICModel(lto_codegen_model model) {
-  switch (model) {
-  case LTO_CODEGEN_PIC_MODEL_STATIC:
-  case LTO_CODEGEN_PIC_MODEL_DYNAMIC:
-  case LTO_CODEGEN_PIC_MODEL_DYNAMIC_NO_PIC:
-  case LTO_CODEGEN_PIC_MODEL_DEFAULT:
-    CodeModel = model;
-    return;
+void LTOCodeGenerator::setOptLevel(unsigned level) {
+  OptLevel = level;
+  switch (OptLevel) {
+  case 0:
+    CGOptLevel = CodeGenOpt::None;
+    break;
+  case 1:
+    CGOptLevel = CodeGenOpt::Less;
+    break;
+  case 2:
+    CGOptLevel = CodeGenOpt::Default;
+    break;
+  case 3:
+    CGOptLevel = CodeGenOpt::Aggressive;
+    break;
   }
-  llvm_unreachable("Unknown PIC model!");
 }
 
 bool LTOCodeGenerator::writeMergedModules(const char *path,
@@ -291,8 +297,10 @@ bool LTOCodeGenerator::determineTarget(std::string &errMsg) {
     return true;
 
   std::string TripleStr = IRLinker.getModule()->getTargetTriple();
-  if (TripleStr.empty())
+  if (TripleStr.empty()) {
     TripleStr = sys::getDefaultTargetTriple();
+    IRLinker.getModule()->setTargetTriple(TripleStr);
+  }
   llvm::Triple Triple(TripleStr);
 
   // create target machine from info for merged modules
@@ -300,29 +308,11 @@ bool LTOCodeGenerator::determineTarget(std::string &errMsg) {
   if (!march)
     return false;
 
-  // The relocation model is actually a static member of TargetMachine and
-  // needs to be set before the TargetMachine is instantiated.
-  Reloc::Model RelocModel = Reloc::Default;
-  switch (CodeModel) {
-  case LTO_CODEGEN_PIC_MODEL_STATIC:
-    RelocModel = Reloc::Static;
-    break;
-  case LTO_CODEGEN_PIC_MODEL_DYNAMIC:
-    RelocModel = Reloc::PIC_;
-    break;
-  case LTO_CODEGEN_PIC_MODEL_DYNAMIC_NO_PIC:
-    RelocModel = Reloc::DynamicNoPIC;
-    break;
-  case LTO_CODEGEN_PIC_MODEL_DEFAULT:
-    // RelocModel is already the default, so leave it that way.
-    break;
-  }
-
   // Construct LTOModule, hand over ownership of module and target. Use MAttr as
   // the default set of features.
   SubtargetFeatures Features(MAttr);
   Features.getDefaultSubtargetFeatures(Triple);
-  std::string FeatureStr = Features.getString();
+  FeatureStr = Features.getString();
   // Set a default CPU for Darwin triples.
   if (MCpu.empty() && Triple.isOSDarwin()) {
     if (Triple.getArch() == llvm::Triple::x86_64)
@@ -331,22 +321,6 @@ bool LTOCodeGenerator::determineTarget(std::string &errMsg) {
       MCpu = "yonah";
     else if (Triple.getArch() == llvm::Triple::aarch64)
       MCpu = "cyclone";
-  }
-
-  CodeGenOpt::Level CGOptLevel;
-  switch (OptLevel) {
-  case 0:
-    CGOptLevel = CodeGenOpt::None;
-    break;
-  case 1:
-    CGOptLevel = CodeGenOpt::Less;
-    break;
-  case 2:
-    CGOptLevel = CodeGenOpt::Default;
-    break;
-  case 3:
-    CGOptLevel = CodeGenOpt::Aggressive;
-    break;
   }
 
   TargetMach.reset(march->createTargetMachine(TripleStr, MCpu, FeatureStr,

@@ -5508,9 +5508,10 @@ bool X86InstrInfo::unfoldMemoryOperand(MachineFunction &MF, MachineInstr *MI,
 
   const MCInstrDesc &MCID = get(Opc);
   const TargetRegisterClass *RC = getRegClass(MCID, Index, &RI, MF);
+  // TODO: Check if 32-byte or greater accesses are slow too?
   if (!MI->hasOneMemOperand() &&
       RC == &X86::VR128RegClass &&
-      !Subtarget.isUnalignedMemAccessFast())
+      Subtarget.isUnalignedMemUnder32Slow())
     // Without memoperands, loadRegFromAddr and storeRegToStackSlot will
     // conservatively assume the address is unaligned. That's bad for
     // performance.
@@ -5658,9 +5659,11 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
                             cast<MachineSDNode>(N)->memoperands_end());
     if (!(*MMOs.first) &&
         RC == &X86::VR128RegClass &&
-        !Subtarget.isUnalignedMemAccessFast())
+        Subtarget.isUnalignedMemUnder32Slow())
       // Do not introduce a slow unaligned load.
       return false;
+    // FIXME: If a VR128 can have size 32, we should be checking if a 32-byte
+    // memory access is slow above.
     unsigned Alignment = RC->getSize() == 32 ? 32 : 16;
     bool isAligned = (*MMOs.first) &&
                      (*MMOs.first)->getAlignment() >= Alignment;
@@ -5701,9 +5704,11 @@ X86InstrInfo::unfoldMemoryOperand(SelectionDAG &DAG, SDNode *N,
                              cast<MachineSDNode>(N)->memoperands_end());
     if (!(*MMOs.first) &&
         RC == &X86::VR128RegClass &&
-        !Subtarget.isUnalignedMemAccessFast())
+        Subtarget.isUnalignedMemUnder32Slow())
       // Do not introduce a slow unaligned store.
       return false;
+    // FIXME: If a VR128 can have size 32, we should be checking if a 32-byte
+    // memory access is slow above.
     unsigned Alignment = RC->getSize() == 32 ? 32 : 16;
     bool isAligned = (*MMOs.first) &&
                      (*MMOs.first)->getAlignment() >= Alignment;
@@ -6394,12 +6399,24 @@ static bool isAssociativeAndCommutative(const MachineInstr &Inst) {
   // Normal min/max instructions are not commutative because of NaN and signed
   // zero semantics, but these are. Thus, there's no need to check for global
   // relaxed math; the instructions themselves have the properties we need.
+  case X86::MAXCPDrr:
+  case X86::MAXCPSrr:
   case X86::MAXCSDrr:
   case X86::MAXCSSrr:
+  case X86::MINCPDrr:
+  case X86::MINCPSrr:
   case X86::MINCSDrr:
   case X86::MINCSSrr:
+  case X86::VMAXCPDrr:
+  case X86::VMAXCPSrr:
+  case X86::VMAXCPDYrr:
+  case X86::VMAXCPSYrr:
   case X86::VMAXCSDrr:
   case X86::VMAXCSSrr:
+  case X86::VMINCPDrr:
+  case X86::VMINCPSrr:
+  case X86::VMINCPDYrr:
+  case X86::VMINCPSYrr:
   case X86::VMINCSDrr:
   case X86::VMINCSSrr:
     return true;
