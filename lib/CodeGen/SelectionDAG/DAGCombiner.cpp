@@ -313,6 +313,7 @@ namespace {
     SDValue visitMGATHER(SDNode *N);
     SDValue visitMSCATTER(SDNode *N);
     SDValue visitFP_TO_FP16(SDNode *N);
+    SDValue visitFP16_TO_FP(SDNode *N);
 
     SDValue visitFADDForFMACombine(SDNode *N);
     SDValue visitFSUBForFMACombine(SDNode *N);
@@ -1411,6 +1412,7 @@ SDValue DAGCombiner::visit(SDNode *N) {
   case ISD::MSCATTER:           return visitMSCATTER(N);
   case ISD::MSTORE:             return visitMSTORE(N);
   case ISD::FP_TO_FP16:         return visitFP_TO_FP16(N);
+  case ISD::FP16_TO_FP:         return visitFP16_TO_FP(N);
   }
   return SDValue();
 }
@@ -2181,7 +2183,6 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
                          N0, N1);
   }
 
-  bool MinSize = DAG.getMachineFunction().getFunction()->optForMinSize();
   // fold (sdiv X, pow2) -> simple ops after legalize
   // FIXME: We check for the exact bit here because the generic lowering gives
   // better results in that case. The target-specific lowering should learn how
@@ -2190,10 +2191,6 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
       !cast<BinaryWithFlagsSDNode>(N)->Flags.hasExact() &&
       (N1C->getAPIntValue().isPowerOf2() ||
        (-N1C->getAPIntValue()).isPowerOf2())) {
-    // If integer division is cheap, then don't perform the following fold.
-    if (TLI.isIntDivCheap(N->getValueType(0), MinSize))
-      return SDValue();
-
     // Target-specific implementation of sdiv x, pow2.
     if (SDValue Res = BuildSDIVPow2(N))
       return Res;
@@ -2230,8 +2227,10 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
   }
 
   // If integer divide is expensive and we satisfy the requirements, emit an
-  // alternate sequence.
-  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), MinSize))
+  // alternate sequence.  Targets may check function attributes for size/speed
+  // trade-offs.
+  AttributeSet Attr = DAG.getMachineFunction().getFunction()->getAttributes();
+  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), Attr))
     if (SDValue Op = BuildSDIV(N))
       return Op;
 
@@ -2287,8 +2286,8 @@ SDValue DAGCombiner::visitUDIV(SDNode *N) {
   }
 
   // fold (udiv x, c) -> alternate
-  bool MinSize = DAG.getMachineFunction().getFunction()->optForMinSize();
-  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), MinSize))
+  AttributeSet Attr = DAG.getMachineFunction().getFunction()->getAttributes();
+  if (N1C && !TLI.isIntDivCheap(N->getValueType(0), Attr))
     if (SDValue Op = BuildUDIV(N))
       return Op;
 
@@ -13118,6 +13117,21 @@ SDValue DAGCombiner::visitFP_TO_FP16(SDNode *N) {
   // fold (fp_to_fp16 (fp16_to_fp op)) -> op
   if (N0->getOpcode() == ISD::FP16_TO_FP)
     return N0->getOperand(0);
+
+  return SDValue();
+}
+
+SDValue DAGCombiner::visitFP16_TO_FP(SDNode *N) {
+  SDValue N0 = N->getOperand(0);
+
+  // fold fp16_to_fp(op & 0xffff) -> fp16_to_fp(op)
+  if (N0->getOpcode() == ISD::AND) {
+    ConstantSDNode *AndConst = getAsNonOpaqueConstant(N0.getOperand(1));
+    if (AndConst && AndConst->getAPIntValue() == 0xffff) {
+      return DAG.getNode(ISD::FP16_TO_FP, SDLoc(N), N->getValueType(0),
+                         N0.getOperand(0));
+    }
+  }
 
   return SDValue();
 }
