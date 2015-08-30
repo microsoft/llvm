@@ -255,9 +255,6 @@ public:
     IK_PtrInduction  ///< Pointer induction var. Step = C / sizeof(elem).
   };
 
-private:
-  /// Private constructor - use \c isInductionPHI.
-  InductionDescriptor(Value *Start, InductionKind K, ConstantInt *Step);
 public:
   /// Default constructor - creates an invalid induction.
   InductionDescriptor()
@@ -283,8 +280,11 @@ public:
 
   static bool isInductionPHI(PHINode *Phi, ScalarEvolution *SE,
                              InductionDescriptor &D);
-  
+
 private:
+  /// Private constructor - used by \c isInductionPHI.
+  InductionDescriptor(Value *Start, InductionKind K, ConstantInt *Step);
+
   /// Start value.
   TrackingVH<Value> StartValue;
   /// Induction kind.
@@ -355,10 +355,10 @@ bool hoistRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
 
 /// \brief Try to promote memory values to scalars by sinking stores out of
 /// the loop and moving loads to before the loop.  We do this by looping over
-/// the stores in the loop, looking for stores to Must pointers which are 
+/// the stores in the loop, looking for stores to Must pointers which are
 /// loop invariant. It takes AliasSet, Loop exit blocks vector, loop exit blocks
 /// insertion point vector, PredIteratorCache, LoopInfo, DominatorTree, Loop,
-/// AliasSet information for all instructions of the loop and loop safety 
+/// AliasSet information for all instructions of the loop and loop safety
 /// information as arguments. It returns changed status.
 bool promoteLoopAccessesToScalars(AliasSet &, SmallVectorImpl<BasicBlock*> &,
                                   SmallVectorImpl<Instruction*> &,

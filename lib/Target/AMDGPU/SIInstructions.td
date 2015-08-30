@@ -1514,23 +1514,23 @@ let isCommutable = 1, Defs = [VCC] in { // Carry-out goes to VCC
 // V_ADD_I32, V_SUB_I32, and V_SUBREV_I32 where renamed to *_U32 in VI,
 // but the VI instructions behave the same as the SI versions.
 defm V_ADD_I32 : VOP2bInst <vop2<0x25, 0x19>, "v_add_i32",
-  VOP_I32_I32_I32, add
+  VOP2b_I32_I1_I32_I32
 >;
-defm V_SUB_I32 : VOP2bInst <vop2<0x26, 0x1a>, "v_sub_i32", VOP_I32_I32_I32>;
+defm V_SUB_I32 : VOP2bInst <vop2<0x26, 0x1a>, "v_sub_i32", VOP2b_I32_I1_I32_I32>;
 
 defm V_SUBREV_I32 : VOP2bInst <vop2<0x27, 0x1b>, "v_subrev_i32",
-  VOP_I32_I32_I32, null_frag, "v_sub_i32"
+  VOP2b_I32_I1_I32_I32, null_frag, "v_sub_i32"
 >;
 
 let Uses = [VCC] in { // Carry-in comes from VCC
 defm V_ADDC_U32 : VOP2bInst <vop2<0x28, 0x1c>, "v_addc_u32",
-  VOP_I32_I32_I32_VCC
+  VOP2b_I32_I1_I32_I32_VCC
 >;
 defm V_SUBB_U32 : VOP2bInst <vop2<0x29, 0x1d>, "v_subb_u32",
-  VOP_I32_I32_I32_VCC
+  VOP2b_I32_I1_I32_I32_VCC
 >;
 defm V_SUBBREV_U32 : VOP2bInst <vop2<0x2a, 0x1e>, "v_subbrev_u32",
-  VOP_I32_I32_I32_VCC, null_frag, "v_subb_u32"
+  VOP2b_I32_I1_I32_I32_VCC, null_frag, "v_subb_u32"
 >;
 
 } // End Uses = [VCC]
@@ -1992,13 +1992,19 @@ multiclass SI_SPILL_SGPR <RegisterClass sgpr_class> {
       (ins sgpr_class:$src, i32imm:$frame_idx, SReg_128:$scratch_rsrc,
            SReg_32:$scratch_offset),
       "", []
-    >;
+    > {
+      let mayStore = 1;
+      let mayLoad = 0;
+    }
 
     def _RESTORE : InstSI <
       (outs sgpr_class:$dst),
       (ins i32imm:$frame_idx, SReg_128:$scratch_rsrc, SReg_32:$scratch_offset),
       "", []
-    >;
+    > {
+      let mayStore = 0;
+      let mayLoad = 1;
+    }
   } // End UseNamedOperandTable = 1
 }
 
@@ -2018,13 +2024,19 @@ multiclass SI_SPILL_VGPR <RegisterClass vgpr_class> {
       (ins vgpr_class:$src, i32imm:$frame_idx, SReg_128:$scratch_rsrc,
            SReg_32:$scratch_offset),
       "", []
-    >;
+    > {
+      let mayStore = 1;
+      let mayLoad = 0;
+    }
 
     def _RESTORE : InstSI <
       (outs vgpr_class:$dst),
       (ins i32imm:$frame_idx, SReg_128:$scratch_rsrc, SReg_32:$scratch_offset),
       "", []
-    >;
+    > {
+      let mayStore = 0;
+      let mayLoad = 1;
+    }
   } // End UseNamedOperandTable = 1, VGPRSpill = 1
 }
 
