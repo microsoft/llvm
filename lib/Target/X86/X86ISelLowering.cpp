@@ -6899,7 +6899,7 @@ static SDValue lowerVectorShuffleAsByteRotate(SDLoc DL, MVT VT, SDValue V1,
     Hi = DAG.getBitcast(AlignVT, Hi);
 
     return DAG.getBitcast(
-        VT, DAG.getNode(X86ISD::PALIGNR, DL, AlignVT, Hi, Lo,
+        VT, DAG.getNode(X86ISD::PALIGNR, DL, AlignVT, Lo, Hi,
                         DAG.getConstant(Rotation * Scale, DL, MVT::i8)));
   }
 
@@ -15692,12 +15692,16 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
         Src1, Src2, Imm, Rnd),
         Mask, PassThru, Subtarget, DAG);
     }
+    case INTR_TYPE_3OP_IMM8_MASK:
     case INTR_TYPE_3OP_MASK: {
       SDValue Src1 = Op.getOperand(1);
       SDValue Src2 = Op.getOperand(2);
       SDValue Src3 = Op.getOperand(3);
       SDValue PassThru = Op.getOperand(4);
       SDValue Mask = Op.getOperand(5);
+
+      if (IntrData->Type == INTR_TYPE_3OP_IMM8_MASK)
+        Src3 = DAG.getNode(ISD::TRUNCATE, dl, MVT::i8, Src3);
       // We specify 2 possible opcodes for intrinsics with rounding modes.
       // First, we check if the intrinsic may have non-default rounding mode,
       // (IntrData->Opc1 != 0), then we check the rounding mode operand.
@@ -19265,6 +19269,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::TESTM:              return "X86ISD::TESTM";
   case X86ISD::TESTNM:             return "X86ISD::TESTNM";
   case X86ISD::KORTEST:            return "X86ISD::KORTEST";
+  case X86ISD::KTEST:              return "X86ISD::KTEST";
   case X86ISD::PACKSS:             return "X86ISD::PACKSS";
   case X86ISD::PACKUS:             return "X86ISD::PACKUS";
   case X86ISD::PALIGNR:            return "X86ISD::PALIGNR";
@@ -19301,6 +19306,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::PMULUDQ:            return "X86ISD::PMULUDQ";
   case X86ISD::PMULDQ:             return "X86ISD::PMULDQ";
   case X86ISD::PSADBW:             return "X86ISD::PSADBW";
+  case X86ISD::DBPSADBW:           return "X86ISD::DBPSADBW";
   case X86ISD::VASTART_SAVE_XMM_REGS: return "X86ISD::VASTART_SAVE_XMM_REGS";
   case X86ISD::VAARG_64:           return "X86ISD::VAARG_64";
   case X86ISD::WIN_ALLOCA:         return "X86ISD::WIN_ALLOCA";

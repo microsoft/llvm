@@ -182,6 +182,8 @@ namespace llvm {
 
       /// Compute Sum of Absolute Differences.
       PSADBW,
+      /// Compute Double Block Packed Sum-Absolute-Differences
+      DBPSADBW,
 
       /// Bitwise Logical AND NOT of Packed FP values.
       ANDNP,
@@ -350,6 +352,7 @@ namespace llvm {
 
       // OR/AND test for masks
       KORTEST,
+      KTEST,
 
       // Several flavors of instructions with vector shuffle behaviors.
       PACKSS,

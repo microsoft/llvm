@@ -410,7 +410,7 @@ namespace {
     /// vector elements, try to merge them into one larger store.
     /// \return True if a merged store was created.
     bool MergeStoresOfConstantsOrVecElts(SmallVectorImpl<MemOpLink> &StoreNodes,
-                                         EVT MemVT, unsigned NumElem,
+                                         EVT MemVT, unsigned NumStores,
                                          bool IsConstantSrc, bool UseVector);
 
     /// This is a helper function for MergeConsecutiveStores.
@@ -2880,10 +2880,13 @@ SDValue DAGCombiner::visitANDLike(SDValue N0, SDValue N1,
       if (Result != ISD::SETCC_INVALID &&
           (!LegalOperations ||
            (TLI.isCondCodeLegal(Result, LL.getSimpleValueType()) &&
-            TLI.isOperationLegal(ISD::SETCC,
-                            getSetCCResultType(N0.getSimpleValueType())))))
-        return DAG.getSetCC(SDLoc(LocReference), N0.getValueType(),
-                            LL, LR, Result);
+            TLI.isOperationLegal(ISD::SETCC, LL.getValueType())))) {
+        EVT CCVT = getSetCCResultType(LL.getValueType());
+        if (N0.getValueType() == CCVT ||
+            (!LegalOperations && N0.getValueType() == MVT::i1))
+          return DAG.getSetCC(SDLoc(LocReference), N0.getValueType(),
+                              LL, LR, Result);
+      }
     }
   }
 
@@ -3538,10 +3541,13 @@ SDValue DAGCombiner::visitORLike(SDValue N0, SDValue N1, SDNode *LocReference) {
       if (Result != ISD::SETCC_INVALID &&
           (!LegalOperations ||
            (TLI.isCondCodeLegal(Result, LL.getSimpleValueType()) &&
-            TLI.isOperationLegal(ISD::SETCC,
-              getSetCCResultType(N0.getValueType())))))
-        return DAG.getSetCC(SDLoc(LocReference), N0.getValueType(),
-                            LL, LR, Result);
+            TLI.isOperationLegal(ISD::SETCC, LL.getValueType())))) {
+        EVT CCVT = getSetCCResultType(LL.getValueType());
+        if (N0.getValueType() == CCVT ||
+            (!LegalOperations && N0.getValueType() == MVT::i1))
+          return DAG.getSetCC(SDLoc(LocReference), N0.getValueType(),
+                              LL, LR, Result);
+      }
     }
   }
 
@@ -6059,7 +6065,8 @@ SDValue DAGCombiner::visitSIGN_EXTEND(SDNode *N) {
 
     if (!VT.isVector()) {
       EVT SetCCVT = getSetCCResultType(N0.getOperand(0).getValueType());
-      if (!LegalOperations || TLI.isOperationLegal(ISD::SETCC, SetCCVT)) {
+      if (!LegalOperations ||
+          TLI.isOperationLegal(ISD::SETCC, N0.getOperand(0).getValueType())) {
         SDLoc DL(N);
         ISD::CondCode CC = cast<CondCodeSDNode>(N0.getOperand(2))->get();
         SDValue SetCC = DAG.getSetCC(DL, SetCCVT,
@@ -8500,7 +8507,7 @@ SDValue DAGCombiner::visitFSQRT(SDNode *N) {
   // Unfortunately, RV is now NaN if the input was exactly 0.
   // Select out this case and force the answer to 0.
   SDValue Zero = DAG.getConstantFP(0.0, DL, VT);
-  EVT CCVT = TLI.getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), VT);
+  EVT CCVT = getSetCCResultType(VT);
   SDValue ZeroCmp = DAG.getSetCC(DL, CCVT, N->getOperand(0), Zero, ISD::SETEQ);
   AddToWorklist(ZeroCmp.getNode());
   AddToWorklist(RV.getNode());
@@ -10708,16 +10715,16 @@ SDValue DAGCombiner::getMergedConstantVectorStore(SelectionDAG &DAG,
 
 bool DAGCombiner::MergeStoresOfConstantsOrVecElts(
                   SmallVectorImpl<MemOpLink> &StoreNodes, EVT MemVT,
-                  unsigned NumElem, bool IsConstantSrc, bool UseVector) {
+                  unsigned NumStores, bool IsConstantSrc, bool UseVector) {
   // Make sure we have something to merge.
-  if (NumElem < 2)
+  if (NumStores < 2)
     return false;
 
   int64_t ElementSizeBytes = MemVT.getSizeInBits() / 8;
   LSBaseSDNode *FirstInChain = StoreNodes[0].MemNode;
   unsigned LatestNodeUsed = 0;
 
-  for (unsigned i=0; i < NumElem; ++i) {
+  for (unsigned i=0; i < NumStores; ++i) {
     // Find a chain for the new wide-store operand. Notice that some
     // of the store nodes that we found may not be selected for inclusion
     // in the wide store. The chain we use needs to be the chain of the
@@ -10732,38 +10739,45 @@ bool DAGCombiner::MergeStoresOfConstantsOrVecElts(
 
   SDValue StoredVal;
   if (UseVector) {
-    // Find a legal type for the vector store.
-    EVT Ty = EVT::getVectorVT(*DAG.getContext(), MemVT, NumElem);
+    bool IsVec = MemVT.isVector();
+    unsigned Elts = NumStores;
+    if (IsVec) {
+      // When merging vector stores, get the total number of elements.
+      Elts *= MemVT.getVectorNumElements();
+    }
+    // Get the type for the merged vector store.
+    EVT Ty = EVT::getVectorVT(*DAG.getContext(), MemVT.getScalarType(), Elts);
     assert(TLI.isTypeLegal(Ty) && "Illegal vector store");
+
     if (IsConstantSrc) {
       StoredVal = getMergedConstantVectorStore(DAG, DL, StoreNodes, Ty);
     } else {
       SmallVector<SDValue, 8> Ops;
-      for (unsigned i = 0; i < NumElem ; ++i) {
+      for (unsigned i = 0; i < NumStores; ++i) {
         StoreSDNode *St = cast<StoreSDNode>(StoreNodes[i].MemNode);
         SDValue Val = St->getValue();
-        // All of the operands of a BUILD_VECTOR must have the same type.
+        // All operands of BUILD_VECTOR / CONCAT_VECTOR must have the same type.
         if (Val.getValueType() != MemVT)
           return false;
         Ops.push_back(Val);
       }
 
       // Build the extracted vector elements back into a vector.
-      StoredVal = DAG.getNode(ISD::BUILD_VECTOR, DL, Ty, Ops);
-    }
+      StoredVal = DAG.getNode(IsVec ? ISD::CONCAT_VECTORS : ISD::BUILD_VECTOR,
+                              DL, Ty, Ops);    }
   } else {
     // We should always use a vector store when merging extracted vector
     // elements, so this path implies a store of constants.
     assert(IsConstantSrc && "Merged vector elements should use vector store");
 
-    unsigned SizeInBits = NumElem * ElementSizeBytes * 8;
+    unsigned SizeInBits = NumStores * ElementSizeBytes * 8;
     APInt StoreInt(SizeInBits, 0);
 
     // Construct a single integer constant which is made of the smaller
     // constant inputs.
     bool IsLE = DAG.getDataLayout().isLittleEndian();
-    for (unsigned i = 0; i < NumElem ; ++i) {
-      unsigned Idx = IsLE ? (NumElem - 1 - i) : i;
+    for (unsigned i = 0; i < NumStores; ++i) {
+      unsigned Idx = IsLE ? (NumStores - 1 - i) : i;
       StoreSDNode *St  = cast<StoreSDNode>(StoreNodes[Idx].MemNode);
       SDValue Val = St->getValue();
       StoreInt <<= ElementSizeBytes * 8;
@@ -10790,7 +10804,7 @@ bool DAGCombiner::MergeStoresOfConstantsOrVecElts(
   // Replace the last store with the new store
   CombineTo(LatestOp, NewStore);
   // Erase all other stores.
-  for (unsigned i = 0; i < NumElem ; ++i) {
+  for (unsigned i = 0; i < NumStores; ++i) {
     if (StoreNodes[i].MemNode == LatestOp)
       continue;
     StoreSDNode *St = cast<StoreSDNode>(StoreNodes[i].MemNode);
@@ -11047,25 +11061,19 @@ bool DAGCombiner::MergeConsecutiveStores(StoreSDNode* St) {
         }
       }
 
-      // Find a legal type for the vector store.
-      EVT Ty = EVT::getVectorVT(Context, MemVT, i+1);
-      if (TLI.isTypeLegal(Ty) &&
-          TLI.allowsMemoryAccess(Context, DL, Ty, FirstStoreAS,
-                                 FirstStoreAlign)) {
-        LastLegalVectorType = i + 1;
+      // We only use vectors if the constant is known to be zero or the target
+      // allows it and the function is not marked with the noimplicitfloat
+      // attribute.
+      if ((!NonZero || TLI.storeOfVectorConstantIsCheap(MemVT, i+1,
+                                                        FirstStoreAS)) &&
+          !NoVectors) {
+        // Find a legal type for the vector store.
+        EVT Ty = EVT::getVectorVT(Context, MemVT, i+1);
+        if (TLI.isTypeLegal(Ty) &&
+            TLI.allowsMemoryAccess(Context, DL, Ty, FirstStoreAS,
+                                   FirstStoreAlign))
+          LastLegalVectorType = i + 1;
       }
-    }
-
-
-    // We only use vectors if the constant is known to be zero or the target
-    // allows it and the function is not marked with the noimplicitfloat
-    // attribute.
-    if (NoVectors) {
-      LastLegalVectorType = 0;
-    } else if (NonZero && !TLI.storeOfVectorConstantIsCheap(MemVT,
-                                                            LastLegalVectorType,
-                                                            FirstStoreAS)) {
-      LastLegalVectorType = 0;
     }
 
     // Check if we found a legal integer type to store.
@@ -13729,8 +13737,7 @@ SDValue DAGCombiner::SimplifySelectCC(SDLoc DL, SDValue N0, SDValue N1,
     // Get a SetCC of the condition
     // NOTE: Don't create a SETCC if it's not legal on this target.
     if (!LegalOperations ||
-        TLI.isOperationLegal(ISD::SETCC,
-          LegalTypes ? getSetCCResultType(N0.getValueType()) : MVT::i1)) {
+        TLI.isOperationLegal(ISD::SETCC, N0.getValueType())) {
       SDValue Temp, SCC;
       // cast from setcc result type to select result type
       if (LegalTypes) {
@@ -13759,51 +13766,6 @@ SDValue DAGCombiner::SimplifySelectCC(SDLoc DL, SDValue N0, SDValue N1,
           ISD::SHL, DL, N2.getValueType(), Temp,
           DAG.getConstant(N2C->getAPIntValue().logBase2(), SDLoc(Temp),
                           getShiftAmountTy(Temp.getValueType())));
-    }
-  }
-
-  // Check to see if this is the equivalent of setcc
-  // FIXME: Turn all of these into setcc if setcc if setcc is legal
-  // otherwise, go ahead with the folds.
-  if (0 && isNullConstant(N3) && isOneConstant(N2)) {
-    EVT XType = N0.getValueType();
-    if (!LegalOperations ||
-        TLI.isOperationLegal(ISD::SETCC, getSetCCResultType(XType))) {
-      SDValue Res = DAG.getSetCC(DL, getSetCCResultType(XType), N0, N1, CC);
-      if (Res.getValueType() != VT)
-        Res = DAG.getNode(ISD::ZERO_EXTEND, DL, VT, Res);
-      return Res;
-    }
-
-    // fold (seteq X, 0) -> (srl (ctlz X, log2(size(X))))
-    if (isNullConstant(N1) && CC == ISD::SETEQ &&
-        (!LegalOperations ||
-         TLI.isOperationLegal(ISD::CTLZ, XType))) {
-      SDValue Ctlz = DAG.getNode(ISD::CTLZ, SDLoc(N0), XType, N0);
-      return DAG.getNode(ISD::SRL, DL, XType, Ctlz,
-                         DAG.getConstant(Log2_32(XType.getSizeInBits()),
-                                         SDLoc(Ctlz),
-                                       getShiftAmountTy(Ctlz.getValueType())));
-    }
-    // fold (setgt X, 0) -> (srl (and (-X, ~X), size(X)-1))
-    if (isNullConstant(N1) && CC == ISD::SETGT) {
-      SDLoc DL(N0);
-      SDValue NegN0 = DAG.getNode(ISD::SUB, DL,
-                                  XType, DAG.getConstant(0, DL, XType), N0);
-      SDValue NotN0 = DAG.getNOT(DL, N0, XType);
-      return DAG.getNode(ISD::SRL, DL, XType,
-                         DAG.getNode(ISD::AND, DL, XType, NegN0, NotN0),
-                         DAG.getConstant(XType.getSizeInBits() - 1, DL,
-                                         getShiftAmountTy(XType)));
-    }
-    // fold (setgt X, -1) -> (xor (srl (X, size(X)-1), 1))
-    if (isAllOnesConstant(N1) && CC == ISD::SETGT) {
-      SDLoc DL(N0);
-      SDValue Sign = DAG.getNode(ISD::SRL, DL, XType, N0,
-                                 DAG.getConstant(XType.getSizeInBits() - 1, DL,
-                                         getShiftAmountTy(N0.getValueType())));
-      return DAG.getNode(ISD::XOR, DL, XType, Sign, DAG.getConstant(1, DL,
-                                                                    XType));
     }
   }
 

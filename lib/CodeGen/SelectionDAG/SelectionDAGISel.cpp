@@ -945,14 +945,12 @@ bool SelectionDAGISel::PrepareEHLandingPad() {
   // If this is an MSVC-style personality function, we need to split the landing
   // pad into several BBs.
   const BasicBlock *LLVMBB = MBB->getBasicBlock();
-  const LandingPadInst *LPadInst = LLVMBB->getLandingPadInst();
-  MF->getMMI().addPersonality(MBB, cast<Function>(LPadInst->getParent()
-                                                      ->getParent()
-                                                      ->getPersonalityFn()
-                                                      ->stripPointerCasts()));
-  EHPersonality Personality = MF->getMMI().getPersonalityType();
+  const Constant *Personality = MF->getFunction()->getPersonalityFn();
+  if (const auto *PF = dyn_cast<Function>(Personality->stripPointerCasts()))
+    MF->getMMI().addPersonality(PF);
+  EHPersonality PersonalityType = classifyEHPersonality(Personality);
 
-  if (isMSVCEHPersonality(Personality)) {
+  if (isMSVCEHPersonality(PersonalityType)) {
     SmallVector<MachineBasicBlock *, 4> ClauseBBs;
     const IntrinsicInst *ActionsCall =
         dyn_cast<IntrinsicInst>(LLVMBB->getFirstInsertionPt());
@@ -1492,9 +1490,7 @@ SelectionDAGISel::FinishBasicBlock() {
       CodeGenAndEmitDAG();
     }
 
-    uint32_t UnhandledWeight = 0;
-    for (unsigned j = 0, ej = SDB->BitTestCases[i].Cases.size(); j != ej; ++j)
-      UnhandledWeight += SDB->BitTestCases[i].Cases[j].ExtraWeight;
+    uint32_t UnhandledWeight = SDB->BitTestCases[i].Weight;
 
     for (unsigned j = 0, ej = SDB->BitTestCases[i].Cases.size(); j != ej; ++j) {
       UnhandledWeight -= SDB->BitTestCases[i].Cases[j].ExtraWeight;
