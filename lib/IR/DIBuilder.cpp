@@ -602,18 +602,20 @@ DIGlobalVariable *DIBuilder::createTempGlobalVariableFwdDecl(
       .release();
 }
 
-DILocalVariable *DIBuilder::createLocalVariable(
-    unsigned Tag, DIScope *Scope, StringRef Name, DIFile *File, unsigned LineNo,
-    DIType *Ty, bool AlwaysPreserve, unsigned Flags, unsigned ArgNo) {
+static DILocalVariable *createLocalVariable(
+    LLVMContext &VMContext,
+    DenseMap<MDNode *, std::vector<TrackingMDNodeRef>> &PreservedVariables,
+    DIScope *Scope, StringRef Name, unsigned ArgNo, DIFile *File,
+    unsigned LineNo, DIType *Ty, bool AlwaysPreserve, unsigned Flags) {
   // FIXME: Why getNonCompileUnitScope()?
   // FIXME: Why is "!Context" okay here?
   // FIXME: Why doesn't this check for a subprogram or lexical block (AFAICT
   // the only valid scopes)?
   DIScope *Context = getNonCompileUnitScope(Scope);
 
-  auto *Node = DILocalVariable::get(
-      VMContext, Tag, cast_or_null<DILocalScope>(Context), Name, File, LineNo,
-      DITypeRef::get(Ty), ArgNo, Flags);
+  auto *Node =
+      DILocalVariable::get(VMContext, cast_or_null<DILocalScope>(Context), Name,
+                           File, LineNo, DITypeRef::get(Ty), ArgNo, Flags);
   if (AlwaysPreserve) {
     // The optimizer may remove local variables. If there is an interest
     // to preserve variable info in such situation then stash it in a
@@ -623,6 +625,23 @@ DILocalVariable *DIBuilder::createLocalVariable(
     PreservedVariables[Fn].emplace_back(Node);
   }
   return Node;
+}
+
+DILocalVariable *DIBuilder::createAutoVariable(DIScope *Scope, StringRef Name,
+                                               DIFile *File, unsigned LineNo,
+                                               DIType *Ty, bool AlwaysPreserve,
+                                               unsigned Flags) {
+  return createLocalVariable(VMContext, PreservedVariables, Scope, Name,
+                             /* ArgNo */ 0, File, LineNo, Ty, AlwaysPreserve,
+                             Flags);
+}
+
+DILocalVariable *DIBuilder::createParameterVariable(
+    DIScope *Scope, StringRef Name, unsigned ArgNo, DIFile *File,
+    unsigned LineNo, DIType *Ty, bool AlwaysPreserve, unsigned Flags) {
+  assert(ArgNo && "Expected non-zero argument number for parameter");
+  return createLocalVariable(VMContext, PreservedVariables, Scope, Name, ArgNo,
+                             File, LineNo, Ty, AlwaysPreserve, Flags);
 }
 
 DIExpression *DIBuilder::createExpression(ArrayRef<uint64_t> Addr) {
@@ -656,6 +675,13 @@ DISubprogram *DIBuilder::createFunction(DIScopeRef Context, StringRef Name,
                         Flags, isOptimized, Fn, TParams, Decl);
 }
 
+template <class... Ts>
+static DISubprogram *getSubprogram(bool IsDistinct, Ts &&... Args) {
+  if (IsDistinct)
+    return DISubprogram::getDistinct(std::forward<Ts>(Args)...);
+  return DISubprogram::get(std::forward<Ts>(Args)...);
+}
+
 DISubprogram *DIBuilder::createFunction(DIScope *Context, StringRef Name,
                                         StringRef LinkageName, DIFile *File,
                                         unsigned LineNo, DISubroutineType *Ty,
@@ -663,14 +689,13 @@ DISubprogram *DIBuilder::createFunction(DIScope *Context, StringRef Name,
                                         unsigned ScopeLine, unsigned Flags,
                                         bool isOptimized, Function *Fn,
                                         MDNode *TParams, MDNode *Decl) {
-  assert(Ty->getTag() == dwarf::DW_TAG_subroutine_type &&
-         "function types should be subroutines");
-  auto *Node = DISubprogram::get(
-      VMContext, DIScopeRef::get(getNonCompileUnitScope(Context)), Name,
-      LinkageName, File, LineNo, Ty, isLocalToUnit, isDefinition, ScopeLine,
-      nullptr, 0, 0, Flags, isOptimized, Fn, cast_or_null<MDTuple>(TParams),
-      cast_or_null<DISubprogram>(Decl),
-      MDTuple::getTemporary(VMContext, None).release());
+  auto *Node = getSubprogram(/* IsDistinct = */ isDefinition, VMContext,
+                             DIScopeRef::get(getNonCompileUnitScope(Context)),
+                             Name, LinkageName, File, LineNo, Ty, isLocalToUnit,
+                             isDefinition, ScopeLine, nullptr, 0, 0, Flags,
+                             isOptimized, Fn, cast_or_null<MDTuple>(TParams),
+                             cast_or_null<DISubprogram>(Decl),
+                             MDTuple::getTemporary(VMContext, None).release());
 
   if (isDefinition)
     AllSubprograms.push_back(Node);
@@ -698,17 +723,16 @@ DIBuilder::createMethod(DIScope *Context, StringRef Name, StringRef LinkageName,
                         bool isLocalToUnit, bool isDefinition, unsigned VK,
                         unsigned VIndex, DIType *VTableHolder, unsigned Flags,
                         bool isOptimized, Function *Fn, MDNode *TParam) {
-  assert(Ty->getTag() == dwarf::DW_TAG_subroutine_type &&
-         "function types should be subroutines");
   assert(getNonCompileUnitScope(Context) &&
          "Methods should have both a Context and a context that isn't "
          "the compile unit.");
   // FIXME: Do we want to use different scope/lines?
-  auto *SP = DISubprogram::get(
-      VMContext, DIScopeRef::get(cast<DIScope>(Context)), Name, LinkageName, F,
-      LineNo, Ty, isLocalToUnit, isDefinition, LineNo,
-      DITypeRef::get(VTableHolder), VK, VIndex, Flags, isOptimized, Fn,
-      cast_or_null<MDTuple>(TParam), nullptr, nullptr);
+  auto *SP = getSubprogram(/* IsDistinct = */ isDefinition, VMContext,
+                           DIScopeRef::get(cast<DIScope>(Context)), Name,
+                           LinkageName, F, LineNo, Ty, isLocalToUnit,
+                           isDefinition, LineNo, DITypeRef::get(VTableHolder),
+                           VK, VIndex, Flags, isOptimized, Fn,
+                           cast_or_null<MDTuple>(TParam), nullptr, nullptr);
 
   if (isDefinition)
     AllSubprograms.push_back(SP);

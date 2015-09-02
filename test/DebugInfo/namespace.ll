@@ -1,7 +1,6 @@
 ; REQUIRES: object-emission
 
-; RUN: %llc_dwarf -O0 -filetype=obj < %s > %t
-; RUN: llvm-dwarfdump %t | FileCheck %s
+; RUN: %llc_dwarf -O0 -filetype=obj -dwarf-linkage-names=Enable < %s | llvm-dwarfdump - | FileCheck %s
 ; CHECK: debug_info contents
 ; CHECK: [[NS1:0x[0-9a-f]*]]:{{ *}}DW_TAG_namespace
 ; CHECK-NEXT: DW_AT_name{{.*}} = "A"
@@ -288,7 +287,7 @@ attributes #1 = { nounwind readnone }
 !llvm.module.flags = !{!57, !58}
 !llvm.ident = !{!59}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.6.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !9, globals: !30, imports: !33)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.6.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !9, globals: !30, imports: !33)
 !1 = !DIFile(filename: "debug-info-namespace.cpp", directory: "/tmp")
 !2 = !{}
 !3 = !{!4, !8}
@@ -298,24 +297,24 @@ attributes #1 = { nounwind readnone }
 !7 = !DINamespace(name: "A", line: 5, file: !1, scope: null)
 !8 = !DICompositeType(tag: DW_TAG_structure_type, name: "bar", line: 6, size: 8, align: 8, file: !5, scope: !6, elements: !2, identifier: "_ZTSN1A1B3barE")
 !9 = !{!10, !14, !17, !21, !25, !26, !27}
-!10 = !DISubprogram(name: "f1", linkageName: "_ZN1A1B2f1Ev", line: 3, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 3, file: !5, scope: !6, type: !11, function: i32 ()* @_ZN1A1B2f1Ev, variables: !2)
+!10 = distinct !DISubprogram(name: "f1", linkageName: "_ZN1A1B2f1Ev", line: 3, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 3, file: !5, scope: !6, type: !11, function: i32 ()* @_ZN1A1B2f1Ev, variables: !2)
 !11 = !DISubroutineType(types: !12)
 !12 = !{!13}
 !13 = !DIBasicType(tag: DW_TAG_base_type, name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
-!14 = !DISubprogram(name: "f1", linkageName: "_ZN1A1B2f1Ei", line: 4, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 4, file: !5, scope: !6, type: !15, function: void (i32)* @_ZN1A1B2f1Ei, variables: !2)
+!14 = distinct !DISubprogram(name: "f1", linkageName: "_ZN1A1B2f1Ei", line: 4, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 4, file: !5, scope: !6, type: !15, function: void (i32)* @_ZN1A1B2f1Ei, variables: !2)
 !15 = !DISubroutineType(types: !16)
 !16 = !{null, !13}
-!17 = !DISubprogram(name: "__cxx_global_var_init", line: 20, isLocal: true, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 20, file: !5, scope: !18, type: !19, function: void ()* @__cxx_global_var_init, variables: !2)
+!17 = distinct !DISubprogram(name: "__cxx_global_var_init", line: 20, isLocal: true, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 20, file: !5, scope: !18, type: !19, function: void ()* @__cxx_global_var_init, variables: !2)
 !18 = !DIFile(filename: "foo.cpp", directory: "/tmp")
 !19 = !DISubroutineType(types: !20)
 !20 = !{null}
-!21 = !DISubprogram(name: "func", linkageName: "_Z4funcb", line: 21, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 21, file: !5, scope: !18, type: !22, function: i32 (i1)* @_Z4funcb, variables: !2)
+!21 = distinct !DISubprogram(name: "func", linkageName: "_Z4funcb", line: 21, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 21, file: !5, scope: !18, type: !22, function: i32 (i1)* @_Z4funcb, variables: !2)
 !22 = !DISubroutineType(types: !23)
 !23 = !{!13, !24}
 !24 = !DIBasicType(tag: DW_TAG_base_type, name: "bool", size: 8, align: 8, encoding: DW_ATE_boolean)
-!25 = !DISubprogram(name: "__cxx_global_var_init1", line: 44, isLocal: true, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 44, file: !5, scope: !18, type: !19, function: void ()* @__cxx_global_var_init1, variables: !2)
-!26 = !DISubprogram(name: "func_fwd", linkageName: "_ZN1A1B8func_fwdEv", line: 47, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 47, file: !5, scope: !6, type: !19, function: void ()* @_ZN1A1B8func_fwdEv, variables: !2)
-!27 = !DISubprogram(name: "", linkageName: "_GLOBAL__sub_I_debug_info_namespace.cpp", isLocal: true, isDefinition: true, flags: DIFlagArtificial, isOptimized: false, file: !1, scope: !28, type: !29, function: void ()* @_GLOBAL__sub_I_debug_info_namespace.cpp, variables: !2)
+!25 = distinct !DISubprogram(name: "__cxx_global_var_init1", line: 44, isLocal: true, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 44, file: !5, scope: !18, type: !19, function: void ()* @__cxx_global_var_init1, variables: !2)
+!26 = distinct !DISubprogram(name: "func_fwd", linkageName: "_ZN1A1B8func_fwdEv", line: 47, isLocal: false, isDefinition: true, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 47, file: !5, scope: !6, type: !19, function: void ()* @_ZN1A1B8func_fwdEv, variables: !2)
+!27 = distinct !DISubprogram(name: "", linkageName: "_GLOBAL__sub_I_debug_info_namespace.cpp", isLocal: true, isDefinition: true, flags: DIFlagArtificial, isOptimized: false, file: !1, scope: !28, type: !29, function: void ()* @_GLOBAL__sub_I_debug_info_namespace.cpp, variables: !2)
 !28 = !DIFile(filename: "debug-info-namespace.cpp", directory: "/tmp")
 !29 = !DISubroutineType(types: !2)
 !30 = !{!31, !32}
@@ -349,12 +348,12 @@ attributes #1 = { nounwind readnone }
 !58 = !{i32 2, !"Debug Info Version", i32 3}
 !59 = !{!"clang version 3.6.0 "}
 !60 = !DILocation(line: 3, column: 12, scope: !10)
-!61 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "", line: 4, arg: 1, scope: !14, file: !18, type: !13)
+!61 = !DILocalVariable(name: "", line: 4, arg: 1, scope: !14, file: !18, type: !13)
 !62 = !DIExpression()
 !63 = !DILocation(line: 4, column: 12, scope: !14)
 !64 = !DILocation(line: 4, column: 16, scope: !14)
 !65 = !DILocation(line: 20, column: 12, scope: !17)
-!66 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "b", line: 21, arg: 1, scope: !21, file: !18, type: !24)
+!66 = !DILocalVariable(name: "b", line: 21, arg: 1, scope: !21, file: !18, type: !24)
 !67 = !DILocation(line: 21, column: 15, scope: !21)
 !68 = !DILocation(line: 22, column: 7, scope: !21)
 !69 = !DILocation(line: 24, column: 5, scope: !38)

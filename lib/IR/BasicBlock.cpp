@@ -197,7 +197,7 @@ BasicBlock::iterator BasicBlock::getFirstInsertionPt() {
     return end();
 
   iterator InsertPt = FirstNonPHI;
-  if (isa<LandingPadInst>(InsertPt)) ++InsertPt;
+  if (InsertPt->isEHPad()) ++InsertPt;
   return InsertPt;
 }
 
@@ -333,6 +333,17 @@ void BasicBlock::removePredecessor(BasicBlock *Pred,
   }
 }
 
+bool BasicBlock::canSplitPredecessors() const {
+  const Instruction *FirstNonPHI = getFirstNonPHI();
+  if (isa<LandingPadInst>(FirstNonPHI))
+    return true;
+  // This is perhaps a little conservative because constructs like
+  // CleanupBlockInst are pretty easy to split.  However, SplitBlockPredecessors
+  // cannot handle such things just yet.
+  if (FirstNonPHI->isEHPad())
+    return false;
+  return true;
+}
 
 /// This splits a basic block into two at the specified
 /// instruction.  Note that all instructions BEFORE the specified iterator stay
@@ -375,12 +386,14 @@ BasicBlock *BasicBlock::splitBasicBlock(iterator I, const Twine &BBName) {
     // incoming values...
     BasicBlock *Successor = *I;
     PHINode *PN;
-    for (BasicBlock::iterator II = Successor->begin();
-         (PN = dyn_cast<PHINode>(II)); ++II) {
-      int IDX = PN->getBasicBlockIndex(this);
-      while (IDX != -1) {
-        PN->setIncomingBlock((unsigned)IDX, New);
-        IDX = PN->getBasicBlockIndex(this);
+    if (!Successor->InstList.empty()) {
+      for (BasicBlock::iterator II = Successor->begin();
+        (PN = dyn_cast<PHINode>(II)); ++II) {
+        int IDX = PN->getBasicBlockIndex(this);
+        while (IDX != -1) {
+          PN->setIncomingBlock((unsigned)IDX, New);
+          IDX = PN->getBasicBlockIndex(this);
+        }
       }
     }
   }
@@ -393,8 +406,7 @@ void BasicBlock::replaceSuccessorsPhiUsesWith(BasicBlock *New) {
     // Cope with being called on a BasicBlock that doesn't have a terminator
     // yet. Clang's CodeGenFunction::EmitReturnBlock() likes to do this.
     return;
-  for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i) {
-    BasicBlock *Succ = TI->getSuccessor(i);
+  for (BasicBlock *Succ : TI->successors()) {
     // N.B. Succ might not be a complete BasicBlock, so don't assume
     // that it ends with a non-phi instruction.
     for (iterator II = Succ->begin(), IE = Succ->end(); II != IE; ++II) {

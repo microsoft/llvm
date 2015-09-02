@@ -148,7 +148,7 @@ namespace llvm {
     // copy - Allocate copy in Allocator and return ArrayRef<T> to it.
     template <typename Allocator> ArrayRef<T> copy(Allocator &A) {
       T *Buff = A.template Allocate<T>(Length);
-      std::copy(begin(), end(), Buff);
+      std::uninitialized_copy(begin(), end(), Buff);
       return ArrayRef<T>(Buff, Length);
     }
 
@@ -156,8 +156,6 @@ namespace llvm {
     bool equals(ArrayRef RHS) const {
       if (Length != RHS.Length)
         return false;
-      if (Length == 0)
-        return true;
       return std::equal(begin(), end(), RHS.begin());
     }
 

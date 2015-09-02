@@ -164,8 +164,9 @@ RuntimeDyldImpl::loadObjectImpl(const object::ObjectFile &Obj) {
         ErrorOr<StringRef> NameOrErr = I->getName();
         Check(NameOrErr.getError());
         StringRef Name = *NameOrErr;
-        section_iterator SI = Obj.section_end();
-        Check(I->getSection(SI));
+        ErrorOr<section_iterator> SIOrErr = I->getSection();
+        Check(SIOrErr.getError());
+        section_iterator SI = *SIOrErr;
         if (SI == Obj.section_end())
           continue;
         uint64_t SectOffset;
@@ -521,6 +522,9 @@ void RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
     Offset += Size;
     Addr += Size;
   }
+
+  if (Checker)
+    Checker->registerSection(Obj.getFileName(), SectionID);
 }
 
 unsigned RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
@@ -559,6 +563,12 @@ unsigned RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
   // Virtual sections have no data in the object image, so leave pData = 0
   if (!IsVirtual)
     pData = data.data();
+
+  // Code section alignment needs to be at least as high as stub alignment or
+  // padding calculations may by incorrect when the section is remapped to a
+  // higher alignment.
+  if (IsCode)
+    Alignment = std::max(Alignment, getStubAlignment());
 
   // Some sections, such as debug info, don't need to be loaded for execution.
   // Leave those where they are.

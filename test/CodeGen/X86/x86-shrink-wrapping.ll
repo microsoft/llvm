@@ -532,7 +532,11 @@ declare hidden fastcc %struct.temp_slot* @find_temp_slot_from_address(%struct.rt
 ;
 ; CHECK: movl $24599, [[TMP2:%e[a-z]+]]
 ; CHECK-NEXT: btl [[TMP]], [[TMP2]]
-; CHECK-NEXT: jb [[CLEANUP]]
+; CHECK-NEXT: jae [[LOR_LHS_FALSE:LBB[0-9_]+]]
+;
+; CHECK: [[CLEANUP]]: ## %cleanup
+; DISABLE: popq
+; CHECK-NEXT: retq
 ;
 ; CHECK: [[LOR_LHS_FALSE]]: ## %lor.lhs.false
 ; CHECK: cmpl $134, %e[[BF_LOAD2]]
@@ -551,10 +555,6 @@ declare hidden fastcc %struct.temp_slot* @find_temp_slot_from_address(%struct.rt
 ; CHECK-NEXT: je [[CLEANUP]]
 ;
 ; CHECK: movb $1, 57(%rax)
-;
-; CHECK: [[CLEANUP]]: ## %cleanup
-; DISABLE: popq
-; CHECK-NEXT: retq
 define void @useLEA(%struct.rtx_def* readonly %x) {
 entry:
   %cmp = icmp eq %struct.rtx_def* %x, null
@@ -637,3 +637,33 @@ if.end:
 declare void @abort() #0
 
 attributes #0 = { noreturn nounwind }
+
+
+; Make sure that we handle infinite loops properly When checking that the Save
+; and Restore blocks are control flow equivalent, the loop searches for the
+; immediate (post) dominator for the (restore) save blocks. When either the Save
+; or Restore block is located in an infinite loop the only immediate (post)
+; dominator is itself. In this case, we cannot perform shrink wrapping, but we
+; should return gracefully and continue compilation.
+; The only condition for this test is the compilation finishes correctly.
+;
+; CHECK-LABEL: infiniteloop
+; CHECK: retq
+define void @infiniteloop() {
+entry:
+  br i1 undef, label %if.then, label %if.end
+
+if.then:
+  %ptr = alloca i32, i32 4
+  br label %for.body
+
+for.body:                                         ; preds = %for.body, %entry
+  %sum.03 = phi i32 [ 0, %if.then ], [ %add, %for.body ]
+  %call = tail call i32 asm "movl $$1, $0", "=r,~{ebx}"()
+  %add = add nsw i32 %call, %sum.03
+  store i32 %add, i32* %ptr
+  br label %for.body
+
+if.end:
+  ret void
+}

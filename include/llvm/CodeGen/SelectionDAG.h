@@ -687,7 +687,7 @@ public:
                   SDValue N3, SDValue N4);
   SDValue getNode(unsigned Opcode, SDLoc DL, EVT VT, SDValue N1, SDValue N2,
                   SDValue N3, SDValue N4, SDValue N5);
-  
+
   // Specialize again based on number of operands for nodes with a VTList
   // rather than a single VT.
   SDValue getNode(unsigned Opcode, SDLoc DL, SDVTList VTs);
@@ -901,6 +901,12 @@ public:
   /// the target's desired shift amount type.
   SDValue getShiftAmountOperand(EVT LHSTy, SDValue Op);
 
+  /// Expand the specified \c ISD::VAARG node as the Legalize pass would.
+  SDValue expandVAArg(SDNode *Node);
+
+  /// Expand the specified \c ISD::VACOPY node as the Legalize pass would.
+  SDValue expandVACopy(SDNode *Node);
+
   /// *Mutate* the specified node in-place to have the
   /// specified operands.  If the resultant node already exists in the DAG,
   /// this does not modify the specified node, instead it returns the node that
@@ -1072,6 +1078,10 @@ public:
     // target info.
     switch (Opcode) {
     case ISD::ADD:
+    case ISD::SMIN:
+    case ISD::SMAX:
+    case ISD::UMIN:
+    case ISD::UMAX:
     case ISD::MUL:
     case ISD::MULHU:
     case ISD::MULHS:
@@ -1088,6 +1098,8 @@ public:
     case ISD::ADDE:
     case ISD::FMINNUM:
     case ISD::FMAXNUM:
+    case ISD::FMINNAN:
+    case ISD::FMAXNAN:
       return true;
     default: return false;
     }

@@ -95,23 +95,23 @@ attributes #2 = { "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "n
 !llvm.module.flags = !{!13, !14}
 !llvm.ident = !{!15}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: false, emissionKind: 1, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
 !1 = !DIFile(filename: "inline-scopes.cpp", directory: "/tmp/dbginfo")
 !2 = !{}
 !3 = !{!4, !10, !12}
-!4 = !DISubprogram(name: "main", line: 7, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 7, file: !5, scope: !6, type: !7, function: i32 ()* @main, variables: !2)
+!4 = distinct !DISubprogram(name: "main", line: 7, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 7, file: !5, scope: !6, type: !7, function: i32 ()* @main, variables: !2)
 !5 = !DIFile(filename: "y.cc", directory: "/tmp/dbginfo")
 !6 = !DIFile(filename: "y.cc", directory: "/tmp/dbginfo")
 !7 = !DISubroutineType(types: !8)
 !8 = !{!9}
 !9 = !DIBasicType(tag: DW_TAG_base_type, name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
-!10 = !DISubprogram(name: "f2", linkageName: "_Z2f2v", line: 8, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 8, file: !1, scope: !11, type: !7, variables: !2)
+!10 = distinct !DISubprogram(name: "f2", linkageName: "_Z2f2v", line: 8, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 8, file: !1, scope: !11, type: !7, variables: !2)
 !11 = !DIFile(filename: "inline-scopes.cpp", directory: "/tmp/dbginfo")
-!12 = !DISubprogram(name: "f1", linkageName: "_Z2f1v", line: 2, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 2, file: !1, scope: !11, type: !7, variables: !2)
+!12 = distinct !DISubprogram(name: "f1", linkageName: "_Z2f1v", line: 2, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 2, file: !1, scope: !11, type: !7, variables: !2)
 !13 = !{i32 2, !"Dwarf Version", i32 4}
 !14 = !{i32 1, !"Debug Info Version", i32 3}
 !15 = !{!"clang version 3.5.0 "}
-!16 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "b", line: 3, scope: !17, file: !11, type: !18)
+!16 = !DILocalVariable(name: "b", line: 3, scope: !17, file: !11, type: !18)
 !17 = distinct !DILexicalBlock(line: 3, column: 0, file: !1, scope: !12)
 !18 = !DIBasicType(tag: DW_TAG_base_type, name: "bool", size: 8, align: 8, encoding: DW_ATE_boolean)
 !19 = !DILocation(line: 3, scope: !17, inlinedAt: !20)
@@ -119,7 +119,7 @@ attributes #2 = { "less-precise-fpmad"="false" "no-frame-pointer-elim"="true" "n
 !21 = !DILocation(line: 4, scope: !17, inlinedAt: !20)
 !22 = !DILocation(line: 5, scope: !12, inlinedAt: !20)
 !23 = !DILocation(line: 6, scope: !12, inlinedAt: !20)
-!24 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "b", line: 2, scope: !25, file: !6, type: !18)
+!24 = !DILocalVariable(name: "b", line: 2, scope: !25, file: !6, type: !18)
 !25 = distinct !DILexicalBlock(line: 2, column: 0, file: !5, scope: !26)
 !26 = !DILexicalBlockFile(discriminator: 0, file: !5, scope: !10)
 !27 = !DILocation(line: 2, scope: !25, inlinedAt: !28)

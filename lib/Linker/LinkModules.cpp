@@ -425,18 +425,22 @@ class ModuleLinker {
   DiagnosticHandlerFunction DiagnosticHandler;
 
   /// For symbol clashes, prefer those from Src.
-  bool OverrideFromSrc;
+  unsigned Flags;
 
 public:
   ModuleLinker(Module *dstM, Linker::IdentifiedStructTypeSet &Set, Module *srcM,
-               DiagnosticHandlerFunction DiagnosticHandler,
-               bool OverrideFromSrc)
+               DiagnosticHandlerFunction DiagnosticHandler, unsigned Flags)
       : DstM(dstM), SrcM(srcM), TypeMap(Set),
         ValMaterializer(TypeMap, DstM, LazilyLinkGlobalValues),
-        DiagnosticHandler(DiagnosticHandler), OverrideFromSrc(OverrideFromSrc) {
-  }
+        DiagnosticHandler(DiagnosticHandler), Flags(Flags) {}
 
   bool run();
+
+  bool shouldOverrideFromSrc() { return Flags & Linker::OverrideFromSrc; }
+  bool shouldLinkOnlyNeeded() { return Flags & Linker::LinkOnlyNeeded; }
+  bool shouldInternalizeLinkedSymbols() {
+    return Flags & Linker::InternalizeLinkedSymbols;
+  }
 
 private:
   bool shouldLinkFromSource(bool &LinkFromSrc, const GlobalValue &Dest,
@@ -730,7 +734,7 @@ bool ModuleLinker::shouldLinkFromSource(bool &LinkFromSrc,
                                         const GlobalValue &Dest,
                                         const GlobalValue &Src) {
   // Should we unconditionally use the Src?
-  if (OverrideFromSrc) {
+  if (shouldOverrideFromSrc()) {
     LinkFromSrc = true;
     return false;
   }
@@ -1081,9 +1085,16 @@ bool ModuleLinker::linkGlobalValueProto(GlobalValue *SGV) {
   } else {
     // If the GV is to be lazily linked, don't create it just yet.
     // The ValueMaterializerTy will deal with creating it if it's used.
-    if (!DGV && !OverrideFromSrc &&
+    if (!DGV && !shouldOverrideFromSrc() &&
         (SGV->hasLocalLinkage() || SGV->hasLinkOnceLinkage() ||
          SGV->hasAvailableExternallyLinkage())) {
+      DoNotLinkFromSource.insert(SGV);
+      return false;
+    }
+
+    // When we only want to link in unresolved dependencies, blacklist
+    // the symbol unless unless DestM has a matching declaration (DGV).
+    if (shouldLinkOnlyNeeded() && !(DGV && DGV->isDeclaration())) {
       DoNotLinkFromSource.insert(SGV);
       return false;
     }
@@ -1156,7 +1167,7 @@ void ModuleLinker::linkAppendingVarInit(const AppendingVarInfo &AVI) {
         continue;
     }
     DstElements.push_back(
-        MapValue(V, ValueMap, RF_None, &TypeMap, &ValMaterializer));
+        MapValue(V, ValueMap, RF_MoveDistinctMDs, &TypeMap, &ValMaterializer));
   }
   if (IsNewStructor) {
     NewType = ArrayType::get(NewType->getElementType(), DstElements.size());
@@ -1170,8 +1181,8 @@ void ModuleLinker::linkAppendingVarInit(const AppendingVarInfo &AVI) {
 /// referenced are in Dest.
 void ModuleLinker::linkGlobalInit(GlobalVariable &Dst, GlobalVariable &Src) {
   // Figure out what the initializer looks like in the dest module.
-  Dst.setInitializer(MapValue(Src.getInitializer(), ValueMap, RF_None, &TypeMap,
-                              &ValMaterializer));
+  Dst.setInitializer(MapValue(Src.getInitializer(), ValueMap,
+                              RF_MoveDistinctMDs, &TypeMap, &ValMaterializer));
 }
 
 /// Copy the source function over into the dest function and fix up references
@@ -1186,18 +1197,20 @@ bool ModuleLinker::linkFunctionBody(Function &Dst, Function &Src) {
 
   // Link in the prefix data.
   if (Src.hasPrefixData())
-    Dst.setPrefixData(MapValue(Src.getPrefixData(), ValueMap, RF_None, &TypeMap,
-                               &ValMaterializer));
+    Dst.setPrefixData(MapValue(Src.getPrefixData(), ValueMap,
+                               RF_MoveDistinctMDs, &TypeMap, &ValMaterializer));
 
   // Link in the prologue data.
   if (Src.hasPrologueData())
-    Dst.setPrologueData(MapValue(Src.getPrologueData(), ValueMap, RF_None,
-                                 &TypeMap, &ValMaterializer));
+    Dst.setPrologueData(MapValue(Src.getPrologueData(), ValueMap,
+                                 RF_MoveDistinctMDs, &TypeMap,
+                                 &ValMaterializer));
 
   // Link in the personality function.
   if (Src.hasPersonalityFn())
-    Dst.setPersonalityFn(MapValue(Src.getPersonalityFn(), ValueMap, RF_None,
-                                  &TypeMap, &ValMaterializer));
+    Dst.setPersonalityFn(MapValue(Src.getPersonalityFn(), ValueMap,
+                                  RF_MoveDistinctMDs, &TypeMap,
+                                  &ValMaterializer));
 
   // Go through and convert function arguments over, remembering the mapping.
   Function::arg_iterator DI = Dst.arg_begin();
@@ -1213,8 +1226,8 @@ bool ModuleLinker::linkFunctionBody(Function &Dst, Function &Src) {
   SmallVector<std::pair<unsigned, MDNode *>, 8> MDs;
   Src.getAllMetadata(MDs);
   for (const auto &I : MDs)
-    Dst.setMetadata(I.first, MapMetadata(I.second, ValueMap, RF_None, &TypeMap,
-                                         &ValMaterializer));
+    Dst.setMetadata(I.first, MapMetadata(I.second, ValueMap, RF_MoveDistinctMDs,
+                                         &TypeMap, &ValMaterializer));
 
   // Splice the body of the source function into the dest function.
   Dst.getBasicBlockList().splice(Dst.end(), Src.getBasicBlockList());
@@ -1225,7 +1238,8 @@ bool ModuleLinker::linkFunctionBody(Function &Dst, Function &Src) {
   // functions and patch them up to point to the local versions.
   for (BasicBlock &BB : Dst)
     for (Instruction &I : BB)
-      RemapInstruction(&I, ValueMap, RF_IgnoreMissingEntries, &TypeMap,
+      RemapInstruction(&I, ValueMap,
+                       RF_IgnoreMissingEntries | RF_MoveDistinctMDs, &TypeMap,
                        &ValMaterializer);
 
   // There is no need to map the arguments anymore.
@@ -1238,14 +1252,17 @@ bool ModuleLinker::linkFunctionBody(Function &Dst, Function &Src) {
 
 void ModuleLinker::linkAliasBody(GlobalAlias &Dst, GlobalAlias &Src) {
   Constant *Aliasee = Src.getAliasee();
-  Constant *Val =
-      MapValue(Aliasee, ValueMap, RF_None, &TypeMap, &ValMaterializer);
+  Constant *Val = MapValue(Aliasee, ValueMap, RF_MoveDistinctMDs, &TypeMap,
+                           &ValMaterializer);
   Dst.setAliasee(Val);
 }
 
 bool ModuleLinker::linkGlobalValueBody(GlobalValue &Src) {
   Value *Dst = ValueMap[&Src];
   assert(Dst);
+  if (shouldInternalizeLinkedSymbols())
+    if (auto *DGV = dyn_cast<GlobalValue>(Dst))
+      DGV->setLinkage(GlobalValue::InternalLinkage);
   if (auto *F = dyn_cast<Function>(&Src))
     return linkFunctionBody(cast<Function>(*Dst), *F);
   if (auto *GVar = dyn_cast<GlobalVariable>(&Src)) {
@@ -1266,8 +1283,8 @@ void ModuleLinker::linkNamedMDNodes() {
     NamedMDNode *DestNMD = DstM->getOrInsertNamedMetadata(NMD.getName());
     // Add Src elements into Dest node.
     for (const MDNode *op : NMD.operands())
-      DestNMD->addOperand(
-          MapMetadata(op, ValueMap, RF_None, &TypeMap, &ValMaterializer));
+      DestNMD->addOperand(MapMetadata(op, ValueMap, RF_MoveDistinctMDs,
+                                      &TypeMap, &ValMaterializer));
   }
 }
 
@@ -1574,7 +1591,7 @@ bool ModuleLinker::run() {
       continue;
     const GlobalValue *GV = SrcM->getNamedValue(C.getName());
     if (GV)
-      MapValue(GV, ValueMap, RF_None, &TypeMap, &ValMaterializer);
+      MapValue(GV, ValueMap, RF_MoveDistinctMDs, &TypeMap, &ValMaterializer);
   }
 
   // Strip replaced subprograms before mapping any metadata -- so that we're
@@ -1628,6 +1645,11 @@ bool ModuleLinker::run() {
   while (!LazilyLinkGlobalValues.empty()) {
     GlobalValue *SGV = LazilyLinkGlobalValues.back();
     LazilyLinkGlobalValues.pop_back();
+
+    // Skip declarations that ValueMaterializer may have created in
+    // case we link in only some of SrcM.
+    if (shouldLinkOnlyNeeded() && SGV->isDeclaration())
+      continue;
 
     assert(!SGV->isDeclaration() && "users should not pass down decls");
     if (linkGlobalValueBody(*SGV))
@@ -1751,17 +1773,14 @@ Linker::Linker(Module *M) {
   });
 }
 
-Linker::~Linker() {
-}
-
 void Linker::deleteModule() {
   delete Composite;
   Composite = nullptr;
 }
 
-bool Linker::linkInModule(Module *Src, bool OverrideSymbols) {
+bool Linker::linkInModule(Module *Src, unsigned Flags) {
   ModuleLinker TheLinker(Composite, IdentifiedStructTypes, Src,
-                         DiagnosticHandler, OverrideSymbols);
+                         DiagnosticHandler, Flags);
   bool RetCode = TheLinker.run();
   Composite->dropTriviallyDeadConstantArrays();
   return RetCode;
@@ -1781,14 +1800,15 @@ void Linker::setModule(Module *Dst) {
 /// Upon failure, the Dest module could be in a modified state, and shouldn't be
 /// relied on to be consistent.
 bool Linker::LinkModules(Module *Dest, Module *Src,
-                         DiagnosticHandlerFunction DiagnosticHandler) {
+                         DiagnosticHandlerFunction DiagnosticHandler,
+                         unsigned Flags) {
   Linker L(Dest, DiagnosticHandler);
-  return L.linkInModule(Src);
+  return L.linkInModule(Src, Flags);
 }
 
-bool Linker::LinkModules(Module *Dest, Module *Src) {
+bool Linker::LinkModules(Module *Dest, Module *Src, unsigned Flags) {
   Linker L(Dest);
-  return L.linkInModule(Src);
+  return L.linkInModule(Src, Flags);
 }
 
 //===----------------------------------------------------------------------===//

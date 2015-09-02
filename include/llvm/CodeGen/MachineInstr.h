@@ -1100,6 +1100,9 @@ public:
   ///
   bool hasUnmodeledSideEffects() const;
 
+  /// Returns true if it is illegal to fold a load across this instruction.
+  bool isLoadFoldBarrier() const;
+
   /// Return true if all the defs of this instruction are dead.
   bool allDefsAreDead() const;
 
@@ -1180,15 +1183,14 @@ public:
     }
   }
 
+  /// Add all implicit def and use operands to this instruction.
+  void addImplicitDefUseOperands(MachineFunction &MF);
 
 private:
   /// If this instruction is embedded into a MachineFunction, return the
   /// MachineRegisterInfo object for the current function, otherwise
   /// return null.
   MachineRegisterInfo *getRegInfo();
-
-  /// Add all implicit def and use operands to this instruction.
-  void addImplicitDefUseOperands(MachineFunction &MF);
 
   /// Unlink all of the register operands in this instruction from their
   /// respective use lists.  This requires that the operands already be on their

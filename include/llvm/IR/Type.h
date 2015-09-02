@@ -63,45 +63,36 @@ public:
     LabelTyID,       ///<  7: Labels
     MetadataTyID,    ///<  8: Metadata
     X86_MMXTyID,     ///<  9: MMX vectors (64 bits, X86 specific)
+    TokenTyID,       ///< 10: Tokens
 
     // Derived types... see DerivedTypes.h file.
     // Make sure FirstDerivedTyID stays up to date!
-    IntegerTyID,     ///< 10: Arbitrary bit width integers
-    FunctionTyID,    ///< 11: Functions
-    StructTyID,      ///< 12: Structures
-    ArrayTyID,       ///< 13: Arrays
-    PointerTyID,     ///< 14: Pointers
-    VectorTyID       ///< 15: SIMD 'packed' format, or other vector type
+    IntegerTyID,     ///< 11: Arbitrary bit width integers
+    FunctionTyID,    ///< 12: Functions
+    StructTyID,      ///< 13: Structures
+    ArrayTyID,       ///< 14: Arrays
+    PointerTyID,     ///< 15: Pointers
+    VectorTyID       ///< 16: SIMD 'packed' format, or other vector type
   };
 
 private:
   /// Context - This refers to the LLVMContext in which this type was uniqued.
   LLVMContext &Context;
 
-  // Due to Ubuntu GCC bug 910363:
-  // https://bugs.launchpad.net/ubuntu/+source/gcc-4.5/+bug/910363
-  // Bitpack ID and SubclassData manually.
-  // Note: TypeID : low 8 bit; SubclassData : high 24 bit.
-  uint32_t IDAndSubclassData;
+  TypeID   ID : 8;            // The current base type of this type.
+  unsigned SubclassData : 24; // Space for subclasses to store data.
 
 protected:
   friend class LLVMContextImpl;
   explicit Type(LLVMContext &C, TypeID tid)
-    : Context(C), IDAndSubclassData(0),
-      NumContainedTys(0), ContainedTys(nullptr) {
-    setTypeID(tid);
-  }
+    : Context(C), ID(tid), SubclassData(0),
+      NumContainedTys(0), ContainedTys(nullptr) {}
   ~Type() = default;
 
-  void setTypeID(TypeID ID) {
-    IDAndSubclassData = (ID & 0xFF) | (IDAndSubclassData & 0xFFFFFF00);
-    assert(getTypeID() == ID && "TypeID data too large for field");
-  }
-  
-  unsigned getSubclassData() const { return IDAndSubclassData >> 8; }
-  
+  unsigned getSubclassData() const { return SubclassData; }
+
   void setSubclassData(unsigned val) {
-    IDAndSubclassData = (IDAndSubclassData & 0xFF) | (val << 8);
+    SubclassData = val;
     // Ensure we don't have any accidental truncation.
     assert(getSubclassData() == val && "Subclass data too large for field");
   }
@@ -131,7 +122,7 @@ public:
   /// getTypeID - Return the type id for the type.  This will return one
   /// of the TypeID enum elements defined above.
   ///
-  TypeID getTypeID() const { return (TypeID)(IDAndSubclassData & 0xFF); }
+  TypeID getTypeID() const { return ID; }
 
   /// isVoidTy - Return true if this is 'void'.
   bool isVoidTy() const { return getTypeID() == VoidTyID; }
@@ -187,6 +178,9 @@ public:
 
   /// isMetadataTy - Return true if this is 'metadata'.
   bool isMetadataTy() const { return getTypeID() == MetadataTyID; }
+
+  /// isTokenTy - Return true if this is 'token'.
+  bool isTokenTy() const { return getTypeID() == TokenTyID; }
 
   /// isIntegerTy - True if this is an instance of IntegerType.
   ///
@@ -265,7 +259,7 @@ public:
   /// get the actual size for a particular target, it is reasonable to use the
   /// DataLayout subsystem to do this.
   ///
-  bool isSized(SmallPtrSetImpl<const Type*> *Visited = nullptr) const {
+  bool isSized(SmallPtrSetImpl<Type*> *Visited = nullptr) const {
     // If it's a primitive, it is always sized.
     if (getTypeID() == IntegerTyID || isFloatingPointTy() ||
         getTypeID() == PointerTyID ||
@@ -304,8 +298,7 @@ public:
 
   /// getScalarType - If this is a vector type, return the element type,
   /// otherwise return 'this'.
-  const Type *getScalarType() const LLVM_READONLY;
-  Type *getScalarType() LLVM_READONLY;
+  Type *getScalarType() const LLVM_READONLY;
 
   //===--------------------------------------------------------------------===//
   // Type Iteration support.
@@ -389,6 +382,7 @@ public:
   static Type *getFP128Ty(LLVMContext &C);
   static Type *getPPC_FP128Ty(LLVMContext &C);
   static Type *getX86_MMXTy(LLVMContext &C);
+  static Type *getTokenTy(LLVMContext &C);
   static IntegerType *getIntNTy(LLVMContext &C, unsigned N);
   static IntegerType *getInt1Ty(LLVMContext &C);
   static IntegerType *getInt8Ty(LLVMContext &C);
@@ -417,13 +411,13 @@ public:
 
   /// getPointerTo - Return a pointer to the current type.  This is equivalent
   /// to PointerType::get(Foo, AddrSpace).
-  PointerType *getPointerTo(unsigned AddrSpace = 0);
+  PointerType *getPointerTo(unsigned AddrSpace = 0) const;
 
 private:
   /// isSizedDerivedType - Derived types like structures and arrays are sized
   /// iff all of the members of the type are sized as well.  Since asking for
   /// their size is relatively uncommon, move this operation out of line.
-  bool isSizedDerivedType(SmallPtrSetImpl<const Type*> *Visited = nullptr) const;
+  bool isSizedDerivedType(SmallPtrSetImpl<Type*> *Visited = nullptr) const;
 };
 
 // Printing of types.

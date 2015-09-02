@@ -62,6 +62,7 @@ void WinException::beginFunction(const MachineFunction *MF) {
 
   // If any landing pads survive, we need an EH table.
   bool hasLandingPads = !MMI->getLandingPads().empty();
+  bool hasEHFunclets = MMI->hasEHFunclets();
 
   const Function *F = MF->getFunction();
   const Function *ParentF = MMI->getWinEHParent(F);
@@ -77,19 +78,22 @@ void WinException::beginFunction(const MachineFunction *MF) {
   bool forceEmitPersonality =
     F->hasPersonalityFn() && !isNoOpWithoutInvoke(classifyEHPersonality(Per)) &&
     F->needsUnwindTableEntry();
-  shouldEmitPersonality = forceEmitPersonality || ((hasLandingPads || F != ParentF) &&
-    PerEncoding != dwarf::DW_EH_PE_omit && Per);
+
+  shouldEmitPersonality =
+    forceEmitPersonality || ((hasLandingPads || hasEHFunclets || F != ParentF) &&
+                               PerEncoding != dwarf::DW_EH_PE_omit && Per);
 
   unsigned LSDAEncoding = TLOF.getLSDAEncoding();
   shouldEmitLSDA = shouldEmitPersonality &&
     LSDAEncoding != dwarf::DW_EH_PE_omit;
 
-  // If we're not using CFI, we don't want the CFI or the personality. If
-  // WinEHPrepare outlined something, we should emit the LSDA.
+  // If we're not using CFI, we don't want the CFI or the personality, but we
+  // might want EH tables if we had EH pads.
+  // FIXME: If WinEHPrepare outlined something, we should emit the LSDA. Remove
+  // this once WinEHPrepare stops doing that.
   if (!Asm->MAI->usesWindowsCFI()) {
-    bool HasOutlinedChildren =
-        F->hasFnAttribute("wineh-parent") && F == ParentF;
-    shouldEmitLSDA = HasOutlinedChildren;
+    shouldEmitLSDA =
+        hasEHFunclets || (F->hasFnAttribute("wineh-parent") && F == ParentF);
     shouldEmitPersonality = false;
     return;
   }
@@ -183,10 +187,13 @@ const MCExpr *WinException::create32bitRef(const MCSymbol *Value) {
                                  Asm->OutContext);
 }
 
-const MCExpr *WinException::create32bitRef(const GlobalValue *GV) {
-  if (!GV)
+const MCExpr *WinException::create32bitRef(const Value *V) {
+  if (!V)
     return MCConstantExpr::create(0, Asm->OutContext);
-  return create32bitRef(Asm->getSymbol(GV));
+  // FIXME: Delete the GlobalValue case once the new IR is fully functional.
+  if (const auto *GV = dyn_cast<GlobalValue>(V))
+    return create32bitRef(Asm->getSymbol(GV));
+  return create32bitRef(MMI->getAddrLabelSymbol(cast<BasicBlock>(V)));
 }
 
 /// Emit the language-specific data that __C_specific_handler expects.  This
@@ -321,14 +328,17 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
 
     extendIP2StateTable(MF, ParentF, FuncInfo);
 
-    // Defer emission until we've visited the parent function and all the catch
-    // handlers.  Cleanups don't contribute to the ip2state table, so don't count
-    // them.
-    if (ParentF != F && !FuncInfo.CatchHandlerMaxState.count(F))
-      return;
-    ++FuncInfo.NumIPToStateFuncsVisited;
-    if (FuncInfo.NumIPToStateFuncsVisited != FuncInfo.CatchHandlerMaxState.size())
-      return;
+    if (!MMI->hasEHFunclets()) {
+      // Defer emission until we've visited the parent function and all the
+      // catch handlers.  Cleanups don't contribute to the ip2state table, so
+      // don't count them.
+      if (ParentF != F && !FuncInfo.CatchHandlerMaxState.count(F))
+        return;
+      ++FuncInfo.NumIPToStateFuncsVisited;
+      if (FuncInfo.NumIPToStateFuncsVisited !=
+          FuncInfo.CatchHandlerMaxState.size())
+        return;
+    }
   } else {
     FuncInfoXData = Asm->OutContext.getOrCreateLSDASymbol(ParentLinkageName);
     emitEHRegistrationOffsetLabel(FuncInfo, ParentLinkageName);
@@ -411,10 +421,13 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
 
       HandlerMaps.push_back(HandlerMapXData);
 
-      int CatchHigh = -1;
-      for (WinEHHandlerType &HT : TBME.HandlerArray)
-        CatchHigh =
-            std::max(CatchHigh, FuncInfo.CatchHandlerMaxState[HT.Handler]);
+      int CatchHigh = TBME.CatchHigh;
+      if (CatchHigh == -1) {
+        for (WinEHHandlerType &HT : TBME.HandlerArray)
+          CatchHigh = std::max(
+              CatchHigh,
+              FuncInfo.CatchHandlerMaxState[cast<Function>(HT.Handler)]);
+      }
 
       assert(TBME.TryLow <= TBME.TryHigh);
       OS.EmitIntValue(TBME.TryLow, 4);                    // TryLow
@@ -456,7 +469,10 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
         OS.EmitIntValue(HT.Adjectives, 4);                    // Adjectives
         OS.EmitValue(create32bitRef(HT.TypeDescriptor), 4);   // Type
         OS.EmitValue(FrameAllocOffsetRef, 4);                 // CatchObjOffset
-        OS.EmitValue(create32bitRef(HT.Handler), 4);          // Handler
+        if (HT.HandlerMBB)                                    // Handler
+          OS.EmitValue(create32bitRef(HT.HandlerMBB->getSymbol()), 4);
+        else
+          OS.EmitValue(create32bitRef(HT.Handler), 4);
 
         if (shouldEmitPersonality) {
           MCSymbol *ParentFrameOffset =

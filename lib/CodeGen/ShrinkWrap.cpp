@@ -78,6 +78,10 @@ STATISTIC(NumCandidates, "Number of shrink-wrapping candidates");
 STATISTIC(NumCandidatesDropped,
           "Number of shrink-wrapping candidates dropped because of frequency");
 
+static cl::opt<cl::boolOrDefault>
+    EnableShrinkWrapOpt("enable-shrink-wrap", cl::Hidden,
+                        cl::desc("enable the shrink-wrapping pass"));
+
 namespace {
 /// \brief Class to determine where the safe point to insert the
 /// prologue and epilogue are.
@@ -148,6 +152,9 @@ class ShrinkWrap : public MachineFunctionPass {
   /// shrink-wrapping.
   bool ArePointsInteresting() const { return Save != Entry && Save && Restore; }
 
+  /// \brief Check if shrink wrapping is enabled for this target and function.
+  static bool isShrinkWrapEnabled(const MachineFunction &MF);
+  
 public:
   static char ID;
 
@@ -290,19 +297,38 @@ void ShrinkWrap::updateSaveRestorePoints(MachineBasicBlock &MBB) {
     // Fix (C).
     if (Save && Restore && Save != Restore &&
         MLI->getLoopFor(Save) != MLI->getLoopFor(Restore)) {
-      if (MLI->getLoopDepth(Save) > MLI->getLoopDepth(Restore))
-        // Push Save outside of this loop.
-        Save = FindIDom<>(*Save, Save->predecessors(), *MDT);
-      else
-        // Push Restore outside of this loop.
-        Restore = FindIDom<>(*Restore, Restore->successors(), *MPDT);
+      if (MLI->getLoopDepth(Save) > MLI->getLoopDepth(Restore)) {
+        // Push Save outside of this loop if immediate dominator is different
+        // from save block. If immediate dominator is not different, bail out. 
+        MachineBasicBlock *IDom = FindIDom<>(*Save, Save->predecessors(), *MDT);
+        if (IDom != Save)
+          Save = IDom;
+        else {
+          Save = nullptr;
+          break;
+        }
+      }
+      else {
+        // Push Restore outside of this loop if immediate post-dominator is
+        // different from restore block. If immediate post-dominator is not
+        // different, bail out. 
+        MachineBasicBlock *IPdom =
+          FindIDom<>(*Restore, Restore->successors(), *MPDT);
+        if (IPdom != Restore)
+          Restore = IPdom; 
+        else {
+          Restore = nullptr;
+          break;
+        }
+      }      
     }
   }
 }
 
 bool ShrinkWrap::runOnMachineFunction(MachineFunction &MF) {
-  if (MF.empty())
+  if (MF.empty() || !isShrinkWrapEnabled(MF))
     return false;
+
   DEBUG(dbgs() << "**** Analysing " << MF.getName() << '\n');
 
   init(MF);
@@ -385,4 +411,21 @@ bool ShrinkWrap::runOnMachineFunction(MachineFunction &MF) {
   MFI->setRestorePoint(Restore);
   ++NumCandidates;
   return false;
+}
+
+bool ShrinkWrap::isShrinkWrapEnabled(const MachineFunction &MF) {
+  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+
+  switch (EnableShrinkWrapOpt) {
+  case cl::BOU_UNSET:
+    return TFI->enableShrinkWrapping(MF);
+  // If EnableShrinkWrap is set, it takes precedence on whatever the
+  // target sets. The rational is that we assume we want to test
+  // something related to shrink-wrapping.
+  case cl::BOU_TRUE:
+    return true;
+  case cl::BOU_FALSE:
+    return false;
+  }
+  llvm_unreachable("Invalid shrink-wrapping state");
 }

@@ -8,6 +8,10 @@
 //===----------------------------------------------------------------------===//
 // Define the main class fuzzer::Fuzzer and most functions.
 //===----------------------------------------------------------------------===//
+
+#ifndef LLVM_FUZZER_INTERNAL_H
+#define LLVM_FUZZER_INTERNAL_H
+
 #include <cassert>
 #include <climits>
 #include <chrono>
@@ -33,13 +37,6 @@ void CopyFileToErr(const std::string &Path);
 std::string DirPlusFile(const std::string &DirPath,
                         const std::string &FileName);
 
-size_t Mutate(uint8_t *Data, size_t Size, size_t MaxSize,
-              FuzzerRandomBase &Rand);
-
-size_t CrossOver(const uint8_t *Data1, size_t Size1, const uint8_t *Data2,
-                 size_t Size2, uint8_t *Out, size_t MaxOutSize,
-                 FuzzerRandomBase &Rand);
-
 void Printf(const char *Fmt, ...);
 void Print(const Unit &U, const char *PrintAfter = "");
 void PrintASCII(const Unit &U, const char *PrintAfter = "");
@@ -52,6 +49,10 @@ void ExecuteCommand(const std::string &Command);
 static const int kSHA1NumBytes = 20;
 // Computes SHA1 hash of 'Len' bytes in 'Data', writes kSHA1NumBytes to 'Out'.
 void ComputeSHA1(const uint8_t *Data, size_t Len, uint8_t *Out);
+
+// Changes U to contain only ASCII (isprint+isspace) characters.
+// Returns true iff U has been changed.
+bool ToASCII(Unit &U);
 
 int NumberOfCpuCores();
 
@@ -71,6 +72,10 @@ class Fuzzer {
     int PreferSmallDuringInitialShuffle = -1;
     size_t MaxNumberOfRuns = ULONG_MAX;
     int SyncTimeout = 600;
+    int ReportSlowUnits = 10;
+    bool OnlyASCII = false;
+    int TBMDepth = 10;
+    int TBMWidth = 10;
     std::string OutputCorpus;
     std::string SyncCommand;
     std::vector<std::string> Tokens;
@@ -105,7 +110,7 @@ class Fuzzer {
   void MutateAndTestOne(Unit *U);
   void ReportNewCoverage(size_t NewCoverage, const Unit &U);
   size_t RunOne(const Unit &U);
-  void RunOneAndUpdateCorpus(const Unit &U);
+  void RunOneAndUpdateCorpus(Unit &U);
   size_t RunOneMaximizeTotalCoverage(const Unit &U);
   size_t RunOneMaximizeFullCoverageSet(const Unit &U);
   size_t RunOneMaximizeCoveragePairs(const Unit &U);
@@ -133,6 +138,7 @@ class Fuzzer {
   Unit CurrentUnit;
 
   size_t TotalNumberOfRuns = 0;
+  size_t TotalNumberOfExecutedTraceBasedMutations = 0;
 
   std::vector<Unit> Corpus;
   std::unordered_set<std::string> UnitHashesAddedToCorpus;
@@ -168,3 +174,5 @@ class SimpleUserSuppliedFuzzer: public UserSuppliedFuzzer {
 };
 
 };  // namespace fuzzer
+
+#endif // LLVM_FUZZER_INTERNAL_H

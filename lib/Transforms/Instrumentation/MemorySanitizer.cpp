@@ -1339,6 +1339,12 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
   }
 
   void visitBitCastInst(BitCastInst &I) {
+    // Special case: if this is the bitcast (there is exactly 1 allowed) between
+    // a musttail call and a ret, don't instrument. New instructions are not
+    // allowed after a musttail call.
+    if (auto *CI = dyn_cast<CallInst>(I.getOperand(0)))
+      if (CI->isMustTailCall())
+        return;
     IRBuilder<> IRB(&I);
     setShadow(&I, IRB.CreateBitCast(getShadow(&I, 0), getShadowTy(&I)));
     setOrigin(&I, getOrigin(&I, 0));
@@ -1730,25 +1736,30 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
 
   /// \brief Instrument signed relational comparisons.
   ///
-  /// Handle (x<0) and (x>=0) comparisons (essentially, sign bit tests) by
-  /// propagating the highest bit of the shadow. Everything else is delegated
-  /// to handleShadowOr().
+  /// Handle sign bit tests: x<0, x>=0, x<=-1, x>-1 by propagating the highest
+  /// bit of the shadow. Everything else is delegated to handleShadowOr().
   void handleSignedRelationalComparison(ICmpInst &I) {
-    Constant *constOp0 = dyn_cast<Constant>(I.getOperand(0));
-    Constant *constOp1 = dyn_cast<Constant>(I.getOperand(1));
-    Value* op = nullptr;
-    CmpInst::Predicate pre = I.getPredicate();
-    if (constOp0 && constOp0->isNullValue() &&
-        (pre == CmpInst::ICMP_SGT || pre == CmpInst::ICMP_SLE)) {
-      op = I.getOperand(1);
-    } else if (constOp1 && constOp1->isNullValue() &&
-               (pre == CmpInst::ICMP_SLT || pre == CmpInst::ICMP_SGE)) {
+    Constant *constOp;
+    Value *op = nullptr;
+    CmpInst::Predicate pre;
+    if ((constOp = dyn_cast<Constant>(I.getOperand(1)))) {
       op = I.getOperand(0);
+      pre = I.getPredicate();
+    } else if ((constOp = dyn_cast<Constant>(I.getOperand(0)))) {
+      op = I.getOperand(1);
+      pre = I.getSwappedPredicate();
+    } else {
+      handleShadowOr(I);
+      return;
     }
-    if (op) {
+
+    if ((constOp->isNullValue() &&
+         (pre == CmpInst::ICMP_SLT || pre == CmpInst::ICMP_SGE)) ||
+        (constOp->isAllOnesValue() &&
+         (pre == CmpInst::ICMP_SGT || pre == CmpInst::ICMP_SLE))) {
       IRBuilder<> IRB(&I);
-      Value* Shadow =
-        IRB.CreateICmpSLT(getShadow(op), getCleanShadow(op), "_msprop_icmpslt");
+      Value *Shadow = IRB.CreateICmpSLT(getShadow(op), getCleanShadow(op),
+                                        "_msprop_icmp_s");
       setShadow(&I, Shadow);
       setOrigin(&I, getOrigin(op));
     } else {
@@ -2493,6 +2504,8 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
 
     // Now, get the shadow for the RetVal.
     if (!I.getType()->isSized()) return;
+    // Don't emit the epilogue for musttail call returns.
+    if (CS.isCall() && cast<CallInst>(&I)->isMustTailCall()) return;
     IRBuilder<> IRBBefore(&I);
     // Until we have full dynamic coverage, make sure the retval shadow is 0.
     Value *Base = getShadowPtrForRetval(&I, IRBBefore);
@@ -2523,10 +2536,22 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
       setOrigin(&I, IRBAfter.CreateLoad(getOriginPtrForRetval(IRBAfter)));
   }
 
+  bool isAMustTailRetVal(Value *RetVal) {
+    if (auto *I = dyn_cast<BitCastInst>(RetVal)) {
+      RetVal = I->getOperand(0);
+    }
+    if (auto *I = dyn_cast<CallInst>(RetVal)) {
+      return I->isMustTailCall();
+    }
+    return false;
+  }
+
   void visitReturnInst(ReturnInst &I) {
     IRBuilder<> IRB(&I);
     Value *RetVal = I.getReturnValue();
     if (!RetVal) return;
+    // Don't emit the epilogue for musttail call returns.
+    if (isAMustTailRetVal(RetVal)) return;
     Value *ShadowPtr = getShadowPtrForRetval(RetVal, IRB);
     if (CheckReturnValue) {
       insertShadowCheck(RetVal, &I);
@@ -2653,6 +2678,26 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     setOrigin(&I, getCleanOrigin());
   }
 
+  void visitCleanupPadInst(CleanupPadInst &I) {
+    setShadow(&I, getCleanShadow(&I));
+    setOrigin(&I, getCleanOrigin());
+  }
+
+  void visitCatchPad(CatchPadInst &I) {
+    setShadow(&I, getCleanShadow(&I));
+    setOrigin(&I, getCleanOrigin());
+  }
+
+  void visitTerminatePad(TerminatePadInst &I) {
+    DEBUG(dbgs() << "TerminatePad: " << I << "\n");
+    // Nothing to do here.
+  }
+
+  void visitCatchEndPadInst(CatchEndPadInst &I) {
+    DEBUG(dbgs() << "CatchEndPad: " << I << "\n");
+    // Nothing to do here.
+  }
+
   void visitGetElementPtrInst(GetElementPtrInst &I) {
     handleShadowOr(I);
   }
@@ -2693,6 +2738,16 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
 
   void visitResumeInst(ResumeInst &I) {
     DEBUG(dbgs() << "Resume: " << I << "\n");
+    // Nothing to do here.
+  }
+
+  void visitCleanupReturnInst(CleanupReturnInst &CRI) {
+    DEBUG(dbgs() << "CleanupReturn: " << CRI << "\n");
+    // Nothing to do here.
+  }
+
+  void visitCatchReturnInst(CatchReturnInst &CRI) {
+    DEBUG(dbgs() << "CatchReturn: " << CRI << "\n");
     // Nothing to do here.
   }
 
@@ -2808,6 +2863,8 @@ struct VarArgAMD64Helper : public VarArgHelper {
   }
 
   void visitVAStartInst(VAStartInst &I) override {
+    if (F.getCallingConv() == CallingConv::X86_64_Win64)
+      return;
     IRBuilder<> IRB(&I);
     VAStartInstrumentationList.push_back(&I);
     Value *VAListTag = I.getArgOperand(0);
@@ -2820,6 +2877,8 @@ struct VarArgAMD64Helper : public VarArgHelper {
   }
 
   void visitVACopyInst(VACopyInst &I) override {
+    if (F.getCallingConv() == CallingConv::X86_64_Win64)
+      return;
     IRBuilder<> IRB(&I);
     Value *VAListTag = I.getArgOperand(0);
     Value *ShadowPtr = MSV.getShadowPtr(VAListTag, IRB.getInt8Ty(), IRB);

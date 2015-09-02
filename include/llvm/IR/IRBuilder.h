@@ -517,10 +517,9 @@ template<bool preserveNames = true, typename T = ConstantFolder,
 class IRBuilder : public IRBuilderBase, public Inserter {
   T Folder;
 public:
-  IRBuilder(LLVMContext &C, const T &F, const Inserter &I = Inserter(),
+  IRBuilder(LLVMContext &C, const T &F, Inserter I = Inserter(),
             MDNode *FPMathTag = nullptr)
-    : IRBuilderBase(C, FPMathTag), Inserter(I), Folder(F) {
-  }
+      : IRBuilderBase(C, FPMathTag), Inserter(std::move(I)), Folder(F) {}
 
   explicit IRBuilder(LLVMContext &C, MDNode *FPMathTag = nullptr)
     : IRBuilderBase(C, FPMathTag), Folder() {
@@ -670,6 +669,35 @@ public:
 
   ResumeInst *CreateResume(Value *Exn) {
     return Insert(ResumeInst::Create(Exn));
+  }
+
+  CleanupReturnInst *CreateCleanupRet(CleanupPadInst *CleanupPad,
+                                      BasicBlock *UnwindBB = nullptr) {
+    return Insert(CleanupReturnInst::Create(CleanupPad, UnwindBB));
+  }
+
+  CatchPadInst *CreateCatchPad(BasicBlock *NormalDest, BasicBlock *UnwindDest,
+                               ArrayRef<Value *> Args, const Twine &Name = "") {
+    return Insert(CatchPadInst::Create(NormalDest, UnwindDest, Args), Name);
+  }
+
+  CatchEndPadInst *CreateCatchEndPad(BasicBlock *UnwindBB = nullptr) {
+    return Insert(CatchEndPadInst::Create(Context, UnwindBB));
+  }
+
+  TerminatePadInst *CreateTerminatePad(BasicBlock *UnwindBB = nullptr,
+                                       ArrayRef<Value *> Args = {},
+                                       const Twine &Name = "") {
+    return Insert(TerminatePadInst::Create(Context, UnwindBB, Args), Name);
+  }
+
+  CleanupPadInst *CreateCleanupPad(ArrayRef<Value *> Args,
+                                   const Twine &Name = "") {
+    return Insert(CleanupPadInst::Create(Context, Args), Name);
+  }
+
+  CatchReturnInst *CreateCatchRet(CatchPadInst *CatchPad, BasicBlock *BB) {
+    return Insert(CatchReturnInst::Create(CatchPad, BB));
   }
 
   UnreachableInst *CreateUnreachable() {

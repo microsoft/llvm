@@ -182,6 +182,8 @@ namespace llvm {
 
       /// Compute Sum of Absolute Differences.
       PSADBW,
+      /// Compute Double Block Packed Sum-Absolute-Differences
+      DBPSADBW,
 
       /// Bitwise Logical AND NOT of Packed FP values.
       ANDNP,
@@ -260,6 +262,8 @@ namespace llvm {
 
       // Exception Handling helpers.
       EH_RETURN,
+
+      CATCHRET,
 
       // SjLj exception handling setjmp.
       EH_SJLJ_SETJMP,
@@ -348,6 +352,7 @@ namespace llvm {
 
       // OR/AND test for masks
       KORTEST,
+      KTEST,
 
       // Several flavors of instructions with vector shuffle behaviors.
       PACKSS,
@@ -445,9 +450,6 @@ namespace llvm {
       // segmented stacks. Check if the current stacklet has enough space, and
       // falls back to heap allocation if not.
       SEG_ALLOCA,
-
-      // Windows's _ftol2 runtime routine to do fptoui.
-      WIN_FTOL,
 
       // Memory barrier
       MEMBARRIER,
@@ -856,15 +858,6 @@ namespace llvm {
       (VT == MVT::f32 && X86ScalarSSEf32);   // f32 is when SSE1
     }
 
-    /// Return true if the target uses the MSVC _ftol2 routine for fptoui.
-    bool isTargetFTOL() const;
-
-    /// Return true if the MSVC _ftol2 routine should be used for fptoui to the
-    /// given type.
-    bool isIntegerTypeFTOL(EVT VT) const {
-      return isTargetFTOL() && VT == MVT::i64;
-    }
-
     /// \brief Returns true if it is beneficial to convert a load of a constant
     /// to just the constant itself.
     bool shouldConvertConstantLoadToIntImm(const APInt &Imm,
@@ -901,6 +894,8 @@ namespace llvm {
     bool useLoadStackGuardNode() const override;
     /// \brief Customize the preferred legalization strategy for certain types.
     LegalizeTypeAction getPreferredVectorAction(EVT VT) const override;
+
+    bool isIntDivCheap(EVT VT, AttributeSet Attr) const override;
 
   protected:
     std::pair<const TargetRegisterClass *, uint8_t>
@@ -1008,6 +1003,7 @@ namespace llvm {
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAME_TO_ARGS_OFFSET(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerCATCHRET(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerEH_SJLJ_SETJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue lowerEH_SJLJ_LONGJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINIT_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
@@ -1051,7 +1047,7 @@ namespace llvm {
     LoadInst *
     lowerIdempotentRMWIntoFencedLoad(AtomicRMWInst *AI) const override;
 
-    bool needsCmpXchgNb(const Type *MemType) const;
+    bool needsCmpXchgNb(Type *MemType) const;
 
     MachineBasicBlock *EmitGCTransitionRA(MachineInstr *MI,
                                           MachineBasicBlock *MBB) const;
@@ -1083,6 +1079,9 @@ namespace llvm {
 
     MachineBasicBlock *EmitLoweredSelect(MachineInstr *I,
                                          MachineBasicBlock *BB) const;
+
+    MachineBasicBlock *EmitLoweredAtomicFP(MachineInstr *I,
+                                           MachineBasicBlock *BB) const;
 
     MachineBasicBlock *EmitLoweredWinAlloca(MachineInstr *MI,
                                               MachineBasicBlock *BB) const;

@@ -95,21 +95,21 @@ enum perms {
 };
 
 // Helper functions so that you can use & and | to manipulate perms bits:
-inline perms operator|(perms l , perms r) {
-  return static_cast<perms>(
-             static_cast<unsigned short>(l) | static_cast<unsigned short>(r)); 
+inline perms operator|(perms l, perms r) {
+  return static_cast<perms>(static_cast<unsigned short>(l) |
+                            static_cast<unsigned short>(r));
 }
-inline perms operator&(perms l , perms r) {
-  return static_cast<perms>(
-             static_cast<unsigned short>(l) & static_cast<unsigned short>(r)); 
+inline perms operator&(perms l, perms r) {
+  return static_cast<perms>(static_cast<unsigned short>(l) &
+                            static_cast<unsigned short>(r));
 }
 inline perms &operator|=(perms &l, perms r) {
-  l = l | r; 
-  return l; 
+  l = l | r;
+  return l;
 }
 inline perms &operator&=(perms &l, perms r) {
-  l = l & r; 
-  return l; 
+  l = l & r;
+  return l;
 }
 inline perms operator~(perms x) {
   return static_cast<perms>(~static_cast<unsigned short>(x));
@@ -156,6 +156,7 @@ class file_status
   friend bool equivalent(file_status A, file_status B);
   file_type Type;
   perms Perms;
+
 public:
   #if defined(LLVM_ON_UNIX)
     file_status() : fs_st_dev(0), fs_st_ino(0), fs_st_mtime(0),
@@ -285,7 +286,8 @@ std::error_code make_absolute(SmallVectorImpl<char> &path);
 ///          specific error_code. If IgnoreExisting is false, also returns
 ///          error if the directory already existed.
 std::error_code create_directories(const Twine &path,
-                                   bool IgnoreExisting = true);
+                                   bool IgnoreExisting = true,
+                                   perms Perms = owner_all | group_all);
 
 /// @brief Create the directory in path.
 ///
@@ -293,7 +295,8 @@ std::error_code create_directories(const Twine &path,
 /// @returns errc::success if is_directory(path), otherwise a platform
 ///          specific error_code. If IgnoreExisting is false, also returns
 ///          error if the directory already existed.
-std::error_code create_directory(const Twine &path, bool IgnoreExisting = true);
+std::error_code create_directory(const Twine &path, bool IgnoreExisting = true,
+                                 perms Perms = owner_all | group_all);
 
 /// @brief Create a link from \a from to \a to.
 ///

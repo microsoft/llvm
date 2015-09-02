@@ -1553,9 +1553,9 @@ bool GVN::PerformLoadPRE(LoadInst *LI, AvailValInBlkVect &ValuesPerBlock,
         return false;
       }
 
-      if (LoadBB->isLandingPad()) {
+      if (LoadBB->isEHPad()) {
         DEBUG(dbgs()
-              << "COULD NOT PRE LOAD BECAUSE OF LANDING PAD CRITICAL EDGE '"
+              << "COULD NOT PRE LOAD BECAUSE OF AN EH PAD CRITICAL EDGE '"
               << Pred->getName() << "': " << *LI << '\n');
         return false;
       }
@@ -1744,7 +1744,8 @@ bool GVN::processNonLocalLoad(LoadInst *LI) {
     if (isa<PHINode>(V))
       V->takeName(LI);
     if (Instruction *I = dyn_cast<Instruction>(V))
-      I->setDebugLoc(LI->getDebugLoc());
+      if (LI->getDebugLoc())
+        I->setDebugLoc(LI->getDebugLoc());
     if (V->getType()->getScalarType()->isPointerTy())
       MD->invalidateCachedPointerInfo(V);
     markInstructionForDeletion(LI);
@@ -1771,7 +1772,7 @@ static void patchReplacementInstruction(Instruction *I, Value *Repl) {
   if (Instruction *ReplInst = dyn_cast<Instruction>(Repl)) {
     // FIXME: If both the original and replacement value are part of the
     // same control-flow region (meaning that the execution of one
-    // guarentees the executation of the other), then we can combine the
+    // guarantees the execution of the other), then we can combine the
     // noalias scopes here and do better than the general conservative
     // answer used in combineMetadata().
 
@@ -2588,8 +2589,8 @@ bool GVN::performPRE(Function &F) {
     if (CurrentBlock == &F.getEntryBlock())
       continue;
 
-    // Don't perform PRE on a landing pad.
-    if (CurrentBlock->isLandingPad())
+    // Don't perform PRE on an EH pad.
+    if (CurrentBlock->isEHPad())
       continue;
 
     for (BasicBlock::iterator BI = CurrentBlock->begin(),
@@ -2766,7 +2767,7 @@ void GVN::addDeadBlock(BasicBlock *BB) {
 //     R be the target of the dead out-coming edge.
 //  1) Identify the set of dead blocks implied by the branch's dead outcoming
 //     edge. The result of this step will be {X| X is dominated by R}
-//  2) Identify those blocks which haves at least one dead prodecessor. The
+//  2) Identify those blocks which haves at least one dead predecessor. The
 //     result of this step will be dominance-frontier(R).
 //  3) Update the PHIs in DF(R) by replacing the operands corresponding to 
 //     dead blocks with "UndefVal" in an hope these PHIs will optimized away.

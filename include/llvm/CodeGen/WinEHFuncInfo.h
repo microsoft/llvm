@@ -27,6 +27,7 @@ class InvokeInst;
 class IntrinsicInst;
 class LandingPadInst;
 class MCSymbol;
+class MachineBasicBlock;
 class Value;
 
 enum ActionType { Catch, Cleanup };
@@ -115,19 +116,21 @@ void parseEHActions(const IntrinsicInst *II,
 
 struct WinEHUnwindMapEntry {
   int ToState;
-  Function *Cleanup;
+  const Value *Cleanup;
 };
 
 struct WinEHHandlerType {
   int Adjectives;
   GlobalVariable *TypeDescriptor;
   int CatchObjRecoverIdx;
-  Function *Handler;
+  const Value *Handler;
+  MachineBasicBlock *HandlerMBB;
 };
 
 struct WinEHTryBlockMapEntry {
   int TryLow;
   int TryHigh;
+  int CatchHigh = -1;
   SmallVector<WinEHHandlerType, 1> HandlerArray;
 };
 
@@ -136,7 +139,7 @@ struct WinEHFuncInfo {
   DenseMap<const Function *, const InvokeInst *> LastInvoke;
   DenseMap<const Function *, int> HandlerEnclosedState;
   DenseMap<const Function *, bool> LastInvokeVisited;
-  DenseMap<const LandingPadInst *, int> LandingPadStateMap;
+  DenseMap<const Instruction *, int> EHPadStateMap;
   DenseMap<const Function *, int> CatchHandlerParentFrameObjIdx;
   DenseMap<const Function *, int> CatchHandlerParentFrameObjOffset;
   DenseMap<const Function *, int> CatchHandlerMaxState;
@@ -147,6 +150,8 @@ struct WinEHFuncInfo {
   int UnwindHelpFrameIdx = INT_MAX;
   int UnwindHelpFrameOffset = -1;
   unsigned NumIPToStateFuncsVisited = 0;
+
+  int getLastStateNumber() const { return UnwindMap.size() - 1; }
 
   /// localescape index of the 32-bit EH registration node. Set by
   /// WinEHStatePass and used indirectly by SEH filter functions of the parent.

@@ -78,7 +78,7 @@ namespace {
     typedef std::vector<CaseRange> CaseVector;
     typedef std::vector<CaseRange>::iterator CaseItr;
   private:
-    void processSwitchInst(SwitchInst *SI);
+    void processSwitchInst(SwitchInst *SI, SmallPtrSetImpl<BasicBlock*> &DeleteList);
 
     BasicBlock *switchConvert(CaseItr Begin, CaseItr End,
                               ConstantInt *LowerBound, ConstantInt *UpperBound,
@@ -116,14 +116,24 @@ FunctionPass *llvm::createLowerSwitchPass() {
 
 bool LowerSwitch::runOnFunction(Function &F) {
   bool Changed = false;
+  SmallPtrSet<BasicBlock*, 8> DeleteList;
 
   for (Function::iterator I = F.begin(), E = F.end(); I != E; ) {
     BasicBlock *Cur = I++; // Advance over block so we don't traverse new blocks
 
+    // If the block is a dead Default block that will be deleted later, don't
+    // waste time processing it.
+    if (DeleteList.count(Cur))
+      continue;
+
     if (SwitchInst *SI = dyn_cast<SwitchInst>(Cur->getTerminator())) {
       Changed = true;
-      processSwitchInst(SI);
+      processSwitchInst(SI, DeleteList);
     }
+  }
+
+  for (BasicBlock* BB: DeleteList) {
+    DeleteDeadBlock(BB);
   }
 
   return Changed;
@@ -163,7 +173,7 @@ static void fixPhis(BasicBlock *SuccBB, BasicBlock *OrigBB, BasicBlock *NewBB,
        I != IE; ++I) {
     PHINode *PN = cast<PHINode>(I);
 
-    // Only update the first occurence.
+    // Only update the first occurrence.
     unsigned Idx = 0, E = PN->getNumIncomingValues();
     unsigned LocalNumMergedCases = NumMergedCases;
     for (; Idx != E; ++Idx) {
@@ -173,7 +183,7 @@ static void fixPhis(BasicBlock *SuccBB, BasicBlock *OrigBB, BasicBlock *NewBB,
       }
     }
 
-    // Remove additional occurences coming from condensed cases and keep the
+    // Remove additional occurrences coming from condensed cases and keep the
     // number of incoming values equal to the number of branches to SuccBB.
     SmallVector<unsigned, 8> Indices;
     for (++Idx; LocalNumMergedCases > 0 && Idx < E; ++Idx)
@@ -397,7 +407,8 @@ unsigned LowerSwitch::Clusterify(CaseVector& Cases, SwitchInst *SI) {
 // processSwitchInst - Replace the specified switch instruction with a sequence
 // of chained if-then insts in a balanced binary search.
 //
-void LowerSwitch::processSwitchInst(SwitchInst *SI) {
+void LowerSwitch::processSwitchInst(SwitchInst *SI,
+                                    SmallPtrSetImpl<BasicBlock*> &DeleteList) {
   BasicBlock *CurBlock = SI->getParent();
   BasicBlock *OrigBlock = CurBlock;
   Function *F = CurBlock->getParent();
@@ -424,7 +435,7 @@ void LowerSwitch::processSwitchInst(SwitchInst *SI) {
   std::vector<IntRange> UnreachableRanges;
 
   if (isa<UnreachableInst>(Default->getFirstNonPHIOrDbg())) {
-    // Make the bounds tightly fitted around the case value range, becase we
+    // Make the bounds tightly fitted around the case value range, because we
     // know that the value passed to the switch must be exactly one of the case
     // values.
     assert(!Cases.empty());
@@ -518,7 +529,7 @@ void LowerSwitch::processSwitchInst(SwitchInst *SI) {
   BasicBlock *OldDefault = SI->getDefaultDest();
   CurBlock->getInstList().erase(SI);
 
-  // If the Default block has no more predecessors just remove it.
+  // If the Default block has no more predecessors just add it to DeleteList.
   if (pred_begin(OldDefault) == pred_end(OldDefault))
-    DeleteDeadBlock(OldDefault);
+    DeleteList.insert(OldDefault);
 }

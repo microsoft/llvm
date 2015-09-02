@@ -124,8 +124,8 @@ const char *Triple::getArchTypePrefix(ArchType Kind) {
   case spir64:      return "spir";
   case kalimba:     return "kalimba";
   case shave:       return "shave";
-  case wasm32:      return "wasm32";
-  case wasm64:      return "wasm64";
+  case wasm32:
+  case wasm64:      return "wasm";
   }
 }
 
@@ -196,6 +196,7 @@ const char *Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   case MSVC: return "msvc";
   case Itanium: return "itanium";
   case Cygnus: return "cygnus";
+  case AMDOpenCL: return "amdopencl";
   case CoreCLR: return "coreclr";
   }
 
@@ -266,8 +267,8 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
 }
 
 static Triple::ArchType parseARMArch(StringRef ArchName) {
-  unsigned ISA = ARMTargetParser::parseArchISA(ArchName);
-  unsigned ENDIAN = ARMTargetParser::parseArchEndian(ArchName);
+  unsigned ISA = ARM::parseArchISA(ArchName);
+  unsigned ENDIAN = ARM::parseArchEndian(ArchName);
 
   Triple::ArchType arch = Triple::UnknownArch;
   switch (ENDIAN) {
@@ -301,7 +302,7 @@ static Triple::ArchType parseARMArch(StringRef ArchName) {
   }
   }
 
-  ArchName = ARMTargetParser::getCanonicalArchName(ArchName);
+  ArchName = ARM::getCanonicalArchName(ArchName);
   if (ArchName.empty())
     return Triple::UnknownArch;
 
@@ -311,8 +312,8 @@ static Triple::ArchType parseARMArch(StringRef ArchName) {
     return Triple::UnknownArch;
 
   // Thumb only for v6m
-  unsigned Profile = ARMTargetParser::parseArchProfile(ArchName);
-  unsigned Version = ARMTargetParser::parseArchVersion(ArchName);
+  unsigned Profile = ARM::parseArchProfile(ArchName);
+  unsigned Version = ARM::parseArchVersion(ArchName);
   if (Profile == ARM::PK_M && Version == 6) {
     if (ENDIAN == ARM::EK_BIG)
       return Triple::thumbeb;
@@ -324,10 +325,7 @@ static Triple::ArchType parseARMArch(StringRef ArchName) {
 }
 
 static Triple::ArchType parseArch(StringRef ArchName) {
-  Triple::ArchType ARMArch(parseARMArch(ArchName));
-  Triple::ArchType BPFArch(parseBPFArch(ArchName));
-
-  return StringSwitch<Triple::ArchType>(ArchName)
+  auto AT = StringSwitch<Triple::ArchType>(ArchName)
     .Cases("i386", "i486", "i586", "i686", Triple::x86)
     // FIXME: Do we need to support these?
     .Cases("i786", "i886", "i986", Triple::x86)
@@ -337,9 +335,13 @@ static Triple::ArchType parseArch(StringRef ArchName) {
     .Case("powerpc64le", Triple::ppc64le)
     .Case("xscale", Triple::arm)
     .Case("xscaleeb", Triple::armeb)
-    .StartsWith("arm", ARMArch)
-    .StartsWith("thumb", ARMArch)
-    .StartsWith("aarch64", ARMArch)
+    .Case("aarch64", Triple::aarch64)
+    .Case("aarch64_be", Triple::aarch64_be)
+    .Case("arm64", Triple::aarch64)
+    .Case("arm", Triple::arm)
+    .Case("armeb", Triple::armeb)
+    .Case("thumb", Triple::thumb)
+    .Case("thumbeb", Triple::thumbeb)
     .Case("msp430", Triple::msp430)
     .Cases("mips", "mipseb", "mipsallegrex", Triple::mips)
     .Cases("mipsel", "mipsallegrexel", Triple::mipsel)
@@ -347,7 +349,6 @@ static Triple::ArchType parseArch(StringRef ArchName) {
     .Case("mips64el", Triple::mips64el)
     .Case("r600", Triple::r600)
     .Case("amdgcn", Triple::amdgcn)
-    .StartsWith("bpf", BPFArch)
     .Case("hexagon", Triple::hexagon)
     .Case("s390x", Triple::systemz)
     .Case("sparc", Triple::sparc)
@@ -370,6 +371,18 @@ static Triple::ArchType parseArch(StringRef ArchName) {
     .Case("wasm32", Triple::wasm32)
     .Case("wasm64", Triple::wasm64)
     .Default(Triple::UnknownArch);
+
+  // Some architectures require special parsing logic just to compute the
+  // ArchType result.
+  if (AT == Triple::UnknownArch) {
+    if (ArchName.startswith("arm") || ArchName.startswith("thumb") ||
+        ArchName.startswith("aarch64"))
+      return parseARMArch(ArchName);
+    if (ArchName.startswith("bpf"))
+      return parseBPFArch(ArchName);
+  }
+
+  return AT;
 }
 
 static Triple::VendorType parseVendor(StringRef VendorName) {
@@ -431,6 +444,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
     .StartsWith("msvc", Triple::MSVC)
     .StartsWith("itanium", Triple::Itanium)
     .StartsWith("cygnus", Triple::Cygnus)
+    .StartsWith("amdopencl", Triple::AMDOpenCL)
     .StartsWith("coreclr", Triple::CoreCLR)
     .Default(Triple::UnknownEnvironment);
 }
@@ -444,7 +458,7 @@ static Triple::ObjectFormatType parseFormat(StringRef EnvironmentName) {
 }
 
 static Triple::SubArchType parseSubArch(StringRef SubArchName) {
-  StringRef ARMSubArch = ARMTargetParser::getCanonicalArchName(SubArchName);
+  StringRef ARMSubArch = ARM::getCanonicalArchName(SubArchName);
 
   // For now, this is the small part. Early return.
   if (ARMSubArch.empty())
@@ -455,7 +469,7 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
       .Default(Triple::NoSubArch);
 
   // ARM sub arch.
-  switch(ARMTargetParser::parseArch(ARMSubArch)) {
+  switch(ARM::parseArch(ARMSubArch)) {
   case ARM::AK_ARMV4:
     return Triple::NoSubArch;
   case ARM::AK_ARMV4T:
@@ -537,6 +551,11 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
     if (T.isOSDarwin())
       return Triple::MachO;
     return Triple::ELF;
+
+  case Triple::wasm32:
+  case Triple::wasm64:
+    // Unknown for now, until an object format is specified.
+    return Triple::UnknownObjectFormat;
   }
 
   if (T.isOSDarwin())
@@ -1283,10 +1302,10 @@ Triple Triple::getLittleEndianArchVariant() const {
   return T;
 }
 
-const char *Triple::getARMCPUForArch(StringRef MArch) const {
+StringRef Triple::getARMCPUForArch(StringRef MArch) const {
   if (MArch.empty())
     MArch = getArchName();
-  MArch = ARMTargetParser::getCanonicalArchName(MArch);
+  MArch = ARM::getCanonicalArchName(MArch);
 
   // Some defaults are forced.
   switch (getOS()) {
@@ -1303,10 +1322,10 @@ const char *Triple::getARMCPUForArch(StringRef MArch) const {
   }
 
   if (MArch.empty())
-    return nullptr;
+    return StringRef();
 
-  const char *CPU = ARMTargetParser::getDefaultCPU(MArch);
-  if (CPU)
+  StringRef CPU = ARM::getDefaultCPU(MArch);
+  if (!CPU.empty())
     return CPU;
 
   // If no specific architecture version is requested, return the minimum CPU

@@ -91,7 +91,7 @@ AllocaInst *llvm::DemoteRegToStack(Instruction &I, bool VolatileLoads,
   if (!isa<TerminatorInst>(I)) {
     InsertPt = &I;
     ++InsertPt;
-    for (; isa<PHINode>(InsertPt) || isa<LandingPadInst>(InsertPt); ++InsertPt)
+    for (; isa<PHINode>(InsertPt) || InsertPt->isEHPad(); ++InsertPt)
       /* empty */;   // Don't insert before PHI nodes or landingpad instrs.
   } else {
     InvokeInst &II = cast<InvokeInst>(I);
@@ -135,7 +135,7 @@ AllocaInst *llvm::DemotePHIToStack(PHINode *P, Instruction *AllocaPoint) {
   // Insert a load in place of the PHI and replace all uses.
   BasicBlock::iterator InsertPt = P;
 
-  for (; isa<PHINode>(InsertPt) || isa<LandingPadInst>(InsertPt); ++InsertPt)
+  for (; isa<PHINode>(InsertPt) || InsertPt->isEHPad(); ++InsertPt)
     /* empty */;   // Don't insert before PHI nodes or landingpad instrs.
 
   Value *V = new LoadInst(Slot, P->getName()+".reload", InsertPt);

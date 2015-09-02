@@ -519,7 +519,7 @@ static Value *tryFactorization(InstCombiner::BuilderTy *Builder,
           if (isa<OverflowingBinaryOperator>(Op1))
             HasNSW &= Op1->hasNoSignedWrap();
 
-        // We can propogate 'nsw' if we know that
+        // We can propagate 'nsw' if we know that
         //  %Y = mul nsw i16 %X, C
         //  %Z = add nsw i16 %Y, %X
         // =>
@@ -2673,7 +2673,7 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   assert(I->hasOneUse() && "Invariants didn't hold!");
 
   // Cannot move control-flow-involving, volatile loads, vaarg, etc.
-  if (isa<PHINode>(I) || isa<LandingPadInst>(I) || I->mayHaveSideEffects() ||
+  if (isa<PHINode>(I) || I->isEHPad() || I->mayHaveSideEffects() ||
       isa<TerminatorInst>(I))
     return false;
 
@@ -2928,8 +2928,8 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
       }
     }
 
-    for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
-      Worklist.push_back(TI->getSuccessor(i));
+    for (BasicBlock *SuccBB : TI->successors())
+      Worklist.push_back(SuccBB);
   } while (!Worklist.empty());
 
   // Once we've found all of the instructions to add to instcombine's worklist,
@@ -2976,7 +2976,7 @@ static bool prepareICWorklistFromFunction(Function &F, const DataLayout &DL,
       Instruction *Inst = --I;
       if (!Inst->use_empty())
         Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
-      if (isa<LandingPadInst>(Inst)) {
+      if (Inst->isEHPad()) {
         EndInst = Inst;
         continue;
       }
@@ -2996,8 +2996,6 @@ combineInstructionsOverFunction(Function &F, InstCombineWorklist &Worklist,
                                 AliasAnalysis *AA, AssumptionCache &AC,
                                 TargetLibraryInfo &TLI, DominatorTree &DT,
                                 LoopInfo *LI = nullptr) {
-  // Minimizing size?
-  bool MinimizeSize = F.hasFnAttribute(Attribute::MinSize);
   auto &DL = F.getParent()->getDataLayout();
 
   /// Builder - This is an IRBuilder that automatically inserts new
@@ -3020,7 +3018,7 @@ combineInstructionsOverFunction(Function &F, InstCombineWorklist &Worklist,
     if (prepareICWorklistFromFunction(F, DL, &TLI, Worklist))
       Changed = true;
 
-    InstCombiner IC(Worklist, &Builder, MinimizeSize,
+    InstCombiner IC(Worklist, &Builder, F.optForMinSize(),
                     AA, &AC, &TLI, &DT, DL, LI);
     if (IC.run())
       Changed = true;

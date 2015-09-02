@@ -188,9 +188,8 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       BasicBlock *BB = SI->getParent();
 
       // Remove entries from PHI nodes which we no longer branch to...
-      for (unsigned i = 0, e = SI->getNumSuccessors(); i != e; ++i) {
+      for (BasicBlock *Succ : SI->successors()) {
         // Found case matching a constant operand?
-        BasicBlock *Succ = SI->getSuccessor(i);
         if (Succ == TheOnlyDest)
           TheOnlyDest = nullptr; // Don't modify the first branch to TheOnlyDest
         else
@@ -229,6 +228,11 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
                         createBranchWeights(SICase->getValue().getZExtValue(),
                                             SIDef->getValue().getZExtValue()));
       }
+
+      // Update make.implicit metadata to the newly-created conditional branch.
+      MDNode *MakeImplicitMD = SI->getMetadata(LLVMContext::MD_make_implicit);
+      if (MakeImplicitMD)
+        NewBr->setMetadata(LLVMContext::MD_make_implicit, MakeImplicitMD);
 
       // Delete the old switch.
       SI->eraseFromParent();
@@ -283,8 +287,9 @@ bool llvm::isInstructionTriviallyDead(Instruction *I,
                                       const TargetLibraryInfo *TLI) {
   if (!I->use_empty() || isa<TerminatorInst>(I)) return false;
 
-  // We don't want the landingpad instruction removed by anything this general.
-  if (isa<LandingPadInst>(I))
+  // We don't want the landingpad-like instructions removed by anything this
+  // general.
+  if (I->isEHPad())
     return false;
 
   // We don't want debug info removed by anything this general, unless
@@ -1285,7 +1290,7 @@ bool llvm::removeUnreachableBlocks(Function &F) {
 
 void llvm::combineMetadata(Instruction *K, const Instruction *J, ArrayRef<unsigned> KnownIDs) {
   SmallVector<std::pair<unsigned, MDNode *>, 4> Metadata;
-  K->dropUnknownMetadata(KnownIDs);
+  K->dropUnknownNonDebugMetadata(KnownIDs);
   K->getAllMetadataOtherThanDebugLoc(Metadata);
   for (unsigned i = 0, n = Metadata.size(); i < n; ++i) {
     unsigned Kind = Metadata[i].first;

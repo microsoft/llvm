@@ -204,7 +204,7 @@ unsigned MachineCombiner::getLatency(MachineInstr *Root, MachineInstr *NewRoot,
           NewRoot, NewRoot->findRegisterDefOperandIdx(MO.getReg()), UseMO,
           UseMO->findRegisterUseOperandIdx(MO.getReg()));
     } else {
-      LatencyOp = TSchedModel.computeInstrLatency(NewRoot->getOpcode());
+      LatencyOp = TSchedModel.computeInstrLatency(NewRoot);
     }
     NewRootLatency = std::max(NewRootLatency, LatencyOp);
   }
@@ -426,8 +426,7 @@ bool MachineCombiner::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   Traces = &getAnalysis<MachineTraceMetrics>();
   MinInstr = 0;
-
-  OptSize = MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize);
+  OptSize = MF.getFunction()->optForSize();
 
   DEBUG(dbgs() << getPassName() << ": " << MF.getName() << '\n');
   if (!TII->useMachineCombiner()) {

@@ -38,11 +38,11 @@
 
 ; CHECK: DW_TAG_structure_type
 ; CHECK-NEXT: DW_AT_name {{.*}} "C"
-; CHECK:   DW_TAG_subprogram
-; CHECK-NOT: DW_TAG
+; CHECK: [[M_FN3_DECL:.*]]:  DW_TAG_subprogram
+; CHECK-NOT: {{DW_TAG|NULL}}
 ; CHECK: DW_AT_name {{.*}} "m_fn3"
 
-; CHECK: DW_AT_specification {{.*}} "_ZN1C5m_fn3Ev"
+; CHECK: DW_AT_specification {{.*}} {[[M_FN3_DECL]]}
 ; CHECK-NOT: DW_TAG
 ; CHECK:   DW_TAG_formal_parameter
 ; CHECK-NOT: DW_TAG
@@ -336,7 +336,7 @@ attributes #3 = { nounwind readnone }
 !llvm.module.flags = !{!36, !37}
 !llvm.ident = !{!38}
 
-!0 = !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: true, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !21, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C_plus_plus, producer: "clang version 3.5.0 ", isOptimized: true, emissionKind: 1, file: !1, enums: !2, retainedTypes: !3, subprograms: !21, globals: !2, imports: !2)
 !1 = !DIFile(filename: "<stdin>", directory: "/tmp/dbginfo")
 !2 = !{}
 !3 = !{!4, !14}
@@ -358,19 +358,19 @@ attributes #3 = { nounwind readnone }
 !19 = !{null, !20}
 !20 = !DIDerivedType(tag: DW_TAG_pointer_type, size: 64, align: 64, flags: DIFlagArtificial | DIFlagObjectPointer, baseType: !"_ZTS1B")
 !21 = !{!22, !28, !32}
-!22 = !DISubprogram(name: "fn1", linkageName: "_Z3fn1v", line: 16, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 16, file: !5, scope: !23, type: !24, function: i32 ()* @_Z3fn1v, variables: !26)
+!22 = distinct !DISubprogram(name: "fn1", linkageName: "_Z3fn1v", line: 16, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 16, file: !5, scope: !23, type: !24, function: i32 ()* @_Z3fn1v, variables: !26)
 !23 = !DIFile(filename: "incorrect-variable-debug-loc.cpp", directory: "/tmp/dbginfo")
 !24 = !DISubroutineType(types: !25)
 !25 = !{!8}
 !26 = !{!27}
-!27 = !DILocalVariable(tag: DW_TAG_auto_variable, name: "A", line: 17, scope: !22, file: !23, type: !"_ZTS1C")
-!28 = !DISubprogram(name: "m_fn3", linkageName: "_ZN1C5m_fn3Ev", line: 21, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 21, file: !5, scope: !"_ZTS1C", type: !11, function: void (%struct.C*)* @_ZN1C5m_fn3Ev, declaration: !10, variables: !29)
+!27 = !DILocalVariable(name: "A", line: 17, scope: !22, file: !23, type: !"_ZTS1C")
+!28 = distinct !DISubprogram(name: "m_fn3", linkageName: "_ZN1C5m_fn3Ev", line: 21, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 21, file: !5, scope: !"_ZTS1C", type: !11, function: void (%struct.C*)* @_ZN1C5m_fn3Ev, declaration: !10, variables: !29)
 !29 = !{!30}
-!30 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !28, type: !31)
+!30 = !DILocalVariable(name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !28, type: !31)
 !31 = !DIDerivedType(tag: DW_TAG_pointer_type, size: 64, align: 64, baseType: !"_ZTS1C")
-!32 = !DISubprogram(name: "m_fn2", linkageName: "_ZN1B5m_fn2Ev", line: 6, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 6, file: !5, scope: !"_ZTS1B", type: !18, declaration: !17, variables: !33)
+!32 = distinct !DISubprogram(name: "m_fn2", linkageName: "_ZN1B5m_fn2Ev", line: 6, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: true, scopeLine: 6, file: !5, scope: !"_ZTS1B", type: !18, declaration: !17, variables: !33)
 !33 = !{!34}
-!34 = !DILocalVariable(tag: DW_TAG_arg_variable, name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !32, type: !35)
+!34 = !DILocalVariable(name: "this", arg: 1, flags: DIFlagArtificial | DIFlagObjectPointer, scope: !32, type: !35)
 !35 = !DIDerivedType(tag: DW_TAG_pointer_type, size: 64, align: 64, baseType: !"_ZTS1B")
 !36 = !{i32 2, !"Dwarf Version", i32 4}
 !37 = !{i32 2, !"Debug Info Version", i32 3}

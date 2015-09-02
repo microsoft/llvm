@@ -958,27 +958,43 @@ def : Pat<(v4i32 (PPCxxswapd v4i32:$src)), (XXPERMDI $src, $src, 2)>;
 
 // Selects.
 def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETLT)),
+          (SELECT_VSRC (CRANDC $lhs, $rhs), $tval, $fval)>;
+def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETULT)),
           (SELECT_VSRC (CRANDC $rhs, $lhs), $tval, $fval)>;
 def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETLE)),
+          (SELECT_VSRC (CRORC  $lhs, $rhs), $tval, $fval)>;
+def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETULE)),
           (SELECT_VSRC (CRORC  $rhs, $lhs), $tval, $fval)>;
 def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETEQ)),
           (SELECT_VSRC (CREQV $lhs, $rhs), $tval, $fval)>;
 def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETGE)),
+          (SELECT_VSRC (CRORC  $rhs, $lhs), $tval, $fval)>;
+def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETUGE)),
           (SELECT_VSRC (CRORC  $lhs, $rhs), $tval, $fval)>;
 def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETGT)),
+          (SELECT_VSRC (CRANDC $rhs, $lhs), $tval, $fval)>;
+def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETUGT)),
           (SELECT_VSRC (CRANDC $lhs, $rhs), $tval, $fval)>;
 def : Pat<(v2f64 (selectcc i1:$lhs, i1:$rhs, v2f64:$tval, v2f64:$fval, SETNE)),
           (SELECT_VSRC (CRXOR $lhs, $rhs), $tval, $fval)>;
 
 def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETLT)),
+          (SELECT_VSFRC (CRANDC $lhs, $rhs), $tval, $fval)>;
+def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETULT)),
           (SELECT_VSFRC (CRANDC $rhs, $lhs), $tval, $fval)>;
 def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETLE)),
+          (SELECT_VSFRC (CRORC  $lhs, $rhs), $tval, $fval)>;
+def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETULE)),
           (SELECT_VSFRC (CRORC  $rhs, $lhs), $tval, $fval)>;
 def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETEQ)),
           (SELECT_VSFRC (CREQV $lhs, $rhs), $tval, $fval)>;
 def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETGE)),
+          (SELECT_VSFRC (CRORC  $rhs, $lhs), $tval, $fval)>;
+def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETUGE)),
           (SELECT_VSFRC (CRORC  $lhs, $rhs), $tval, $fval)>;
 def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETGT)),
+          (SELECT_VSFRC (CRANDC $rhs, $lhs), $tval, $fval)>;
+def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETUGT)),
           (SELECT_VSFRC (CRANDC $lhs, $rhs), $tval, $fval)>;
 def : Pat<(f64 (selectcc i1:$lhs, i1:$rhs, f64:$tval, f64:$fval, SETNE)),
           (SELECT_VSFRC (CRXOR $lhs, $rhs), $tval, $fval)>;
@@ -1060,18 +1076,27 @@ let AddedComplexity = 400 in { // Prefer VSX patterns over non-VSX patterns.
             (COPY_TO_REGCLASS (LXSSPX xoaddr:$src), VSFRC)>;
   def : Pat<(f64 (fextend f32:$src)),
             (COPY_TO_REGCLASS $src, VSFRC)>;
+
   def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETLT)),
+            (SELECT_VSSRC (CRANDC $lhs, $rhs), $tval, $fval)>;
+  def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETULT)),
             (SELECT_VSSRC (CRANDC $rhs, $lhs), $tval, $fval)>;
   def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETLE)),
+            (SELECT_VSSRC (CRORC  $lhs, $rhs), $tval, $fval)>;
+  def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETULE)),
             (SELECT_VSSRC (CRORC  $rhs, $lhs), $tval, $fval)>;
   def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETEQ)),
             (SELECT_VSSRC (CREQV $lhs, $rhs), $tval, $fval)>;
   def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETGE)),
+            (SELECT_VSSRC (CRORC  $rhs, $lhs), $tval, $fval)>;
+  def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETUGE)),
             (SELECT_VSSRC (CRORC  $lhs, $rhs), $tval, $fval)>;
   def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETGT)),
+            (SELECT_VSSRC (CRANDC $rhs, $lhs), $tval, $fval)>;
+  def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETUGT)),
             (SELECT_VSSRC (CRANDC $lhs, $rhs), $tval, $fval)>;
   def : Pat<(f32 (selectcc i1:$lhs, i1:$rhs, f32:$tval, f32:$fval, SETNE)),
-          (SELECT_VSSRC (CRXOR $lhs, $rhs), $tval, $fval)>;
+            (SELECT_VSSRC (CRXOR $lhs, $rhs), $tval, $fval)>;
 
   // VSX Elementary Scalar FP arithmetic (SP)
   let isCommutable = 1 in {
@@ -1181,6 +1206,23 @@ let AddedComplexity = 400 in { // Prefer VSX patterns over non-VSX patterns.
                           RegConstraint<"$XTi = $XT">, NoEncode<"$XTi">,
                           AltVSXFMARel;
   }
+
+  // Single Precision Conversions (FP <-> INT)
+  def XSCVSXDSP : XX2Form<60, 312,
+                      (outs vssrc:$XT), (ins vsfrc:$XB),
+                      "xscvsxdsp $XT, $XB", IIC_VecFP,
+                      [(set f32:$XT, (PPCfcfids f64:$XB))]>;
+  def XSCVUXDSP : XX2Form<60, 296,
+                      (outs vssrc:$XT), (ins vsfrc:$XB),
+                      "xscvuxdsp $XT, $XB", IIC_VecFP,
+                      [(set f32:$XT, (PPCfcfidus f64:$XB))]>;
+
+  // Conversions between vector and scalar single precision
+  def XSCVDPSPN : XX2Form<60, 267, (outs vsrc:$XT), (ins vssrc:$XB),
+                          "xscvdpspn $XT, $XB", IIC_VecFP, []>;
+  def XSCVSPDPN : XX2Form<60, 331, (outs vssrc:$XT), (ins vsrc:$XB),
+                          "xscvspdpn $XT, $XB", IIC_VecFP, []>;
+
 } // AddedComplexity = 400
 } // HasP8Vector
 
@@ -1204,3 +1246,60 @@ let Predicates = [HasDirectMove, HasVSX] in {
                                "mtvsrwz $XT, $rA", IIC_VecGeneral,
                                [(set f64:$XT, (PPCmtvsrz i32:$rA))]>;
 } // HasDirectMove, HasVSX
+
+/*  Direct moves of various size entities from GPR's into VSR's. Each lines
+    the value up into element 0 (both BE and LE). Namely, entities smaller than
+    a doubleword are shifted left and moved for BE. For LE, they're moved, then
+    swapped to go into the least significant element of the VSR.
+*/
+def Moves {
+  dag BE_BYTE_0 = (MTVSRD
+                  (RLDICR
+                    (INSERT_SUBREG (i64 (IMPLICIT_DEF)), $A, sub_32), 56, 7));
+  dag BE_HALF_0 = (MTVSRD
+                  (RLDICR
+                    (INSERT_SUBREG (i64 (IMPLICIT_DEF)), $A, sub_32), 48, 15));
+  dag BE_WORD_0 = (MTVSRD
+                  (RLDICR
+                    (INSERT_SUBREG (i64 (IMPLICIT_DEF)), $A, sub_32), 32, 31));
+  dag BE_DWORD_0 = (MTVSRD $A);
+
+  dag LE_MTVSRW = (MTVSRD (INSERT_SUBREG (i64 (IMPLICIT_DEF)), $A, sub_32));
+  dag LE_WORD_1 = (v2i64 (COPY_TO_REGCLASS LE_MTVSRW, VSRC));
+  dag LE_WORD_0 = (XXPERMDI LE_WORD_1, LE_WORD_1, 2);
+  dag LE_DWORD_1 = (v2i64 (COPY_TO_REGCLASS BE_DWORD_0, VSRC));
+  dag LE_DWORD_0 = (XXPERMDI LE_DWORD_1, LE_DWORD_1, 2);
+}
+
+let Predicates = [IsBigEndian, HasP8Vector] in {
+  def : Pat<(v4f32 (scalar_to_vector f32:$A)),
+            (v4f32 (XSCVDPSPN $A))>;
+} // IsBigEndian, HasP8Vector
+
+let Predicates = [IsBigEndian, HasDirectMove] in {
+  def : Pat<(v16i8 (scalar_to_vector i32:$A)),
+            (v16i8 (COPY_TO_REGCLASS Moves.BE_BYTE_0, VSRC))>;
+  def : Pat<(v8i16 (scalar_to_vector i32:$A)),
+            (v8i16 (COPY_TO_REGCLASS Moves.BE_HALF_0, VSRC))>;
+  def : Pat<(v4i32 (scalar_to_vector i32:$A)),
+            (v4i32 (COPY_TO_REGCLASS Moves.BE_WORD_0, VSRC))>;
+  def : Pat<(v2i64 (scalar_to_vector i64:$A)),
+            (v2i64 (COPY_TO_REGCLASS Moves.BE_DWORD_0, VSRC))>;
+} // IsBigEndian, HasDirectMove
+
+let Predicates = [IsLittleEndian, HasP8Vector] in {
+  def : Pat<(v4f32 (scalar_to_vector f32:$A)),
+            (v4f32 (XXSLDWI (XSCVDPSPN $A), (XSCVDPSPN $A), 1))>;
+} // IsLittleEndian, HasP8Vector
+
+let Predicates = [IsLittleEndian, HasDirectMove] in {
+  def : Pat<(v16i8 (scalar_to_vector i32:$A)),
+            (v16i8 (COPY_TO_REGCLASS Moves.LE_WORD_0, VSRC))>;
+  def : Pat<(v8i16 (scalar_to_vector i32:$A)),
+            (v8i16 (COPY_TO_REGCLASS Moves.LE_WORD_0, VSRC))>;
+  def : Pat<(v4i32 (scalar_to_vector i32:$A)),
+            (v4i32 (COPY_TO_REGCLASS Moves.LE_WORD_0, VSRC))>;
+  def : Pat<(v2i64 (scalar_to_vector i64:$A)),
+            (v2i64 Moves.LE_DWORD_0)>;
+} // IsLittleEndian, HasDirectMove
+

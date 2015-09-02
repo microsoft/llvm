@@ -20,7 +20,6 @@ def arm_cmpfp  : SDNode<"ARMISD::CMPFP",   SDT_ARMCmp, [SDNPOutGlue]>;
 def arm_cmpfp0 : SDNode<"ARMISD::CMPFPw0", SDT_CMPFP0, [SDNPOutGlue]>;
 def arm_fmdrr  : SDNode<"ARMISD::VMOVDRR", SDT_VMOVDRR>;
 
-
 //===----------------------------------------------------------------------===//
 // Operand Definitions.
 //
@@ -393,8 +392,8 @@ multiclass vmaxmin_inst<string op, bit opc, SDNode SD> {
   }
 }
 
-defm VMAXNM : vmaxmin_inst<"vmaxnm", 0, ARMvmaxnm>;
-defm VMINNM : vmaxmin_inst<"vminnm", 1, ARMvminnm>;
+defm VMAXNM : vmaxmin_inst<"vmaxnm", 0, fmaxnum>;
+defm VMINNM : vmaxmin_inst<"vminnm", 1, fminnum>;
 
 // Match reassociated forms only if not sign dependent rounding.
 def : Pat<(fmul (fneg DPR:$a), (f64 DPR:$b)),
@@ -921,6 +920,22 @@ def VMOVDRR : AVConv5I<0b11000100, 0b1011,
   // $Dm = REG_SEQUENCE $Rt, ssub_0, $Rt2, ssub_1
   let isRegSequence = 1;
 }
+
+// Hoist an fabs or a fneg of a value coming from integer registers
+// and do the fabs/fneg on the integer value. This is never a lose
+// and could enable the conversion to float to be removed completely.
+def : Pat<(fabs (arm_fmdrr GPR:$Rl, GPR:$Rh)),
+          (VMOVDRR GPR:$Rl, (BFC GPR:$Rh, (i32 0x7FFFFFFF)))>,
+      Requires<[IsARM]>;
+def : Pat<(fabs (arm_fmdrr GPR:$Rl, GPR:$Rh)),
+          (VMOVDRR GPR:$Rl, (t2BFC GPR:$Rh, (i32 0x7FFFFFFF)))>,
+      Requires<[IsThumb2]>;
+def : Pat<(fneg (arm_fmdrr GPR:$Rl, GPR:$Rh)),
+          (VMOVDRR GPR:$Rl, (EORri GPR:$Rh, (i32 0x80000000)))>,
+      Requires<[IsARM]>;
+def : Pat<(fneg (arm_fmdrr GPR:$Rl, GPR:$Rh)),
+          (VMOVDRR GPR:$Rl, (t2EORri GPR:$Rh, (i32 0x80000000)))>,
+      Requires<[IsThumb2]>;
 
 let hasSideEffects = 0 in
 def VMOVSRR : AVConv5I<0b11000100, 0b1010,

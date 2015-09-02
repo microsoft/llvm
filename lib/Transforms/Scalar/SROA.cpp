@@ -55,7 +55,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
-#include "llvm/Transforms/Utils/SSAUpdater.h"
 
 #if __cplusplus >= 201103L && !defined(NDEBUG)
 // We only use this for a debug check in C++11
@@ -76,11 +75,6 @@ STATISTIC(NumPromoted, "Number of allocas promoted to SSA values");
 STATISTIC(NumLoadsSpeculated, "Number of loads speculated to allow promotion");
 STATISTIC(NumDeleted, "Number of instructions deleted");
 STATISTIC(NumVectorized, "Number of vectorized aggregates");
-
-/// Hidden option to force the pass to not use DomTree and mem2reg, instead
-/// forming SSA values through the SSAUpdater infrastructure.
-static cl::opt<bool> ForceSSAUpdater("force-ssa-updater", cl::init(false),
-                                     cl::Hidden);
 
 /// Hidden option to enable randomly shuffling the slices to help uncover
 /// instability in their order.
@@ -270,7 +264,8 @@ public:
     friend class AllocaSlices;
     friend class AllocaSlices::partition_iterator;
 
-    /// \brief The begining and ending offsets of the alloca for this partition.
+    /// \brief The beginning and ending offsets of the alloca for this
+    /// partition.
     uint64_t BeginOffset, EndOffset;
 
     /// \brief The start end end iterators of this partition.
@@ -439,7 +434,7 @@ public:
 
       // OK, we need to consume new slices. Set the end offset based on the
       // current slice, and step SJ past it. The beginning offset of the
-      // parttion is the beginning offset of the next slice unless we have
+      // partition is the beginning offset of the next slice unless we have
       // pre-existing split slices that are continuing, in which case we begin
       // at the prior end offset.
       P.BeginOffset = P.SplitTails.empty() ? P.SI->beginOffset() : P.EndOffset;
@@ -493,7 +488,7 @@ public:
              "End iterators don't match between compared partition iterators!");
 
       // The observed positions of partitions is marked by the P.SI iterator and
-      // the emptyness of the split slices. The latter is only relevant when
+      // the emptiness of the split slices. The latter is only relevant when
       // P.SI == SE, as the end iterator will additionally have an empty split
       // slices list, but the prior may have the same P.SI and a tail of split
       // slices.
@@ -1073,109 +1068,6 @@ LLVM_DUMP_METHOD void AllocaSlices::dump() const { print(dbgs()); }
 #endif // !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 
 namespace {
-/// \brief Implementation of LoadAndStorePromoter for promoting allocas.
-///
-/// This subclass of LoadAndStorePromoter adds overrides to handle promoting
-/// the loads and stores of an alloca instruction, as well as updating its
-/// debug information. This is used when a domtree is unavailable and thus
-/// mem2reg in its full form can't be used to handle promotion of allocas to
-/// scalar values.
-class AllocaPromoter : public LoadAndStorePromoter {
-  AllocaInst &AI;
-  DIBuilder &DIB;
-
-  SmallVector<DbgDeclareInst *, 4> DDIs;
-  SmallVector<DbgValueInst *, 4> DVIs;
-
-public:
-  AllocaPromoter(ArrayRef<const Instruction *> Insts,
-                 SSAUpdater &S,
-                 AllocaInst &AI, DIBuilder &DIB)
-      : LoadAndStorePromoter(Insts, S), AI(AI), DIB(DIB) {}
-
-  void run(const SmallVectorImpl<Instruction *> &Insts) {
-    // Retain the debug information attached to the alloca for use when
-    // rewriting loads and stores.
-    if (auto *L = LocalAsMetadata::getIfExists(&AI)) {
-      if (auto *DINode = MetadataAsValue::getIfExists(AI.getContext(), L)) {
-        for (User *U : DINode->users())
-          if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(U))
-            DDIs.push_back(DDI);
-          else if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(U))
-            DVIs.push_back(DVI);
-      }
-    }
-
-    LoadAndStorePromoter::run(Insts);
-
-    // While we have the debug information, clear it off of the alloca. The
-    // caller takes care of deleting the alloca.
-    while (!DDIs.empty())
-      DDIs.pop_back_val()->eraseFromParent();
-    while (!DVIs.empty())
-      DVIs.pop_back_val()->eraseFromParent();
-  }
-
-  bool
-  isInstInList(Instruction *I,
-               const SmallVectorImpl<Instruction *> &Insts) const override {
-    Value *Ptr;
-    if (LoadInst *LI = dyn_cast<LoadInst>(I))
-      Ptr = LI->getOperand(0);
-    else
-      Ptr = cast<StoreInst>(I)->getPointerOperand();
-
-    // Only used to detect cycles, which will be rare and quickly found as
-    // we're walking up a chain of defs rather than down through uses.
-    SmallPtrSet<Value *, 4> Visited;
-
-    do {
-      if (Ptr == &AI)
-        return true;
-
-      if (BitCastInst *BCI = dyn_cast<BitCastInst>(Ptr))
-        Ptr = BCI->getOperand(0);
-      else if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(Ptr))
-        Ptr = GEPI->getPointerOperand();
-      else
-        return false;
-
-    } while (Visited.insert(Ptr).second);
-
-    return false;
-  }
-
-  void updateDebugInfo(Instruction *Inst) const override {
-    for (DbgDeclareInst *DDI : DDIs)
-      if (StoreInst *SI = dyn_cast<StoreInst>(Inst))
-        ConvertDebugDeclareToDebugValue(DDI, SI, DIB);
-      else if (LoadInst *LI = dyn_cast<LoadInst>(Inst))
-        ConvertDebugDeclareToDebugValue(DDI, LI, DIB);
-    for (DbgValueInst *DVI : DVIs) {
-      Value *Arg = nullptr;
-      if (StoreInst *SI = dyn_cast<StoreInst>(Inst)) {
-        // If an argument is zero extended then use argument directly. The ZExt
-        // may be zapped by an optimization pass in future.
-        if (ZExtInst *ZExt = dyn_cast<ZExtInst>(SI->getOperand(0)))
-          Arg = dyn_cast<Argument>(ZExt->getOperand(0));
-        else if (SExtInst *SExt = dyn_cast<SExtInst>(SI->getOperand(0)))
-          Arg = dyn_cast<Argument>(SExt->getOperand(0));
-        if (!Arg)
-          Arg = SI->getValueOperand();
-      } else if (LoadInst *LI = dyn_cast<LoadInst>(Inst)) {
-        Arg = LI->getPointerOperand();
-      } else {
-        continue;
-      }
-      DIB.insertDbgValueIntrinsic(Arg, 0, DVI->getVariable(),
-                                  DVI->getExpression(), DVI->getDebugLoc(),
-                                  Inst);
-    }
-  }
-};
-} // end anon namespace
-
-namespace {
 /// \brief An optimization pass providing Scalar Replacement of Aggregates.
 ///
 /// This pass takes allocations which can be completely analyzed (that is, they
@@ -1195,8 +1087,6 @@ namespace {
 ///    this form. By doing so, it will enable promotion of vector aggregates to
 ///    SSA vector values.
 class SROA : public FunctionPass {
-  const bool RequiresDomTree;
-
   LLVMContext *C;
   DominatorTree *DT;
   AssumptionCache *AC;
@@ -1244,9 +1134,7 @@ class SROA : public FunctionPass {
   SetVector<SelectInst *, SmallVector<SelectInst *, 2>> SpeculatableSelects;
 
 public:
-  SROA(bool RequiresDomTree = true)
-      : FunctionPass(ID), RequiresDomTree(RequiresDomTree), C(nullptr),
-        DT(nullptr) {
+  SROA() : FunctionPass(ID), C(nullptr), DT(nullptr) {
     initializeSROAPass(*PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F) override;
@@ -1272,8 +1160,8 @@ private:
 
 char SROA::ID = 0;
 
-FunctionPass *llvm::createSROAPass(bool RequiresDomTree) {
-  return new SROA(RequiresDomTree);
+FunctionPass *llvm::createSROAPass() {
+  return new SROA();
 }
 
 INITIALIZE_PASS_BEGIN(SROA, "sroa", "Scalar Replacement Of Aggregates", false,
@@ -1934,7 +1822,7 @@ static Value *convertValue(const DataLayout &DL, IRBuilderTy &IRB, Value *V,
 
 /// \brief Test whether the given slice use can be promoted to a vector.
 ///
-/// This function is called to test each entry in a partioning which is slated
+/// This function is called to test each entry in a partition which is slated
 /// for a single slice.
 static bool isVectorPromotionViableForSlice(AllocaSlices::Partition &P,
                                             const Slice &S, VectorType *Ty,
@@ -2130,7 +2018,7 @@ static bool isIntegerWideningViableForSlice(const Slice &S,
   uint64_t RelEnd = S.endOffset() - AllocBeginOffset;
 
   // We can't reasonably handle cases where the load or store extends past
-  // the end of the aloca's type and into its padding.
+  // the end of the alloca's type and into its padding.
   if (RelEnd > Size)
     return false;
 
@@ -2583,9 +2471,19 @@ private:
     V = convertValue(DL, IRB, V, IntTy);
     assert(NewBeginOffset >= NewAllocaBeginOffset && "Out of bounds offset");
     uint64_t Offset = NewBeginOffset - NewAllocaBeginOffset;
-    if (Offset > 0 || NewEndOffset < NewAllocaEndOffset)
-      V = extractInteger(DL, IRB, V, cast<IntegerType>(LI.getType()), Offset,
-                         "extract");
+    if (Offset > 0 || NewEndOffset < NewAllocaEndOffset) {
+      IntegerType *ExtractTy = Type::getIntNTy(LI.getContext(), SliceSize * 8);
+      V = extractInteger(DL, IRB, V, ExtractTy, Offset, "extract");
+    }
+    // It is possible that the extracted type is not the load type. This
+    // happens if there is a load past the end of the alloca, and as
+    // a consequence the slice is narrower but still a candidate for integer
+    // lowering. To handle this case, we just zero extend the extracted
+    // integer.
+    assert(cast<IntegerType>(LI.getType())->getBitWidth() >= SliceSize * 8 &&
+           "Can only handle an extract for an overly wide load");
+    if (cast<IntegerType>(LI.getType())->getBitWidth() > SliceSize * 8)
+      V = IRB.CreateZExt(V, LI.getType());
     return V;
   }
 
@@ -3711,7 +3609,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
                        return true;
                      }),
       Stores.end());
-  // Now we have to go *back* through all te stores, because a later store may
+  // Now we have to go *back* through all the stores, because a later store may
   // have caused an earlier store's load to become unsplittable and if it is
   // unsplittable for the later store, then we can't rely on it being split in
   // the earlier store either.
@@ -3972,7 +3870,7 @@ bool SROA::presplitLoadsAndStores(AllocaInst &AI, AllocaSlices &AS) {
 
     // Mark the original store as dead now that we've split it up and kill its
     // slice. Note that we leave the original load in place unless this store
-    // was its ownly use. It may in turn be split up if it is an alloca load
+    // was its only use. It may in turn be split up if it is an alloca load
     // for some other alloca, but it may be a normal load. This may introduce
     // redundant loads, but where those can be merged the rest of the optimizer
     // should handle the merging, and this uncovers SSA splits which is more
@@ -4230,7 +4128,7 @@ bool SROA::splitAlloca(AllocaInst &AI, AllocaSlices &AS) {
       std::max<unsigned>(NumPartitions, MaxPartitionsPerAlloca);
 
   // Migrate debug information from the old alloca to the new alloca(s)
-  // and the individial partitions.
+  // and the individual partitions.
   if (DbgDeclareInst *DbgDecl = FindAllocaDbgDeclare(&AI)) {
     auto *Var = DbgDecl->getVariable();
     auto *Expr = DbgDecl->getExpression();
@@ -4388,93 +4286,19 @@ void SROA::deleteDeadInstructions(
   }
 }
 
-static void enqueueUsersInWorklist(Instruction &I,
-                                   SmallVectorImpl<Instruction *> &Worklist,
-                                   SmallPtrSetImpl<Instruction *> &Visited) {
-  for (User *U : I.users())
-    if (Visited.insert(cast<Instruction>(U)).second)
-      Worklist.push_back(cast<Instruction>(U));
-}
-
 /// \brief Promote the allocas, using the best available technique.
 ///
 /// This attempts to promote whatever allocas have been identified as viable in
 /// the PromotableAllocas list. If that list is empty, there is nothing to do.
-/// If there is a domtree available, we attempt to promote using the full power
-/// of mem2reg. Otherwise, we build and use the AllocaPromoter above which is
-/// based on the SSAUpdater utilities. This function returns whether any
-/// promotion occurred.
+/// This function returns whether any promotion occurred.
 bool SROA::promoteAllocas(Function &F) {
   if (PromotableAllocas.empty())
     return false;
 
   NumPromoted += PromotableAllocas.size();
 
-  if (DT && !ForceSSAUpdater) {
-    DEBUG(dbgs() << "Promoting allocas with mem2reg...\n");
-    PromoteMemToReg(PromotableAllocas, *DT, nullptr, AC);
-    PromotableAllocas.clear();
-    return true;
-  }
-
-  DEBUG(dbgs() << "Promoting allocas with SSAUpdater...\n");
-  SSAUpdater SSA;
-  DIBuilder DIB(*F.getParent(), /*AllowUnresolved*/ false);
-  SmallVector<Instruction *, 64> Insts;
-
-  // We need a worklist to walk the uses of each alloca.
-  SmallVector<Instruction *, 8> Worklist;
-  SmallPtrSet<Instruction *, 8> Visited;
-  SmallVector<Instruction *, 32> DeadInsts;
-
-  for (unsigned Idx = 0, Size = PromotableAllocas.size(); Idx != Size; ++Idx) {
-    AllocaInst *AI = PromotableAllocas[Idx];
-    Insts.clear();
-    Worklist.clear();
-    Visited.clear();
-
-    enqueueUsersInWorklist(*AI, Worklist, Visited);
-
-    while (!Worklist.empty()) {
-      Instruction *I = Worklist.pop_back_val();
-
-      // FIXME: Currently the SSAUpdater infrastructure doesn't reason about
-      // lifetime intrinsics and so we strip them (and the bitcasts+GEPs
-      // leading to them) here. Eventually it should use them to optimize the
-      // scalar values produced.
-      if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I)) {
-        assert(II->getIntrinsicID() == Intrinsic::lifetime_start ||
-               II->getIntrinsicID() == Intrinsic::lifetime_end);
-        II->eraseFromParent();
-        continue;
-      }
-
-      // Push the loads and stores we find onto the list. SROA will already
-      // have validated that all loads and stores are viable candidates for
-      // promotion.
-      if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
-        assert(LI->getType() == AI->getAllocatedType());
-        Insts.push_back(LI);
-        continue;
-      }
-      if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
-        assert(SI->getValueOperand()->getType() == AI->getAllocatedType());
-        Insts.push_back(SI);
-        continue;
-      }
-
-      // For everything else, we know that only no-op bitcasts and GEPs will
-      // make it this far, just recurse through them and recall them for later
-      // removal.
-      DeadInsts.push_back(I);
-      enqueueUsersInWorklist(*I, Worklist, Visited);
-    }
-    AllocaPromoter(Insts, SSA, *AI, DIB).run(Insts);
-    while (!DeadInsts.empty())
-      DeadInsts.pop_back_val()->eraseFromParent();
-    AI->eraseFromParent();
-  }
-
+  DEBUG(dbgs() << "Promoting allocas with mem2reg...\n");
+  PromoteMemToReg(PromotableAllocas, *DT, nullptr, AC);
   PromotableAllocas.clear();
   return true;
 }
@@ -4485,9 +4309,7 @@ bool SROA::runOnFunction(Function &F) {
 
   DEBUG(dbgs() << "SROA function: " << F.getName() << "\n");
   C = &F.getContext();
-  DominatorTreeWrapperPass *DTWP =
-      getAnalysisIfAvailable<DominatorTreeWrapperPass>();
-  DT = DTWP ? &DTWP->getDomTree() : nullptr;
+  DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
 
   BasicBlock &EntryBB = F.getEntryBlock();
@@ -4532,7 +4354,6 @@ bool SROA::runOnFunction(Function &F) {
 
 void SROA::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<AssumptionCacheTracker>();
-  if (RequiresDomTree)
-    AU.addRequired<DominatorTreeWrapperPass>();
+  AU.addRequired<DominatorTreeWrapperPass>();
   AU.setPreservesCFG();
 }

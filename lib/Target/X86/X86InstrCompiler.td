@@ -161,26 +161,6 @@ def SEG_ALLOCA_64 : I<0, Pseudo, (outs GR64:$dst), (ins GR64:$size),
                     Requires<[In64BitMode]>;
 }
 
-// The MSVC runtime contains an _ftol2 routine for converting floating-point
-// to integer values. It has a strange calling convention: the input is
-// popped from the x87 stack, and the return value is given in EDX:EAX. ECX is
-// used as a temporary register. No other registers (aside from flags) are
-// touched.
-// Microsoft toolchains do not support 80-bit precision, so a WIN_FTOL_80
-// variant is unnecessary.
-
-let Defs = [EAX, EDX, ECX, EFLAGS], FPForm = SpecialFP in {
-  def WIN_FTOL_32 : I<0, Pseudo, (outs), (ins RFP32:$src),
-                      "# win32 fptoui",
-                      [(X86WinFTOL RFP32:$src)]>,
-                    Requires<[Not64BitMode]>;
-
-  def WIN_FTOL_64 : I<0, Pseudo, (outs), (ins RFP64:$src),
-                      "# win32 fptoui",
-                      [(X86WinFTOL RFP64:$src)]>,
-                    Requires<[Not64BitMode]>;
-}
-
 //===----------------------------------------------------------------------===//
 // EH Pseudo Instructions
 //
@@ -199,6 +179,15 @@ def EH_RETURN64   : I<0xC3, RawFrm, (outs), (ins GR64:$addr),
                      "ret\t#eh_return, addr: $addr",
                      [(X86ehret GR64:$addr)], IIC_RET>, Sched<[WriteJumpLd]>;
 
+}
+
+let isTerminator = 1, isBarrier = 1, hasCtrlDep = 1, isCodeGenOnly = 1 in {
+def CATCHRET   : I<0xC3, RawFrm, (outs), (ins GR32:$addr),
+                   "ret{l}\t# CATCHRET",
+                   [(X86catchret GR32:$addr)], IIC_RET>, Sched<[WriteJumpLd]>;
+def CATCHRET64 : I<0xC3, RawFrm, (outs), (ins GR64:$addr),
+                   "ret{q}\t# CATCHRET",
+                   [(X86catchret GR64:$addr)], IIC_RET>, Sched<[WriteJumpLd]>;
 }
 
 let hasSideEffects = 1, isBarrier = 1, isCodeGenOnly = 1,
@@ -781,46 +770,83 @@ defm LXADD : ATOMIC_LOAD_BINOP<0xc0, 0xc1, "xadd", "atomic_load_add",
 
 /* The following multiclass tries to make sure that in code like
  *    x.store (immediate op x.load(acquire), release)
+ * and
+ *    x.store (register op x.load(acquire), release)
  * an operation directly on memory is generated instead of wasting a register.
  * It is not automatic as atomic_store/load are only lowered to MOV instructions
  * extremely late to prevent them from being accidentally reordered in the backend
  * (see below the RELEASE_MOV* / ACQUIRE_MOV* pseudo-instructions)
  */
-multiclass RELEASE_BINOP_MI<string op> {
+multiclass RELEASE_BINOP_MI<SDNode op> {
     def NAME#8mi : I<0, Pseudo, (outs), (ins i8mem:$dst, i8imm:$src),
-        "#RELEASE_BINOP PSEUDO!",
-        [(atomic_store_8 addr:$dst, (!cast<PatFrag>(op)
+        "#BINOP "#NAME#"8mi PSEUDO!",
+        [(atomic_store_8 addr:$dst, (op
             (atomic_load_8 addr:$dst), (i8 imm:$src)))]>;
+    def NAME#8mr : I<0, Pseudo, (outs), (ins i8mem:$dst, GR8:$src),
+        "#BINOP "#NAME#"8mr PSEUDO!",
+        [(atomic_store_8 addr:$dst, (op
+            (atomic_load_8 addr:$dst), GR8:$src))]>;
     // NAME#16 is not generated as 16-bit arithmetic instructions are considered
     // costly and avoided as far as possible by this backend anyway
     def NAME#32mi : I<0, Pseudo, (outs), (ins i32mem:$dst, i32imm:$src),
-        "#RELEASE_BINOP PSEUDO!",
-        [(atomic_store_32 addr:$dst, (!cast<PatFrag>(op)
+        "#BINOP "#NAME#"32mi PSEUDO!",
+        [(atomic_store_32 addr:$dst, (op
             (atomic_load_32 addr:$dst), (i32 imm:$src)))]>;
+    def NAME#32mr : I<0, Pseudo, (outs), (ins i32mem:$dst, GR32:$src),
+        "#BINOP "#NAME#"32mr PSEUDO!",
+        [(atomic_store_32 addr:$dst, (op
+            (atomic_load_32 addr:$dst), GR32:$src))]>;
     def NAME#64mi32 : I<0, Pseudo, (outs), (ins i64mem:$dst, i64i32imm:$src),
-        "#RELEASE_BINOP PSEUDO!",
-        [(atomic_store_64 addr:$dst, (!cast<PatFrag>(op)
+        "#BINOP "#NAME#"64mi32 PSEUDO!",
+        [(atomic_store_64 addr:$dst, (op
             (atomic_load_64 addr:$dst), (i64immSExt32:$src)))]>;
+    def NAME#64mr : I<0, Pseudo, (outs), (ins i64mem:$dst, GR64:$src),
+        "#BINOP "#NAME#"64mr PSEUDO!",
+        [(atomic_store_64 addr:$dst, (op
+            (atomic_load_64 addr:$dst), GR64:$src))]>;
 }
-defm RELEASE_ADD : RELEASE_BINOP_MI<"add">;
-defm RELEASE_AND : RELEASE_BINOP_MI<"and">;
-defm RELEASE_OR  : RELEASE_BINOP_MI<"or">;
-defm RELEASE_XOR : RELEASE_BINOP_MI<"xor">;
+defm RELEASE_ADD : RELEASE_BINOP_MI<add>;
+defm RELEASE_AND : RELEASE_BINOP_MI<and>;
+defm RELEASE_OR  : RELEASE_BINOP_MI<or>;
+defm RELEASE_XOR : RELEASE_BINOP_MI<xor>;
 // Note: we don't deal with sub, because substractions of constants are
 // optimized into additions before this code can run
 
+// Same as above, but for floating-point.
+// FIXME: imm version.
+// FIXME: Version that doesn't clobber $src, using AVX's VADDSS.
+// FIXME: This could also handle SIMD operations with *ps and *pd instructions.
+let usesCustomInserter = 1 in {
+multiclass RELEASE_FP_BINOP_MI<SDNode op> {
+    def NAME#32mr : I<0, Pseudo, (outs), (ins i32mem:$dst, FR32:$src),
+        "#BINOP "#NAME#"32mr PSEUDO!",
+        [(atomic_store_32 addr:$dst,
+	   (i32 (bitconvert (op
+             (f32 (bitconvert (i32 (atomic_load_32 addr:$dst)))),
+	      FR32:$src))))]>, Requires<[HasSSE1]>;
+    def NAME#64mr : I<0, Pseudo, (outs), (ins i64mem:$dst, FR64:$src),
+        "#BINOP "#NAME#"64mr PSEUDO!",
+        [(atomic_store_64 addr:$dst,
+	   (i64 (bitconvert (op
+             (f64 (bitconvert (i64 (atomic_load_64 addr:$dst)))),
+	      FR64:$src))))]>, Requires<[HasSSE2]>;
+}
+defm RELEASE_FADD : RELEASE_FP_BINOP_MI<fadd>;
+// FIXME: Add fsub, fmul, fdiv, ...
+}
+
 multiclass RELEASE_UNOP<dag dag8, dag dag16, dag dag32, dag dag64> {
     def NAME#8m : I<0, Pseudo, (outs), (ins i8mem:$dst),
-        "#RELEASE_UNOP PSEUDO!",
+        "#UNOP "#NAME#"8m PSEUDO!",
         [(atomic_store_8 addr:$dst, dag8)]>;
     def NAME#16m : I<0, Pseudo, (outs), (ins i16mem:$dst),
-        "#RELEASE_UNOP PSEUDO!",
+        "#UNOP "#NAME#"16m PSEUDO!",
         [(atomic_store_16 addr:$dst, dag16)]>;
     def NAME#32m : I<0, Pseudo, (outs), (ins i32mem:$dst),
-        "#RELEASE_UNOP PSEUDO!",
+        "#UNOP "#NAME#"32m PSEUDO!",
         [(atomic_store_32 addr:$dst, dag32)]>;
     def NAME#64m : I<0, Pseudo, (outs), (ins i64mem:$dst),
-        "#RELEASE_UNOP PSEUDO!",
+        "#UNOP "#NAME#"64m PSEUDO!",
         [(atomic_store_64 addr:$dst, dag64)]>;
 }
 
@@ -850,42 +876,42 @@ defm RELEASE_NOT : RELEASE_UNOP<
 */
 
 def RELEASE_MOV8mi : I<0, Pseudo, (outs), (ins i8mem:$dst, i8imm:$src),
-			"#RELEASE_MOV PSEUDO !",
+			"#RELEASE_MOV8mi PSEUDO!",
 			[(atomic_store_8 addr:$dst, (i8 imm:$src))]>;
 def RELEASE_MOV16mi : I<0, Pseudo, (outs), (ins i16mem:$dst, i16imm:$src),
-			"#RELEASE_MOV PSEUDO !",
+			"#RELEASE_MOV16mi PSEUDO!",
 			[(atomic_store_16 addr:$dst, (i16 imm:$src))]>;
 def RELEASE_MOV32mi : I<0, Pseudo, (outs), (ins i32mem:$dst, i32imm:$src),
-			"#RELEASE_MOV PSEUDO !",
+			"#RELEASE_MOV32mi PSEUDO!",
 			[(atomic_store_32 addr:$dst, (i32 imm:$src))]>;
 def RELEASE_MOV64mi32 : I<0, Pseudo, (outs), (ins i64mem:$dst, i64i32imm:$src),
-			"#RELEASE_MOV PSEUDO !",
+			"#RELEASE_MOV64mi32 PSEUDO!",
 			[(atomic_store_64 addr:$dst, i64immSExt32:$src)]>;
 
 def RELEASE_MOV8mr  : I<0, Pseudo, (outs), (ins i8mem :$dst, GR8 :$src),
-                        "#RELEASE_MOV PSEUDO!",
+                        "#RELEASE_MOV8mr PSEUDO!",
                         [(atomic_store_8  addr:$dst, GR8 :$src)]>;
 def RELEASE_MOV16mr : I<0, Pseudo, (outs), (ins i16mem:$dst, GR16:$src),
-                        "#RELEASE_MOV PSEUDO!",
+                        "#RELEASE_MOV16mr PSEUDO!",
                         [(atomic_store_16 addr:$dst, GR16:$src)]>;
 def RELEASE_MOV32mr : I<0, Pseudo, (outs), (ins i32mem:$dst, GR32:$src),
-                        "#RELEASE_MOV PSEUDO!",
+                        "#RELEASE_MOV32mr PSEUDO!",
                         [(atomic_store_32 addr:$dst, GR32:$src)]>;
 def RELEASE_MOV64mr : I<0, Pseudo, (outs), (ins i64mem:$dst, GR64:$src),
-                        "#RELEASE_MOV PSEUDO!",
+                        "#RELEASE_MOV64mr PSEUDO!",
                         [(atomic_store_64 addr:$dst, GR64:$src)]>;
 
 def ACQUIRE_MOV8rm  : I<0, Pseudo, (outs GR8 :$dst), (ins i8mem :$src),
-                      "#ACQUIRE_MOV PSEUDO!",
+                      "#ACQUIRE_MOV8rm PSEUDO!",
                       [(set GR8:$dst,  (atomic_load_8  addr:$src))]>;
 def ACQUIRE_MOV16rm : I<0, Pseudo, (outs GR16:$dst), (ins i16mem:$src),
-                      "#ACQUIRE_MOV PSEUDO!",
+                      "#ACQUIRE_MOV16rm PSEUDO!",
                       [(set GR16:$dst, (atomic_load_16 addr:$src))]>;
 def ACQUIRE_MOV32rm : I<0, Pseudo, (outs GR32:$dst), (ins i32mem:$src),
-                      "#ACQUIRE_MOV PSEUDO!",
+                      "#ACQUIRE_MOV32rm PSEUDO!",
                       [(set GR32:$dst, (atomic_load_32 addr:$src))]>;
 def ACQUIRE_MOV64rm : I<0, Pseudo, (outs GR64:$dst), (ins i64mem:$src),
-                      "#ACQUIRE_MOV PSEUDO!",
+                      "#ACQUIRE_MOV64rm PSEUDO!",
                       [(set GR64:$dst, (atomic_load_64 addr:$src))]>;
 
 //===----------------------------------------------------------------------===//

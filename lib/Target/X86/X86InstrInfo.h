@@ -401,6 +401,10 @@ public:
   bool isSafeToClobberEFLAGS(MachineBasicBlock &MBB,
                              MachineBasicBlock::iterator I) const;
 
+  /// True if MI has a condition code def, e.g. EFLAGS, that is
+  /// not marked dead.
+  bool hasLiveCondCodeDef(MachineInstr *MI) const;
+
   static bool isX86_64ExtendedReg(const MachineOperand &MO) {
     if (!MO.isReg()) return false;
     return X86II::isX86_64ExtendedReg(MO.getReg());
@@ -494,6 +498,12 @@ public:
                                   const MachineRegisterInfo *MRI,
                                   unsigned &FoldAsLoadDefReg,
                                   MachineInstr *&DefMI) const override;
+
+  std::pair<unsigned, unsigned>
+  decomposeMachineOperandsTargetFlags(unsigned TF) const override;
+
+  ArrayRef<std::pair<unsigned, const char *>>
+  getSerializableDirectMachineOperandTargetFlags() const override;
 
 private:
   MachineInstr * convertToThreeAddressWithLEA(unsigned MIOpc,

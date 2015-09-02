@@ -103,6 +103,11 @@ protected: // Can only create subclasses.
 
   unsigned RequireStructuredCFG : 1;
 
+  /// This API is here to support the C API, deprecated in 3.7 release.
+  /// This should never be used outside of legacy existing client.
+  const DataLayout &getDataLayout() const { return DL; }
+  friend struct C_API_PRIVATE_ACCESS;
+
 public:
   mutable TargetOptions Options;
 
@@ -132,6 +137,15 @@ public:
 
   /// Create a DataLayout.
   const DataLayout createDataLayout() const { return DL; }
+
+  /// Test if a DataLayout if compatible with the CodeGen for this target.
+  ///
+  /// The LLVM Module owns a DataLayout that is used for the target independent
+  /// optimizations and code generation. This hook provides a target specific
+  /// check on the validity of this DataLayout.
+  bool isCompatibleDataLayout(const DataLayout &Candidate) const {
+    return DL == Candidate;
+  }
 
   /// Get the pointer size for this target.
   ///

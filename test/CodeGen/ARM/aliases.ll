@@ -2,33 +2,34 @@
 
 ; CHECK: .globl	test
 
-; CHECK: .globl structvar
-; CHECK: .size structvar, 8
+; CHECK: .Lstructvar:
+; CHECK: .size .Lstructvar, 8
 
 ; CHECK: .globl	foo1
 ; CHECK: foo1 = bar
-; CHECK: .size foo1, 4
+; CHECK-NOT: .size foo1
 
 ; CHECK: .globl	foo2
 ; CHECK: foo2 = bar
-; CHECK: .size foo2, 4
+; CHECK-NOT: .size foo2
 
 ; CHECK: .weak	bar_f
 ; CHECK: bar_f = foo_f
+; CHECK-NOT: .size bar_f
 
 ; CHECK: bar_i = bar
-; CHECK: .size bar_i, 4
+; CHECK-NOT: .size bar_i
 
 ; CHECK: .globl	A
 ; CHECK: A = bar
-; CHECK: .size A, 8
+; CHECK-NOT: .size A
 
 ; CHECK: .globl elem0
-; CHECK: elem0 = structvar
+; CHECK: elem0 = .Lstructvar
 ; CHECK: .size elem0, 4
 
 ; CHECK: .globl elem1
-; CHECK: elem1 = structvar+4
+; CHECK: elem1 = .Lstructvar+4
 ; CHECK: .size elem1, 4
 
 @bar = global i32 42
@@ -46,7 +47,7 @@ define i32 @foo_f() {
 
 @A = alias bitcast (i32* @bar to i64*)
 
-@structvar = global {i32, i32} {i32 1, i32 2}
+@structvar = private global {i32, i32} {i32 1, i32 2}
 @elem0 = alias getelementptr({i32, i32}, {i32, i32}*  @structvar, i32 0, i32 0)
 @elem1 = alias getelementptr({i32, i32}, {i32, i32}*  @structvar, i32 0, i32 1)
 

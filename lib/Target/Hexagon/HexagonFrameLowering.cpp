@@ -511,7 +511,13 @@ void HexagonFrameLowering::insertPrologueInBlock(MachineBasicBlock &MBB) const {
       for (unsigned I = 0, E = CSI.size(); I < E; ++I) {
         if (CSI[I].getReg() == regsToMove[i]) {
           // Subtract 8 to make room for R30 and R31, which are added above.
-          int64_t Offset = getFrameIndexOffset(MF, CSI[I].getFrameIdx()) - 8;
+          unsigned FrameReg;
+          int64_t Offset =
+              getFrameIndexReference(MF, CSI[I].getFrameIdx(), FrameReg) - 8;
+
+          assert(FrameReg == HRI.getFrameRegister() &&
+                 "FrameReg from getFrameIndexReference should be the default "
+                 "frame reg");
 
           if (regsToMove[i] < Hexagon::D0 || regsToMove[i] > Hexagon::D15) {
             unsigned DwarfReg = HRI.getDwarfRegNum(regsToMove[i], true);
@@ -717,9 +723,14 @@ static void addCalleeSaveRegistersAsImpOperand(MachineInstr *Inst,
   }
 }
 
+int HexagonFrameLowering::getFrameIndexReference(const MachineFunction &MF,
+                                                 int FI,
+                                                 unsigned &FrameReg) const {
+  const TargetRegisterInfo *RI = MF.getSubtarget().getRegisterInfo();
 
-int HexagonFrameLowering::getFrameIndexOffset(const MachineFunction &MF,
-      int FI) const {
+  // Fill in FrameReg output argument.
+  FrameReg = RI->getFrameRegister(MF);
+
   return MF.getFrameInfo()->getObjectOffset(FI);
 }
 
@@ -1219,6 +1230,7 @@ MachineInstr *HexagonFrameLowering::getAlignaInstr(MachineFunction &MF) const {
 }
 
 
+// FIXME: Use Function::optForSize().
 inline static bool isOptSize(const MachineFunction &MF) {
   AttributeSet AF = MF.getFunction()->getAttributes();
   return AF.hasAttribute(AttributeSet::FunctionIndex,
@@ -1226,8 +1238,7 @@ inline static bool isOptSize(const MachineFunction &MF) {
 }
 
 inline static bool isMinSize(const MachineFunction &MF) {
-  AttributeSet AF = MF.getFunction()->getAttributes();
-  return AF.hasAttribute(AttributeSet::FunctionIndex, Attribute::MinSize);
+  return MF.getFunction()->optForMinSize();
 }
 
 
@@ -1289,4 +1300,3 @@ bool HexagonFrameLowering::useRestoreFunction(MachineFunction &MF,
                                      : SpillFuncThreshold;
   return Threshold < NumCSI;
 }
-

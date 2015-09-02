@@ -242,11 +242,9 @@ void ScheduleDAGInstrs::addSchedBarrierDeps() {
     assert(Uses.empty() && "Uses in set before adding deps?");
     for (MachineBasicBlock::succ_iterator SI = BB->succ_begin(),
            SE = BB->succ_end(); SI != SE; ++SI)
-      for (MachineBasicBlock::livein_iterator I = (*SI)->livein_begin(),
-             E = (*SI)->livein_end(); I != E; ++I) {
-        unsigned Reg = *I;
-        if (!Uses.contains(Reg))
-          Uses.insert(PhysRegSUOper(&ExitSU, -1, Reg));
+      for (unsigned LI : (*SI)->liveins()) {
+        if (!Uses.contains(LI))
+          Uses.insert(PhysRegSUOper(&ExitSU, -1, LI));
       }
   }
 }
@@ -508,7 +506,7 @@ static inline bool isUnsafeMemoryObject(MachineInstr *MI,
   return false;
 }
 
-/// This returns true if the two MIs need a chain edge betwee them.
+/// This returns true if the two MIs need a chain edge between them.
 /// If these are not even memory operations, we still may need
 /// chain deps between them. The question really is - could
 /// these two MIs be reordered during scheduling from memory dependency
@@ -670,7 +668,7 @@ static inline void addChainDependency(AliasAnalysis *AA,
                                       unsigned TrueMemOrderLatency = 0,
                                       bool isNormalMemory = false) {
   // If this is a false dependency,
-  // do not add the edge, but rememeber the rejected node.
+  // do not add the edge, but remember the rejected node.
   if (MIsNeedChainEdge(AA, MFI, DL, SUa->getInstr(), SUb->getInstr())) {
     SDep Dep(SUa, isNormalMemory ? SDep::MayAliasMem : SDep::Barrier);
     Dep.setLatency(TrueMemOrderLatency);
@@ -685,7 +683,7 @@ static inline void addChainDependency(AliasAnalysis *AA,
   }
 }
 
-/// Create an SUnit for each real instruction, numbered in top-down toplological
+/// Create an SUnit for each real instruction, numbered in top-down topological
 /// order. The instruction order A < B, implies that no edge exists from B to A.
 ///
 /// Map each real instruction to its SUnit.
@@ -766,7 +764,7 @@ void ScheduleDAGInstrs::buildSchedGraph(AliasAnalysis *AA,
   // We build scheduling units by walking a block's instruction list from bottom
   // to top.
 
-  // Remember where a generic side-effecting instruction is as we procede.
+  // Remember where a generic side-effecting instruction is as we proceed.
   SUnit *BarrierChain = nullptr, *AliasChain = nullptr;
 
   // Memory references to specific known memory locations are tracked
@@ -1080,11 +1078,9 @@ void ScheduleDAGInstrs::startBlockForKills(MachineBasicBlock *BB) {
   // Examine the live-in regs of all successors.
   for (MachineBasicBlock::succ_iterator SI = BB->succ_begin(),
        SE = BB->succ_end(); SI != SE; ++SI) {
-    for (MachineBasicBlock::livein_iterator I = (*SI)->livein_begin(),
-         E = (*SI)->livein_end(); I != E; ++I) {
-      unsigned Reg = *I;
+    for (unsigned LI : (*SI)->liveins()) {
       // Repeat, for reg and all subregs.
-      for (MCSubRegIterator SubRegs(Reg, TRI, /*IncludeSelf=*/true);
+      for (MCSubRegIterator SubRegs(LI, TRI, /*IncludeSelf=*/true);
            SubRegs.isValid(); ++SubRegs)
         LiveRegs.set(*SubRegs);
     }

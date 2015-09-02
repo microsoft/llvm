@@ -68,12 +68,12 @@ MCAsmLayout::MCAsmLayout(MCAssembler &Asm)
   : Assembler(Asm), LastValidFragment()
  {
   // Compute the section layout order. Virtual sections must go last.
-  for (MCAssembler::iterator it = Asm.begin(), ie = Asm.end(); it != ie; ++it)
-    if (!it->isVirtualSection())
-      SectionOrder.push_back(&*it);
-  for (MCAssembler::iterator it = Asm.begin(), ie = Asm.end(); it != ie; ++it)
-    if (it->isVirtualSection())
-      SectionOrder.push_back(&*it);
+  for (MCSection &Sec : Asm)
+    if (!Sec.isVirtualSection())
+      SectionOrder.push_back(&Sec);
+  for (MCSection &Sec : Asm)
+    if (Sec.isVirtualSection())
+      SectionOrder.push_back(&Sec);
 }
 
 bool MCAsmLayout::isFragmentValid(const MCFragment *F) const {
@@ -137,7 +137,7 @@ static bool getSymbolOffsetImpl(const MCAsmLayout &Layout, const MCSymbol &S,
 
   // If SD is a variable, evaluate it.
   MCValue Target;
-  if (!S.getVariableValue()->evaluateAsRelocatable(Target, &Layout, nullptr))
+  if (!S.getVariableValue()->evaluateAsValue(Target, Layout))
     report_fatal_error("unable to evaluate offset for variable '" +
                        S.getName() + "'");
 
@@ -325,11 +325,10 @@ void MCFragment::destroy() {
 /* *** */
 
 MCAssembler::MCAssembler(MCContext &Context_, MCAsmBackend &Backend_,
-                         MCCodeEmitter &Emitter_, MCObjectWriter &Writer_,
-                         raw_ostream &OS_)
+                         MCCodeEmitter &Emitter_, MCObjectWriter &Writer_)
     : Context(Context_), Backend(Backend_), Emitter(Emitter_), Writer(Writer_),
-      OS(OS_), BundleAlignSize(0), RelaxAll(false),
-      SubsectionsViaSymbols(false), ELFHeaderEFlags(0) {
+      BundleAlignSize(0), RelaxAll(false), SubsectionsViaSymbols(false),
+      ELFHeaderEFlags(0) {
   VersionMinInfo.Major = 0; // Major version == 0 for "none specified"
 }
 
@@ -786,15 +785,14 @@ void MCAssembler::writeSectionData(const MCSection *Sec,
     assert(Layout.getSectionFileSize(Sec) == 0 && "Invalid size for section!");
 
     // Check that contents are only things legal inside a virtual section.
-    for (MCSection::const_iterator it = Sec->begin(), ie = Sec->end(); it != ie;
-         ++it) {
-      switch (it->getKind()) {
+    for (const MCFragment &F : *Sec) {
+      switch (F.getKind()) {
       default: llvm_unreachable("Invalid fragment in virtual section!");
       case MCFragment::FT_Data: {
         // Check that we aren't trying to write a non-zero contents (or fixups)
         // into a virtual section. This is to support clients which use standard
         // directives to fill the contents of virtual sections.
-        const MCDataFragment &DF = cast<MCDataFragment>(*it);
+        const MCDataFragment &DF = cast<MCDataFragment>(F);
         assert(DF.fixup_begin() == DF.fixup_end() &&
                "Cannot have fixups in virtual section!");
         for (unsigned i = 0, e = DF.getContents().size(); i != e; ++i)
@@ -810,13 +808,13 @@ void MCAssembler::writeSectionData(const MCSection *Sec,
       case MCFragment::FT_Align:
         // Check that we aren't trying to write a non-zero value into a virtual
         // section.
-        assert((cast<MCAlignFragment>(it)->getValueSize() == 0 ||
-                cast<MCAlignFragment>(it)->getValue() == 0) &&
+        assert((cast<MCAlignFragment>(F).getValueSize() == 0 ||
+                cast<MCAlignFragment>(F).getValue() == 0) &&
                "Invalid align in virtual section!");
         break;
       case MCFragment::FT_Fill:
-        assert((cast<MCFillFragment>(it)->getValueSize() == 0 ||
-                cast<MCFillFragment>(it)->getValue() == 0) &&
+        assert((cast<MCFillFragment>(F).getValueSize() == 0 ||
+                cast<MCFillFragment>(F).getValue() == 0) &&
                "Invalid fill in virtual section!");
         break;
       }
@@ -828,9 +826,8 @@ void MCAssembler::writeSectionData(const MCSection *Sec,
   uint64_t Start = getWriter().getStream().tell();
   (void)Start;
 
-  for (MCSection::const_iterator it = Sec->begin(), ie = Sec->end(); it != ie;
-       ++it)
-    writeFragment(*this, Layout, *it);
+  for (const MCFragment &F : *Sec)
+    writeFragment(*this, Layout, F);
 
   assert(getWriter().getStream().tell() - Start ==
          Layout.getSectionAddressSize(Sec));
@@ -854,23 +851,20 @@ std::pair<uint64_t, bool> MCAssembler::handleFixup(const MCAsmLayout &Layout,
   return std::make_pair(FixedValue, IsPCRel);
 }
 
-void MCAssembler::Finish() {
+void MCAssembler::layout(MCAsmLayout &Layout) {
   DEBUG_WITH_TYPE("mc-dump", {
       llvm::errs() << "assembler backend - pre-layout\n--\n";
       dump(); });
 
-  // Create the layout object.
-  MCAsmLayout Layout(*this);
-
   // Create dummy fragments and assign section ordinals.
   unsigned SectionIndex = 0;
-  for (MCAssembler::iterator it = begin(), ie = end(); it != ie; ++it) {
+  for (MCSection &Sec : *this) {
     // Create dummy fragments to eliminate any empty sections, this simplifies
     // layout.
-    if (it->getFragmentList().empty())
-      new MCDataFragment(&*it);
+    if (Sec.getFragmentList().empty())
+      new MCDataFragment(&Sec);
 
-    it->setOrdinal(SectionIndex++);
+    Sec.setOrdinal(SectionIndex++);
   }
 
   // Assign layout order indices to sections and fragments.
@@ -879,9 +873,8 @@ void MCAssembler::Finish() {
     Sec->setLayoutOrder(i);
 
     unsigned FragmentIndex = 0;
-    for (MCSection::iterator iFrag = Sec->begin(), iFragEnd = Sec->end();
-         iFrag != iFragEnd; ++iFrag)
-      iFrag->setLayoutOrder(FragmentIndex++);
+    for (MCFragment &Frag : *Sec)
+      Frag.setLayoutOrder(FragmentIndex++);
   }
 
   // Layout until everything fits.
@@ -899,17 +892,14 @@ void MCAssembler::Finish() {
       llvm::errs() << "assembler backend - final-layout\n--\n";
       dump(); });
 
-  uint64_t StartOffset = OS.tell();
-
   // Allow the object writer a chance to perform post-layout binding (for
   // example, to set the index fields in the symbol data).
   getWriter().executePostLayoutBinding(*this, Layout);
 
   // Evaluate and apply the fixups, generating relocation entries as necessary.
-  for (MCAssembler::iterator it = begin(), ie = end(); it != ie; ++it) {
-    for (MCSection::iterator it2 = it->begin(), ie2 = it->end(); it2 != ie2;
-         ++it2) {
-      MCEncodedFragment *F = dyn_cast<MCEncodedFragment>(it2);
+  for (MCSection &Sec : *this) {
+    for (MCFragment &Frag : Sec) {
+      MCEncodedFragment *F = dyn_cast<MCEncodedFragment>(&Frag);
       // Data and relaxable fragments both have fixups.  So only process
       // those here.
       // FIXME: Is there a better way to do this?  MCEncodedFragmentWithFixups
@@ -935,6 +925,15 @@ void MCAssembler::Finish() {
       }
     }
   }
+}
+
+void MCAssembler::Finish() {
+  // Create the layout object.
+  MCAsmLayout Layout(*this);
+  layout(Layout);
+
+  raw_ostream &OS = getWriter().getStream();
+  uint64_t StartOffset = OS.tell();
 
   // Write the object file.
   getWriter().writeObject(*this, Layout);
@@ -960,9 +959,8 @@ bool MCAssembler::fragmentNeedsRelaxation(const MCRelaxableFragment *F,
   if (!getBackend().mayNeedRelaxation(F->getInst()))
     return false;
 
-  for (MCRelaxableFragment::const_fixup_iterator it = F->fixup_begin(),
-       ie = F->fixup_end(); it != ie; ++it)
-    if (fixupNeedsRelaxation(*it, F, Layout))
+  for (const MCFixup &Fixup : F->getFixups())
+    if (fixupNeedsRelaxation(Fixup, F, Layout))
       return true;
 
   return false;
@@ -991,7 +989,6 @@ bool MCAssembler::relaxInstruction(MCAsmLayout &Layout,
   SmallString<256> Code;
   raw_svector_ostream VecOS(Code);
   getEmitter().encodeInstruction(Relaxed, VecOS, Fixups, F.getSubtargetInfo());
-  VecOS.flush();
 
   // Update the fragment.
   F.setInst(Relaxed);
@@ -1014,7 +1011,6 @@ bool MCAssembler::relaxLEB(MCAsmLayout &Layout, MCLEBFragment &LF) {
     encodeSLEB128(Value, OSE);
   else
     encodeULEB128(Value, OSE);
-  OSE.flush();
   return OldSize != LF.getContents().size();
 }
 
@@ -1031,8 +1027,8 @@ bool MCAssembler::relaxDwarfLineAddr(MCAsmLayout &Layout,
   SmallString<8> &Data = DF.getContents();
   Data.clear();
   raw_svector_ostream OSE(Data);
-  MCDwarfLineAddr::Encode(Context, LineDelta, AddrDelta, OSE);
-  OSE.flush();
+  MCDwarfLineAddr::Encode(Context, getDWARFLinetableParams(), LineDelta,
+                          AddrDelta, OSE);
   return OldSize != Data.size();
 }
 
@@ -1048,7 +1044,6 @@ bool MCAssembler::relaxDwarfCallFrameFragment(MCAsmLayout &Layout,
   Data.clear();
   raw_svector_ostream OSE(Data);
   MCDwarfFrameEmitter::EncodeAdvanceLoc(Context, AddrDelta, OSE);
-  OSE.flush();
   return OldSize != Data.size();
 }
 

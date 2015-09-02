@@ -233,22 +233,13 @@ bool AsmPrinter::doInitialization(Module &M) {
   }
 
   if (MAI->doesSupportDebugInformation()) {
-    bool skip_dwarf = false;
-    if (TM.getTargetTriple().isKnownWindowsMSVCEnvironment()) {
+    bool EmitCodeView = MMI->getModule()->getCodeViewFlag();
+    if (EmitCodeView && TM.getTargetTriple().isKnownWindowsMSVCEnvironment()) {
       Handlers.push_back(HandlerInfo(new WinCodeViewLineTables(this),
                                      DbgTimerName,
                                      CodeViewLineTablesGroupName));
-      // FIXME: Don't emit DWARF debug info if there's at least one function
-      // with AddressSanitizer instrumentation.
-      // This is a band-aid fix for PR22032.
-      for (auto &F : M.functions()) {
-        if (F.hasFnAttribute(Attribute::SanitizeAddress)) {
-          skip_dwarf = true;
-          break;
-        }
-      }
     }
-    if (!skip_dwarf) {
+    if (!EmitCodeView || MMI->getModule()->getDwarfVersion()) {
       DD = new DwarfDebug(this, &M);
       Handlers.push_back(HandlerInfo(DD, DbgTimerName, DWARFGroupName));
     }
@@ -1194,10 +1185,14 @@ bool AsmPrinter::doFinalization(Module &M) {
     // Emit the directives as assignments aka .set:
     OutStreamer->EmitAssignment(Name, lowerConstant(Alias.getAliasee()));
 
-    // Set the size of the alias symbol if we can, as otherwise the alias gets
-    // the size of the aliasee which may not be correct e.g. if the alias is of
-    // a member of a struct.
-    if (MAI->hasDotTypeDotSizeDirective() && Alias.getValueType()->isSized()) {
+    // If the aliasee does not correspond to a symbol in the output, i.e. the
+    // alias is not of an object or the aliased object is private, then set the
+    // size of the alias symbol from the type of the alias. We don't do this in
+    // other situations as the alias and aliasee having differing types but same
+    // size may be intentional.
+    const GlobalObject *BaseObject = Alias.getBaseObject();
+    if (MAI->hasDotTypeDotSizeDirective() && Alias.getValueType()->isSized() &&
+        (!BaseObject || BaseObject->hasPrivateLinkage())) {
       const DataLayout &DL = M.getDataLayout();
       uint64_t Size = DL.getTypeAllocSize(Alias.getValueType());
       OutStreamer->emitELFSize(cast<MCSymbolELF>(Name),
@@ -2495,7 +2490,8 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock &MBB) const {
   }
 
   // Print the main label for the block.
-  if (MBB.pred_empty() || isBlockOnlyReachableByFallthrough(&MBB)) {
+  if (MBB.pred_empty() ||
+      (isBlockOnlyReachableByFallthrough(&MBB) && !MBB.isEHFuncletEntry())) {
     if (isVerbose()) {
       // NOTE: Want this comment at start of line, don't emit with AddComment.
       OutStreamer->emitRawComment(" BB#" + Twine(MBB.getNumber()) + ":", false);
@@ -2533,7 +2529,7 @@ bool AsmPrinter::
 isBlockOnlyReachableByFallthrough(const MachineBasicBlock *MBB) const {
   // If this is a landing pad, it isn't a fall through.  If it has no preds,
   // then nothing falls through to it.
-  if (MBB->isLandingPad() || MBB->pred_empty())
+  if (MBB->isEHPad() || MBB->pred_empty())
     return false;
 
   // If there isn't exactly one predecessor, it can't be a fall through.

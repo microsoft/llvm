@@ -240,6 +240,9 @@ int FuzzerDriver(int argc, char **argv, UserSuppliedFuzzer &USF) {
       Flags.prefer_small_during_initial_shuffle;
   Options.Tokens = ReadTokensFile(Flags.tokens);
   Options.Reload = Flags.reload;
+  Options.OnlyASCII = Flags.only_ascii;
+  Options.TBMDepth = Flags.tbm_depth;
+  Options.TBMWidth = Flags.tbm_width;
   if (Flags.runs >= 0)
     Options.MaxNumberOfRuns = Flags.runs;
   if (!inputs.empty())
@@ -247,6 +250,7 @@ int FuzzerDriver(int argc, char **argv, UserSuppliedFuzzer &USF) {
   if (Flags.sync_command)
     Options.SyncCommand = Flags.sync_command;
   Options.SyncTimeout = Flags.sync_timeout;
+  Options.ReportSlowUnits = Flags.report_slow_units;
   Fuzzer F(USF, Options);
 
   if (Flags.apply_tokens)

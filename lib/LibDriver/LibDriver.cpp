@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 //
 // Defines an interface to a lib.exe-compatible driver that also understands
-// bitcode files. Used by llvm-lib and lld-link2 /lib.
+// bitcode files. Used by llvm-lib and lld-link /lib.
 //
 //===----------------------------------------------------------------------===//
 
@@ -102,7 +102,7 @@ static Optional<std::string> findInputFile(StringRef File,
 int llvm::libDriverMain(llvm::ArrayRef<const char*> ArgsArr) {
   SmallVector<const char *, 20> NewArgs(ArgsArr.begin(), ArgsArr.end());
   BumpPtrAllocator Alloc;
-  BumpPtrStringSaver Saver(Alloc);
+  StringSaver Saver(Alloc);
   cl::ExpandResponseFiles(Saver, cl::TokenizeWindowsCommandLine, NewArgs);
   ArgsArr = NewArgs;
 

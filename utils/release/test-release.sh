@@ -32,6 +32,7 @@ do_asserts="no"
 do_compare="yes"
 do_rt="yes"
 do_libs="yes"
+do_libunwind="yes"
 do_test_suite="yes"
 do_openmp="no"
 BuildDir="`pwd`"
@@ -59,6 +60,7 @@ function usage() {
     echo "                      For example -svn-path trunk or -svn-path branches/release_37"
     echo " -no-rt               Disable check-out & build Compiler-RT"
     echo " -no-libs             Disable check-out & build libcxx/libcxxabi/libunwind"
+    echo " -no-libunwind        Disable check-out & build libunwind"
     echo " -no-test-suite       Disable check-out & build test-suite"
     echo " -openmp              Check out and build the OpenMP run-time (experimental)"
 }
@@ -135,6 +137,9 @@ while [ $# -gt 0 ]; do
         -no-libs )
             do_libs="no"
             ;;
+        -no-libunwind )
+            do_libunwind="no"
+            ;;
         -no-test-suite )
             do_test_suite="no"
             ;;
@@ -191,7 +196,10 @@ if [ $do_rt = "yes" ]; then
   projects="$projects compiler-rt"
 fi
 if [ $do_libs = "yes" ]; then
-  projects="$projects libcxx libcxxabi libunwind"
+  projects="$projects libcxx libcxxabi"
+  if [ $do_libunwind = "yes" ]; then
+    projects="$projects libunwind"
+  fi
 fi
 if [ $do_test_suite = "yes" ]; then
   projects="$projects test-suite"
@@ -275,7 +283,7 @@ function export_sources() {
         ln -s ../../cfe.src clang
     fi
     cd $BuildDir/llvm.src/tools/clang/tools
-    if [ ! -h clang-tools-extra ]; then
+    if [ ! -h extra ]; then
         ln -s ../../../../clang-tools-extra.src extra
     fi
     cd $BuildDir/llvm.src/projects
@@ -462,7 +470,12 @@ function build_OpenMP() {
     echo "# ${MAKE} install DESTDIR=$BuildDir/Phase3/openmp.install"
     ${MAKE} install DESTDIR=$BuildDir/Phase3/openmp.install
 
-    OpenMPPackage=OpenMP-$Triple
+    OpenMPPackage=OpenMP-$Release
+    if [ $RC != "final" ]; then
+        OpenMPPackage=$OpenMPPackage-$RC
+    fi
+    OpenMPPackage=$OpenMPPackage-$Triple
+
     mv $BuildDir/Phase3/openmp.install/usr/local $BuildDir/$OpenMPPackage
     cd $BuildDir
     tar cvfJ $BuildDir/$OpenMPPackage.tar.xz $OpenMPPackage

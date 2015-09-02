@@ -120,7 +120,7 @@ namespace {
       AU.addPreservedID(LCSSAID);
       AU.addRequired<AliasAnalysis>();
       AU.addPreserved<AliasAnalysis>();
-      AU.addPreserved<ScalarEvolution>();
+      AU.addPreserved<ScalarEvolutionWrapperPass>();
       AU.addRequired<TargetLibraryInfoWrapperPass>();
     }
 
@@ -164,7 +164,7 @@ INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_DEPENDENCY(LCSSA)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_END(LICM, "licm", "Loop Invariant Code Motion", false, false)
@@ -264,9 +264,10 @@ bool LICM::runOnLoop(Loop *L, LPPassManager &LPM) {
     // FIXME: This is really heavy handed. It would be a bit better to use an
     // SSAUpdater strategy during promotion that was LCSSA aware and reformed
     // it as it went.
-    if (Changed)
-      formLCSSARecursively(*L, *DT, LI,
-                           getAnalysisIfAvailable<ScalarEvolution>());
+    if (Changed) {
+      auto *SEWP = getAnalysisIfAvailable<ScalarEvolutionWrapperPass>();
+      formLCSSARecursively(*L, *DT, LI, SEWP ? &SEWP->getSE() : nullptr);
+    }
   }
 
   // Check that neither this loop nor its parent have had LCSSA broken. LICM is
@@ -402,7 +403,7 @@ bool llvm::hoistRegion(DomTreeNode *N, AliasAnalysis *AA, LoopInfo *LI,
 }
 
 /// Computes loop safety information, checks loop body & header
-/// for the possiblity of may throw exception.
+/// for the possibility of may throw exception.
 ///
 void llvm::computeLICMSafetyInfo(LICMSafetyInfo * SafetyInfo, Loop * CurLoop) {
   assert(CurLoop != nullptr && "CurLoop cant be null");
@@ -410,7 +411,7 @@ void llvm::computeLICMSafetyInfo(LICMSafetyInfo * SafetyInfo, Loop * CurLoop) {
   // Setting default safety values.
   SafetyInfo->MayThrow = false;
   SafetyInfo->HeaderMayThrow = false;
-  // Iterate over header and compute dafety info.
+  // Iterate over header and compute safety info.
   for (BasicBlock::iterator I = Header->begin(), E = Header->end();
        (I != E) && !SafetyInfo->HeaderMayThrow; ++I)
     SafetyInfo->HeaderMayThrow |= I->mayThrow();
@@ -445,7 +446,7 @@ bool canSinkOrHoistInst(Instruction &I, AliasAnalysis *AA, DominatorTree *DT,
     // Don't hoist loads which have may-aliased stores in loop.
     uint64_t Size = 0;
     if (LI->getType()->isSized())
-      Size = AA->getTypeStoreSize(LI->getType());
+      Size = I.getModule()->getDataLayout().getTypeStoreSize(LI->getType());
 
     AAMDNodes AAInfo;
     LI->getAAMetadata(AAInfo);
@@ -973,7 +974,7 @@ bool llvm::promoteLoopAccessesToScalars(AliasSet &AS,
   return Changed;
 }
 
-/// Simple Analysis hook. Clone alias set info.
+/// Simple analysis hook. Clone alias set info.
 ///
 void LICM::cloneBasicBlockAnalysis(BasicBlock *From, BasicBlock *To, Loop *L) {
   AliasSetTracker *AST = LoopToAliasSetMap.lookup(L);

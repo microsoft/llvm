@@ -170,11 +170,7 @@ bool X86CallFrameOptimization::isProfitable(MachineFunction &MF,
     return true;
 
   // Don't do this when not optimizing for size.
-  bool OptForSize =
-      MF.getFunction()->hasFnAttribute(Attribute::OptimizeForSize) ||
-      MF.getFunction()->hasFnAttribute(Attribute::MinSize);
-
-  if (!OptForSize)
+  if (!MF.getFunction()->optForSize())
     return false;
 
   unsigned StackAlign = TFL->getStackAlignment();
@@ -308,7 +304,6 @@ void X86CallFrameOptimization::collectCallInfo(MachineFunction &MF,
   // transformation.
   const X86RegisterInfo &RegInfo = *static_cast<const X86RegisterInfo *>(
                                        MF.getSubtarget().getRegisterInfo());
-  unsigned StackPtr = RegInfo.getStackRegister();
   unsigned FrameDestroyOpcode = TII->getCallFrameDestroyOpcode();
 
   // We expect to enter this at the beginning of a call sequence
@@ -338,7 +333,8 @@ void X86CallFrameOptimization::collectCallInfo(MachineFunction &MF,
   if (!I->isCopy() || !I->getOperand(0).isReg())
     return;
   Context.SPCopy = I++;
-  StackPtr = Context.SPCopy->getOperand(0).getReg();
+
+  unsigned StackPtr = Context.SPCopy->getOperand(0).getReg();
 
   // Scan the call setup sequence for the pattern we're looking for.
   // We only handle a simple case - a sequence of MOV32mi or MOV32mr
@@ -532,13 +528,10 @@ MachineInstr *X86CallFrameOptimization::canFoldIntoRegPush(
       DefMI->getParent() != FrameSetup->getParent())
     return nullptr;
 
-  // Now, make sure everything else up until the ADJCALLSTACK is a sequence
-  // of MOVs. To be less conservative would require duplicating a lot of the
-  // logic from PeepholeOptimizer.
-  // FIXME: A possibly better approach would be to teach the PeepholeOptimizer
-  // to be smarter about folding into pushes.
+  // Make sure we don't have any instructions between DefMI and the
+  // push that make folding the load illegal.
   for (auto I = DefMI; I != FrameSetup; ++I)
-    if (I->getOpcode() != X86::MOV32rm)
+    if (I->isLoadFoldBarrier())
       return nullptr;
 
   return DefMI;

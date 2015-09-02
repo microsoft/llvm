@@ -210,8 +210,7 @@ public:
   uint64_t getCommonSymbolSizeImpl(DataRefImpl Symb) const override;
   SymbolRef::Type getSymbolType(DataRefImpl Symb) const override;
   uint32_t getSymbolFlags(DataRefImpl Symb) const override;
-  std::error_code getSymbolSection(DataRefImpl Symb,
-                                   section_iterator &Res) const override;
+  ErrorOr<section_iterator> getSymbolSection(DataRefImpl Symb) const override;
   unsigned getSymbolSectionID(SymbolRef Symb) const;
   unsigned getSectionID(SectionRef Sec) const;
 
@@ -421,6 +420,24 @@ public:
 
   static bool classof(const Binary *v) {
     return v->isMachO();
+  }
+
+  static uint32_t
+  getVersionMinMajor(MachO::version_min_command &C, bool SDK) {
+    uint32_t VersionOrSDK = (SDK) ? C.sdk : C.version;
+    return (VersionOrSDK >> 16) & 0xffff;
+  }
+
+  static uint32_t
+  getVersionMinMinor(MachO::version_min_command &C, bool SDK) {
+    uint32_t VersionOrSDK = (SDK) ? C.sdk : C.version;
+    return (VersionOrSDK >> 8) & 0xff;
+  }
+
+  static uint32_t
+  getVersionMinUpdate(MachO::version_min_command &C, bool SDK) {
+    uint32_t VersionOrSDK = (SDK) ? C.sdk : C.version;
+    return VersionOrSDK & 0xff;
   }
 
 private:

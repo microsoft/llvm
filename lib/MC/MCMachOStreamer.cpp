@@ -443,7 +443,6 @@ void MCMachOStreamer::EmitInstToData(const MCInst &Inst,
   SmallString<256> Code;
   raw_svector_ostream VecOS(Code);
   getAssembler().getEmitter().encodeInstruction(Inst, VecOS, Fixups, STI);
-  VecOS.flush();
 
   // Add the fixups and data.
   for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {
@@ -493,6 +492,16 @@ MCStreamer *llvm::createMachOStreamer(MCContext &Context, MCAsmBackend &MAB,
                                       bool LabelSections) {
   MCMachOStreamer *S = new MCMachOStreamer(Context, MAB, OS, CE,
                                            DWARFMustBeAtTheEnd, LabelSections);
+  const Triple &TT = Context.getObjectFileInfo()->getTargetTriple();
+  if (TT.isOSDarwin()) {
+    unsigned Major, Minor, Update;
+    TT.getOSVersion(Major, Minor, Update);
+    // If there is a version specified, Major will be non-zero.
+    if (Major)
+      S->EmitVersionMin((TT.isMacOSX() ?
+                        MCVM_OSXVersionMin : MCVM_IOSVersionMin),
+                        Major, Minor, Update);
+  }
   if (RelaxAll)
     S->getAssembler().setRelaxAll(true);
   return S;

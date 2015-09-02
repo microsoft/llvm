@@ -24,6 +24,7 @@
 #include "ObjDumper.h"
 #include "StreamWriter.h"
 #include "llvm/Object/Archive.h"
+#include "llvm/Object/COFFImportFile.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Object/ObjectFile.h"
@@ -181,6 +182,21 @@ namespace opts {
   COFFBaseRelocs("coff-basereloc",
                  cl::desc("Display the PE/COFF .reloc section"));
 
+  // -macho-data-in-code
+  cl::opt<bool>
+  MachODataInCode("macho-data-in-code",
+                  cl::desc("Display MachO Data in Code command"));
+
+  // -macho-version-min
+  cl::opt<bool>
+  MachOVersionMin("macho-version-min",
+                  cl::desc("Display MachO version min command"));
+
+  // -macho-dysymtab
+  cl::opt<bool>
+  MachODysymtab("macho-dysymtab",
+                  cl::desc("Display MachO Dysymtab command"));
+
   // -stackmap
   cl::opt<bool>
   PrintStackMap("stackmap",
@@ -191,7 +207,7 @@ namespace opts {
 namespace llvm {
 
 void reportError(Twine Msg) {
-  outs() << Msg << "\n";
+  outs() << "\nError reading file: " << Msg << ".\n";
   outs().flush();
   exit(1);
 }
@@ -200,7 +216,7 @@ void error(std::error_code EC) {
   if (!EC)
     return;
 
-  reportError(Twine("\nError reading file: ") + EC.message() + ".");
+  reportError(EC.message());
 }
 
 bool relocAddressLess(RelocationRef a, RelocationRef b) {
@@ -312,16 +328,22 @@ static void dumpObject(const ObjectFile *Obj) {
     if (opts::COFFBaseRelocs)
       Dumper->printCOFFBaseReloc();
   }
+  if (Obj->isMachO()) {
+    if (opts::MachODataInCode)
+      Dumper->printMachODataInCode();
+    if (opts::MachOVersionMin)
+      Dumper->printMachOVersionMin();
+    if (opts::MachODysymtab)
+      Dumper->printMachODysymtab();
+  }
   if (opts::PrintStackMap)
     Dumper->printStackMap();
 }
 
 /// @brief Dumps each object file in \a Arc;
 static void dumpArchive(const Archive *Arc) {
-  for (Archive::child_iterator ArcI = Arc->child_begin(),
-                               ArcE = Arc->child_end();
-                               ArcI != ArcE; ++ArcI) {
-    ErrorOr<std::unique_ptr<Binary>> ChildOrErr = ArcI->getAsBinary();
+  for (const auto &Child : Arc->children()) {
+    ErrorOr<std::unique_ptr<Binary>> ChildOrErr = Child.getAsBinary();
     if (std::error_code EC = ChildOrErr.getError()) {
       // Ignore non-object files.
       if (EC != object_error::invalid_file_type)
@@ -372,6 +394,8 @@ static void dumpInput(StringRef File) {
     dumpMachOUniversalBinary(UBinary);
   else if (ObjectFile *Obj = dyn_cast<ObjectFile>(&Binary))
     dumpObject(Obj);
+  else if (COFFImportFile *Import = dyn_cast<COFFImportFile>(&Binary))
+    dumpCOFFImportFile(Import);
   else
     reportError(File, readobj_error::unrecognized_file_format);
 }

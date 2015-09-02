@@ -10,6 +10,7 @@
 #include "BinaryHolder.h"
 #include "DebugMap.h"
 #include "dsymutil.h"
+#include "NonRelocatableStringpool.h"
 #include "llvm/ADT/IntervalMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -43,17 +44,6 @@ namespace dsymutil {
 
 namespace {
 
-void warn(const Twine &Warning, const Twine &Context) {
-  errs() << Twine("while processing ") + Context + ":\n";
-  errs() << Twine("warning: ") + Warning + "\n";
-}
-
-bool error(const Twine &Error, const Twine &Context) {
-  errs() << Twine("while processing ") + Context + ":\n";
-  errs() << Twine("error: ") + Error + "\n";
-  return false;
-}
-
 template <typename KeyT, typename ValT>
 using HalfOpenIntervalMap =
     IntervalMap<KeyT, ValT, IntervalMapImpl::NodeSizer<KeyT, ValT>::LeafSize,
@@ -83,7 +73,6 @@ struct PatchLocation {
 
 class CompileUnit;
 struct DeclMapInfo;
-class NonRelocatableStringpool;
 
 /// A DeclContext is a named program scope that is used for ODR
 /// uniquing of types.
@@ -444,91 +433,6 @@ void CompileUnit::addTypeAccelerator(const DIE *Die, const char *Name,
   Pubtypes.emplace_back(Name, Die, Offset, false);
 }
 
-/// \brief A string table that doesn't need relocations.
-///
-/// We are doing a final link, no need for a string table that
-/// has relocation entries for every reference to it. This class
-/// provides this ablitity by just associating offsets with
-/// strings.
-class NonRelocatableStringpool {
-public:
-  /// \brief Entries are stored into the StringMap and simply linked
-  /// together through the second element of this pair in order to
-  /// keep track of insertion order.
-  typedef StringMap<std::pair<uint32_t, StringMapEntryBase *>, BumpPtrAllocator>
-      MapTy;
-
-  NonRelocatableStringpool()
-      : CurrentEndOffset(0), Sentinel(0), Last(&Sentinel) {
-    // Legacy dsymutil puts an empty string at the start of the line
-    // table.
-    getStringOffset("");
-  }
-
-  /// \brief Get the offset of string \p S in the string table. This
-  /// can insert a new element or return the offset of a preexisitng
-  /// one.
-  uint32_t getStringOffset(StringRef S);
-
-  /// \brief Get permanent storage for \p S (but do not necessarily
-  /// emit \p S in the output section).
-  /// \returns The StringRef that points to permanent storage to use
-  /// in place of \p S.
-  StringRef internString(StringRef S);
-
-  // \brief Return the first entry of the string table.
-  const MapTy::MapEntryTy *getFirstEntry() const {
-    return getNextEntry(&Sentinel);
-  }
-
-  // \brief Get the entry following \p E in the string table or null
-  // if \p E was the last entry.
-  const MapTy::MapEntryTy *getNextEntry(const MapTy::MapEntryTy *E) const {
-    return static_cast<const MapTy::MapEntryTy *>(E->getValue().second);
-  }
-
-  uint64_t getSize() { return CurrentEndOffset; }
-
-private:
-  MapTy Strings;
-  uint32_t CurrentEndOffset;
-  MapTy::MapEntryTy Sentinel, *Last;
-};
-
-/// \brief Get the offset of string \p S in the string table. This
-/// can insert a new element or return the offset of a preexisitng
-/// one.
-uint32_t NonRelocatableStringpool::getStringOffset(StringRef S) {
-  if (S.empty() && !Strings.empty())
-    return 0;
-
-  std::pair<uint32_t, StringMapEntryBase *> Entry(0, nullptr);
-  MapTy::iterator It;
-  bool Inserted;
-
-  // A non-empty string can't be at offset 0, so if we have an entry
-  // with a 0 offset, it must be a previously interned string.
-  std::tie(It, Inserted) = Strings.insert(std::make_pair(S, Entry));
-  if (Inserted || It->getValue().first == 0) {
-    // Set offset and chain at the end of the entries list.
-    It->getValue().first = CurrentEndOffset;
-    CurrentEndOffset += S.size() + 1; // +1 for the '\0'.
-    Last->getValue().second = &*It;
-    Last = &*It;
-  }
-  return It->getValue().first;
-}
-
-/// \brief Put \p S into the StringMap so that it gets permanent
-/// storage, but do not actually link it in the chain of elements
-/// that go into the output section. A latter call to
-/// getStringOffset() with the same string will chain it though.
-StringRef NonRelocatableStringpool::internString(StringRef S) {
-  std::pair<uint32_t, StringMapEntryBase *> Entry(0, nullptr);
-  auto InsertResult = Strings.insert(std::make_pair(S, Entry));
-  return InsertResult.first->getKey();
-}
-
 /// \brief The Dwarf streaming logic
 ///
 /// All interactions with the MC layer that is used to build the debug
@@ -618,7 +522,8 @@ public:
 
   /// \brief Emit the line table described in \p Rows into the
   /// debug_line section.
-  void emitLineTableForUnit(StringRef PrologueBytes, unsigned MinInstLength,
+  void emitLineTableForUnit(MCDwarfLineTableParams Params,
+                            StringRef PrologueBytes, unsigned MinInstLength,
                             std::vector<DWARFDebugLine::Row> &Rows,
                             unsigned AdddressSize);
 
@@ -783,7 +688,7 @@ void DwarfStreamer::emitRangesEntries(
   MS->SwitchSection(MC->getObjectFileInfo()->getDwarfRangesSection());
 
   // Offset each range by the right amount.
-  int64_t PcOffset = FuncRange.value() + UnitPcOffset;
+  int64_t PcOffset = Entries.empty() ? 0 : FuncRange.value() + UnitPcOffset;
   for (const auto &Range : Entries) {
     if (Range.isBaseAddressSelectionEntry(AddressSize)) {
       warn("unsupported base address selection operation",
@@ -942,7 +847,8 @@ void DwarfStreamer::emitLocationsForUnit(const CompileUnit &Unit,
   }
 }
 
-void DwarfStreamer::emitLineTableForUnit(StringRef PrologueBytes,
+void DwarfStreamer::emitLineTableForUnit(MCDwarfLineTableParams Params,
+                                         StringRef PrologueBytes,
                                          unsigned MinInstLength,
                                          std::vector<DWARFDebugLine::Row> &Rows,
                                          unsigned PointerSize) {
@@ -965,7 +871,7 @@ void DwarfStreamer::emitLineTableForUnit(StringRef PrologueBytes,
   if (Rows.empty()) {
     // We only have the dummy entry, dsymutil emits an entry with a 0
     // address in that case.
-    MCDwarfLineAddr::Encode(*MC, INT64_MAX, 0, EncodingOS);
+    MCDwarfLineAddr::Encode(*MC, Params, INT64_MAX, 0, EncodingOS);
     MS->EmitBytes(EncodingOS.str());
     LineSectionSize += EncodingBuffer.size();
     MS->EmitLabel(LineEndSym);
@@ -1047,11 +953,10 @@ void DwarfStreamer::emitLineTableForUnit(StringRef PrologueBytes,
 
     int64_t LineDelta = int64_t(Row.Line) - LastLine;
     if (!Row.EndSequence) {
-      MCDwarfLineAddr::Encode(*MC, LineDelta, AddressDelta, EncodingOS);
+      MCDwarfLineAddr::Encode(*MC, Params, LineDelta, AddressDelta, EncodingOS);
       MS->EmitBytes(EncodingOS.str());
       LineSectionSize += EncodingBuffer.size();
       EncodingBuffer.resize(0);
-      EncodingOS.resync();
       Address = Row.Address;
       LastLine = Row.Line;
       RowsSinceLastSequence++;
@@ -1066,11 +971,10 @@ void DwarfStreamer::emitLineTableForUnit(StringRef PrologueBytes,
         MS->EmitULEB128IntValue(AddressDelta);
         LineSectionSize += 1 + getULEB128Size(AddressDelta);
       }
-      MCDwarfLineAddr::Encode(*MC, INT64_MAX, 0, EncodingOS);
+      MCDwarfLineAddr::Encode(*MC, Params, INT64_MAX, 0, EncodingOS);
       MS->EmitBytes(EncodingOS.str());
       LineSectionSize += EncodingBuffer.size();
       EncodingBuffer.resize(0);
-      EncodingOS.resync();
       Address = -1ULL;
       LastLine = FileNum = IsStatement = 1;
       RowsSinceLastSequence = Column = Isa = 0;
@@ -1078,11 +982,10 @@ void DwarfStreamer::emitLineTableForUnit(StringRef PrologueBytes,
   }
 
   if (RowsSinceLastSequence) {
-    MCDwarfLineAddr::Encode(*MC, INT64_MAX, 0, EncodingOS);
+    MCDwarfLineAddr::Encode(*MC, Params, INT64_MAX, 0, EncodingOS);
     MS->EmitBytes(EncodingOS.str());
     LineSectionSize += EncodingBuffer.size();
     EncodingBuffer.resize(0);
-    EncodingOS.resync();
   }
 
   MS->EmitLabel(LineEndSym);
@@ -1303,6 +1206,7 @@ private:
     const char *Name, *MangledName;         ///< Names.
     uint32_t NameOffset, MangledNameOffset; ///< Offsets in the string pool.
 
+    uint64_t OrigLowPc;  ///< Value of AT_low_pc in the input DIE
     uint64_t OrigHighPc; ///< Value of AT_high_pc in the input DIE
     int64_t PCOffset;    ///< Offset to apply to PC addresses inside a function.
 
@@ -1311,8 +1215,8 @@ private:
 
     AttributesInfo()
         : Name(nullptr), MangledName(nullptr), NameOffset(0),
-          MangledNameOffset(0), OrigHighPc(0), PCOffset(0), HasLowPc(false),
-          IsDeclaration(false) {}
+          MangledNameOffset(0), OrigLowPc(UINT64_MAX), OrigHighPc(0),
+          PCOffset(0), HasLowPc(false), IsDeclaration(false) {}
   };
 
   /// \brief Helper for cloneDIE.
@@ -2323,7 +2227,7 @@ unsigned DwarfLinker::cloneDieReferenceAttribute(
 unsigned DwarfLinker::cloneBlockAttribute(DIE &Die, AttributeSpec AttrSpec,
                                           const DWARFFormValue &Val,
                                           unsigned AttrSize) {
-  DIE *Attr;
+  DIEValueList *Attr;
   DIEValue Value;
   DIELoc *Loc = nullptr;
   DIEBlock *Block = nullptr;
@@ -2335,7 +2239,8 @@ unsigned DwarfLinker::cloneBlockAttribute(DIE &Die, AttributeSpec AttrSpec,
     Block = new (DIEAlloc) DIEBlock;
     DIEBlocks.push_back(Block);
   }
-  Attr = Loc ? static_cast<DIE *>(Loc) : static_cast<DIE *>(Block);
+  Attr = Loc ? static_cast<DIEValueList *>(Loc)
+             : static_cast<DIEValueList *>(Block);
 
   if (Loc)
     Value = DIEValue(dwarf::Attribute(AttrSpec.Attr),
@@ -2370,7 +2275,12 @@ unsigned DwarfLinker::cloneAddressAttribute(DIE &Die, AttributeSpec AttrSpec,
   if (AttrSpec.Attr == dwarf::DW_AT_low_pc) {
     if (Die.getTag() == dwarf::DW_TAG_inlined_subroutine ||
         Die.getTag() == dwarf::DW_TAG_lexical_block)
-      Addr += Info.PCOffset;
+      // The low_pc of a block or inline subroutine might get
+      // relocated because it happens to match the low_pc of the
+      // enclosing subprogram. To prevent issues with that, always use
+      // the low_pc from the input DIE if relocations have been applied.
+      Addr = (Info.OrigLowPc != UINT64_MAX ? Info.OrigLowPc : Addr) +
+             Info.PCOffset;
     else if (Die.getTag() == dwarf::DW_TAG_compile_unit) {
       Addr = Unit.getLowPc();
       if (Addr == UINT64_MAX)
@@ -2618,6 +2528,11 @@ DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
     // high_pc value is done in cloneAddressAttribute().
     AttrInfo.OrigHighPc =
         InputDIE.getAttributeValueAsAddress(&U, dwarf::DW_AT_high_pc, 0);
+    // Also store the low_pc. It might get relocated in an
+    // inline_subprogram that happens at the beginning of its
+    // inlining function.
+    AttrInfo.OrigLowPc =
+        InputDIE.getAttributeValueAsAddress(&U, dwarf::DW_AT_low_pc, UINT64_MAX);
   }
 
   // Reset the Offset to 0 as we will be working on the local copy of
@@ -2723,15 +2638,18 @@ void DwarfLinker::patchRangesForUnit(const CompileUnit &Unit,
     RangeAttribute.set(Streamer->getRangesSectionSize());
     RangeList.extract(RangeExtractor, &Offset);
     const auto &Entries = RangeList.getEntries();
-    const DWARFDebugRangeList::RangeListEntry &First = Entries.front();
+    if (!Entries.empty()) {
+      const DWARFDebugRangeList::RangeListEntry &First = Entries.front();
 
-    if (CurrRange == InvalidRange || First.StartAddress < CurrRange.start() ||
-        First.StartAddress >= CurrRange.stop()) {
-      CurrRange = FunctionRanges.find(First.StartAddress + OrigLowPc);
       if (CurrRange == InvalidRange ||
-          CurrRange.start() > First.StartAddress + OrigLowPc) {
-        reportWarning("no mapping for range.");
-        continue;
+          First.StartAddress + OrigLowPc < CurrRange.start() ||
+          First.StartAddress + OrigLowPc >= CurrRange.stop()) {
+        CurrRange = FunctionRanges.find(First.StartAddress + OrigLowPc);
+        if (CurrRange == InvalidRange ||
+            CurrRange.start() > First.StartAddress + OrigLowPc) {
+          reportWarning("no mapping for range.");
+          continue;
+        }
       }
     }
 
@@ -2881,12 +2799,13 @@ void DwarfLinker::patchLineTableForUnit(CompileUnit &Unit,
       if (StopAddress != -1ULL && !Seq.empty()) {
         // Insert end sequence row with the computed end address, but
         // the same line as the previous one.
-        Seq.emplace_back(Seq.back());
-        Seq.back().Address = StopAddress;
-        Seq.back().EndSequence = 1;
-        Seq.back().PrologueEnd = 0;
-        Seq.back().BasicBlock = 0;
-        Seq.back().EpilogueBegin = 0;
+        auto NextLine = Seq.back();
+        NextLine.Address = StopAddress;
+        NextLine.EndSequence = 1;
+        NextLine.PrologueEnd = 0;
+        NextLine.BasicBlock = 0;
+        NextLine.EpilogueBegin = 0;
+        Seq.push_back(NextLine);
         insertLineSequence(Seq, NewRows);
       }
 
@@ -2914,13 +2833,18 @@ void DwarfLinker::patchLineTableForUnit(CompileUnit &Unit,
   // table emitter.
   if (LineTable.Prologue.Version != 2 ||
       LineTable.Prologue.DefaultIsStmt != DWARF2_LINE_DEFAULT_IS_STMT ||
-      LineTable.Prologue.LineBase != -5 || LineTable.Prologue.LineRange != 14 ||
-      LineTable.Prologue.OpcodeBase != 13)
+      LineTable.Prologue.OpcodeBase > 13)
     reportWarning("line table paramters mismatch. Cannot emit.");
-  else
-    Streamer->emitLineTableForUnit(LineData.slice(StmtList + 4, PrologueEnd),
+  else {
+    MCDwarfLineTableParams Params;
+    Params.DWARF2LineOpcodeBase = LineTable.Prologue.OpcodeBase;
+    Params.DWARF2LineBase = LineTable.Prologue.LineBase;
+    Params.DWARF2LineRange = LineTable.Prologue.LineRange;
+    Streamer->emitLineTableForUnit(Params,
+                                   LineData.slice(StmtList + 4, PrologueEnd),
                                    LineTable.Prologue.MinInstLength, NewRows,
                                    Unit.getOrigUnit().getAddressByteSize());
+  }
 }
 
 void DwarfLinker::emitAcceleratorEntriesForUnit(CompileUnit &Unit) {
@@ -3018,8 +2942,10 @@ DwarfLinker::loadObject(BinaryHolder &BinaryHolder, DebugMapObject &Obj,
                         const DebugMap &Map) {
   auto ErrOrObjs =
       BinaryHolder.GetObjectFiles(Obj.getObjectFilename(), Obj.getTimestamp());
-  if (std::error_code EC = ErrOrObjs.getError())
+  if (std::error_code EC = ErrOrObjs.getError()) {
     reportWarning(Twine(Obj.getObjectFilename()) + ": " + EC.message());
+    return EC;
+  }
   auto ErrOrObj = BinaryHolder.Get(Map.getTriple());
   if (std::error_code EC = ErrOrObj.getError())
     reportWarning(Twine(Obj.getObjectFilename()) + ": " + EC.message());
@@ -3027,11 +2953,6 @@ DwarfLinker::loadObject(BinaryHolder &BinaryHolder, DebugMapObject &Obj,
 }
 
 bool DwarfLinker::link(const DebugMap &Map) {
-
-  if (Map.begin() == Map.end()) {
-    errs() << "Empty debug map.\n";
-    return false;
-  }
 
   if (!createStreamer(Map.getTriple(), OutputFilename))
     return false;
@@ -3138,6 +3059,51 @@ bool DwarfLinker::link(const DebugMap &Map) {
 
   return Options.NoOutput ? true : Streamer->finish();
 }
+}
+
+/// \brief Get the offset of string \p S in the string table. This
+/// can insert a new element or return the offset of a preexisitng
+/// one.
+uint32_t NonRelocatableStringpool::getStringOffset(StringRef S) {
+  if (S.empty() && !Strings.empty())
+    return 0;
+
+  std::pair<uint32_t, StringMapEntryBase *> Entry(0, nullptr);
+  MapTy::iterator It;
+  bool Inserted;
+
+  // A non-empty string can't be at offset 0, so if we have an entry
+  // with a 0 offset, it must be a previously interned string.
+  std::tie(It, Inserted) = Strings.insert(std::make_pair(S, Entry));
+  if (Inserted || It->getValue().first == 0) {
+    // Set offset and chain at the end of the entries list.
+    It->getValue().first = CurrentEndOffset;
+    CurrentEndOffset += S.size() + 1; // +1 for the '\0'.
+    Last->getValue().second = &*It;
+    Last = &*It;
+  }
+  return It->getValue().first;
+}
+
+/// \brief Put \p S into the StringMap so that it gets permanent
+/// storage, but do not actually link it in the chain of elements
+/// that go into the output section. A latter call to
+/// getStringOffset() with the same string will chain it though.
+StringRef NonRelocatableStringpool::internString(StringRef S) {
+  std::pair<uint32_t, StringMapEntryBase *> Entry(0, nullptr);
+  auto InsertResult = Strings.insert(std::make_pair(S, Entry));
+  return InsertResult.first->getKey();
+}
+
+void warn(const Twine &Warning, const Twine &Context) {
+  errs() << Twine("while processing ") + Context + ":\n";
+  errs() << Twine("warning: ") + Warning + "\n";
+}
+
+bool error(const Twine &Error, const Twine &Context) {
+  errs() << Twine("while processing ") + Context + ":\n";
+  errs() << Twine("error: ") + Error + "\n";
+  return false;
 }
 
 bool linkDwarf(StringRef OutputFilename, const DebugMap &DM,

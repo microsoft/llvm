@@ -1274,6 +1274,7 @@ void DAGTypeLegalizer::ExpandIntegerResult(SDNode *N, unsigned ResNo) {
   case ISD::FP_TO_UINT:  ExpandIntRes_FP_TO_UINT(N, Lo, Hi); break;
   case ISD::LOAD:        ExpandIntRes_LOAD(cast<LoadSDNode>(N), Lo, Hi); break;
   case ISD::MUL:         ExpandIntRes_MUL(N, Lo, Hi); break;
+  case ISD::READCYCLECOUNTER: ExpandIntRes_READCYCLECOUNTER(N, Lo, Hi); break;
   case ISD::SDIV:        ExpandIntRes_SDIV(N, Lo, Hi); break;
   case ISD::SIGN_EXTEND: ExpandIntRes_SIGN_EXTEND(N, Lo, Hi); break;
   case ISD::SIGN_EXTEND_INREG: ExpandIntRes_SIGN_EXTEND_INREG(N, Lo, Hi); break;
@@ -2103,6 +2104,17 @@ void DAGTypeLegalizer::ExpandIntRes_MUL(SDNode *N,
   SplitInteger(TLI.makeLibCall(DAG, LC, VT, Ops, 2, true/*irrelevant*/,
                                dl).first,
                Lo, Hi);
+}
+
+void DAGTypeLegalizer::ExpandIntRes_READCYCLECOUNTER(SDNode *N, SDValue &Lo,
+                                                     SDValue &Hi) {
+  SDLoc DL(N);
+  EVT NVT = TLI.getTypeToTransformTo(*DAG.getContext(), N->getValueType(0));
+  SDVTList VTs = DAG.getVTList(NVT, NVT, MVT::Other);
+  SDValue R = DAG.getNode(N->getOpcode(), DL, VTs, N->getOperand(0));
+  Lo = R.getValue(0);
+  Hi = R.getValue(1);
+  ReplaceValueWith(SDValue(N, 1), R.getValue(2));
 }
 
 void DAGTypeLegalizer::ExpandIntRes_SADDSUBO(SDNode *Node,
@@ -2984,11 +2996,10 @@ SDValue DAGTypeLegalizer::ExpandIntOp_UINT_TO_FP(SDNode *N) {
 
     // Load the value out, extending it from f32 to the destination float type.
     // FIXME: Avoid the extend by constructing the right constant pool?
-    SDValue Fudge = DAG.getExtLoad(ISD::EXTLOAD, dl, DstVT, DAG.getEntryNode(),
-                                   FudgePtr,
-                                   MachinePointerInfo::getConstantPool(),
-                                   MVT::f32,
-                                   false, false, false, Alignment);
+    SDValue Fudge = DAG.getExtLoad(
+        ISD::EXTLOAD, dl, DstVT, DAG.getEntryNode(), FudgePtr,
+        MachinePointerInfo::getConstantPool(DAG.getMachineFunction()), MVT::f32,
+        false, false, false, Alignment);
     return DAG.getNode(ISD::FADD, dl, DstVT, SignedConv, Fudge);
   }
 

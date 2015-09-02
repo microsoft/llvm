@@ -32,6 +32,7 @@ namespace llvm {
 
 class FunctionType;
 class LLVMContext;
+class DISubprogram;
 
 template<> struct ilist_traits<Argument>
   : public SymbolTableListTraits<Argument, Function> {
@@ -395,6 +396,16 @@ public:
     addAttribute(n, Attribute::ReadOnly);
   }
 
+  /// Optimize this function for minimum size (-Oz).
+  bool optForMinSize() const {
+    return hasFnAttribute(Attribute::MinSize);
+  };
+  
+  /// Optimize this function for size (-Os) or minimum size (-Oz).
+  bool optForSize() const {
+    return hasFnAttribute(Attribute::OptimizeForSize) || optForMinSize();
+  }
+
   /// copyAttributesFrom - copy all additional attributes (those not needed to
   /// create a Function) from the Function Src to this one.
   void copyAttributesFrom(const GlobalValue *Src) override;
@@ -595,6 +606,17 @@ public:
   ///
   /// Drop all metadata from \c this not included in \c KnownIDs.
   void dropUnknownMetadata(ArrayRef<unsigned> KnownIDs);
+
+  /// \brief Set the attached subprogram.
+  ///
+  /// Calls \a setMetadata() with \a LLVMContext::MD_dbg.
+  void setSubprogram(DISubprogram *SP);
+
+  /// \brief Get the attached subprogram.
+  ///
+  /// Calls \a getMetadata() with \a LLVMContext::MD_dbg and casts the result
+  /// to \a DISubprogram.
+  DISubprogram *getSubprogram() const;
 
 private:
   // Shadow Value::setValueSubclassData with a private forwarding method so that
