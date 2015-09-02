@@ -1,4 +1,5 @@
 ; RUN: llc < %s | FileCheck %s
+; RUN: llc -stackmap-version=2 < %s | FileCheck --check-prefix=V2CHECK %s 
 ; Check that we can lower a use of an alloca both as a deopt value (where the
 ; exact meaning is up to the consumer of the stackmap) and as an explicit spill
 ; slot used for GC.  
@@ -70,7 +71,7 @@ declare i32 @llvm.experimental.gc.statepoint.p0f_i1f(i64, i32, i1 ()*, i32, i32,
 
 ; Callsites
 ; The GC one
-; CHECK: .long	.Ltmp1-test
+; CHECK: .long	.L{{.*}}-test
 ; CHECK: .short	0
 ; CHECK: .short	4
 ; SmallConstant (0)
@@ -99,7 +100,7 @@ declare i32 @llvm.experimental.gc.statepoint.p0f_i1f(i64, i32, i1 ()*, i32, i32,
 ; CHECK: .align	8
 
 ; The Deopt one
-; CHECK: .long	.Ltmp3-test2
+; CHECK: .long	.L{{.*}}-test2
 ; CHECK: .short	0
 ; CHECK: .short	4
 ; SmallConstant (0)
@@ -127,4 +128,108 @@ declare i32 @llvm.experimental.gc.statepoint.p0f_i1f(i64, i32, i1 ()*, i32, i32,
 ; CHECK: .short	0
 ; CHECK: .short	0
 ; CHECK: .align	8
+
+; V2CHECK-LABEL:	.section	.llvm_stackmaps
+; V2CHECK-NEXT: __LLVM_StackMaps:
+; Header
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	2
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.align	8
+
+; Constant Array
+; V2CHECK-NEXT:.L{{.*}}:
+; V2CHECK-NEXT:	.align	8
+
+; FrameRecordMap Array
+; V2CHECK-NEXT:.L{{.*}}:
+; V2CHECK-NEXT:	.quad	test
+; V2CHECK-NEXT:	.long	.L{{.*}}-test
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.quad	test2
+; V2CHECK-NEXT:	.long	.L{{.*}}-test2
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.align	8
+
+; StackMapRecord Array
+; V2CHECK-NEXT:.L{{.*}}:
+; V2CHECK-NEXT:	.quad	0
+; V2CHECK-NEXT:	.long	.L{{.*}}-test
+; V2CHECK-NEXT:	.byte	.L{{.*}}-.L{{.*}}
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	4
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.quad	0
+; V2CHECK-NEXT:	.long	.L{{.*}}-test2
+; V2CHECK-NEXT:	.byte	.L{{.*}}-.L{{.*}}
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	4
+; V2CHECK-NEXT:	.short	4
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.align	4
+
+; Location Array
+; V2CHECK-NEXT:.L{{.*}}:
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	1
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.align	2
 

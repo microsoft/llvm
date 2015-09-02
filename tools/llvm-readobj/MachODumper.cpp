@@ -38,7 +38,7 @@ public:
   void printSymbols() override;
   void printDynamicSymbols() override;
   void printUnwindInfo() override;
-  void printStackMap() const override;
+  void printStackMap(int StackMapVersion) const override;
 
   // MachO-specific.
   void printMachODataInCode() override;
@@ -641,7 +641,7 @@ void MachODumper::printUnwindInfo() {
   W.startLine() << "UnwindInfo not implemented.\n";
 }
 
-void MachODumper::printStackMap() const {
+void MachODumper::printStackMap(int StackMapVersion) const {
   object::SectionRef StackMapSection;
   for (auto Sec : Obj->sections()) {
     StringRef Name;
@@ -661,13 +661,23 @@ void MachODumper::printStackMap() const {
       reinterpret_cast<const uint8_t*>(StackMapContents.data()),
       StackMapContents.size());
 
-  if (Obj->isLittleEndian())
-     prettyPrintStackMap(
-                      llvm::outs(),
-                      StackMapV1Parser<support::little>(StackMapContentsArray));
-  else
-     prettyPrintStackMap(llvm::outs(),
-                         StackMapV1Parser<support::big>(StackMapContentsArray));
+  if (StackMapVersion == 1) {
+    if (Obj->isLittleEndian())
+      prettyPrintStackMapV1(llvm::outs(), StackMapV1Parser<support::little>(
+                                              StackMapContentsArray));
+    else
+      prettyPrintStackMapV1(
+          llvm::outs(), StackMapV1Parser<support::big>(StackMapContentsArray));
+  } else if (StackMapVersion == 2) {
+    if (Obj->isLittleEndian())
+      prettyPrintStackMapV2(llvm::outs(), StackMapV2Parser<support::little>(
+                                              StackMapContentsArray));
+    else
+      prettyPrintStackMapV2(
+          llvm::outs(), StackMapV2Parser<support::big>(StackMapContentsArray));
+  } else {
+    llvm_unreachable("Unsupported stackmap version!");
+  }
 }
 
 void MachODumper::printMachODataInCode() {

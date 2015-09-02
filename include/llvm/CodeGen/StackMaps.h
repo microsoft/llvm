@@ -127,6 +127,209 @@ private:
   const MachineInstr *MI;
 };
 
+/// StackMaps Version 2
+class StackMapsV2 {
+  friend class StackMaps;
+
+public:
+  struct Location {
+    enum LocationType {
+      Unprocessed,
+      Register,
+      Direct,
+      Indirect,
+      Constant,
+      ConstantIndex
+    };
+    LocationType Type;
+    unsigned Size;
+    unsigned Reg;
+    int64_t Offset;
+    Location() : Type(Unprocessed), Size(0), Reg(0), Offset(0) {}
+    Location(LocationType Type, unsigned Size, unsigned Reg, int64_t Offset)
+        : Type(Type), Size(Size), Reg(Reg), Offset(Offset) {}
+  };
+
+  struct LiveOutReg {
+    uint16_t Reg;
+    uint16_t DwarfRegNum;
+    uint16_t Size;
+
+    LiveOutReg() : Reg(0), DwarfRegNum(0), Size(0) {}
+    LiveOutReg(uint16_t Reg, uint16_t DwarfRegNum, uint16_t Size)
+        : Reg(Reg), DwarfRegNum(DwarfRegNum), Size(Size) {}
+  };
+
+  // OpTypes are used to encode information about the following logical
+  // operand (which may consist of several MachineOperands) for the
+  // OpParser.
+  typedef enum { DirectMemRefOp, IndirectMemRefOp, ConstantOp } OpType;
+
+  StackMapsV2(AsmPrinter &AP) : AP(AP) {}
+
+  void reset();
+
+  /// \brief Generate a stackmap record for a stackmap instruction.
+  ///
+  /// MI must be a raw STACKMAP, not a PATCHPOINT.
+  void recordStackMap(const MachineInstr &MI);
+
+  /// \brief Generate a stackmap record for a patchpoint instruction.
+  void recordPatchPoint(const MachineInstr &MI);
+
+  /// \brief Generate a stackmap record for a statepoint instruction.
+  void recordStatepoint(const MachineInstr &MI, MCSymbol *CallLabel = nullptr);
+
+  /// If there is any stack map data, create a stack map section and serialize
+  /// the map info into it. This clears the stack map data structures
+  /// afterwards.
+  void serializeToStackMapSection();
+
+  void createSubSectionLabelAndOffset(MCSymbol **SubSection, const MCExpr **);
+
+private:
+  static const char *WSMP;
+
+  typedef SmallVector<Location, 8> LocationVec;
+  typedef SmallVector<LiveOutReg, 8> LiveOutVec;
+  typedef MapVector<uint64_t, uint64_t> ConstantPool;
+
+  AsmPrinter &AP;
+  ConstantPool ConstPool;
+
+  MachineInstr::const_mop_iterator
+  parseOperand(MachineInstr::const_mop_iterator MOI,
+               MachineInstr::const_mop_iterator MOE, LocationVec &Locs,
+               LiveOutVec &LiveOuts) const;
+
+  /// \brief Create a live-out register record for the given register @p Reg.
+  LiveOutReg createLiveOutReg(unsigned Reg,
+                              const TargetRegisterInfo *TRI) const;
+
+  /// \brief Parse the register live-out mask and return a vector of live-out
+  /// registers that need to be recorded in the stackmap.
+  LiveOutVec parseRegisterLiveOutMask(const uint32_t *Mask) const;
+
+  /// This should be called by the MC lowering code _immediately_ before
+  /// lowering the MI to an MCInst. It records where the operands for the
+  /// instruction are stored, and outputs a label to record the offset of
+  /// the call from the start of the text section. In special cases (e.g. AnyReg
+  /// calling convention) the return register is also recorded if requested.
+  void recordStackMapOpers(const MachineInstr &MI, uint64_t ID,
+                           MachineInstr::const_mop_iterator MOI,
+                           MachineInstr::const_mop_iterator MOE,
+                           bool recordResult = false,
+                           MCSymbol *CallLabel = nullptr);
+
+  /// \brief Emit the constant pool.
+  void emitConstantPoolEntries(MCStreamer &OS);
+
+  //
+  // The followings are version2 Specific data structures
+  //
+  struct FrameRecord {
+    const MCSymbol *FunctionStart;
+    const MCExpr *FunctionSize; // used to compute Function Size
+    uint32_t StackSize;
+    union {
+      struct {
+        uint16_t HasFramePointerRegister : 1;
+        uint16_t HasVairableSizeAlloca : 1;
+        uint16_t HasStackRealignment : 1;
+        uint16_t HasLiveOutInfo : 1;
+      } FlagBits;
+      uint16_t FlagValue;
+    };
+
+    uint16_t FrameBaseRegister;
+    uint16_t StackMapRecordIndex;
+    uint16_t NumStackMapRecord;
+    FrameRecord()
+        : FunctionStart(nullptr), FunctionSize(nullptr), StackSize(0),
+          FlagValue(0), FrameBaseRegister(0), StackMapRecordIndex(-1),
+          NumStackMapRecord(0) {}
+  };
+
+  struct StackMapRecord {
+    uint64_t ID;
+    const MCExpr *Offset;
+    const MCExpr *Size;
+
+    union {
+      struct {
+        unsigned char HasLiveOutInfo : 1;
+      } FlagBits;
+      unsigned char FlagValue;
+    };
+
+    uint16_t LocationIndex;
+    uint16_t NumLocation;
+    uint16_t LiveOutIndex;
+    uint16_t NumLiveOut;
+
+    StackMapRecord()
+        : ID(0), Offset(nullptr), Size(nullptr), FlagValue(0), LocationIndex(0),
+          NumLocation(0), LiveOutIndex(0), NumLiveOut(0) {}
+
+    StackMapRecord(uint64_t ID, MCExpr *Offset, MCExpr *Size, uint16_t Flag,
+                   uint16_t LocationIndex, uint16_t NumLocation,
+                   uint16_t LiveOutIndex, uint16_t NumLiveOut)
+        : ID(ID), Offset(Offset), Size(Size), FlagValue(Flag),
+          LocationIndex(LocationIndex), NumLocation(NumLocation),
+          LiveOutIndex(LiveOutIndex), NumLiveOut(NumLiveOut) {}
+  };
+
+  typedef std::vector<LiveOutReg> LiveOutPool;
+  typedef std::vector<Location> LocationPool;
+  typedef std::vector<StackMapRecord> StackMapRecordPool;
+  typedef MapVector<MCSymbol *, FrameRecord> FrameRecordMap;
+
+  LiveOutPool LivePool;
+  LocationPool LocPool;
+  StackMapRecordPool StackPool;
+  FrameRecordMap FrameMap;
+
+  MCSymbol *ConstantSubSection;
+  const MCExpr *ConstantSubSectionOffset;
+  MCSymbol *FrameRecordSubSection;
+  const MCExpr *FrameRecordSubSectionOffset;
+  MCSymbol *StackMapSubSection;
+  const MCExpr *StackMapSubSectionOffset;
+  MCSymbol *LocationSubSection;
+  const MCExpr *LocationSubSectionOffset;
+  MCSymbol *LiveOutSubSection;
+  const MCExpr *LiveOutSubSectionOffset;
+
+  MCSymbol *SectionStart;
+
+public:
+  /// \brief Check if it needs to update FrameRecordMap
+  bool hasFrameMap();
+
+  /// \brief Update FrameRecordMap
+  void recordFrameMap(const MCExpr *Size);
+
+  /// \brief Emit the stackmap header.
+  void emitStackmapHeaderSubSection(MCStreamer &OS);
+
+  /// \brief Emit the constant pool.
+  void emitConstantPoolEntriesSubSection(MCStreamer &OS);
+
+  /// \brief Emit the function frame record for each function.
+  void emitFunctionFrameRecordsSubSection(MCStreamer &OS);
+
+  /// \brief Emit the callsite info for each stackmap/patchpoint intrinsic call.
+  void emitStackMapSubSection(MCStreamer &OS);
+
+  /// \brief Emit location
+  void emitLocationSubSection(MCStreamer &OS);
+
+  /// \brief Emit live out
+  void emitLiveOutSubSection(MCStreamer &OS);
+};
+
+// StackMap V1 (default) and V2 are supported for one release cycle,
+/// and deprecate v1 in the next release.
 class StackMaps {
 public:
   struct Location {
@@ -148,13 +351,12 @@ public:
   };
 
   struct LiveOutReg {
-    unsigned short Reg;
-    unsigned short DwarfRegNum;
-    unsigned short Size;
+    uint16_t Reg;
+    uint16_t DwarfRegNum;
+    uint16_t Size;
 
     LiveOutReg() : Reg(0), DwarfRegNum(0), Size(0) {}
-    LiveOutReg(unsigned short Reg, unsigned short DwarfRegNum,
-               unsigned short Size)
+    LiveOutReg(uint16_t Reg, uint16_t DwarfRegNum, uint16_t Size)
         : Reg(Reg), DwarfRegNum(DwarfRegNum), Size(Size) {}
   };
 
@@ -165,11 +367,13 @@ public:
 
   StackMaps(AsmPrinter &AP);
 
-  void reset() {
-    CSInfos.clear();
-    ConstPool.clear();
-    FnStackSize.clear();
-  }
+  void reset();
+
+  /// \brief Check if it needs to update FrameRecordMap (version 2 only)
+  bool hasFrameMap();
+
+  /// \brief Update FrameRecordMap (version 2 only)
+  void recordFrameMap(const MCExpr *Size);
 
   /// \brief Generate a stackmap record for a stackmap instruction.
   ///
@@ -180,7 +384,7 @@ public:
   void recordPatchPoint(const MachineInstr &MI);
 
   /// \brief Generate a stackmap record for a statepoint instruction.
-  void recordStatepoint(const MachineInstr &MI);
+  void recordStatepoint(const MachineInstr &MI, MCSymbol *CallLabel = nullptr);
 
   /// If there is any stack map data, create a stack map section and serialize
   /// the map info into it. This clears the stack map data structures
@@ -188,7 +392,11 @@ public:
   void serializeToStackMapSection();
 
 private:
+  /// Hold StackMapsV2 object to handle version2 operations.
+  StackMapsV2 SM2;
+
   static const char *WSMP;
+
   typedef SmallVector<Location, 8> LocationVec;
   typedef SmallVector<LiveOutReg, 8> LiveOutVec;
   typedef MapVector<uint64_t, uint64_t> ConstantPool;
@@ -254,3 +462,4 @@ private:
 }
 
 #endif
+

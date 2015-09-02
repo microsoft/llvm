@@ -20,6 +20,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/DwarfStringPoolEntry.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -106,6 +107,9 @@ public:
   /// its number of uses by other globals.
   typedef std::pair<const GlobalVariable *, unsigned> GOTEquivUsePair;
   MapVector<const MCSymbol *, GOTEquivUsePair> GlobalGOTEquivs;
+
+  /// The stack maps
+  StackMaps SM;
 
 private:
   MCSymbol *CurrentFnBegin;

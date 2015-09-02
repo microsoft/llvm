@@ -63,7 +63,7 @@ public:
   void printMipsABIFlags() override;
   void printMipsReginfo() override;
 
-  void printStackMap() const override;
+  void printStackMap(int StackMapVersion) const override;
 
 private:
   typedef ELFFile<ELFT> ELFO;
@@ -2029,7 +2029,8 @@ template <class ELFT> void ELFDumper<ELFT>::printMipsReginfo() {
   W.printHex("Co-Proc Mask3", Reginfo->ri_cprmask[3]);
 }
 
-template <class ELFT> void ELFDumper<ELFT>::printStackMap() const {
+template <class ELFT>
+void ELFDumper<ELFT>::printStackMap(int StackMapVersion) const {
   const Elf_Shdr *StackMapSection = nullptr;
   for (const auto &Sec : Obj->sections()) {
     ErrorOr<StringRef> Name = Obj->getSectionName(&Sec);
@@ -2046,7 +2047,15 @@ template <class ELFT> void ELFDumper<ELFT>::printStackMap() const {
   ErrorOr<ArrayRef<uint8_t>> StackMapContentsArray =
     Obj->getSectionContents(StackMapSection);
 
-  prettyPrintStackMap(
-              llvm::outs(),
-              StackMapV1Parser<ELFT::TargetEndianness>(*StackMapContentsArray));
+  if (StackMapVersion == 1) {
+    prettyPrintStackMapV1(
+        llvm::outs(),
+        StackMapV1Parser<ELFT::TargetEndianness>(*StackMapContentsArray));
+  } else if (StackMapVersion == 2) {
+    prettyPrintStackMapV2(
+        llvm::outs(),
+        StackMapV2Parser<ELFT::TargetEndianness>(*StackMapContentsArray));
+  } else {
+    llvm_unreachable("Unsupported stackmap version!");
+  }
 }

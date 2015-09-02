@@ -1,5 +1,7 @@
 ; RUN: llc < %s -mtriple="x86_64-pc-linux-gnu" | FileCheck %s
 ; RUN: llc < %s -mtriple="x86_64-pc-win64-coff" | FileCheck %s
+; RUN: llc < %s -mtriple="x86_64-pc-linux-gnu" -stackmap-version=2 | FileCheck --check-prefix=V2CHECK %s
+; RUN: llc < %s -mtriple="x86_64-pc-win64-coff" -stackmap-version=2 | FileCheck --check-prefix=V2CHECK %s
 
 ; This test is a sanity check to ensure statepoints are generating StackMap
 ; sections correctly.  This is not intended to be a rigorous test of the 
@@ -105,7 +107,7 @@ declare i32 addrspace(1)* @llvm.experimental.gc.relocate.p1i32(i32, i32, i32) #3
 
 ; Callsites
 ; Constant arguments
-; CHECK: .long	.Ltmp1-test
+; CHECK: .long	.L{{.*}}-test
 ; CHECK: .short	0
 ; CHECK: .short	11
 ; SmallConstant (0)
@@ -179,7 +181,7 @@ declare i32 addrspace(1)* @llvm.experimental.gc.relocate.p1i32(i32, i32, i32) #3
 
 ; Callsites
 ; Constant arguments
-; CHECK: .long	.Ltmp3-test_derived_arg
+; CHECK: .long	.L{{.*}}-test_derived_arg
 ; CHECK: .short	0
 ; CHECK: .short	11
 ; SmallConstant (0)
@@ -245,7 +247,7 @@ declare i32 addrspace(1)* @llvm.experimental.gc.relocate.p1i32(i32, i32, i32) #3
 ; CHECK: .quad	237
 
 ; Instruction Offset
-; CHECK: .long	.Ltmp5-test_id
+; CHECK: .long	.L{{.*}}-test_id
 
 ; Reserved:
 ; CHECK: .short	0
@@ -279,3 +281,208 @@ declare i32 addrspace(1)* @llvm.experimental.gc.relocate.p1i32(i32, i32, i32) #3
 ; CHECK: .short	0
 ; CHECK: .align	8
 
+; V2CHECK-LABEL:	.section	.llvm_stackmaps
+; V2CHECK-NEXT:__LLVM_StackMaps:
+; Header
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	3
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	.L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.align	8
+
+; Constant Array
+; V2CHECK-NEXT:.L{{.*}}
+; V2CHECK-NEXT:	.align	8
+
+; FrameRecordMap Array
+; V2CHECK-NEXT:.L{{.*}}
+; V2CHECK-NEXT:	.quad	test
+; V2CHECK-NEXT:	.long	.L{{.*}}-test
+; V2CHECK-NEXT:	.long	40
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.quad	test_derived_arg
+; V2CHECK-NEXT:	.long	.L{{.*}}-test_derived_arg
+; V2CHECK-NEXT:	.long	40
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.quad	test_id
+; V2CHECK-NEXT:	.long	.L{{.*}}-test_id
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.short	2
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.align	8
+
+; StackMapRecord Array
+; V2CHECK-NEXT:.L{{.*}}:
+; V2CHECK-NEXT:	.quad	0
+; V2CHECK-NEXT:	.long	.L{{.*}}-test
+; V2CHECK-NEXT:	.byte	.L{{.*}}-.L{{.*}}
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	11
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.quad	0
+; V2CHECK-NEXT:	.long	.L{{.*}}-test_derived_arg
+; V2CHECK-NEXT:	.byte	.L{{.*}}-.L{{.*}}
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	11
+; V2CHECK-NEXT:	.short	11
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.quad	237
+; V2CHECK-NEXT:	.long	.L{{.*}}-test_id
+; V2CHECK-NEXT:	.byte	.L{{.*}}-.L{{.*}}
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	22
+; V2CHECK-NEXT:	.short	3
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	8
+; V2CHECK-NEXT:	.align	4
+
+; Location Array
+; V2CHECK-NEXT:.L{{.*}}:
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	2
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	2
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	7
+; V2CHECK-NEXT:	.long	16
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	4
+; V2CHECK-NEXT:	.align	2
