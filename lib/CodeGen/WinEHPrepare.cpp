@@ -681,7 +681,8 @@ void WinEHPrepare::demoteValuesLiveAcrossHandlers(
     for (Instruction &I : BB) {
       for (Value *Op : I.operands()) {
         // Don't demote static allocas, constants, and labels.
-        if (isa<Constant>(Op) || isa<BasicBlock>(Op) || isa<InlineAsm>(Op))
+        if (isa<Constant>(Op) || isa<BasicBlock>(Op) || isa<InlineAsm>(Op)
+            || isa<MetadataAsValue>(Op))
           continue;
         auto *AI = dyn_cast<AllocaInst>(Op);
         if (AI && AI->isStaticAlloca())
