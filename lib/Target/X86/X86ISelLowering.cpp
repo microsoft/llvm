@@ -19883,9 +19883,7 @@ MachineBasicBlock *
 X86TargetLowering::EmitGCTransitionPause(MachineInstr *MI,
                                          MachineBasicBlock *MBB) const {
   // Emit GC_TRANSITION_PAUSE instruction on X86-64.
-
-  const bool Is64Bit = Subtarget->is64Bit();
-  assert(Is64Bit && "GC_TRANSITION_PAUSE only supports x86-64");
+  assert(Subtarget->is64Bit() && "GC_TRANSITION_PAUSE only supports x86-64");
 
   DebugLoc DL = MI->getDebugLoc();
   MachineFunction *MF = MBB->getParent();
