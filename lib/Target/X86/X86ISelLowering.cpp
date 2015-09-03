@@ -1920,13 +1920,21 @@ X86TargetLowering::allowsMisalignedMemoryAccesses(EVT VT,
                                                   unsigned,
                                                   bool *Fast) const {
   if (Fast) {
-    if (VT.getSizeInBits() == 256)
-      *Fast = !Subtarget->isUnalignedMem32Slow();
-    else
-      // FIXME: We should always return that 8-byte and under accesses are fast.
-      // That is what other x86 lowering code assumes.
+    switch (VT.getSizeInBits()) {
+    default:
+      // 8-byte and under are always assumed to be fast.
+      *Fast = true;
+      break;
+    case 128:
       *Fast = !Subtarget->isUnalignedMem16Slow();
+      break;
+    case 256:
+      *Fast = !Subtarget->isUnalignedMem32Slow();
+      break;
+    // TODO: What about AVX-512 (512-bit) accesses?
+    }
   }
+  // Misaligned accesses of any size are always allowed.
   return true;
 }
 
@@ -15573,6 +15581,9 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
     case INTR_TYPE_2OP:
       return DAG.getNode(IntrData->Opc0, dl, Op.getValueType(), Op.getOperand(1),
         Op.getOperand(2));
+    case INTR_TYPE_2OP_IMM8:
+      return DAG.getNode(IntrData->Opc0, dl, Op.getValueType(), Op.getOperand(1),
+                         DAG.getNode(ISD::TRUNCATE, dl, MVT::i8, Op.getOperand(2)));
     case INTR_TYPE_3OP:
       return DAG.getNode(IntrData->Opc0, dl, Op.getValueType(), Op.getOperand(1),
         Op.getOperand(2), Op.getOperand(3));
@@ -15684,6 +15695,18 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
         Rnd = DAG.getConstant(X86::STATIC_ROUNDING::CUR_DIRECTION, dl, MVT::i32);
       return getVectorMaskingNode(DAG.getNode(IntrData->Opc0, dl, VT,
                                               Src1, Src2, Rnd),
+                                  Mask, PassThru, Subtarget, DAG);
+    }
+    case INTR_TYPE_3OP_SCALAR_MASK_RM: {
+      SDValue Src1 = Op.getOperand(1);
+      SDValue Src2 = Op.getOperand(2);
+      SDValue Src3 = Op.getOperand(3);
+      SDValue PassThru = Op.getOperand(4);
+      SDValue Mask = Op.getOperand(5);
+      SDValue Sae  = Op.getOperand(6);
+
+      return getScalarMaskingNode(DAG.getNode(IntrData->Opc0, dl, VT, Src1,
+                                              Src2, Src3, Sae),
                                   Mask, PassThru, Subtarget, DAG);
     }
     case INTR_TYPE_3OP_MASK_RM: {
@@ -19346,6 +19369,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::FMSUBADD_RND:       return "X86ISD::FMSUBADD_RND";
   case X86ISD::VRNDSCALE:          return "X86ISD::VRNDSCALE";
   case X86ISD::VREDUCE:            return "X86ISD::VREDUCE";
+  case X86ISD::VGETMANT:           return "X86ISD::VGETMANT";
   case X86ISD::PCMPESTRI:          return "X86ISD::PCMPESTRI";
   case X86ISD::PCMPISTRI:          return "X86ISD::PCMPISTRI";
   case X86ISD::XTEST:              return "X86ISD::XTEST";

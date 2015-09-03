@@ -4163,6 +4163,16 @@ Examples:
     !2 = !{ i8 0, i8 2, i8 3, i8 6 }
     !3 = !{ i8 -2, i8 0, i8 3, i8 6 }
 
+'``unpredictable``' Metadata
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``unpredictable`` metadata may be attached to any branch or switch
+instruction. It can be used to express the unpredictability of control
+flow. Similar to the llvm.expect intrinsic, it may be used to alter
+optimizations related to compare and branch instructions. The metadata
+is treated as a boolean value; if it exists, it signals that the branch
+or switch that it is attached to is completely unpredictable.
+
 '``llvm.loop``'
 ^^^^^^^^^^^^^^^
 
@@ -6722,7 +6732,7 @@ The optional ``!nonnull`` metadata must reference a single
 metadata name ``<index>`` corresponding to a metadata node with no
 entries. The existence of the ``!nonnull`` metadata on the
 instruction tells the optimizer that the value loaded is known to
-never be null. This is analogous to the ''nonnull'' attribute
+never be null. This is analogous to the ``nonnull`` attribute
 on parameters and return values. This metadata can only be applied
 to loads of a pointer type.
 

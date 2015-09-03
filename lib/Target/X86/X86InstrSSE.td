@@ -2609,19 +2609,20 @@ multiclass sse12_shuffle<RegisterClass RC, X86MemOperand x86memop,
             Sched<[WriteFShuffle]>;
 }
 
-defm VSHUFPS  : sse12_shuffle<VR128, f128mem, v4f32,
+let Predicates = [HasAVX, NoVLX] in {
+  defm VSHUFPS  : sse12_shuffle<VR128, f128mem, v4f32,
            "shufps\t{$src3, $src2, $src1, $dst|$dst, $src1, $src2, $src3}",
            loadv4f32, SSEPackedSingle>, PS, VEX_4V;
-defm VSHUFPSY : sse12_shuffle<VR256, f256mem, v8f32,
+  defm VSHUFPSY : sse12_shuffle<VR256, f256mem, v8f32,
            "shufps\t{$src3, $src2, $src1, $dst|$dst, $src1, $src2, $src3}",
            loadv8f32, SSEPackedSingle>, PS, VEX_4V, VEX_L;
-defm VSHUFPD  : sse12_shuffle<VR128, f128mem, v2f64,
+  defm VSHUFPD  : sse12_shuffle<VR128, f128mem, v2f64,
            "shufpd\t{$src3, $src2, $src1, $dst|$dst, $src1, $src2, $src3}",
            loadv2f64, SSEPackedDouble>, PD, VEX_4V;
-defm VSHUFPDY : sse12_shuffle<VR256, f256mem, v4f64,
+  defm VSHUFPDY : sse12_shuffle<VR256, f256mem, v4f64,
            "shufpd\t{$src3, $src2, $src1, $dst|$dst, $src1, $src2, $src3}",
            loadv4f64, SSEPackedDouble>, PD, VEX_4V, VEX_L;
-
+}
 let Constraints = "$src1 = $dst" in {
   defm SHUFPS : sse12_shuffle<VR128, f128mem, v4f32,
                     "shufps\t{$src3, $src2, $dst|$dst, $src2, $src3}",
@@ -2631,7 +2632,7 @@ let Constraints = "$src1 = $dst" in {
                     memopv2f64, SSEPackedDouble>, PD;
 }
 
-let Predicates = [HasAVX] in {
+let Predicates = [HasAVX, NoVLX] in {
   def : Pat<(v4i32 (X86Shufp VR128:$src1,
                        (bc_v4i32 (loadv2i64 addr:$src2)), (i8 imm:$imm))),
             (VSHUFPSrmi VR128:$src1, addr:$src2, imm:$imm)>;
@@ -4136,8 +4137,10 @@ defm VPSRAW : PDI_binop_rmi<0xE1, 0x71, MRM4r, "vpsraw", X86vsra, X86vsrai,
 defm VPSRAD : PDI_binop_rmi<0xE2, 0x72, MRM4r, "vpsrad", X86vsra, X86vsrai,
                             VR128, v4i32, v4i32, bc_v4i32, loadv2i64,
                             SSE_INTSHIFT_ITINS_P, 0>, VEX_4V;
+} // Predicates = [HasAVX]
 
-let ExeDomain = SSEPackedInt, SchedRW = [WriteVecShift] in {
+let ExeDomain = SSEPackedInt, SchedRW = [WriteVecShift] ,
+                                    Predicates = [HasAVX, NoVLX_Or_NoBWI]in {
   // 128-bit logical shifts.
   def VPSLLDQri : PDIi8<0x73, MRM7r,
                     (outs VR128:$dst), (ins VR128:$src1, u8imm:$src2),
@@ -4152,8 +4155,7 @@ let ExeDomain = SSEPackedInt, SchedRW = [WriteVecShift] in {
                       (v2i64 (X86vshrdq VR128:$src1, (i8 imm:$src2))))]>,
                     VEX_4V;
   // PSRADQri doesn't exist in SSE[1-3].
-}
-} // Predicates = [HasAVX]
+} // Predicates = [HasAVX, NoVLX_Or_NoBWI]
 
 let Predicates = [HasAVX2, NoVLX] in {
 defm VPSLLWY : PDI_binop_rmi<0xF1, 0x71, MRM6r, "vpsllw", X86vshl, X86vshli,
@@ -4182,8 +4184,10 @@ defm VPSRAWY : PDI_binop_rmi<0xE1, 0x71, MRM4r, "vpsraw", X86vsra, X86vsrai,
 defm VPSRADY : PDI_binop_rmi<0xE2, 0x72, MRM4r, "vpsrad", X86vsra, X86vsrai,
                              VR256, v8i32, v4i32, bc_v4i32, loadv2i64,
                              SSE_INTSHIFT_ITINS_P, 0>, VEX_4V, VEX_L;
+}// Predicates = [HasAVX2]
 
-let ExeDomain = SSEPackedInt, SchedRW = [WriteVecShift], hasSideEffects = 0 in {
+let ExeDomain = SSEPackedInt, SchedRW = [WriteVecShift], hasSideEffects = 0 , 
+                                    Predicates = [HasAVX2, NoVLX_Or_NoBWI] in {
   // 256-bit logical shifts.
   def VPSLLDQYri : PDIi8<0x73, MRM7r,
                     (outs VR256:$dst), (ins VR256:$src1, u8imm:$src2),
@@ -4198,8 +4202,7 @@ let ExeDomain = SSEPackedInt, SchedRW = [WriteVecShift], hasSideEffects = 0 in {
                       (v4i64 (X86vshrdq VR256:$src1, (i8 imm:$src2))))]>,
                     VEX_4V, VEX_L;
   // PSRADQYri doesn't exist in SSE[1-3].
-}
-} // Predicates = [HasAVX2]
+} // Predicates = [HasAVX2, NoVLX_Or_NoBWI]
 
 let Constraints = "$src1 = $dst" in {
 defm PSLLW : PDI_binop_rmi<0xF1, 0x71, MRM6r, "psllw", X86vshl, X86vshli,
