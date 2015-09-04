@@ -213,6 +213,8 @@ namespace llvm {
 
       // FP vector get exponent 
       FGETEXP_RND,
+      // Extract Normalized Mantissas
+      VGETMANT,
       // FP Scale
       SCALEF,
       // Integer add/sub with unsigned saturation.
@@ -237,6 +239,9 @@ namespace llvm {
 
       // Integer absolute value
       ABS,
+
+      // Detect Conflicts Within a Vector
+      CONFLICT,
 
       /// Floating point max and min.
       FMAX, FMIN,

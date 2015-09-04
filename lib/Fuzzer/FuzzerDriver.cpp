@@ -238,7 +238,7 @@ int FuzzerDriver(int argc, char **argv, UserSuppliedFuzzer &USF) {
   Options.UseFullCoverageSet = Flags.use_full_coverage_set;
   Options.PreferSmallDuringInitialShuffle =
       Flags.prefer_small_during_initial_shuffle;
-  Options.Tokens = ReadTokensFile(Flags.tokens);
+  Options.Tokens = ReadTokensFile(Flags.deprecated_tokens);
   Options.Reload = Flags.reload;
   Options.OnlyASCII = Flags.only_ascii;
   Options.TBMDepth = Flags.tbm_depth;
@@ -251,6 +251,12 @@ int FuzzerDriver(int argc, char **argv, UserSuppliedFuzzer &USF) {
     Options.SyncCommand = Flags.sync_command;
   Options.SyncTimeout = Flags.sync_timeout;
   Options.ReportSlowUnits = Flags.report_slow_units;
+  if (Flags.dict)
+    if (!ParseDictionaryFile(FileToString(Flags.dict), &Options.Dictionary))
+      return 1;
+  if (Flags.verbosity > 0 && !Options.Dictionary.empty())
+    Printf("Dictionary: %zd entries\n", Options.Dictionary.size());
+
   Fuzzer F(USF, Options);
 
   if (Flags.apply_tokens)

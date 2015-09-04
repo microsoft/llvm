@@ -59,6 +59,8 @@ public:
   virtual void printMachODataInCode() { }
   virtual void printMachOVersionMin() { }
   virtual void printMachODysymtab() { }
+  virtual void printMachOSegment() { }
+  virtual void printMachOIndirectSymbols() { }
 
   virtual void printStackMap() const = 0;
 

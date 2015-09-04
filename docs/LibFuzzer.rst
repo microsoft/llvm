@@ -64,8 +64,6 @@ The most important flags are::
   save_minimized_corpus              	0	If 1, the minimized corpus is saved into the first input directory
   jobs                               	0	Number of jobs to run. If jobs >= 1 we spawn this number of jobs in separate worker processes with stdout/stderr redirected to fuzz-JOB.log.
   workers                            	0	Number of simultaneous worker processes to run the jobs. If zero, "min(jobs,NumberOfCpuCores()/2)" is used.
-  tokens                             	0	Use the file with tokens (one token per line) to fuzz a token based input language.
-  apply_tokens                       	0	Read the given input file, substitute bytes  with tokens and write the result to stdout.
   sync_command                       	0	Execute an external command "<sync_command> <test_corpus>" to synchronize the test corpus.
   sync_timeout                       	600	Minimum timeout between syncs.
   use_traces                            0       Experimental: use instruction traces
@@ -258,23 +256,25 @@ Voila::
 Advanced features
 =================
 
-Tokens
-------
+Dictionaries
+------------
+*EXPERIMENTAL*.
+LibFuzzer supports user-supplied dictionaries with input language keywords
+or other interesting byte sequences (e.g. multi-byte magic values).
+Use ``-dict=DICTIONARY_FILE``. For some input languages using a dictionary
+may significantly improve the search speed.
+The dictionary syntax is similar to that used by AFL_ for its ``-x`` option::
 
-By default, the fuzzer is not aware of complexities of the input language
-and when fuzzing e.g. a C++ parser it will mostly stress the lexer.
-It is very hard for the fuzzer to come up with something like ``reinterpret_cast<int>``
-from a test corpus that doesn't have it.
-See a detailed discussion of this topic at
-http://lcamtuf.blogspot.com/2015/01/afl-fuzz-making-up-grammar-with.html.
+  # Lines starting with '#' and empty lines are ignored.
 
-lib/Fuzzer implements a simple technique that allows to fuzz input languages with
-long tokens. All you need is to prepare a text file containing up to 253 tokens, one token per line,
-and pass it to the fuzzer as ``-tokens=TOKENS_FILE.txt``.
-Three implicit tokens are added: ``" "``, ``"\t"``, and ``"\n"``.
-The fuzzer itself will still be mutating a string of bytes
-but before passing this input to the target library it will replace every byte ``b`` with the ``b``-th token.
-If there are less than ``b`` tokens, a space will be added instead.
+  # Adds "blah" (w/o quotes) to the dictionary.
+  kw1="blah"
+  # Use \\ for backslash and \" for quotes.
+  kw2="\"ac\\dc\""
+  # Use \xAB for hex values
+  kw3="\xF7\xF8"
+  # the name of the keyword followed by '=' may be omitted:
+  "foo\x0Abar"
 
 Data-flow-guided fuzzing
 ------------------------
@@ -341,8 +341,7 @@ Tracking bug: https://llvm.org/bugs/show_bug.cgi?id=23052
 clang-fuzzer
 ------------
 
-The default behavior is very similar to ``clang-format-fuzzer``.
-Clang can also be fuzzed with Tokens_ using ``-tokens=$LLVM/lib/Fuzzer/cxx_fuzzer_tokens.txt`` option.
+The behavior is very similar to ``clang-format-fuzzer``.
 
 Tracking bug: https://llvm.org/bugs/show_bug.cgi?id=23057
 
@@ -366,7 +365,6 @@ The corpuses are stored in git on github and can be used like this::
   git clone https://github.com/kcc/fuzzing-with-sanitizers.git
   bin/clang-format-fuzzer fuzzing-with-sanitizers/llvm/clang-format/C1
   bin/clang-fuzzer        fuzzing-with-sanitizers/llvm/clang/C1/
-  bin/clang-fuzzer        fuzzing-with-sanitizers/llvm/clang/TOK1  -tokens=$LLVM/llvm/lib/Fuzzer/cxx_fuzzer_tokens.txt
   bin/llvm-as-fuzzer      fuzzing-with-sanitizers/llvm/llvm-as/C1  -only_ascii=1
 
 

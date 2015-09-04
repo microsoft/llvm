@@ -577,12 +577,15 @@ public:
   //===--------------------------------------------------------------------===//
 
 private:
-  /// \brief Helper to add branch weight metadata onto an instruction.
+  /// \brief Helper to add branch weight and unpredictable metadata onto an
+  /// instruction.
   /// \returns The annotated instruction.
   template <typename InstTy>
-  InstTy *addBranchWeights(InstTy *I, MDNode *Weights) {
+  InstTy *addBranchMetadata(InstTy *I, MDNode *Weights, MDNode *Unpredictable) {
     if (Weights)
       I->setMetadata(LLVMContext::MD_prof, Weights);
+    if (Unpredictable)
+      I->setMetadata(LLVMContext::MD_unpredictable, Unpredictable);
     return I;
   }
 
@@ -619,9 +622,10 @@ public:
   /// \brief Create a conditional 'br Cond, TrueDest, FalseDest'
   /// instruction.
   BranchInst *CreateCondBr(Value *Cond, BasicBlock *True, BasicBlock *False,
-                           MDNode *BranchWeights = nullptr) {
-    return Insert(addBranchWeights(BranchInst::Create(True, False, Cond),
-                                   BranchWeights));
+                           MDNode *BranchWeights = nullptr,
+                           MDNode *Unpredictable = nullptr) {
+    return Insert(addBranchMetadata(BranchInst::Create(True, False, Cond),
+                                    BranchWeights, Unpredictable));
   }
 
   /// \brief Create a switch instruction with the specified value, default dest,
@@ -629,8 +633,9 @@ public:
   /// allocation).
   SwitchInst *CreateSwitch(Value *V, BasicBlock *Dest, unsigned NumCases = 10,
                            MDNode *BranchWeights = nullptr) {
-    return Insert(addBranchWeights(SwitchInst::Create(V, Dest, NumCases),
-                                   BranchWeights));
+    // TODO: Add unpredictable metadata for a switch.
+    return Insert(addBranchMetadata(SwitchInst::Create(V, Dest, NumCases),
+                                    BranchWeights, nullptr));
   }
 
   /// \brief Create an indirect branch instruction with the specified address
@@ -674,6 +679,11 @@ public:
   CleanupReturnInst *CreateCleanupRet(CleanupPadInst *CleanupPad,
                                       BasicBlock *UnwindBB = nullptr) {
     return Insert(CleanupReturnInst::Create(CleanupPad, UnwindBB));
+  }
+
+  CatchEndPadInst *CreateCleanupEndPad(CleanupPadInst *CleanupPad,
+                                       BasicBlock *UnwindBB = nullptr) {
+    return Insert(CleanupEndPadInst::Create(CleanupPad, UnwindBB));
   }
 
   CatchPadInst *CreateCatchPad(BasicBlock *NormalDest, BasicBlock *UnwindDest,
@@ -1354,9 +1364,11 @@ public:
                                 const Twine &Name = "") {
     if (V->getType() == DestTy)
       return V;
-    if (V->getType()->isPointerTy() && DestTy->isIntegerTy())
+    if (V->getType()->getScalarType()->isPointerTy() &&
+        DestTy->getScalarType()->isIntegerTy())
       return CreatePtrToInt(V, DestTy, Name);
-    if (V->getType()->isIntegerTy() && DestTy->isPointerTy())
+    if (V->getType()->getScalarType()->isIntegerTy() &&
+        DestTy->getScalarType()->isPointerTy())
       return CreateIntToPtr(V, DestTy, Name);
 
     return CreateBitCast(V, DestTy, Name);

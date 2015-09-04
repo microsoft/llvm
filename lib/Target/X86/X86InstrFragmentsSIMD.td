@@ -262,7 +262,9 @@ def STDFp3SrcRm : SDTypeProfile<1, 4, [SDTCisSameAs<0,1>,
 
 def X86PAlignr : SDNode<"X86ISD::PALIGNR", SDTShuff3OpI>;
 def X86VAlign  : SDNode<"X86ISD::VALIGN", SDTShuff3OpI>;
-def X86Abs     : SDNode<"X86ISD::ABS", SDTIntUnaryOp>;
+
+def X86Abs      : SDNode<"X86ISD::ABS", SDTIntUnaryOp>;
+def X86Conflict : SDNode<"X86ISD::CONFLICT", SDTIntUnaryOp>;
 
 def X86PShufd  : SDNode<"X86ISD::PSHUFD", SDTShuff2OpI>;
 def X86PShufhw : SDNode<"X86ISD::PSHUFHW", SDTShuff2OpI>;
@@ -304,10 +306,11 @@ def X86VPermiv3   : SDNode<"X86ISD::VPERMIV3",  SDTShuff3Op>;
 
 def X86VPerm2x128 : SDNode<"X86ISD::VPERM2X128", SDTShuff3OpI>;
 
-def X86VFixupimm       : SDNode<"X86ISD::VFIXUPIMM", SDTFPBinOpImmRound>;
-def X86VRange          : SDNode<"X86ISD::VRANGE", SDTFPBinOpImmRound>;
-def X86VReduce          : SDNode<"X86ISD::VREDUCE", SDTFPUnaryOpImmRound>;
-def X86VRndScale       : SDNode<"X86ISD::VRNDSCALE", SDTFPUnaryOpImmRound>;
+def X86VFixupimm   : SDNode<"X86ISD::VFIXUPIMM", SDTFPBinOpImmRound>;
+def X86VRange      : SDNode<"X86ISD::VRANGE",    SDTFPBinOpImmRound>;
+def X86VReduce     : SDNode<"X86ISD::VREDUCE",   SDTFPUnaryOpImmRound>;
+def X86VRndScale   : SDNode<"X86ISD::VRNDSCALE", SDTFPUnaryOpImmRound>;
+def X86VGetMant    : SDNode<"X86ISD::VGETMANT",  SDTFPUnaryOpImmRound>;
 
 def X86SubVBroadcast : SDNode<"X86ISD::SUBV_BROADCAST",
                     SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>,
@@ -351,10 +354,11 @@ def X86rsqrt28   : SDNode<"X86ISD::RSQRT28",  STDFp1SrcRm>;
 def X86rcp28     : SDNode<"X86ISD::RCP28",    STDFp1SrcRm>;
 def X86exp2      : SDNode<"X86ISD::EXP2",     STDFp1SrcRm>;
 
-def X86rsqrt28s  : SDNode<"X86ISD::RSQRT28",  STDFp2SrcRm>;
-def X86rcp28s    : SDNode<"X86ISD::RCP28",    STDFp2SrcRm>;
+def X86rsqrt28s  : SDNode<"X86ISD::RSQRT28",   STDFp2SrcRm>;
+def X86rcp28s    : SDNode<"X86ISD::RCP28",     STDFp2SrcRm>;
 def X86RndScales : SDNode<"X86ISD::VRNDSCALE", STDFp3SrcRm>;
-def X86Reduces   : SDNode<"X86ISD::VREDUCE", STDFp3SrcRm>;
+def X86Reduces   : SDNode<"X86ISD::VREDUCE",   STDFp3SrcRm>;
+def X86GetMants  : SDNode<"X86ISD::VGETMANT",  STDFp3SrcRm>;
 
 def SDT_PCMPISTRI : SDTypeProfile<2, 3, [SDTCisVT<0, i32>, SDTCisVT<1, i32>,
                                          SDTCisVT<2, v16i8>, SDTCisVT<3, v16i8>,
@@ -618,27 +622,20 @@ def memopmmx  : PatFrag<(ops node:$ptr), (x86mmx  (memop64 node:$ptr))>;
 // MOVNT Support
 // Like 'store', but requires the non-temporal bit to be set
 def nontemporalstore : PatFrag<(ops node:$val, node:$ptr),
-                           (st node:$val, node:$ptr), [{
-  if (StoreSDNode *ST = dyn_cast<StoreSDNode>(N))
-    return ST->isNonTemporal();
-  return false;
+                               (store node:$val, node:$ptr), [{
+  return cast<StoreSDNode>(N)->isNonTemporal();
 }]>;
 
 def alignednontemporalstore : PatFrag<(ops node:$val, node:$ptr),
-                                    (st node:$val, node:$ptr), [{
-  if (StoreSDNode *ST = dyn_cast<StoreSDNode>(N))
-    return ST->isNonTemporal() && !ST->isTruncatingStore() &&
-           ST->getAddressingMode() == ISD::UNINDEXED &&
-           ST->getAlignment() >= 16;
-  return false;
+                                      (nontemporalstore node:$val, node:$ptr), [{
+  StoreSDNode *St = cast<StoreSDNode>(N);
+  return St->getAlignment() >= St->getMemoryVT().getStoreSize();
 }]>;
 
 def unalignednontemporalstore : PatFrag<(ops node:$val, node:$ptr),
-                                      (st node:$val, node:$ptr), [{
-  if (StoreSDNode *ST = dyn_cast<StoreSDNode>(N))
-    return ST->isNonTemporal() &&
-           ST->getAlignment() < 16;
-  return false;
+                                        (nontemporalstore node:$val, node:$ptr), [{
+  StoreSDNode *St = cast<StoreSDNode>(N);
+  return St->getAlignment() < St->getMemoryVT().getStoreSize();
 }]>;
 
 def mgatherv4i32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),

@@ -7200,7 +7200,6 @@ SDValue PPCTargetLowering::LowerVECTOR_SHUFFLE(SDValue Op,
         PPC::isSplatShuffleMask(SVOp, 4) ||
         PPC::isVPKUWUMShuffleMask(SVOp, 1, DAG) ||
         PPC::isVPKUHUMShuffleMask(SVOp, 1, DAG) ||
-        PPC::isVPKUDUMShuffleMask(SVOp, 1, DAG) ||
         PPC::isVSLDOIShuffleMask(SVOp, 1, DAG) != -1 ||
         PPC::isVMRGLShuffleMask(SVOp, 1, 1, DAG) ||
         PPC::isVMRGLShuffleMask(SVOp, 2, 1, DAG) ||
@@ -7208,8 +7207,10 @@ SDValue PPCTargetLowering::LowerVECTOR_SHUFFLE(SDValue Op,
         PPC::isVMRGHShuffleMask(SVOp, 1, 1, DAG) ||
         PPC::isVMRGHShuffleMask(SVOp, 2, 1, DAG) ||
         PPC::isVMRGHShuffleMask(SVOp, 4, 1, DAG) ||
-        PPC::isVMRGEOShuffleMask(SVOp, true, 1, DAG)   ||
-        PPC::isVMRGEOShuffleMask(SVOp, false, 1, DAG)) {
+        (Subtarget.hasP8Altivec() && (
+         PPC::isVPKUDUMShuffleMask(SVOp, 1, DAG) ||
+         PPC::isVMRGEOShuffleMask(SVOp, true, 1, DAG) ||
+         PPC::isVMRGEOShuffleMask(SVOp, false, 1, DAG)))) {
       return Op;
     }
   }
@@ -7220,7 +7221,6 @@ SDValue PPCTargetLowering::LowerVECTOR_SHUFFLE(SDValue Op,
   unsigned int ShuffleKind = isLittleEndian ? 2 : 0;
   if (PPC::isVPKUWUMShuffleMask(SVOp, ShuffleKind, DAG) ||
       PPC::isVPKUHUMShuffleMask(SVOp, ShuffleKind, DAG) ||
-      PPC::isVPKUDUMShuffleMask(SVOp, ShuffleKind, DAG) ||
       PPC::isVSLDOIShuffleMask(SVOp, ShuffleKind, DAG) != -1 ||
       PPC::isVMRGLShuffleMask(SVOp, 1, ShuffleKind, DAG) ||
       PPC::isVMRGLShuffleMask(SVOp, 2, ShuffleKind, DAG) ||
@@ -7228,8 +7228,10 @@ SDValue PPCTargetLowering::LowerVECTOR_SHUFFLE(SDValue Op,
       PPC::isVMRGHShuffleMask(SVOp, 1, ShuffleKind, DAG) ||
       PPC::isVMRGHShuffleMask(SVOp, 2, ShuffleKind, DAG) ||
       PPC::isVMRGHShuffleMask(SVOp, 4, ShuffleKind, DAG) ||
-      PPC::isVMRGEOShuffleMask(SVOp, true, ShuffleKind, DAG)             ||
-      PPC::isVMRGEOShuffleMask(SVOp, false, ShuffleKind, DAG))
+      (Subtarget.hasP8Altivec() && (
+       PPC::isVPKUDUMShuffleMask(SVOp, ShuffleKind, DAG) ||
+       PPC::isVMRGEOShuffleMask(SVOp, true, ShuffleKind, DAG) ||
+       PPC::isVMRGEOShuffleMask(SVOp, false, ShuffleKind, DAG))))
     return Op;
 
   // Check to see if this is a shuffle of 4-byte values.  If so, we can use our
@@ -9182,6 +9184,20 @@ unsigned PPCTargetLowering::combineRepeatedFPDivisors() const {
   }
 }
 
+// isConsecutiveLSLoc needs to work even if all adds have not yet been
+// collapsed, and so we need to look through chains of them.
+static void getBaseWithConstantOffset(SDValue Loc, SDValue &Base,
+                                     int64_t& Offset, SelectionDAG &DAG) {
+  if (DAG.isBaseWithConstantOffset(Loc)) {
+    Base = Loc.getOperand(0);
+    Offset += cast<ConstantSDNode>(Loc.getOperand(1))->getSExtValue();
+
+    // The base might itself be a base plus an offset, and if so, accumulate
+    // that as well.
+    getBaseWithConstantOffset(Loc.getOperand(0), Base, Offset, DAG);
+  }
+}
+
 static bool isConsecutiveLSLoc(SDValue Loc, EVT VT, LSBaseSDNode *Base,
                             unsigned Bytes, int Dist,
                             SelectionDAG &DAG) {
@@ -9201,16 +9217,18 @@ static bool isConsecutiveLSLoc(SDValue Loc, EVT VT, LSBaseSDNode *Base,
     return MFI->getObjectOffset(FI) == (MFI->getObjectOffset(BFI) + Dist*Bytes);
   }
 
-  // Handle X+C
-  if (DAG.isBaseWithConstantOffset(Loc) && Loc.getOperand(0) == BaseLoc &&
-      cast<ConstantSDNode>(Loc.getOperand(1))->getSExtValue() == Dist*Bytes)
-    return true;
-
+  SDValue Base1 = Loc, Base2 = BaseLoc;
+  int64_t Offset1 = 0, Offset2 = 0;
+  getBaseWithConstantOffset(Loc, Base1, Offset1, DAG);
+  getBaseWithConstantOffset(BaseLoc, Base2, Offset2, DAG);
+    if (Base1 == Base2 && Offset1 == (Offset2 + Dist*Bytes))
+      return true;
+  
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   const GlobalValue *GV1 = nullptr;
   const GlobalValue *GV2 = nullptr;
-  int64_t Offset1 = 0;
-  int64_t Offset2 = 0;
+  Offset1 = 0;
+  Offset2 = 0;
   bool isGA1 = TLI.isGAPlusOffset(Loc.getNode(), GV1, Offset1);
   bool isGA2 = TLI.isGAPlusOffset(BaseLoc.getNode(), GV2, Offset2);
   if (isGA1 && isGA2 && GV1 == GV2)
@@ -10300,7 +10318,8 @@ SDValue PPCTargetLowering::PerformDAGCombine(SDNode *N,
       // original unaligned load.
       MachineFunction &MF = DAG.getMachineFunction();
       MachineMemOperand *BaseMMO =
-        MF.getMachineMemOperand(LD->getMemOperand(), -MemVT.getStoreSize()+1,
+        MF.getMachineMemOperand(LD->getMemOperand(),
+                                -(long)MemVT.getStoreSize()+1,
                                 2*MemVT.getStoreSize()-1);
 
       // Create the new base load.
