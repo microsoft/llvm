@@ -681,6 +681,11 @@ public:
     return Insert(CleanupReturnInst::Create(CleanupPad, UnwindBB));
   }
 
+  CatchEndPadInst *CreateCleanupEndPad(CleanupPadInst *CleanupPad,
+                                       BasicBlock *UnwindBB = nullptr) {
+    return Insert(CleanupEndPadInst::Create(CleanupPad, UnwindBB));
+  }
+
   CatchPadInst *CreateCatchPad(BasicBlock *NormalDest, BasicBlock *UnwindDest,
                                ArrayRef<Value *> Args, const Twine &Name = "") {
     return Insert(CatchPadInst::Create(NormalDest, UnwindDest, Args), Name);
@@ -1359,9 +1364,11 @@ public:
                                 const Twine &Name = "") {
     if (V->getType() == DestTy)
       return V;
-    if (V->getType()->isPointerTy() && DestTy->isIntegerTy())
+    if (V->getType()->getScalarType()->isPointerTy() &&
+        DestTy->getScalarType()->isIntegerTy())
       return CreatePtrToInt(V, DestTy, Name);
-    if (V->getType()->isIntegerTy() && DestTy->isPointerTy())
+    if (V->getType()->getScalarType()->isIntegerTy() &&
+        DestTy->getScalarType()->isPointerTy())
       return CreateIntToPtr(V, DestTy, Name);
 
     return CreateBitCast(V, DestTy, Name);

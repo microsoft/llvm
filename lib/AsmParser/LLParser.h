@@ -59,7 +59,7 @@ namespace llvm {
 
     LLLexer::LocTy Loc;
     unsigned UIntVal;
-    FunctionType *FTy;
+    FunctionType *FTy = nullptr;
     std::string StrVal, StrVal2;
     APSInt APSIntVal;
     APFloat APFloatVal{0.0};
@@ -475,6 +475,7 @@ namespace llvm {
     bool ParseTerminatePad(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseCleanupPad(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseCatchEndPad(Instruction *&Inst, PerFunctionState &PFS);
+    bool ParseCleanupEndPad(Instruction *&Inst, PerFunctionState &PFS);
 
     bool ParseArithmetic(Instruction *&I, PerFunctionState &PFS, unsigned Opc,
                          unsigned OperandType);
