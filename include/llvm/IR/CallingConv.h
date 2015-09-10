@@ -72,6 +72,12 @@ namespace CallingConv {
     // Swift - Calling convention for Swift.
     Swift = 16,
 
+    // CLR Virtual Dispatch Stub - Calling convention used for CLR virtual dispatch stub calls
+    CLR_VirtualDispatchStub = 17,
+
+    // CLR Secret Parameter - Calling convention used for CLR calls that accept a secret parameter
+    CLR_SecretParameter = 18,
+
     // Target - This is the start of the target-specific calling conventions,
     // e.g. fastcall and thiscall on X86.
     FirstTargetCC = 64,

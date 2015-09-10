@@ -1021,8 +1021,6 @@ namespace llvm {
     SDValue LowerINIT_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFLT_ROUNDS_(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerWin64_i128OP(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerGC_TRANSITION_START(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerGC_TRANSITION_END(SDValue Op, SelectionDAG &DAG) const;
 
     SDValue
       LowerFormalArguments(SDValue Chain,
@@ -1062,6 +1060,12 @@ namespace llvm {
     lowerIdempotentRMWIntoFencedLoad(AtomicRMWInst *AI) const override;
 
     bool needsCmpXchgNb(Type *MemType) const;
+
+    MachineBasicBlock *EmitGCTransitionRA(MachineInstr *MI,
+                                          MachineBasicBlock *MBB) const;
+
+    MachineBasicBlock *EmitGCTransitionPause(MachineInstr *MI,
+                                             MachineBasicBlock *MBB) const;
 
     /// Utility function to emit atomic-load-arith operations (and, or, xor,
     /// nand, max, min, umax, umin). It takes the corresponding instruction to

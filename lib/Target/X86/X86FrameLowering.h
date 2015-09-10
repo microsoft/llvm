@@ -47,11 +47,17 @@ public:
 
   unsigned StackPtr;
 
-  /// Emit a call to the target's stack probe function. This is required for all
+  /// Emit target stack probe code. This is required for all
   /// large stack allocations on Windows. The caller is required to materialize
-  /// the number of bytes to probe in RAX/EAX.
-  void emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
-                          MachineBasicBlock::iterator MBBI, DebugLoc DL) const;
+  /// the number of bytes to probe in RAX/EAX. Returns instruction just
+  /// after the expansion.
+  MachineInstr *emitStackProbe(MachineFunction &MF, MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                               bool InProlog) const;
+
+  /// Replace a StackProbe inline-stub with the actual probe code inline.
+  void inlineStackProbe(MachineFunction &MF,
+                        MachineBasicBlock &PrologMBB) const override;
 
   void emitCalleeSavedFrameMoves(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MBBI,
@@ -124,6 +130,23 @@ public:
   bool canUseAsEpilogue(const MachineBasicBlock &MBB) const override;
 
 private:
+  /// Emit target stack probe as a call to a helper function
+  MachineInstr *emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MBBI,
+                                   DebugLoc DL, bool InProlog) const;
+
+  /// Emit target stack probe as an inline sequence.
+  MachineInstr *emitStackProbeInline(MachineFunction &MF,
+                                     MachineBasicBlock &MBB,
+                                     MachineBasicBlock::iterator MBBI,
+                                     DebugLoc DL, bool InProlog) const;
+
+  /// Emit a stub to later inline the target stack probe.
+  MachineInstr *emitStackProbeInlineStub(MachineFunction &MF,
+                                         MachineBasicBlock &MBB,
+                                         MachineBasicBlock::iterator MBBI,
+                                         DebugLoc DL, bool InProlog) const;
+
   /// convertArgMovsToPushes - This method tries to convert a call sequence
   /// that uses sub and mov instructions to put the argument onto the stack
   /// into a series of pushes.
