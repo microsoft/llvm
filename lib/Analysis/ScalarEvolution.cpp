@@ -6306,8 +6306,48 @@ ScalarEvolution::HowFarToZero(const SCEV *V, const Loop *L, bool ControlsExit) {
     // also returns true if StepV is maximally negative (eg, INT_MIN), but that
     // case is not handled as this code is guarded by !CountDown.
     if (StepV.isPowerOf2() &&
-        GetMinTrailingZeros(Distance) >= StepV.countTrailingZeros())
-      return getUDivExactExpr(Distance, Step);
+        GetMinTrailingZeros(Distance) >= StepV.countTrailingZeros()) {
+      // Here we've constrained the equation to be of the form
+      //
+      //   2^(N + k) * Distance' = (StepV == 2^N) * X (mod 2^W)  ... (0)
+      //
+      // where we're operating on a W bit wide integer domain and k is
+      // non-negative.  The smallest unsigned solution for X is the trip count.
+      //
+      // (0) is equivalent to:
+      //
+      //      2^(N + k) * Distance' - 2^N * X = L * 2^W
+      // <=>  2^N(2^k * Distance' - X) = L * 2^(W - N) * 2^N
+      // <=>  2^k * Distance' - X = L * 2^(W - N)
+      // <=>  2^k * Distance'     = L * 2^(W - N) + X    ... (1)
+      //
+      // The smallest X satisfying (1) is unsigned remainder of dividing the LHS
+      // by 2^(W - N).
+      //
+      // <=>  X = 2^k * Distance' URem 2^(W - N)   ... (2)
+      //
+      // E.g. say we're solving
+      //
+      //   2 * Val = 2 * X  (in i8)   ... (3)
+      //
+      // then from (2), we get X = Val URem i8 128 (k = 0 in this case).
+      //
+      // Note: It is tempting to solve (3) by setting X = Val, but Val is not
+      // necessarily the smallest unsigned value of X that satisfies (3).
+      // E.g. if Val is i8 -127 then the smallest value of X that satisfies (3)
+      // is i8 1, not i8 -127
+
+      const auto *ModuloResult = getUDivExactExpr(Distance, Step);
+
+      // Since SCEV does not have a URem node, we construct one using a truncate
+      // and a zero extend.
+
+      unsigned NarrowWidth = StepV.getBitWidth() - StepV.countTrailingZeros();
+      auto *NarrowTy = IntegerType::get(getContext(), NarrowWidth);
+      auto *WideTy = Distance->getType();
+
+      return getZeroExtendExpr(getTruncateExpr(ModuloResult, NarrowTy), WideTy);
+    }
   }
 
   // If the condition controls loop exit (the loop exits only if the expression
@@ -6958,18 +6998,6 @@ ScalarEvolution::isLoopBackedgeGuardedByCond(const Loop *L,
                     LoopContinuePredicate->getSuccessor(0) != L->getHeader()))
     return true;
 
-  // Check conditions due to any @llvm.assume intrinsics.
-  for (auto &AssumeVH : AC.assumptions()) {
-    if (!AssumeVH)
-      continue;
-    auto *CI = cast<CallInst>(AssumeVH);
-    if (!DT.dominates(CI, Latch->getTerminator()))
-      continue;
-
-    if (isImpliedCond(Pred, LHS, RHS, CI->getArgOperand(0), false))
-      return true;
-  }
-
   struct ClearWalkingBEDominatingCondsOnExit {
     ScalarEvolution &SE;
 
@@ -6981,13 +7009,25 @@ ScalarEvolution::isLoopBackedgeGuardedByCond(const Loop *L,
     }
   };
 
-  // We don't want more than one activation of the following loop on the stack
+  // We don't want more than one activation of the following loops on the stack
   // -- that can lead to O(n!) time complexity.
   if (WalkingBEDominatingConds)
     return false;
 
   WalkingBEDominatingConds = true;
   ClearWalkingBEDominatingCondsOnExit ClearOnExit(*this);
+
+  // Check conditions due to any @llvm.assume intrinsics.
+  for (auto &AssumeVH : AC.assumptions()) {
+    if (!AssumeVH)
+      continue;
+    auto *CI = cast<CallInst>(AssumeVH);
+    if (!DT.dominates(CI, Latch->getTerminator()))
+      continue;
+
+    if (isImpliedCond(Pred, LHS, RHS, CI->getArgOperand(0), false))
+      return true;
+  }
 
   // If the loop is not reachable from the entry block, we risk running into an
   // infinite loop as we walk up into the dom tree.  These loops do not matter

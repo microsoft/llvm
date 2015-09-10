@@ -1160,23 +1160,13 @@ SDValue SelectionDAGBuilder::getValueImpl(const Value *V) {
 }
 
 void SelectionDAGBuilder::visitCatchPad(const CatchPadInst &I) {
-  // Update machine-CFG edges.
-  MachineBasicBlock *PadMBB = FuncInfo.MBB;
-  MachineBasicBlock *CatchingMBB = FuncInfo.MBBMap[I.getNormalDest()];
-  MachineBasicBlock *UnwindMBB = FuncInfo.MBBMap[I.getUnwindDest()];
-  PadMBB->addSuccessor(CatchingMBB);
-  PadMBB->addSuccessor(UnwindMBB);
-
-  CatchingMBB->setIsEHFuncletEntry();
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
-  MMI.setHasEHFunclets(true);
+  llvm_unreachable("should never codegen catchpads");
 }
 
 void SelectionDAGBuilder::visitCatchRet(const CatchReturnInst &I) {
   // Update machine-CFG edge.
-  MachineBasicBlock *PadMBB = FuncInfo.MBB;
   MachineBasicBlock *TargetMBB = FuncInfo.MBBMap[I.getSuccessor()];
-  PadMBB->addSuccessor(TargetMBB);
+  FuncInfo.MBB->addSuccessor(TargetMBB);
 
   // Create the terminator node.
   SDValue Ret = DAG.getNode(ISD::CATCHRET, getCurSDLoc(), MVT::Other,
@@ -1185,24 +1175,68 @@ void SelectionDAGBuilder::visitCatchRet(const CatchReturnInst &I) {
 }
 
 void SelectionDAGBuilder::visitCatchEndPad(const CatchEndPadInst &I) {
-  // If this unwinds to caller, we don't need a DAG node hanging around.
-  if (!I.hasUnwindDest())
-    return;
-
-  // Update machine-CFG edge.
-  MachineBasicBlock *PadMBB = FuncInfo.MBB;
-  MachineBasicBlock *UnwindMBB = FuncInfo.MBBMap[I.getUnwindDest()];
-  PadMBB->addSuccessor(UnwindMBB);
+  llvm_unreachable("should never codegen catchendpads");
 }
 
 void SelectionDAGBuilder::visitCleanupPad(const CleanupPadInst &CPI) {
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
-  MMI.setHasEHFunclets(true);
-  report_fatal_error("visitCleanupPad not yet implemented!");
+  // Don't emit any special code for the cleanuppad instruction. It just marks
+  // the start of a funclet.
+  FuncInfo.MBB->setIsEHFuncletEntry();
+}
+
+/// When an invoke or a cleanupret unwinds to the next EH pad, there are
+/// many places it could ultimately go. In the IR, we have a single unwind
+/// destination, but in the machine CFG, we enumerate all the possible blocks.
+/// This function skips over imaginary basic blocks that hold catchpad,
+/// terminatepad, or catchendpad instructions, and finds all the "real" machine
+/// basic block destinations.
+static void
+findUnwindDestinations(FunctionLoweringInfo &FuncInfo,
+                       const BasicBlock *EHPadBB,
+                       SmallVectorImpl<MachineBasicBlock *> &UnwindDests) {
+  bool IsMSVCCXX = classifyEHPersonality(FuncInfo.Fn->getPersonalityFn()) ==
+                   EHPersonality::MSVC_CXX;
+  while (EHPadBB) {
+    const Instruction *Pad = EHPadBB->getFirstNonPHI();
+    if (isa<LandingPadInst>(Pad)) {
+      // Stop on landingpads. They are not funclets.
+      UnwindDests.push_back(FuncInfo.MBBMap[EHPadBB]);
+      break;
+    } else if (isa<CleanupPadInst>(Pad) || isa<LandingPadInst>(Pad)) {
+      // Stop on cleanup pads. Cleanups are always funclet entries for all known
+      // personalities.
+      UnwindDests.push_back(FuncInfo.MBBMap[EHPadBB]);
+      UnwindDests.back()->setIsEHFuncletEntry();
+      break;
+    } else if (const auto *CPI = dyn_cast<CatchPadInst>(Pad)) {
+      // Add the catchpad handler to the possible destinations.
+      UnwindDests.push_back(FuncInfo.MBBMap[CPI->getNormalDest()]);
+      // In MSVC C++, catchblocks are funclets and need prologues.
+      if (IsMSVCCXX)
+        UnwindDests.back()->setIsEHFuncletEntry();
+      EHPadBB = CPI->getUnwindDest();
+    } else if (const auto *CEPI = dyn_cast<CatchEndPadInst>(Pad)) {
+      EHPadBB = CEPI->getUnwindDest();
+    } else if (const auto *CEPI = dyn_cast<CleanupEndPadInst>(Pad)) {
+      EHPadBB = CEPI->getUnwindDest();
+    }
+  }
 }
 
 void SelectionDAGBuilder::visitCleanupRet(const CleanupReturnInst &I) {
-  report_fatal_error("visitCleanupRet not yet implemented!");
+  // Update successor info.
+  // FIXME: The weights for catchpads will be wrong.
+  SmallVector<MachineBasicBlock *, 1> UnwindDests;
+  findUnwindDestinations(FuncInfo, I.getUnwindDest(), UnwindDests);
+  for (MachineBasicBlock *UnwindDest : UnwindDests) {
+    UnwindDest->setIsEHPad();
+    addSuccessorWithWeight(FuncInfo.MBB, UnwindDest);
+  }
+
+  // Create the terminator node.
+  SDValue Ret =
+      DAG.getNode(ISD::CLEANUPRET, getCurSDLoc(), MVT::Other, getControlRoot());
+  DAG.setRoot(Ret);
 }
 
 void SelectionDAGBuilder::visitCleanupEndPad(const CleanupEndPadInst &I) {
@@ -2003,9 +2037,10 @@ void SelectionDAGBuilder::visitBitTestCase(BitTestBlock &BB,
 void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
   MachineBasicBlock *InvokeMBB = FuncInfo.MBB;
 
-  // Retrieve successors.
+  // Retrieve successors. Look through artificial IR level blocks like catchpads
+  // and catchendpads for successors.
   MachineBasicBlock *Return = FuncInfo.MBBMap[I.getSuccessor(0)];
-  MachineBasicBlock *LandingPad = FuncInfo.MBBMap[I.getSuccessor(1)];
+  const BasicBlock *EHPadBB = I.getSuccessor(1);
 
   const Value *Callee(I.getCalledValue());
   const Function *Fn = dyn_cast<Function>(Callee);
@@ -2020,14 +2055,14 @@ void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
       break;
     case Intrinsic::experimental_patchpoint_void:
     case Intrinsic::experimental_patchpoint_i64:
-      visitPatchpoint(&I, LandingPad);
+      visitPatchpoint(&I, EHPadBB);
       break;
     case Intrinsic::experimental_gc_statepoint:
-      LowerStatepoint(ImmutableStatepoint(&I), LandingPad);
+      LowerStatepoint(ImmutableStatepoint(&I), EHPadBB);
       break;
     }
   } else
-    LowerCallTo(&I, getValue(Callee), false, LandingPad);
+    LowerCallTo(&I, getValue(Callee), false, EHPadBB);
 
   // If the value of the invoke is used outside of its defining block, make it
   // available as a virtual register.
@@ -2037,9 +2072,16 @@ void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
     CopyToExportRegsIfNeeded(&I);
   }
 
-  // Update successor info
+  SmallVector<MachineBasicBlock *, 1> UnwindDests;
+  findUnwindDestinations(FuncInfo, EHPadBB, UnwindDests);
+
+  // Update successor info.
+  // FIXME: The weights for catchpads will be wrong.
   addSuccessorWithWeight(InvokeMBB, Return);
-  addSuccessorWithWeight(InvokeMBB, LandingPad);
+  for (MachineBasicBlock *UnwindDest : UnwindDests) {
+    UnwindDest->setIsEHPad();
+    addSuccessorWithWeight(InvokeMBB, UnwindDest);
+  }
 
   // Drop into normal successor.
   DAG.setRoot(DAG.getNode(ISD::BR, getCurSDLoc(),
@@ -5146,11 +5188,11 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
 
 std::pair<SDValue, SDValue>
 SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
-                                    MachineBasicBlock *LandingPad) {
+                                    const BasicBlock *EHPadBB) {
   MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
   MCSymbol *BeginLabel = nullptr;
 
-  if (LandingPad) {
+  if (EHPadBB) {
     // Insert a label before the invoke call to mark the try range.  This can be
     // used to detect deletion of the invoke via the MachineModuleInfo.
     BeginLabel = MMI.getContext().createTempSymbol();
@@ -5160,7 +5202,7 @@ SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
     unsigned CallSiteIndex = MMI.getCurrentCallSite();
     if (CallSiteIndex) {
       MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
-      LPadToCallSiteMap[LandingPad].push_back(CallSiteIndex);
+      LPadToCallSiteMap[FuncInfo.MBBMap[EHPadBB]].push_back(CallSiteIndex);
 
       // Now that the call site is handled, stop tracking it.
       MMI.setCurrentCallSite(0);
@@ -5193,14 +5235,14 @@ SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
     DAG.setRoot(Result.second);
   }
 
-  if (LandingPad) {
+  if (EHPadBB) {
     // Insert a label at the end of the invoke call to mark the try range.  This
     // can be used to detect deletion of the invoke via the MachineModuleInfo.
     MCSymbol *EndLabel = MMI.getContext().createTempSymbol();
     DAG.setRoot(DAG.getEHLabel(getCurSDLoc(), getRoot(), EndLabel));
 
     // Inform MachineModuleInfo of range.
-    MMI.addInvoke(LandingPad, BeginLabel, EndLabel);
+    MMI.addInvoke(FuncInfo.MBBMap[EHPadBB], BeginLabel, EndLabel);
   }
 
   return Result;
@@ -5208,7 +5250,7 @@ SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
 
 void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
                                       bool isTailCall,
-                                      MachineBasicBlock *LandingPad) {
+                                      const BasicBlock *EHPadBB) {
   PointerType *PT = cast<PointerType>(CS.getCalledValue()->getType());
   FunctionType *FTy = cast<FunctionType>(PT->getElementType());
   Type *RetTy = FTy->getReturnType();
@@ -5247,7 +5289,7 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
   CLI.setDebugLoc(getCurSDLoc()).setChain(getRoot())
     .setCallee(RetTy, FTy, Callee, std::move(Args), CS)
     .setTailCall(isTailCall);
-  std::pair<SDValue,SDValue> Result = lowerInvokable(CLI, LandingPad);
+  std::pair<SDValue, SDValue> Result = lowerInvokable(CLI, EHPadBB);
 
   if (Result.first.getNode())
     setValue(CS.getInstruction(), Result.first);
@@ -6553,12 +6595,9 @@ void SelectionDAGBuilder::visitVACopy(const CallInst &I) {
 /// This is a helper for lowering intrinsics that follow a target calling
 /// convention or require stack pointer adjustment. Only a subset of the
 /// intrinsic's operands need to participate in the calling convention.
-std::pair<SDValue, SDValue>
-SelectionDAGBuilder::lowerCallOperands(ImmutableCallSite CS, unsigned ArgIdx,
-                                       unsigned NumArgs, SDValue Callee,
-                                       Type *ReturnTy,
-                                       MachineBasicBlock *LandingPad,
-                                       bool IsPatchPoint) {
+std::pair<SDValue, SDValue> SelectionDAGBuilder::lowerCallOperands(
+    ImmutableCallSite CS, unsigned ArgIdx, unsigned NumArgs, SDValue Callee,
+    Type *ReturnTy, const BasicBlock *EHPadBB, bool IsPatchPoint) {
   TargetLowering::ArgListTy Args;
   Args.reserve(NumArgs);
 
@@ -6582,7 +6621,7 @@ SelectionDAGBuilder::lowerCallOperands(ImmutableCallSite CS, unsigned ArgIdx,
     .setCallee(CS.getCallingConv(), ReturnTy, Callee, std::move(Args), NumArgs)
     .setDiscardResult(CS->use_empty()).setIsPatchPoint(IsPatchPoint);
 
-  return lowerInvokable(CLI, LandingPad);
+  return lowerInvokable(CLI, EHPadBB);
 }
 
 /// \brief Add a stack map intrinsic call's live variable operands to a stackmap
@@ -6686,7 +6725,7 @@ void SelectionDAGBuilder::visitStackmap(const CallInst &CI) {
 
 /// \brief Lower llvm.experimental.patchpoint directly to its target opcode.
 void SelectionDAGBuilder::visitPatchpoint(ImmutableCallSite CS,
-                                          MachineBasicBlock *LandingPad) {
+                                          const BasicBlock *EHPadBB) {
   // void|i64 @llvm.experimental.patchpoint.void|i64(i64 <id>,
   //                                                 i32 <numBytes>,
   //                                                 i8* <target>,
@@ -6723,9 +6762,8 @@ void SelectionDAGBuilder::visitPatchpoint(ImmutableCallSite CS,
   unsigned NumCallArgs = IsAnyRegCC ? 0 : NumArgs;
   Type *ReturnTy =
     IsAnyRegCC ? Type::getVoidTy(*DAG.getContext()) : CS->getType();
-  std::pair<SDValue, SDValue> Result =
-    lowerCallOperands(CS, NumMetaOpers, NumCallArgs, Callee, ReturnTy,
-                      LandingPad, true);
+  std::pair<SDValue, SDValue> Result = lowerCallOperands(
+      CS, NumMetaOpers, NumCallArgs, Callee, ReturnTy, EHPadBB, true);
 
   SDNode *CallEnd = Result.second.getNode();
   if (HasDef && (CallEnd->getOpcode() == ISD::CopyFromReg))

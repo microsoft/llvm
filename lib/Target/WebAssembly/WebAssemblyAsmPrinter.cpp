@@ -204,7 +204,7 @@ void WebAssemblyAsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
   } else {
     assert(false && "Only integer and floating-point constants are supported");
   }
-  OS << ") ;; align " << Align << "\n";
+  OS << ") ;; align " << Align;
   OutStreamer->EmitRawText(OS.str());
 }
 
@@ -236,19 +236,20 @@ void WebAssemblyAsmPrinter::EmitFunctionBodyStart() {
   SmallString<128> Str;
   raw_svector_ostream OS(Str);
   const Function *F = MF->getFunction();
-  for (const Argument &A : F->args())
-    OS << " (param " << toString(A.getType(), hasAddr64) << ')';
   const Type *Rt = F->getReturnType();
-  if (!Rt->isVoidTy())
-    OS << " (result " << toString(Rt, hasAddr64) << ')';
-  OS << '\n';
-  OutStreamer->EmitRawText(OS.str());
+  if (!Rt->isVoidTy() || !F->arg_empty()) {
+    for (const Argument &A : F->args())
+      OS << " (param " << toString(A.getType(), hasAddr64) << ')';
+    if (!Rt->isVoidTy())
+      OS << " (result " << toString(Rt, hasAddr64) << ')';
+    OutStreamer->EmitRawText(OS.str());
+  }
 }
 
 void WebAssemblyAsmPrinter::EmitFunctionBodyEnd() {
   SmallString<128> Str;
   raw_svector_ostream OS(Str);
-  OS << ") ;; end func " << toSymbol(CurrentFnSym->getName()) << '\n';
+  OS << ") ;; end func " << toSymbol(CurrentFnSym->getName());
   OutStreamer->EmitRawText(OS.str());
 }
 
@@ -269,33 +270,35 @@ void WebAssemblyAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     OS << "(setlocal @" << TargetRegisterInfo::virtReg2Index(Reg) << ' ';
   }
 
-  OS << '(' << OpcodeName(TII, MI);
-  for (const MachineOperand &MO : MI->uses())
-    switch (MO.getType()) {
-    default:
-      llvm_unreachable("unexpected machine operand type");
-    case MachineOperand::MO_Register: {
-      if (MO.isImplicit())
-        continue;
-      unsigned Reg = MO.getReg();
-      OS << " @" << TargetRegisterInfo::virtReg2Index(Reg);
-    } break;
-    case MachineOperand::MO_Immediate: {
-      OS << ' ' << MO.getImm();
-    } break;
-    case MachineOperand::MO_FPImmediate: {
-      OS << ' ' << toString(MO.getFPImm()->getValueAPF());
-    } break;
-    case MachineOperand::MO_GlobalAddress: {
-      OS << ' ' << toSymbol(MO.getGlobal()->getName());
-    } break;
-    }
-  OS << ')';
+  if (MI->getOpcode() == WebAssembly::COPY) {
+    OS << '@' << TargetRegisterInfo::virtReg2Index(MI->getOperand(1).getReg());
+  } else {
+    OS << '(' << OpcodeName(TII, MI);
+    for (const MachineOperand &MO : MI->uses())
+      switch (MO.getType()) {
+      default:
+        llvm_unreachable("unexpected machine operand type");
+      case MachineOperand::MO_Register: {
+        if (MO.isImplicit())
+          continue;
+        unsigned Reg = MO.getReg();
+        OS << " @" << TargetRegisterInfo::virtReg2Index(Reg);
+      } break;
+      case MachineOperand::MO_Immediate: {
+        OS << ' ' << MO.getImm();
+      } break;
+      case MachineOperand::MO_FPImmediate: {
+        OS << ' ' << toString(MO.getFPImm()->getValueAPF());
+      } break;
+      case MachineOperand::MO_GlobalAddress: {
+        OS << ' ' << toSymbol(MO.getGlobal()->getName());
+      } break;
+      }
+    OS << ')';
+  }
 
   if (NumDefs != 0)
     OS << ')';
-
-  OS << '\n';
 
   OutStreamer->EmitRawText(OS.str());
 }

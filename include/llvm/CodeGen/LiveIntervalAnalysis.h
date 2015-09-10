@@ -22,6 +22,7 @@
 
 #include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -36,7 +37,6 @@ namespace llvm {
 
 extern cl::opt<bool> UseSegmentSetForPhysRegs;
 
-  class AliasAnalysis;
   class BitVector;
   class BlockFrequency;
   class LiveRangeCalc;
@@ -256,11 +256,6 @@ extern cl::opt<bool> UseSegmentSetForPhysRegs;
 
     void ReplaceMachineInstrInMaps(MachineInstr *MI, MachineInstr *NewMI) {
       Indexes->replaceMachineInstrInMaps(MI, NewMI);
-    }
-
-    bool findLiveInMBBs(SlotIndex Start, SlotIndex End,
-                        SmallVectorImpl<MachineBasicBlock*> &MBBs) const {
-      return Indexes->findLiveInMBBs(Start, End, MBBs);
     }
 
     VNInfo::Allocator& getVNInfoAllocator() { return VNInfoAllocator; }

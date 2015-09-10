@@ -236,6 +236,8 @@ namespace {
     void verifyLiveRange(const LiveRange&, unsigned, unsigned LaneMask = 0);
 
     void verifyStackFrame();
+
+    void verifySlotIndexes() const;
   };
 
   struct MachineVerifierPass : public MachineFunctionPass {
@@ -273,6 +275,19 @@ void MachineFunction::verify(Pass *p, const char *Banner) const {
     .runOnMachineFunction(const_cast<MachineFunction&>(*this));
 }
 
+void MachineVerifier::verifySlotIndexes() const {
+  if (Indexes == nullptr)
+    return;
+
+  // Ensure the IdxMBB list is sorted by slot indexes.
+  SlotIndex Last;
+  for (SlotIndexes::MBBIndexIterator I = Indexes->MBBIndexBegin(),
+       E = Indexes->MBBIndexEnd(); I != E; ++I) {
+    assert(!Last.isValid() || I->first > Last);
+    Last = I->first;
+  }
+}
+
 bool MachineVerifier::runOnMachineFunction(MachineFunction &MF) {
   foundErrors = 0;
 
@@ -294,6 +309,8 @@ bool MachineVerifier::runOnMachineFunction(MachineFunction &MF) {
     LiveStks = PASS->getAnalysisIfAvailable<LiveStacks>();
     Indexes = PASS->getAnalysisIfAvailable<SlotIndexes>();
   }
+
+  verifySlotIndexes();
 
   visitMachineFunctionBefore();
   for (MachineFunction::const_iterator MFI = MF.begin(), MFE = MF.end();
@@ -507,8 +524,8 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
   if (MRI->isSSA()) {
     // If this block has allocatable physical registers live-in, check that
     // it is an entry block or landing pad.
-    for (unsigned LI : MBB->liveins()) {
-      if (isAllocatable(LI) && !MBB->isEHPad() &&
+    for (const auto &LI : MBB->liveins()) {
+      if (isAllocatable(LI.PhysReg) && !MBB->isEHPad() &&
           MBB != MBB->getParent()->begin()) {
         report("MBB has allocable live-in, but isn't entry or landing-pad.", MBB);
       }
@@ -677,12 +694,12 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
   }
 
   regsLive.clear();
-  for (unsigned LI : MBB->liveins()) {
-    if (!TargetRegisterInfo::isPhysicalRegister(LI)) {
+  for (const auto &LI : MBB->liveins()) {
+    if (!TargetRegisterInfo::isPhysicalRegister(LI.PhysReg)) {
       report("MBB live-in list contains non-physical register", MBB);
       continue;
     }
-    for (MCSubRegIterator SubRegs(LI, TRI, /*IncludeSelf=*/true);
+    for (MCSubRegIterator SubRegs(LI.PhysReg, TRI, /*IncludeSelf=*/true);
          SubRegs.isValid(); ++SubRegs)
       regsLive.insert(*SubRegs);
   }

@@ -91,6 +91,23 @@ class SQRT_S_MMR6_ENC : POOL32F_MATH_FM_MMR6<"sqrt.s", 0, 0b00101000>;
 class SQRT_D_MMR6_ENC : POOL32F_MATH_FM_MMR6<"sqrt.d", 1, 0b00101000>;
 class RSQRT_S_MMR6_ENC : POOL32F_MATH_FM_MMR6<"rsqrt.s", 0, 0b00001000>;
 class RSQRT_D_MMR6_ENC : POOL32F_MATH_FM_MMR6<"rsqrt.d", 1, 0b00001000>;
+class SB_MMR6_ENC : SB32_SH32_STORE_FM_MMR6<0b000110>;
+class SBE_MMR6_ENC : POOL32C_STORE_EVA_FM_MMR6<0b100>;
+class SCE_MMR6_ENC : POOL32C_STORE_EVA_FM_MMR6<0b110>;
+class SH_MMR6_ENC : SB32_SH32_STORE_FM_MMR6<0b001110>;
+class SHE_MMR6_ENC : POOL32C_STORE_EVA_FM_MMR6<0b101>;
+class LLE_MMR6_ENC : LOAD_WORD_EVA_FM_MMR6<0b110>;
+class LWE_MMR6_ENC : LOAD_WORD_EVA_FM_MMR6<0b111>;
+class LW_MMR6_ENC : LOAD_WORD_FM_MMR6;
+class LUI_MMR6_ENC : LOAD_UPPER_IMM_FM_MMR6;
+
+class ADDU16_MMR6_ENC : POOL16A_ADDU16_FM_MMR6;
+class AND16_MMR6_ENC : POOL16C_AND16_FM_MMR6;
+class ANDI16_MMR6_ENC : ANDI_FM_MM16<0b001011>, MicroMipsR6Inst16;
+class NOT16_MMR6_ENC : POOL16C_NOT16_FM_MMR6;
+class OR16_MMR6_ENC : POOL16C_OR16_FM_MMR6;
+class SLL16_MMR6_ENC : SHIFT_FM_MM16<0>, MicroMipsR6Inst16;
+class SRL16_MMR6_ENC : SHIFT_FM_MM16<1>, MicroMipsR6Inst16;
 
 class CMP_CBR_RT_Z_MMR6_DESC_BASE<string instr_asm, DAGOperand opnd,
                                   RegisterOperand GPROpnd>
@@ -605,6 +622,71 @@ class RSQRT_S_MMR6_DESC : ABSS_FT_MMR6_DESC_BASE<"rsqrt.s", FGR32Opnd,
 class RSQRT_D_MMR6_DESC : ABSS_FT_MMR6_DESC_BASE<"rsqrt.d", FGR32Opnd,
                                                   AFGR64Opnd, II_TRUNC>;
 
+class STORE_MMR6_DESC_BASE<string opstr, DAGOperand RO>
+    : Store<opstr, RO>, MMR6Arch<opstr> {
+  let DecoderMethod = "DecodeMemMMImm16";
+}
+class SB_MMR6_DESC : STORE_MMR6_DESC_BASE<"sb", GPR32Opnd>;
+
+class STORE_EVA_MMR6_DESC_BASE<string instr_asm, RegisterOperand RO>
+    : MMR6Arch<instr_asm>, MipsR6Inst {
+  dag OutOperandList = (outs);
+  dag InOperandList = (ins RO:$rt, mem_mm_9:$addr);
+  string AsmString = !strconcat(instr_asm, "\t$rt, $addr");
+  string DecoderMethod = "DecodeStoreEvaOpMM";
+  bit mayStore = 1;
+}
+class SBE_MMR6_DESC : STORE_EVA_MMR6_DESC_BASE<"sbe", GPR32Opnd>;
+class SCE_MMR6_DESC : STORE_EVA_MMR6_DESC_BASE<"sce", GPR32Opnd>;
+class SH_MMR6_DESC : STORE_MMR6_DESC_BASE<"sh", GPR32Opnd>;
+class SHE_MMR6_DESC : STORE_EVA_MMR6_DESC_BASE<"she", GPR32Opnd>;
+
+class LOAD_WORD_EVA_MMR6_DESC_BASE<string instr_asm, RegisterOperand RO> :
+            MMR6Arch<instr_asm>, MipsR6Inst {
+  dag OutOperandList = (outs RO:$rt);
+  dag InOperandList = (ins mem_mm_12:$addr);
+  string AsmString = !strconcat(instr_asm, "\t$rt, $addr");
+  string DecoderMethod = "DecodeMemMMImm9";
+  bit mayLoad = 1;
+}
+class LLE_MMR6_DESC : LOAD_WORD_EVA_MMR6_DESC_BASE<"lle", GPR32Opnd>;
+class LWE_MMR6_DESC : LOAD_WORD_EVA_MMR6_DESC_BASE<"lwe", GPR32Opnd>;
+class ADDU16_MMR6_DESC : ArithRMM16<"addu16", GPRMM16Opnd, 1, II_ADDU, add>,
+  MMR6Arch<"addu16">;
+class AND16_MMR6_DESC : LogicRMM16<"and16", GPRMM16Opnd, II_AND, and>,
+  MMR6Arch<"and16">;
+class ANDI16_MMR6_DESC : AndImmMM16<"andi16", GPRMM16Opnd, II_AND>,
+  MMR6Arch<"andi16">;
+class NOT16_MMR6_DESC : NotMM16<"not16", GPRMM16Opnd>, MMR6Arch<"not16">;
+class OR16_MMR6_DESC : LogicRMM16<"or16", GPRMM16Opnd, II_OR, or>,
+  MMR6Arch<"or16">;
+class SLL16_MMR6_DESC : ShiftIMM16<"sll16", uimm3_shift, GPRMM16Opnd, II_SLL>,
+  MMR6Arch<"sll16">;
+class SRL16_MMR6_DESC : ShiftIMM16<"srl16", uimm3_shift, GPRMM16Opnd, II_SRL>,
+  MMR6Arch<"srl16">;
+
+class LW_MMR6_DESC : MMR6Arch<"lw">, MipsR6Inst {
+  dag OutOperandList = (outs GPR32Opnd:$rt);
+  dag InOperandList = (ins mem:$addr);
+  string AsmString = "lw\t$rt, $addr";
+  let DecoderMethod = "DecodeMemMMImm16";
+  let canFoldAsLoad = 1;
+  let mayLoad = 1;
+  list<dag> Pattern = [(set GPR32Opnd:$rt, (load addrDefault:$addr))];
+  InstrItinClass Itinerary = II_LW;
+}
+
+class LUI_MMR6_DESC : IsAsCheapAsAMove, MMR6Arch<"lui">, MipsR6Inst{
+  dag OutOperandList = (outs GPR32Opnd:$rt);
+  dag InOperandList = (ins uimm16:$imm16);
+  string AsmString = "lui\t$rt, $imm16";
+  list<dag> Pattern = [];
+  bit hasSideEffects = 0;
+  bit isReMaterializable = 1;
+  InstrItinClass Itinerary = II_LUI;
+  Format Form = FrmI;
+}
+
 //===----------------------------------------------------------------------===//
 //
 // Instruction Definitions
@@ -788,6 +870,30 @@ def RSQRT_S_MMR6 : StdMMR6Rel, RSQRT_S_MMR6_ENC, RSQRT_S_MMR6_DESC,
                    ISA_MICROMIPS32R6;
 def RSQRT_D_MMR6 : StdMMR6Rel, RSQRT_D_MMR6_ENC, RSQRT_D_MMR6_DESC,
                    ISA_MICROMIPS32R6;
+def SB_MMR6 : StdMMR6Rel, SB_MMR6_DESC, SB_MMR6_ENC, ISA_MICROMIPS32R6;
+def SBE_MMR6 : StdMMR6Rel, SBE_MMR6_DESC, SBE_MMR6_ENC, ISA_MICROMIPS32R6;
+def SCE_MMR6 : StdMMR6Rel, SCE_MMR6_DESC, SCE_MMR6_ENC, ISA_MICROMIPS32R6;
+def SH_MMR6 : StdMMR6Rel, SH_MMR6_DESC, SH_MMR6_ENC, ISA_MICROMIPS32R6;
+def SHE_MMR6 : StdMMR6Rel, SHE_MMR6_DESC, SHE_MMR6_ENC, ISA_MICROMIPS32R6;
+def LLE_MMR6 : StdMMR6Rel, LLE_MMR6_DESC, LLE_MMR6_ENC, ISA_MICROMIPS32R6;
+def LWE_MMR6 : StdMMR6Rel, LWE_MMR6_DESC, LWE_MMR6_ENC, ISA_MICROMIPS32R6;
+def LW_MMR6 : StdMMR6Rel, LW_MMR6_DESC, LW_MMR6_ENC, ISA_MICROMIPS32R6;
+def LUI_MMR6 : R6MMR6Rel, LUI_MMR6_DESC, LUI_MMR6_ENC, ISA_MICROMIPS32R6;
+
+def ADDU16_MMR6 : StdMMR6Rel, ADDU16_MMR6_DESC, ADDU16_MMR6_ENC,
+                  ISA_MICROMIPS32R6;
+def AND16_MMR6 : StdMMR6Rel, AND16_MMR6_DESC, AND16_MMR6_ENC,
+                  ISA_MICROMIPS32R6;
+def ANDI16_MMR6 : StdMMR6Rel, ANDI16_MMR6_DESC, ANDI16_MMR6_ENC,
+                  ISA_MICROMIPS32R6;
+def NOT16_MMR6 : StdMMR6Rel, NOT16_MMR6_DESC, NOT16_MMR6_ENC,
+                  ISA_MICROMIPS32R6;
+def OR16_MMR6 : StdMMR6Rel, OR16_MMR6_DESC, OR16_MMR6_ENC,
+                  ISA_MICROMIPS32R6;
+def SLL16_MMR6 : StdMMR6Rel, SLL16_MMR6_DESC, SLL16_MMR6_ENC,
+                  ISA_MICROMIPS32R6;
+def SRL16_MMR6 : StdMMR6Rel, SRL16_MMR6_DESC, SRL16_MMR6_ENC,
+                  ISA_MICROMIPS32R6;
 }
 
 //===----------------------------------------------------------------------===//
