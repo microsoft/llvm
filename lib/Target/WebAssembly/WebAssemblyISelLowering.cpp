@@ -228,16 +228,19 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
 
   SmallVectorImpl<ISD::OutputArg> &Outs = CLI.Outs;
   SmallVectorImpl<SDValue> &OutVals = CLI.OutVals;
+
   bool IsStructRet = (Outs.empty()) ? false : Outs[0].Flags.isSRet();
   if (IsStructRet)
     fail(DL, DAG, "WebAssembly doesn't support struct return yet");
-  if (Outs.size() > 1)
-    fail(DL, DAG, "WebAssembly doesn't support more than 1 returned value yet");
 
   SmallVectorImpl<ISD::InputArg> &Ins = CLI.Ins;
+  if (Ins.size() > 1)
+    fail(DL, DAG, "WebAssembly doesn't support more than 1 returned value yet");
+
   bool IsVarArg = CLI.IsVarArg;
   if (IsVarArg)
     fail(DL, DAG, "WebAssembly doesn't support varargs yet");
+
   // Analyze operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
@@ -258,7 +261,9 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
     Tys.push_back(In.VT);
   Tys.push_back(MVT::Other);
   SDVTList TyList = DAG.getVTList(Tys);
-  SDValue Res = DAG.getNode(WebAssemblyISD::CALL, DL, TyList, Ops);
+  SDValue Res =
+      DAG.getNode(Ins.empty() ? WebAssemblyISD::CALL0 : WebAssemblyISD::CALL1,
+                  DL, TyList, Ops);
   if (Ins.empty()) {
     Chain = Res;
   } else {

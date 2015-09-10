@@ -58,10 +58,12 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/CodeMetrics.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
@@ -285,8 +287,6 @@ public:
     // Widen each instruction in the old loop to a new one in the new loop.
     // Use the Legality module to find the induction and reduction variables.
     vectorizeLoop();
-    // Register the new loop and update the analysis passes.
-    updateAnalysis();
   }
 
   // Return true if any runtime check is added.
@@ -490,6 +490,9 @@ protected:
   PHINode *OldInduction;
   /// Maps scalars to widened vectors.
   ValueMap WidenMap;
+  /// Store instructions that should be predicated, as a pair
+  ///   <StoreInst, Predicate>
+  SmallVector<std::pair<StoreInst*,Value*>, 4> PredicatedStores;
   EdgeMaskCache MaskCache;
   /// Trip count of the original loop.
   Value *TripCount;
@@ -1536,7 +1539,7 @@ struct LoopVectorize : public FunctionPass {
     BFI = &getAnalysis<BlockFrequencyInfoWrapperPass>().getBFI();
     auto *TLIP = getAnalysisIfAvailable<TargetLibraryInfoWrapperPass>();
     TLI = TLIP ? &TLIP->getTLI() : nullptr;
-    AA = &getAnalysis<AliasAnalysis>();
+    AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
     AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
     LAA = &getAnalysis<LoopAccessAnalysis>();
 
@@ -1837,11 +1840,13 @@ struct LoopVectorize : public FunctionPass {
     AU.addRequired<LoopInfoWrapperPass>();
     AU.addRequired<ScalarEvolutionWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
-    AU.addRequired<AliasAnalysis>();
+    AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<LoopAccessAnalysis>();
     AU.addPreserved<LoopInfoWrapperPass>();
     AU.addPreserved<DominatorTreeWrapperPass>();
-    AU.addPreserved<AliasAnalysis>();
+    AU.addPreserved<BasicAAWrapperPass>();
+    AU.addPreserved<AAResultsWrapperPass>();
+    AU.addPreserved<GlobalsAAWrapperPass>();
   }
 
 };
@@ -2472,19 +2477,12 @@ void InnerLoopVectorizer::scalarizeInstruction(Instruction *Instr, bool IfPredic
   // Create a new entry in the WidenMap and initialize it to Undef or Null.
   VectorParts &VecResults = WidenMap.splat(Instr, UndefVec);
 
-  Instruction *InsertPt = Builder.GetInsertPoint();
-  BasicBlock *IfBlock = Builder.GetInsertBlock();
-  BasicBlock *CondBlock = nullptr;
-
   VectorParts Cond;
-  Loop *VectorLp = nullptr;
   if (IfPredicateStore) {
     assert(Instr->getParent()->getSinglePredecessor() &&
            "Only support single predecessor blocks");
     Cond = createEdgeMask(Instr->getParent()->getSinglePredecessor(),
                           Instr->getParent());
-    VectorLp = LI->getLoopFor(IfBlock);
-    assert(VectorLp && "Must have a loop for this block");
   }
 
   // For each vector unroll 'part':
@@ -2497,11 +2495,6 @@ void InnerLoopVectorizer::scalarizeInstruction(Instruction *Instr, bool IfPredic
       if (IfPredicateStore) {
         Cmp = Builder.CreateExtractElement(Cond[Part], Builder.getInt32(Width));
         Cmp = Builder.CreateICmp(ICmpInst::ICMP_EQ, Cmp, ConstantInt::get(Cmp->getType(), 1));
-        CondBlock = IfBlock->splitBasicBlock(InsertPt, "cond.store");
-        LoopVectorBody.push_back(CondBlock);
-        VectorLp->addBasicBlockToLoop(CondBlock, *LI);
-        // Update Builder with newly created basic block.
-        Builder.SetInsertPoint(InsertPt);
       }
 
       Instruction *Cloned = Instr->clone();
@@ -2525,15 +2518,9 @@ void InnerLoopVectorizer::scalarizeInstruction(Instruction *Instr, bool IfPredic
         VecResults[Part] = Builder.CreateInsertElement(VecResults[Part], Cloned,
                                                        Builder.getInt32(Width));
       // End if-block.
-      if (IfPredicateStore) {
-         BasicBlock *NewIfBlock = CondBlock->splitBasicBlock(InsertPt, "else");
-         LoopVectorBody.push_back(NewIfBlock);
-         VectorLp->addBasicBlockToLoop(NewIfBlock, *LI);
-         Builder.SetInsertPoint(InsertPt);
-         ReplaceInstWithInst(IfBlock->getTerminator(),
-                             BranchInst::Create(CondBlock, NewIfBlock, Cmp));
-         IfBlock = NewIfBlock;
-      }
+      if (IfPredicateStore)
+        PredicatedStores.push_back(std::make_pair(cast<StoreInst>(Cloned),
+                                                  Cmp));
     }
   }
 }
@@ -2622,8 +2609,8 @@ Value *InnerLoopVectorizer::getOrCreateTripCount(Loop *L) {
 
   IRBuilder<> Builder(L->getLoopPreheader()->getTerminator());
   // Find the loop boundaries.
-  const SCEV *ExitCount = SE->getBackedgeTakenCount(OrigLoop);
-  assert(ExitCount != SE->getCouldNotCompute() && "Invalid loop count");
+  const SCEV *BackedgeTakenCount = SE->getBackedgeTakenCount(OrigLoop);
+  assert(BackedgeTakenCount != SE->getCouldNotCompute() && "Invalid loop count");
 
   Type *IdxTy = Legal->getWidestInductionType();
   
@@ -2632,14 +2619,15 @@ Value *InnerLoopVectorizer::getOrCreateTripCount(Loop *L) {
   // compare. The only way that we get a backedge taken count is that the
   // induction variable was signed and as such will not overflow. In such a case
   // truncation is legal.
-  if (ExitCount->getType()->getPrimitiveSizeInBits() >
+  if (BackedgeTakenCount->getType()->getPrimitiveSizeInBits() >
       IdxTy->getPrimitiveSizeInBits())
-    ExitCount = SE->getTruncateOrNoop(ExitCount, IdxTy);
-
-  const SCEV *BackedgeTakeCount = SE->getNoopOrZeroExtend(ExitCount, IdxTy);
+    BackedgeTakenCount = SE->getTruncateOrNoop(BackedgeTakenCount, IdxTy);
+  BackedgeTakenCount = SE->getNoopOrZeroExtend(BackedgeTakenCount, IdxTy);
+  
   // Get the total trip count from the count by adding 1.
-  ExitCount = SE->getAddExpr(BackedgeTakeCount,
-                             SE->getConstant(BackedgeTakeCount->getType(), 1));
+  const SCEV *ExitCount =
+    SE->getAddExpr(BackedgeTakenCount,
+                   SE->getConstant(BackedgeTakenCount->getType(), 1));
 
   const DataLayout &DL = L->getHeader()->getModule()->getDataLayout();
 
@@ -3367,6 +3355,20 @@ void InnerLoopVectorizer::vectorizeLoop() {
 
   fixLCSSAPHIs();
 
+  // Make sure DomTree is updated.
+  updateAnalysis();
+  
+  // Predicate any stores.
+  for (auto KV : PredicatedStores) {
+    BasicBlock::iterator I(KV.first);
+    auto *BB = SplitBlock(I->getParent(), std::next(I), DT, LI);
+    auto *T = SplitBlockAndInsertIfThen(KV.second, I, /*Unreachable=*/false,
+                                        /*BranchWeights=*/nullptr, DT);
+    I->moveBefore(T);
+    I->getParent()->setName("pred.store.if");
+    BB->setName("pred.store.continue");
+  }
+  DEBUG(DT->verifyDomTree());
   // Remove redundant induction instructions.
   cse(LoopVectorBody);
 }
@@ -3805,17 +3807,10 @@ void InnerLoopVectorizer::updateAnalysis() {
     DT->addNewBlock(LoopBypassBlocks[I], LoopBypassBlocks[I-1]);
   DT->addNewBlock(LoopVectorPreHeader, LoopBypassBlocks.back());
 
-  // Due to if predication of stores we might create a sequence of "if(pred)
-  // a[i] = ...;  " blocks.
-  for (unsigned i = 0, e = LoopVectorBody.size(); i != e; ++i) {
-    if (i == 0)
-      DT->addNewBlock(LoopVectorBody[0], LoopVectorPreHeader);
-    else if (isPredicatedBlock(i)) {
-      DT->addNewBlock(LoopVectorBody[i], LoopVectorBody[i-1]);
-    } else {
-      DT->addNewBlock(LoopVectorBody[i], LoopVectorBody[i-2]);
-    }
-  }
+  // We don't predicate stores by this point, so the vector body should be a
+  // single loop.
+  assert(LoopVectorBody.size() == 1 && "Expected single block loop!");
+  DT->addNewBlock(LoopVectorBody[0], LoopVectorPreHeader);
 
   DT->addNewBlock(LoopMiddleBlock, LoopVectorBody.back());
   DT->addNewBlock(LoopScalarPreHeader, LoopBypassBlocks[0]);
@@ -5336,7 +5331,9 @@ char LoopVectorize::ID = 0;
 static const char lv_name[] = "Loop Vectorization";
 INITIALIZE_PASS_BEGIN(LoopVectorize, LV_NAME, lv_name, false, false)
 INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
-INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
+INITIALIZE_PASS_DEPENDENCY(BasicAAWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(BlockFrequencyInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
@@ -5412,19 +5409,12 @@ void InnerLoopUnroller::scalarizeInstruction(Instruction *Instr,
   // Create a new entry in the WidenMap and initialize it to Undef or Null.
   VectorParts &VecResults = WidenMap.splat(Instr, UndefVec);
 
-  Instruction *InsertPt = Builder.GetInsertPoint();
-  BasicBlock *IfBlock = Builder.GetInsertBlock();
-  BasicBlock *CondBlock = nullptr;
-
   VectorParts Cond;
-  Loop *VectorLp = nullptr;
   if (IfPredicateStore) {
     assert(Instr->getParent()->getSinglePredecessor() &&
            "Only support single predecessor blocks");
     Cond = createEdgeMask(Instr->getParent()->getSinglePredecessor(),
                           Instr->getParent());
-    VectorLp = LI->getLoopFor(IfBlock);
-    assert(VectorLp && "Must have a loop for this block");
   }
 
   // For each vector unroll 'part':
@@ -5439,11 +5429,6 @@ void InnerLoopUnroller::scalarizeInstruction(Instruction *Instr,
             Builder.CreateExtractElement(Cond[Part], Builder.getInt32(0));
       Cmp = Builder.CreateICmp(ICmpInst::ICMP_EQ, Cond[Part],
                                ConstantInt::get(Cond[Part]->getType(), 1));
-      CondBlock = IfBlock->splitBasicBlock(InsertPt, "cond.store");
-      LoopVectorBody.push_back(CondBlock);
-      VectorLp->addBasicBlockToLoop(CondBlock, *LI);
-      // Update Builder with newly created basic block.
-      Builder.SetInsertPoint(InsertPt);
     }
 
     Instruction *Cloned = Instr->clone();
@@ -5463,16 +5448,10 @@ void InnerLoopUnroller::scalarizeInstruction(Instruction *Instr,
       if (!IsVoidRetTy)
         VecResults[Part] = Cloned;
 
-    // End if-block.
-      if (IfPredicateStore) {
-        BasicBlock *NewIfBlock = CondBlock->splitBasicBlock(InsertPt, "else");
-        LoopVectorBody.push_back(NewIfBlock);
-        VectorLp->addBasicBlockToLoop(NewIfBlock, *LI);
-        Builder.SetInsertPoint(InsertPt);
-        ReplaceInstWithInst(IfBlock->getTerminator(),
-                            BranchInst::Create(CondBlock, NewIfBlock, Cmp));
-        IfBlock = NewIfBlock;
-      }
+      // End if-block.
+      if (IfPredicateStore)
+        PredicatedStores.push_back(std::make_pair(cast<StoreInst>(Cloned),
+                                                  Cmp));
   }
 }
 

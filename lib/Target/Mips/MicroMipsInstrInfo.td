@@ -30,6 +30,7 @@ def simm9_addiusp : Operand<i32> {
 
 def uimm3_shift : Operand<i32> {
   let EncoderMethod = "getUImm3Mod8Encoding";
+  let DecoderMethod = "DecodePOOL16BEncodedField";
 }
 
 def simm3_lsa2 : Operand<i32> {
@@ -103,6 +104,14 @@ def mem_mm_gp_imm7_lsl2 : Operand<i32> {
   let MIOperandInfo = (ops GPRMM16:$base, simm7:$offset);
   let OperandType = "OPERAND_MEMORY";
   let EncoderMethod = "getMemEncodingMMGPImm7Lsl2";
+}
+
+def mem_mm_9 : Operand<i32> {
+  let PrintMethod = "printMemOperand";
+  let MIOperandInfo = (ops GPR32, simm9);
+  let EncoderMethod = "getMemEncodingMMImm9";
+  let ParserMatchClass = MipsMemAsmOperand;
+  let OperandType = "OPERAND_MEMORY";
 }
 
 def mem_mm_12 : Operand<i32> {
@@ -553,21 +562,24 @@ class UncondBranchMM16<string opstr> :
 }
 
 def ADDU16_MM : ArithRMM16<"addu16", GPRMM16Opnd, 1, II_ADDU, add>,
-                ARITH_FM_MM16<0>;
+    ARITH_FM_MM16<0>, ISA_MICROMIPS_NOT_32R6_64R6;
+def AND16_MM : LogicRMM16<"and16", GPRMM16Opnd, II_AND, and>,
+    LOGIC_FM_MM16<0x2>, ISA_MICROMIPS_NOT_32R6_64R6;
+def ANDI16_MM : AndImmMM16<"andi16", GPRMM16Opnd, II_AND>, ANDI_FM_MM16<0x0b>,
+    ISA_MICROMIPS_NOT_32R6_64R6;
+def NOT16_MM : NotMM16<"not16", GPRMM16Opnd>, LOGIC_FM_MM16<0x0>,
+    ISA_MICROMIPS_NOT_32R6_64R6;
+def OR16_MM : LogicRMM16<"or16", GPRMM16Opnd, II_OR, or>, LOGIC_FM_MM16<0x3>,
+    ISA_MICROMIPS_NOT_32R6_64R6;
+def SLL16_MM : ShiftIMM16<"sll16", uimm3_shift, GPRMM16Opnd, II_SLL>,
+    SHIFT_FM_MM16<0>, ISA_MICROMIPS_NOT_32R6_64R6;
+def SRL16_MM : ShiftIMM16<"srl16", uimm3_shift, GPRMM16Opnd, II_SRL>,
+    SHIFT_FM_MM16<1>, ISA_MICROMIPS_NOT_32R6_64R6;
+
 def SUBU16_MM : ArithRMM16<"subu16", GPRMM16Opnd, 0, II_SUBU, sub>,
                 ARITH_FM_MM16<1>;
-def ANDI16_MM : AndImmMM16<"andi16", GPRMM16Opnd, II_AND>, ANDI_FM_MM16<0x0b>;
-def AND16_MM : LogicRMM16<"and16", GPRMM16Opnd, II_AND, and>,
-               LOGIC_FM_MM16<0x2>;
-def OR16_MM  : LogicRMM16<"or16", GPRMM16Opnd, II_OR, or>,
-               LOGIC_FM_MM16<0x3>;
 def XOR16_MM : LogicRMM16<"xor16", GPRMM16Opnd, II_XOR, xor>,
                LOGIC_FM_MM16<0x1>;
-def NOT16_MM : NotMM16<"not16", GPRMM16Opnd>, LOGIC_FM_MM16<0x0>;
-def SLL16_MM : ShiftIMM16<"sll16", uimm3_shift, GPRMM16Opnd, II_SLL>,
-               SHIFT_FM_MM16<0>;
-def SRL16_MM : ShiftIMM16<"srl16", uimm3_shift, GPRMM16Opnd, II_SRL>,
-               SHIFT_FM_MM16<1>;
 def LBU16_MM : LoadMM16<"lbu16", GPRMM16Opnd, zextloadi8, II_LBU,
                         mem_mm_4>, LOAD_STORE_FM_MM16<0x02>;
 def LHU16_MM : LoadMM16<"lhu16", GPRMM16Opnd, zextloadi16, II_LHU,
@@ -859,6 +871,13 @@ let DecoderNamespace = "MicroMips", Predicates = [InMicroMips] in {
                  CACHE_PREF_FM_MM<0x08, 0x6>;
   def PREF_MM  : MMRel, CacheOp<"pref", mem_mm_12>,
                  CACHE_PREF_FM_MM<0x18, 0x2>;
+  }
+
+  let DecoderMethod = "DecodePrefeOpMM" in {
+    def PREFE_MM  : MMRel, CacheOp<"prefe", mem_mm_9>,
+                 CACHE_PREFE_FM_MM<0x18, 0x2>;
+    def CACHEE_MM : MMRel, CacheOp<"cachee", mem_mm_9>,
+                 CACHE_PREFE_FM_MM<0x18, 0x3>;
   }
   def SSNOP_MM : MMRel, Barrier<"ssnop">, BARRIER_FM_MM<0x1>;
   def EHB_MM   : MMRel, Barrier<"ehb">, BARRIER_FM_MM<0x3>;
