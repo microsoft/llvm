@@ -966,6 +966,11 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     // Set up the FramePtr and BasePtr physical registers using the address
     // passed as EBP or RDX by the MSVC EH runtime.
     if (STI.is32Bit()) {
+      // PUSH32r %ebp
+      BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
+          .addReg(MachineFramePtr, RegState::Kill)
+          .setMIFlag(MachineInstr::FrameSetup);
+      // Reset EBP / ESI to something good.
       MBBI = restoreWin32EHFrameAndBasePtr(MBB, MBBI, DL);
     } else {
       // FIXME: Add SEH directives.
@@ -979,7 +984,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
         .addReg(RDX)
         .setMIFlag(MachineInstr::FrameSetup);
       // PUSH64r %rbp
-      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
+      BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH64r))
           .addReg(MachineFramePtr, RegState::Kill)
           .setMIFlag(MachineInstr::FrameSetup);
       // MOV64rr %rdx, %rbp
@@ -1322,13 +1327,11 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
 
   if (isFuncletReturnInstr(MBBI)) {
     NumBytes = MFI->getMaxCallFrameSize();
+    assert(hasFP(MF) && "win64 EH funclets without FP not yet implemented");
 
-    if (Is64Bit) {
-      assert(hasFP(MF) && "win64 EH funclets without FP not yet implemented");
-      // POP64r %rbp
-      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::POP64r : X86::POP32r),
-              MachineFramePtr);
-    }
+    // Pop EBP.
+    BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::POP64r : X86::POP32r),
+            MachineFramePtr);
   } else if (hasFP(MF)) {
     // Calculate required stack adjustment.
     uint64_t FrameSize = StackSize - SlotSize;

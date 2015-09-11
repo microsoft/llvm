@@ -83,13 +83,13 @@ STATISTIC(NumSpeculations, "Number of speculative executed instructions");
 
 namespace {
   // The first field contains the value that the switch produces when a certain
-  // case group is selected, and the second field is a vector containing the cases
-  // composing the case group.
+  // case group is selected, and the second field is a vector containing the
+  // cases composing the case group.
   typedef SmallVector<std::pair<Constant *, SmallVector<ConstantInt *, 4>>, 2>
     SwitchCaseResultVectorTy;
   // The first field contains the phi node that generates a result of the switch
-  // and the second field contains the value generated for a certain case in the switch
-  // for that PHI.
+  // and the second field contains the value generated for a certain case in the
+  // switch for that PHI.
   typedef SmallVector<std::pair<PHINode *, Constant *>, 4> SwitchCaseResultsTy;
 
   /// ValueEqualityComparisonCase - Represents a case of a switch.
@@ -971,8 +971,8 @@ bool SimplifyCFGOpt::FoldValueComparisonIntoPredecessors(TerminatorInst *TI,
       // Okay, at this point, we know which new successor Pred will get.  Make
       // sure we update the number of entries in the PHI nodes for these
       // successors.
-      for (unsigned i = 0, e = NewSuccessors.size(); i != e; ++i)
-        AddPredecessorToBlock(NewSuccessors[i], Pred, BB);
+      for (BasicBlock *NewSuccessor : NewSuccessors)
+        AddPredecessorToBlock(NewSuccessor, Pred, BB);
 
       Builder.SetInsertPoint(PTI);
       // Convert pointer to int before we switch.
@@ -985,8 +985,8 @@ bool SimplifyCFGOpt::FoldValueComparisonIntoPredecessors(TerminatorInst *TI,
       SwitchInst *NewSI = Builder.CreateSwitch(CV, PredDefault,
                                                PredCases.size());
       NewSI->setDebugLoc(PTI->getDebugLoc());
-      for (unsigned i = 0, e = PredCases.size(); i != e; ++i)
-        NewSI->addCase(PredCases[i].Value, PredCases[i].Dest);
+      for (ValueEqualityComparisonCase &V : PredCases)
+        NewSI->addCase(V.Value, V.Dest);
 
       if (PredHasWeights || SuccHasWeights) {
         // Halve the weights if any of them cannot fit in an uint32_t
@@ -2827,7 +2827,7 @@ static bool SimplifyBranchOnICmpChain(BranchInst *BI, IRBuilder<> &Builder,
   Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
 
   // If Extra was used, we require at least two switch values to do the
-  // transformation.  A switch with one value is just an cond branch.
+  // transformation.  A switch with one value is just a conditional branch.
   if (ExtraCase && Values.size() < 2) return false;
 
   // TODO: Preserve branch weight metadata, similarly to how
@@ -3423,11 +3423,17 @@ static bool EliminateDeadSwitchCases(SwitchInst *SI, AssumptionCache *AC,
   }
 
   // If we can prove that the cases must cover all possible values, the 
-  // default destination becomes dead and we can remove it.
+  // default destination becomes dead and we can remove it.  If we know some 
+  // of the bits in the value, we can use that to more precisely compute the
+  // number of possible unique case values.
   bool HasDefault =
     !isa<UnreachableInst>(SI->getDefaultDest()->getFirstNonPHIOrDbg());
-  if (HasDefault && Bits < 64 /* avoid overflow */ &&  
-      SI->getNumCases() == (1ULL << Bits)) {
+  const unsigned NumUnknownBits = Bits - 
+    (KnownZero.Or(KnownOne)).countPopulation();
+  assert(NumUnknownBits <= Bits);
+  if (HasDefault && DeadCases.empty() &&
+      NumUnknownBits < 64 /* avoid overflow */ &&  
+      SI->getNumCases() == (1ULL << NumUnknownBits)) {
     DEBUG(dbgs() << "SimplifyCFG: switch default is dead.\n");
     BasicBlock *NewDefault = SplitBlockPredecessors(SI->getDefaultDest(),
                                                     SI->getParent(), "");

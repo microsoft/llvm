@@ -807,6 +807,10 @@ void SlotTracker::processFunction() {
   ST_DEBUG("begin processFunction!\n");
   fNext = 0;
 
+  // Process function metadata if it wasn't hit at the module-level.
+  if (!ShouldInitializeAllMetadata)
+    processFunctionMetadata(*TheFunction);
+
   // Add all the function arguments with no names.
   for(Function::const_arg_iterator AI = TheFunction->arg_begin(),
       AE = TheFunction->arg_end(); AI != AE; ++AI)
@@ -819,8 +823,6 @@ void SlotTracker::processFunction() {
   for (auto &BB : *TheFunction) {
     if (!BB.hasName())
       CreateFunctionSlot(&BB);
-
-    processFunctionMetadata(*TheFunction);
 
     for (auto &I : BB) {
       if (!I.getType()->isVoidTy() && !I.hasName())
@@ -849,11 +851,11 @@ void SlotTracker::processFunction() {
 
 void SlotTracker::processFunctionMetadata(const Function &F) {
   SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
-  for (auto &BB : F) {
-    F.getAllMetadata(MDs);
-    for (auto &MD : MDs)
-      CreateMetadataSlot(MD.second);
+  F.getAllMetadata(MDs);
+  for (auto &MD : MDs)
+    CreateMetadataSlot(MD.second);
 
+  for (auto &BB : F) {
     for (auto &I : BB)
       processInstructionMetadata(I);
   }
@@ -2406,6 +2408,10 @@ void AssemblyWriter::printAlias(const GlobalAlias *GA) {
     Out << "unnamed_addr ";
 
   Out << "alias ";
+
+  TypePrinter.print(GA->getValueType(), Out);
+
+  Out << ", ";
 
   const Constant *Aliasee = GA->getAliasee();
 

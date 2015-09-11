@@ -1159,6 +1159,7 @@ private:
     TF_DependencyWalk = 1 << 2,  ///< Walking the dependencies of a kept DIE.
     TF_ParentWalk = 1 << 3,      ///< Walking up the parents of a kept DIE.
     TF_ODR = 1 << 4,             ///< Use the ODR whhile keeping dependants.
+    TF_SkipPC = 1 << 5,          ///< Skip all location attributes.
   };
 
   /// \brief Mark the passed DIE as well as all the ones it depends on
@@ -1200,7 +1201,7 @@ private:
   ///
   /// \returns the root of the cloned tree.
   DIE *cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE, CompileUnit &U,
-                int64_t PCOffset, uint32_t OutOffset);
+                int64_t PCOffset, uint32_t OutOffset, unsigned Flags);
 
   typedef DWARFAbbreviationDeclaration::AttributeSpec AttributeSpec;
 
@@ -1262,6 +1263,9 @@ private:
 
   /// \brief Assign an abbreviation number to \p Abbrev
   void AssignAbbrev(DIEAbbrev &Abbrev);
+
+  /// Create a copy of abbreviation Abbrev.
+  void copyAbbrev(const DWARFAbbreviationDeclaration &Abbrev, bool hasODR);
 
   /// \brief FoldingSet that uniques the abbreviations.
   FoldingSet<DIEAbbrev> AbbreviationsSet;
@@ -1998,7 +2002,7 @@ unsigned DwarfLinker::shouldKeepDIE(const DWARFDebugInfoEntryMinimal &DIE,
 /// back to lookForDIEsToKeep while adding TF_DependencyWalk to the
 /// TraversalFlags to inform it that it's not doing the primary DIE
 /// tree walk.
-void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
+void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &Die,
                                           CompileUnit::DIEInfo &MyInfo,
                                           const DebugMapObject &DMO,
                                           CompileUnit &CU, bool UseODR) {
@@ -2017,8 +2021,8 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
   // Then we need to mark all the DIEs referenced by this DIE's
   // attributes as kept.
   DataExtractor Data = Unit.getDebugInfoExtractor();
-  const auto *Abbrev = DIE.getAbbreviationDeclarationPtr();
-  uint32_t Offset = DIE.getOffset() + getULEB128Size(Abbrev->getCode());
+  const auto *Abbrev = Die.getAbbreviationDeclarationPtr();
+  uint32_t Offset = Die.getOffset() + getULEB128Size(Abbrev->getCode());
 
   // Mark all DIEs referenced through atttributes as kept.
   for (const auto &AttrSpec : Abbrev->attributes()) {
@@ -2032,7 +2036,7 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
     Val.extractValue(Data, &Offset, &Unit);
     CompileUnit *ReferencedCU;
     if (const auto *RefDIE =
-            resolveDIEReference(Val, Unit, DIE, ReferencedCU)) {
+            resolveDIEReference(Val, Unit, Die, ReferencedCU)) {
       uint32_t RefIdx = ReferencedCU->getOrigUnit().getDIEIndex(RefDIE);
       CompileUnit::DIEInfo &Info = ReferencedCU->getInfo(RefIdx);
       // If the referenced DIE has a DeclContext that has already been
@@ -2067,10 +2071,10 @@ void DwarfLinker::keepDIEAndDenpendencies(const DWARFDebugInfoEntryMinimal &DIE,
 /// also called, but during these dependency walks the file order is
 /// not respected. The TF_DependencyWalk flag tells us which kind of
 /// traversal we are currently doing.
-void DwarfLinker::lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &DIE,
+void DwarfLinker::lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &Die,
                                     const DebugMapObject &DMO, CompileUnit &CU,
                                     unsigned Flags) {
-  unsigned Idx = CU.getOrigUnit().getDIEIndex(&DIE);
+  unsigned Idx = CU.getOrigUnit().getDIEIndex(&Die);
   CompileUnit::DIEInfo &MyInfo = CU.getInfo(Idx);
   bool AlreadyKept = MyInfo.Keep;
 
@@ -2083,12 +2087,12 @@ void DwarfLinker::lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &DIE,
   // We must not call shouldKeepDIE while called from keepDIEAndDenpendencies,
   // because it would screw up the relocation finding logic.
   if (!(Flags & TF_DependencyWalk))
-    Flags = shouldKeepDIE(DIE, CU, MyInfo, Flags);
+    Flags = shouldKeepDIE(Die, CU, MyInfo, Flags);
 
   // If it is a newly kept DIE mark it as well as all its dependencies as kept.
   if (!AlreadyKept && (Flags & TF_Keep)) {
     bool UseOdr = (Flags & TF_DependencyWalk) ? (Flags & TF_ODR) : CU.hasODR();
-    keepDIEAndDenpendencies(DIE, MyInfo, DMO, CU, UseOdr);
+    keepDIEAndDenpendencies(Die, MyInfo, DMO, CU, UseOdr);
   }
   // The TF_ParentWalk flag tells us that we are currently walking up
   // the parent chain of a required DIE, and we don't want to mark all
@@ -2096,13 +2100,13 @@ void DwarfLinker::lookForDIEsToKeep(const DWARFDebugInfoEntryMinimal &DIE,
   // DW_TAG_namespace node in the parent chain). There are however a
   // set of DIE types for which we want to ignore that directive and still
   // walk their children.
-  if (dieNeedsChildrenToBeMeaningful(DIE.getTag()))
+  if (dieNeedsChildrenToBeMeaningful(Die.getTag()))
     Flags &= ~TF_ParentWalk;
 
-  if (!DIE.hasChildren() || (Flags & TF_ParentWalk))
+  if (!Die.hasChildren() || (Flags & TF_ParentWalk))
     return;
 
-  for (auto *Child = DIE.getFirstChild(); Child && !Child->isNULL();
+  for (auto *Child = Die.getFirstChild(); Child && !Child->isNULL();
        Child = Child->getSibling())
     lookForDIEsToKeep(*Child, DMO, CU, Flags);
 }
@@ -2338,6 +2342,7 @@ unsigned DwarfLinker::cloneScalarAttribute(
                    dwarf::Form(AttrSpec.Form), DIEInteger(Value));
   if (AttrSpec.Attr == dwarf::DW_AT_ranges)
     Unit.noteRangeAttribute(Die, Patch);
+
   // A more generic way to check for location attributes would be
   // nice, but it's very unlikely that any other attribute needs a
   // location list.
@@ -2476,6 +2481,30 @@ static bool isTypeTag(uint16_t Tag) {
   return false;
 }
 
+static bool
+shouldSkipAttribute(DWARFAbbreviationDeclaration::AttributeSpec AttrSpec,
+                    uint16_t Tag, bool InDebugMap, bool SkipPC,
+                    bool InFunctionScope) {
+  switch (AttrSpec.Attr) {
+  default:
+    return false;
+  case dwarf::DW_AT_low_pc:
+  case dwarf::DW_AT_high_pc:
+  case dwarf::DW_AT_ranges:
+    return SkipPC;
+  case dwarf::DW_AT_location:
+  case dwarf::DW_AT_frame_base:
+    // FIXME: for some reason dsymutil-classic keeps the location
+    // attributes when they are of block type (ie. not location
+    // lists). This is totally wrong for globals where we will keep a
+    // wrong address. It is mostly harmless for locals, but there is
+    // no point in keeping these anyway when the function wasn't linked.
+    return (SkipPC || (!InFunctionScope && Tag == dwarf::DW_TAG_variable &&
+                       !InDebugMap)) &&
+           !DWARFFormValue(AttrSpec.Form).isFormClass(DWARFFormValue::FC_Block);
+  }
+}
+
 /// \brief Recursively clone \p InputDIE's subtrees that have been
 /// selected to appear in the linked output.
 ///
@@ -2485,7 +2514,7 @@ static bool isTypeTag(uint16_t Tag) {
 /// \returns the cloned DIE object or null if nothing was selected.
 DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
                            CompileUnit &Unit, int64_t PCOffset,
-                           uint32_t OutOffset) {
+                           uint32_t OutOffset, unsigned Flags) {
   DWARFUnit &U = Unit.getOrigUnit();
   unsigned Idx = U.getDIEIndex(&InputDIE);
   CompileUnit::DIEInfo &Info = Unit.getInfo(Idx);
@@ -2551,7 +2580,27 @@ DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
     PCOffset = Info.AddrAdjust;
   AttrInfo.PCOffset = PCOffset;
 
+  if (Abbrev->getTag() == dwarf::DW_TAG_subprogram) {
+    Flags |= TF_InFunctionScope;
+    if (!Info.InDebugMap)
+      Flags |= TF_SkipPC;
+  }
+
+  bool Copied = false;
   for (const auto &AttrSpec : Abbrev->attributes()) {
+    if (shouldSkipAttribute(AttrSpec, Die->getTag(), Info.InDebugMap,
+                            Flags & TF_SkipPC, Flags & TF_InFunctionScope)) {
+      DWARFFormValue::skipValue(AttrSpec.Form, Data, &Offset, &U);
+      // FIXME: dsymutil-classic keeps the old abbreviation around
+      // even if it's not used. We can remove this (and the copyAbbrev
+      // helper) as soon as bit-for-bit compatibility is not a goal anymore.
+      if (!Copied) {
+        copyAbbrev(*InputDIE.getAbbreviationDeclarationPtr(), Unit.hasODR());
+        Copied = true;
+      }
+      continue;
+    }
+
     DWARFFormValue Val(AttrSpec.Form);
     uint32_t AttrSize = Offset;
     Val.extractValue(Data, &Offset, &U);
@@ -2603,7 +2652,7 @@ DIE *DwarfLinker::cloneDIE(const DWARFDebugInfoEntryMinimal &InputDIE,
   // Recursively clone children.
   for (auto *Child = InputDIE.getFirstChild(); Child && !Child->isNULL();
        Child = Child->getSibling()) {
-    if (DIE *Clone = cloneDIE(*Child, Unit, PCOffset, OutOffset)) {
+    if (DIE *Clone = cloneDIE(*Child, Unit, PCOffset, OutOffset, Flags)) {
       Die->addChild(Clone);
       OutOffset = Clone->getOffset() + Clone->getSize();
     }
@@ -2941,6 +2990,21 @@ void DwarfLinker::patchFrameInfoForObject(const DebugMapObject &DMO,
   }
 }
 
+void DwarfLinker::copyAbbrev(const DWARFAbbreviationDeclaration &Abbrev,
+                             bool hasODR) {
+  DIEAbbrev Copy(dwarf::Tag(Abbrev.getTag()),
+                 dwarf::Form(Abbrev.hasChildren()));
+
+  for (const auto &Attr : Abbrev.attributes()) {
+    uint16_t Form = Attr.Form;
+    if (hasODR && isODRAttribute(Attr.Attr))
+      Form = dwarf::DW_FORM_ref_addr;
+    Copy.AddAttribute(dwarf::Attribute(Attr.Attr), dwarf::Form(Form));
+  }
+
+  AssignAbbrev(Copy);
+}
+
 ErrorOr<const object::ObjectFile &>
 DwarfLinker::loadObject(BinaryHolder &BinaryHolder, DebugMapObject &Obj,
                         const DebugMap &Map) {
@@ -3020,7 +3084,7 @@ bool DwarfLinker::link(const DebugMap &Map) {
         const auto *InputDIE = CurrentUnit.getOrigUnit().getUnitDIE();
         CurrentUnit.setStartOffset(OutputDebugInfoSize);
         DIE *OutputDIE = cloneDIE(*InputDIE, CurrentUnit, 0 /* PCOffset */,
-                                  11 /* Unit Header size */);
+                                  11 /* Unit Header size */, /* Flags =*/0);
         CurrentUnit.setOutputUnitDIE(OutputDIE);
         OutputDebugInfoSize = CurrentUnit.computeNextUnitOffset();
         if (Options.NoOutput)
