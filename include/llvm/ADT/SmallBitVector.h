@@ -562,7 +562,7 @@ private:
       uint32_t M = Mask[0];
       if (InvertMask) M = ~M;
       if (AddBits) setSmallBits(getSmallBits() | M);
-      else         setSmallBits(getSmallBits() & ~M);
+      else         setSmallBits(getSmallBits() & ~(uintptr_t)M);
     }
   }
 };
