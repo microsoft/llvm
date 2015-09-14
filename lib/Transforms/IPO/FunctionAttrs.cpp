@@ -60,63 +60,6 @@ struct FunctionAttrs : public CallGraphSCCPass {
 
   bool runOnSCC(CallGraphSCC &SCC) override;
 
-  bool AddReadAttrs(const CallGraphSCC &SCC);
-  bool AddArgumentAttrs(const CallGraphSCC &SCC);
-  bool IsFunctionMallocLike(Function *F, SmallPtrSet<Function *, 8> &) const;
-  bool AddNoAliasAttrs(const CallGraphSCC &SCC);
-  bool ReturnsNonNull(Function *F, SmallPtrSet<Function *, 8> &,
-                      bool &Speculative) const;
-  bool AddNonNullAttrs(const CallGraphSCC &SCC);
-
-  // Utility methods used by inferPrototypeAttributes to add attributes
-  // and maintain annotation statistics.
-
-  void setDoesNotAccessMemory(Function &F) {
-    if (!F.doesNotAccessMemory()) {
-      F.setDoesNotAccessMemory();
-      ++NumAnnotated;
-    }
-  }
-
-  void setOnlyReadsMemory(Function &F) {
-    if (!F.onlyReadsMemory()) {
-      F.setOnlyReadsMemory();
-      ++NumAnnotated;
-    }
-  }
-
-  void setDoesNotThrow(Function &F) {
-    if (!F.doesNotThrow()) {
-      F.setDoesNotThrow();
-      ++NumAnnotated;
-    }
-  }
-
-  void setDoesNotCapture(Function &F, unsigned n) {
-    if (!F.doesNotCapture(n)) {
-      F.setDoesNotCapture(n);
-      ++NumAnnotated;
-    }
-  }
-
-  void setOnlyReadsMemory(Function &F, unsigned n) {
-    if (!F.onlyReadsMemory(n)) {
-      F.setOnlyReadsMemory(n);
-      ++NumAnnotated;
-    }
-  }
-
-  void setDoesNotAlias(Function &F, unsigned n) {
-    if (!F.doesNotAlias(n)) {
-      F.setDoesNotAlias(n);
-      ++NumAnnotated;
-    }
-  }
-
-  bool inferPrototypeAttributes(Function &F);
-
-  bool annotateLibraryCalls(const CallGraphSCC &SCC);
-
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     AU.addRequired<AssumptionCacheTracker>();
@@ -126,6 +69,12 @@ struct FunctionAttrs : public CallGraphSCCPass {
 
 private:
   TargetLibraryInfo *TLI;
+
+  bool AddReadAttrs(const CallGraphSCC &SCC);
+  bool AddArgumentAttrs(const CallGraphSCC &SCC);
+  bool AddNoAliasAttrs(const CallGraphSCC &SCC);
+  bool AddNonNullAttrs(const CallGraphSCC &SCC);
+  bool annotateLibraryCalls(const CallGraphSCC &SCC);
 };
 }
 
@@ -732,8 +681,8 @@ bool FunctionAttrs::AddArgumentAttrs(const CallGraphSCC &SCC) {
 ///
 /// A function is "malloc-like" if it returns either null or a pointer that
 /// doesn't alias any other pointer visible to the caller.
-bool FunctionAttrs::IsFunctionMallocLike(
-    Function *F, SmallPtrSet<Function *, 8> &SCCNodes) const {
+static bool isFunctionMallocLike(Function *F,
+                                 SmallPtrSet<Function *, 8> &SCCNodes) {
   SmallSetVector<Value *, 8> FlowsToReturn;
   for (Function::iterator I = F->begin(), E = F->end(); I != E; ++I)
     if (ReturnInst *Ret = dyn_cast<ReturnInst>(I->getTerminator()))
@@ -827,7 +776,7 @@ bool FunctionAttrs::AddNoAliasAttrs(const CallGraphSCC &SCC) {
     if (!F->getReturnType()->isPointerTy())
       continue;
 
-    if (!IsFunctionMallocLike(F, SCCNodes))
+    if (!isFunctionMallocLike(F, SCCNodes))
       return false;
   }
 
@@ -846,9 +795,14 @@ bool FunctionAttrs::AddNoAliasAttrs(const CallGraphSCC &SCC) {
 }
 
 /// Tests whether this function is known to not return null.
-bool FunctionAttrs::ReturnsNonNull(Function *F,
-                                   SmallPtrSet<Function *, 8> &SCCNodes,
-                                   bool &Speculative) const {
+///
+/// Requires that the function returns a pointer.
+///
+/// Returns true if it believes the function will not return a null, and sets
+/// \p Speculative based on whether the returned conclusion is a speculative
+/// conclusion due to SCC calls.
+static bool isReturnNonNull(Function *F, SmallPtrSet<Function *, 8> &SCCNodes,
+                            const TargetLibraryInfo &TLI, bool &Speculative) {
   assert(F->getReturnType()->isPointerTy() &&
          "nonnull only meaningful on pointer types");
   Speculative = false;
@@ -862,7 +816,7 @@ bool FunctionAttrs::ReturnsNonNull(Function *F,
     Value *RetVal = FlowsToReturn[i];
 
     // If this value is locally known to be non-null, we're good
-    if (isKnownNonNull(RetVal, TLI))
+    if (isKnownNonNull(RetVal, &TLI))
       continue;
 
     // Otherwise, we need to look upwards since we can't make any local
@@ -950,7 +904,7 @@ bool FunctionAttrs::AddNonNullAttrs(const CallGraphSCC &SCC) {
       continue;
 
     bool Speculative = false;
-    if (ReturnsNonNull(F, SCCNodes, Speculative)) {
+    if (isReturnNonNull(F, SCCNodes, *TLI, Speculative)) {
       if (!Speculative) {
         // Mark the function eagerly since we may discover a function
         // which prevents us from speculating about the entire SCC
@@ -984,17 +938,59 @@ bool FunctionAttrs::AddNonNullAttrs(const CallGraphSCC &SCC) {
   return MadeChange;
 }
 
+static void setDoesNotAccessMemory(Function &F) {
+  if (!F.doesNotAccessMemory()) {
+    F.setDoesNotAccessMemory();
+    ++NumAnnotated;
+  }
+}
+
+static void setOnlyReadsMemory(Function &F) {
+  if (!F.onlyReadsMemory()) {
+    F.setOnlyReadsMemory();
+    ++NumAnnotated;
+  }
+}
+
+static void setDoesNotThrow(Function &F) {
+  if (!F.doesNotThrow()) {
+    F.setDoesNotThrow();
+    ++NumAnnotated;
+  }
+}
+
+static void setDoesNotCapture(Function &F, unsigned n) {
+  if (!F.doesNotCapture(n)) {
+    F.setDoesNotCapture(n);
+    ++NumAnnotated;
+  }
+}
+
+static void setOnlyReadsMemory(Function &F, unsigned n) {
+  if (!F.onlyReadsMemory(n)) {
+    F.setOnlyReadsMemory(n);
+    ++NumAnnotated;
+  }
+}
+
+static void setDoesNotAlias(Function &F, unsigned n) {
+  if (!F.doesNotAlias(n)) {
+    F.setDoesNotAlias(n);
+    ++NumAnnotated;
+  }
+}
+
 /// Analyze the name and prototype of the given function and set any applicable
 /// attributes.
 ///
 /// Returns true if any attributes were set and false otherwise.
-bool FunctionAttrs::inferPrototypeAttributes(Function &F) {
+static bool inferPrototypeAttributes(Function &F, const TargetLibraryInfo &TLI) {
   if (F.hasFnAttribute(Attribute::OptimizeNone))
     return false;
 
   FunctionType *FTy = F.getFunctionType();
   LibFunc::Func TheLibFunc;
-  if (!(TLI->getLibFunc(F.getName(), TheLibFunc) && TLI->has(TheLibFunc)))
+  if (!(TLI.getLibFunc(F.getName(), TheLibFunc) && TLI.has(TheLibFunc)))
     return false;
 
   switch (TheLibFunc) {
@@ -1797,7 +1793,7 @@ bool FunctionAttrs::annotateLibraryCalls(const CallGraphSCC &SCC) {
     Function *F = (*I)->getFunction();
 
     if (F && F->isDeclaration())
-      MadeChange |= inferPrototypeAttributes(*F);
+      MadeChange |= inferPrototypeAttributes(*F, *TLI);
   }
 
   return MadeChange;
