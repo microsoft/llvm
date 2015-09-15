@@ -1028,8 +1028,8 @@ int FunctionComparator::cmpGEPs(const GEPOperator *GEPL,
   if (GEPL->accumulateConstantOffset(DL, OffsetL) &&
       GEPR->accumulateConstantOffset(DL, OffsetR))
     return cmpAPInts(OffsetL, OffsetR);
-  if (int Res = cmpTypes(GEPL->getPointerOperand()->getType(),
-                         GEPR->getPointerOperand()->getType()))
+  if (int Res = cmpTypes(GEPL->getSourceElementType(),
+                         GEPR->getSourceElementType()))
     return Res;
 
   if (int Res = cmpNumbers(GEPL->getNumOperands(), GEPR->getNumOperands()))
@@ -1682,8 +1682,7 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
 
 // Replace G with an alias to F and delete G.
 void MergeFunctions::writeAlias(Function *F, Function *G) {
-  PointerType *PTy = G->getType();
-  auto *GA = GlobalAlias::create(PTy, G->getLinkage(), "", F);
+  auto *GA = GlobalAlias::create(G->getLinkage(), "", F);
   F->setAlignment(std::max(F->getAlignment(), G->getAlignment()));
   GA->takeName(G);
   GA->setVisibility(G->getVisibility());
