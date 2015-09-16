@@ -3875,7 +3875,7 @@ DILexicalBlock
 """"""""""""""
 
 ``DILexicalBlock`` nodes describe nested blocks within a :ref:`subprogram
-<DISubprogram>`. The line number and column numbers are used to dinstinguish
+<DISubprogram>`. The line number and column numbers are used to distinguish
 two lexical blocks at same depth. They are valid targets for ``scope:``
 fields.
 
@@ -4060,13 +4060,13 @@ alias.
 
 The metadata identifying each domain is itself a list containing one or two
 entries. The first entry is the name of the domain. Note that if the name is a
-string then it can be combined accross functions and translation units. A
+string then it can be combined across functions and translation units. A
 self-reference can be used to create globally unique domain names. A
 descriptive string may optionally be provided as a second list entry.
 
 The metadata identifying each scope is also itself a list containing two or
 three entries. The first entry is the name of the scope. Note that if the name
-is a string then it can be combined accross functions and translation units. A
+is a string then it can be combined across functions and translation units. A
 self-reference can be used to create globally unique scope names. A metadata
 reference to the scope's domain is the second entry. A descriptive string may
 optionally be provided as a third list entry.
@@ -4420,6 +4420,50 @@ the loop identifier metadata node directly:
 
 The ``llvm.bitsets`` global metadata is used to implement
 :doc:`bitsets <BitSets>`.
+
+'``invariant.group``' Metadata
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``invariant.group`` metadata may be attached to ``load``/``store`` instructions.
+The existence of the ``invariant.group`` metadata on the instruction tells 
+the optimizer that every ``load`` and ``store`` to the same pointer operand 
+within the same invariant group can be assumed to load or store the same  
+value (but see the ``llvm.invariant.group.barrier`` intrinsic which affects 
+when two pointers are considered the same).
+
+Examples:
+
+.. code-block:: llvm
+
+   @unknownPtr = external global i8
+   ...
+   %ptr = alloca i8
+   store i8 42, i8* %ptr, !invariant.group !0
+   call void @foo(i8* %ptr)
+   
+   %a = load i8, i8* %ptr, !invariant.group !0 ; Can assume that value under %ptr didn't change
+   call void @foo(i8* %ptr)
+   %b = load i8, i8* %ptr, !invariant.group !1 ; Can't assume anything, because group changed
+  
+   %newPtr = call i8* @getPointer(i8* %ptr) 
+   %c = load i8, i8* %newPtr, !invariant.group !0 ; Can't assume anything, because we only have information about %ptr
+   
+   %unknownValue = load i8, i8* @unknownPtr
+   store i8 %unknownValue, i8* %ptr, !invariant.group !0 ; Can assume that %unknownValue == 42
+   
+   call void @foo(i8* %ptr)
+   %newPtr2 = call i8* @llvm.invariant.group.barrier(i8* %ptr)
+   %d = load i8, i8* %newPtr2, !invariant.group !0  ; Can't step through invariant.group.barrier to get value of %ptr
+   
+   ...
+   declare void @foo(i8*)
+   declare i8* @getPointer(i8*)
+   declare i8* @llvm.invariant.group.barrier(i8*)
+   
+   !0 = !{!"magic ptr"}
+   !1 = !{!"other ptr"}
+
+
 
 Module Flags Metadata
 =====================
@@ -5161,7 +5205,7 @@ is a catch block --- one where a personality routine attempts to transfer
 control to catch an exception.
 The ``args`` correspond to whatever information the personality
 routine requires to know if this is an appropriate place to catch the
-exception. Control is tranfered to the ``exception`` label if the
+exception. Control is transfered to the ``exception`` label if the
 ``catchpad`` is not an appropriate handler for the in-flight exception.
 The ``normal`` label should contain the code found in the ``catch``
 portion of a ``try``/``catch`` sequence. The ``resultval`` has the type
@@ -6768,8 +6812,8 @@ Syntax:
 
 ::
 
-      <result> = load [volatile] <ty>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !nonnull !<index>][, !dereferenceable !<index>][, !dereferenceable_or_null !<index>]
-      <result> = load atomic [volatile] <ty>* <pointer> [singlethread] <ordering>, align <alignment>
+      <result> = load [volatile] <ty>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.load !<index>][, !invariant.group !<index>][, !nonnull !<index>][, !dereferenceable !<index>][, !dereferenceable_or_null !<index>]
+      <result> = load atomic [volatile] <ty>* <pointer> [singlethread] <ordering>, align <alignment> [, !invariant.group !<index>]
       !<index> = !{ i32 1 }
 
 Overview:
@@ -6824,6 +6868,9 @@ operand to this load points to memory which can be assumed unchanged.
 Being invariant does not imply that a location is dereferenceable,
 but it does imply that once the location is known dereferenceable
 its value is henceforth unchanging.
+
+The optional ``!invariant.group`` metadata must reference a single metadata name
+ ``<index>`` corresponding to a metadata node. See ``invariant.group`` metadata.
 
 The optional ``!nonnull`` metadata must reference a single
 metadata name ``<index>`` corresponding to a metadata node with no
@@ -6882,8 +6929,8 @@ Syntax:
 
 ::
 
-      store [volatile] <ty> <value>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>]        ; yields void
-      store atomic [volatile] <ty> <value>, <ty>* <pointer> [singlethread] <ordering>, align <alignment>  ; yields void
+      store [volatile] <ty> <value>, <ty>* <pointer>[, align <alignment>][, !nontemporal !<index>][, !invariant.group !<index>]        ; yields void
+      store atomic [volatile] <ty> <value>, <ty>* <pointer> [singlethread] <ordering>, align <alignment> [, !invariant.group !<index>] ; yields void
 
 Overview:
 """""""""
@@ -6929,6 +6976,9 @@ tells the optimizer and code generator that this load is not expected to
 be reused in the cache. The code generator may select special
 instructions to save cache bandwidth, such as the MOVNT instruction on
 x86.
+
+The optional ``!invariant.group`` metadata must reference a 
+single metadata name ``<index>``. See ``invariant.group`` metadata.
 
 Semantics:
 """"""""""
@@ -11311,7 +11361,7 @@ The first operand is a vector value to be written to memory. The second operand 
 Semantics:
 """"""""""
 
-The '``llvm.masked.scatter``' intrinsics is designed for writing selected vector elements to arbitrary memory addresses in a single IR operation. The operation may be conditional, when not all bits in the mask are switched on. It is useful for targets that support vector masked scatter and allows vectorizing basic blocks with data and control divergency. Other targets may support this intrinsic differently, for example by lowering it into a sequence of branches that guard scalar store operations.
+The '``llvm.masked.scatter``' intrinsics is designed for writing selected vector elements to arbitrary memory addresses in a single IR operation. The operation may be conditional, when not all bits in the mask are switched on. It is useful for targets that support vector masked scatter and allows vectorizing basic blocks with data and control divergence. Other targets may support this intrinsic differently, for example by lowering it into a sequence of branches that guard scalar store operations.
 
 ::
 
@@ -11464,6 +11514,36 @@ Semantics:
 """"""""""
 
 This intrinsic indicates that the memory is mutable again.
+
+'``llvm.invariant.group.barrier``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare i8* @llvm.invariant.group.barrier(i8* <ptr>)
+
+Overview:
+"""""""""
+
+The '``llvm.invariant.group.barrier``' intrinsic can be used when an invariant 
+established by invariant.group metadata no longer holds, to obtain a new pointer
+value that does not carry the invariant information.
+
+
+Arguments:
+""""""""""
+
+The ``llvm.invariant.group.barrier`` takes only one argument, which is
+the pointer to the memory for which the ``invariant.group`` no longer holds.
+
+Semantics:
+""""""""""
+
+Returns another pointer that aliases its argument but which is considered different 
+for the purposes of ``load``/``store`` ``invariant.group`` metadata.
 
 General Intrinsics
 ------------------
@@ -11837,7 +11917,7 @@ Arguments:
 """"""""""
 
 The first argument is a pointer to be tested. The second argument is a
-metadata string containing the name of a :doc:`bitset <BitSets>`.
+metadata object representing an identifier for a :doc:`bitset <BitSets>`.
 
 Overview:
 """""""""

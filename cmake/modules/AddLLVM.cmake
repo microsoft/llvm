@@ -399,7 +399,10 @@ function(llvm_add_library name)
   endif()
 
   set_output_directory(${name} ${LLVM_RUNTIME_OUTPUT_INTDIR} ${LLVM_LIBRARY_OUTPUT_INTDIR})
-  llvm_update_compile_flags(${name})
+  # $<TARGET_OBJECTS> doesn't require compile flags.
+  if(NOT obj_name)
+    llvm_update_compile_flags(${name})
+  endif()
   add_link_opts( ${name} )
   if(ARG_OUTPUT_NAME)
     set_target_properties(${name}
@@ -587,6 +590,12 @@ macro(add_llvm_executable name)
 
   add_windows_version_resource_file(ALL_FILES ${ALL_FILES})
 
+  if(XCODE)
+    # Note: the dummy.cpp source file provides no definitions. However,
+    # it forces Xcode to properly link the static library.
+    list(APPEND ALL_FILES "${LLVM_MAIN_SRC_DIR}/cmake/dummy.cpp")
+  endif()
+
   if( EXCLUDE_FROM_ALL )
     add_executable(${name} EXCLUDE_FROM_ALL ${ALL_FILES})
   else()
@@ -597,7 +606,10 @@ macro(add_llvm_executable name)
     set_windows_version_resource_properties(${name} ${windows_resource_file})
   endif()
 
-  llvm_update_compile_flags(${name})
+  # $<TARGET_OBJECTS> doesn't require compile flags.
+  if(NOT LLVM_ENABLE_OBJLIB)
+    llvm_update_compile_flags(${name})
+  endif()
   add_link_opts( ${name} )
 
   # Do not add -Dname_EXPORTS to the command-line when building files in this
@@ -628,11 +640,14 @@ function(export_executable_symbols target)
   endif()
 endfunction()
 
-
-set (LLVM_TOOLCHAIN_TOOLS
-  llvm-ar
-  llvm-objdump
-  )
+if(NOT LLVM_TOOLCHAIN_TOOLS)
+  set (LLVM_TOOLCHAIN_TOOLS
+    llvm-ar
+    llvm-ranlib
+    llvm-lib
+    llvm-objdump
+    )
+endif()
 
 macro(add_llvm_tool name)
   if( NOT LLVM_BUILD_TOOLS )
@@ -1007,3 +1022,49 @@ function(add_lit_testsuites project directory)
     endforeach()
   endif()
 endfunction()
+
+function(add_llvm_tool_symlink name dest)
+  if(UNIX)
+    set(LLVM_LINK_OR_COPY create_symlink)
+    set(dest_binary "${dest}${CMAKE_EXECUTABLE_SUFFIX}")
+  else()
+    set(LLVM_LINK_OR_COPY copy)
+    set(dest_binary "${LLVM_RUNTIME_OUTPUT_INTDIR}/${dest}${CMAKE_EXECUTABLE_SUFFIX}")
+  endif()
+
+  set(output_path "${LLVM_RUNTIME_OUTPUT_INTDIR}/${name}${CMAKE_EXECUTABLE_SUFFIX}")
+
+  add_custom_command(OUTPUT ${output_path}
+                     COMMAND ${CMAKE_COMMAND} -E ${LLVM_LINK_OR_COPY} "${dest_binary}" "${output_path}"
+                     DEPENDS ${dest})
+
+  add_custom_target(${name} ALL DEPENDS ${output_path})
+  set_target_properties(${name} PROPERTIES FOLDER Tools)
+
+  # Make sure the parent tool is a toolchain tool, otherwise exclude this tool
+  list(FIND LLVM_TOOLCHAIN_TOOLS ${dest} LLVM_IS_${dest}_TOOLCHAIN_TOOL)
+  if (NOT LLVM_IS_${dest}_TOOLCHAIN_TOOL GREATER -1)
+    set(LLVM_IS_${name}_TOOLCHAIN_TOOL ${LLVM_IS_${dest}_TOOLCHAIN_TOOL})
+  else()
+    list(FIND LLVM_TOOLCHAIN_TOOLS ${name} LLVM_IS_${name}_TOOLCHAIN_TOOL)
+  endif()
+
+  # LLVM_IS_${name}_TOOLCHAIN_TOOL will only be greater than -1 if both this
+  # tool and its parent tool are in LLVM_TOOLCHAIN_TOOLS
+  if (LLVM_IS_${name}_TOOLCHAIN_TOOL GREATER -1 OR NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
+    if( LLVM_BUILD_TOOLS )
+      install(SCRIPT ${CMAKE_SOURCE_DIR}/cmake/modules/install_symlink.cmake
+              CODE "install_symlink(${name} ${dest})"
+              COMPONENT ${name})
+
+      if (NOT CMAKE_CONFIGURATION_TYPES)
+        add_custom_target(install-${name}
+                          DEPENDS ${name}
+                          COMMAND "${CMAKE_COMMAND}"
+                                  -DCMAKE_INSTALL_COMPONENT=${name}
+                                  -P "${CMAKE_BINARY_DIR}/cmake_install.cmake")
+      endif()
+    endif()
+  endif()
+endfunction()
+

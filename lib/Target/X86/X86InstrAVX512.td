@@ -566,85 +566,142 @@ def VINSERTPSzrm: AVX512AIi8<0x21, MRMSrcMem, (outs VR128X:$dst),
 // AVX-512 VECTOR EXTRACT
 //---
 
-multiclass vextract_for_size<int Opcode,
-                             X86VectorVTInfo From, X86VectorVTInfo To,
-                             X86VectorVTInfo AltFrom, X86VectorVTInfo AltTo,
-                             PatFrag vextract_extract,
-                             SDNodeXForm EXTRACT_get_vextract_imm> {
-  let hasSideEffects = 0, ExeDomain = To.ExeDomain in {
-    defm rr : AVX512_maskable_in_asm<Opcode, MRMDestReg, To, (outs To.RC:$dst),
-                (ins VR512:$src1, u8imm:$idx),
-                "vextract" # To.EltTypeName # "x4",
-                "$idx, $src1", "$src1, $idx",
-                [(set To.RC:$dst, (vextract_extract:$idx (From.VT VR512:$src1),
-                                                         (iPTR imm)))]>,
-              AVX512AIi8Base, EVEX, EVEX_V512;
-    let mayStore = 1 in
-    def rm : AVX512AIi8<Opcode, MRMDestMem, (outs),
-            (ins To.MemOp:$dst, VR512:$src1, u8imm:$src2),
-            "vextract" # To.EltTypeName # "x4\t{$src2, $src1, $dst|"
-                                               "$dst, $src1, $src2}",
-            []>, EVEX, EVEX_V512, EVEX_CD8<To.EltSize, CD8VT4>;
-  }
-
-  // Codegen pattern with the alternative types, e.g. v8i64 -> v2i64 for
-  // vextracti32x4
-  def : Pat<(vextract_extract:$ext (AltFrom.VT VR512:$src1), (iPTR imm)),
-            (AltTo.VT (!cast<Instruction>(NAME # To.EltSize # "x4rr")
-                          VR512:$src1,
-                          (EXTRACT_get_vextract_imm To.RC:$ext)))>;
-
-  // A 128/256-bit subvector extract from the first 512-bit vector position is
+multiclass vextract_for_size_first_position_lowering<X86VectorVTInfo From,
+                                                     X86VectorVTInfo To> {
+  // A subvector extract from the first vector position is
   // a subregister copy that needs no instruction.
-  def : Pat<(To.VT (extract_subvector (From.VT VR512:$src), (iPTR 0))),
-            (To.VT
-               (EXTRACT_SUBREG (From.VT VR512:$src), To.SubRegIdx))>;
+  def NAME # To.NumElts:
+      Pat<(To.VT (extract_subvector (From.VT From.RC:$src),(iPTR 0))),
+          (To.VT (EXTRACT_SUBREG (From.VT From.RC:$src), To.SubRegIdx))>;
+}
 
-  // And for the alternative types.
-  def : Pat<(AltTo.VT (extract_subvector (AltFrom.VT VR512:$src), (iPTR 0))),
-            (AltTo.VT
-               (EXTRACT_SUBREG (AltFrom.VT VR512:$src), AltTo.SubRegIdx))>;
+multiclass vextract_for_size<int Opcode,
+                                    X86VectorVTInfo From, X86VectorVTInfo To,
+                                    PatFrag vextract_extract> :
+  vextract_for_size_first_position_lowering<From, To> {
+
+  let hasSideEffects = 0, ExeDomain = To.ExeDomain in {
+    // use AVX512_maskable_in_asm (AVX512_maskable can't be used due to
+    // vextract_extract), we interesting only in patterns without mask,
+    // intrinsics pattern match generated bellow.
+    defm rr : AVX512_maskable_in_asm<Opcode, MRMDestReg, To, (outs To.RC:$dst),
+                (ins From.RC:$src1, i32u8imm:$idx),
+                "vextract" # To.EltTypeName # "x" # To.NumElts,
+                "$idx, $src1", "$src1, $idx",
+                [(set To.RC:$dst, (vextract_extract:$idx (From.VT From.RC:$src1),
+                                                         (iPTR imm)))]>,
+              AVX512AIi8Base, EVEX;
+    let mayStore = 1 in {
+      def rm  : AVX512AIi8<Opcode, MRMDestMem, (outs),
+                      (ins To.MemOp:$dst, From.RC:$src1, i32u8imm:$src2),
+                      "vextract" # To.EltTypeName # "x" # To.NumElts #
+                          "\t{$src2, $src1, $dst|$dst, $src1, $src2}",
+                      []>, EVEX;
+
+      def rmk : AVX512AIi8<Opcode, MRMDestMem, (outs),
+                      (ins To.MemOp:$dst, To.KRCWM:$mask,
+                                          From.RC:$src1, i32u8imm:$src2),
+                       "vextract" # To.EltTypeName # "x" # To.NumElts #
+                            "\t{$src2, $src1, $dst {${mask}}|"
+                            "$dst {${mask}}, $src1, $src2}",
+                      []>, EVEX_K, EVEX;
+    }//mayStore = 1
+  }
 
   // Intrinsic call with masking.
   def : Pat<(!cast<Intrinsic>("int_x86_avx512_mask_vextract" # To.EltTypeName #
-                              "x4_512")
-                VR512:$src1, (iPTR imm:$idx), To.RC:$src0, GR8:$mask),
-            (!cast<Instruction>(NAME # To.EltSize # "x4rrk") To.RC:$src0,
-                (v4i1 (COPY_TO_REGCLASS GR8:$mask, VK4WM)),
-                VR512:$src1, imm:$idx)>;
+                              "x" # To.NumElts # "_" # From.Size)
+                From.RC:$src1, (iPTR imm:$idx), To.RC:$src0, To.MRC:$mask),
+            (!cast<Instruction>(NAME # To.EltSize # "x" # To.NumElts #
+                                From.ZSuffix # "rrk")
+                To.RC:$src0,
+                (COPY_TO_REGCLASS To.MRC:$mask, To.KRCWM),
+                From.RC:$src1, imm:$idx)>;
 
   // Intrinsic call with zero-masking.
   def : Pat<(!cast<Intrinsic>("int_x86_avx512_mask_vextract" # To.EltTypeName #
-                              "x4_512")
-                VR512:$src1, (iPTR imm:$idx), To.ImmAllZerosV, GR8:$mask),
-            (!cast<Instruction>(NAME # To.EltSize # "x4rrkz")
-                (v4i1 (COPY_TO_REGCLASS GR8:$mask, VK4WM)),
-                VR512:$src1, imm:$idx)>;
+                              "x" # To.NumElts # "_" # From.Size)
+                From.RC:$src1, (iPTR imm:$idx), To.ImmAllZerosV, To.MRC:$mask),
+            (!cast<Instruction>(NAME # To.EltSize # "x" # To.NumElts #
+                                From.ZSuffix # "rrkz")
+                (COPY_TO_REGCLASS To.MRC:$mask, To.KRCWM),
+                From.RC:$src1, imm:$idx)>;
 
   // Intrinsic call without masking.
   def : Pat<(!cast<Intrinsic>("int_x86_avx512_mask_vextract" # To.EltTypeName #
-                              "x4_512")
-                VR512:$src1, (iPTR imm:$idx), To.ImmAllZerosV, (i8 -1)),
-            (!cast<Instruction>(NAME # To.EltSize # "x4rr")
-                VR512:$src1, imm:$idx)>;
+                              "x" # To.NumElts # "_" # From.Size)
+                From.RC:$src1, (iPTR imm:$idx), To.ImmAllZerosV, (i8 -1)),
+            (!cast<Instruction>(NAME # To.EltSize # "x" # To.NumElts #
+                                From.ZSuffix # "rr")
+                From.RC:$src1, imm:$idx)>;
 }
 
-multiclass vextract_for_type<ValueType EltVT32, int Opcode32,
-                             ValueType EltVT64, int Opcode64> {
-  defm NAME # "32x4" : vextract_for_size<Opcode32,
+// This multiclass generates patterns for matching vextract with common types
+// (X86VectorVTInfo From , X86VectorVTInfo To) and alternative types
+// (X86VectorVTInfo AltFrom, X86VectorVTInfo AltTo)
+multiclass vextract_for_size_all<int Opcode,
+                             X86VectorVTInfo From, X86VectorVTInfo To,
+                             X86VectorVTInfo AltFrom, X86VectorVTInfo AltTo,
+                             PatFrag vextract_extract,
+                             SDNodeXForm EXTRACT_get_vextract_imm> :
+  vextract_for_size<Opcode, From, To, vextract_extract>,
+  vextract_for_size_first_position_lowering<AltFrom, AltTo> {
+
+  // Codegen pattern with the alternative types.
+  // Only add this if operation not supported natively via AVX512DQ
+  let Predicates = [NoDQI] in
+    def : Pat<(vextract_extract:$ext (AltFrom.VT AltFrom.RC:$src1), (iPTR imm)),
+              (AltTo.VT (!cast<Instruction>(NAME # To.EltSize # "x" #
+                                            To.NumElts # From.ZSuffix # "rr")
+                         AltFrom.RC:$src1,
+                         (EXTRACT_get_vextract_imm To.RC:$ext)))>;
+}
+
+multiclass vextract_for_type<ValueType EltVT32, int Opcode128,
+                             ValueType EltVT64, int Opcode256> {
+  defm NAME # "32x4Z" : vextract_for_size_all<Opcode128,
                                  X86VectorVTInfo<16, EltVT32, VR512>,
                                  X86VectorVTInfo< 4, EltVT32, VR128X>,
                                  X86VectorVTInfo< 8, EltVT64, VR512>,
                                  X86VectorVTInfo< 2, EltVT64, VR128X>,
                                  vextract128_extract,
-                                 EXTRACT_get_vextract128_imm>;
-  defm NAME # "64x4" : vextract_for_size<Opcode64,
+                                 EXTRACT_get_vextract128_imm>,
+                                     EVEX_V512, EVEX_CD8<32, CD8VT4>;
+  defm NAME # "64x4Z" : vextract_for_size_all<Opcode256,
                                  X86VectorVTInfo< 8, EltVT64, VR512>,
                                  X86VectorVTInfo< 4, EltVT64, VR256X>,
                                  X86VectorVTInfo<16, EltVT32, VR512>,
                                  X86VectorVTInfo< 8, EltVT32, VR256>,
                                  vextract256_extract,
-                                 EXTRACT_get_vextract256_imm>, VEX_W;
+                                 EXTRACT_get_vextract256_imm>,
+                                     VEX_W, EVEX_V512, EVEX_CD8<64, CD8VT4>;
+  let Predicates = [HasVLX] in
+    defm NAME # "32x4Z256" : vextract_for_size_all<Opcode128,
+                                 X86VectorVTInfo< 8, EltVT32, VR256X>,
+                                 X86VectorVTInfo< 4, EltVT32, VR128X>,
+                                 X86VectorVTInfo< 4, EltVT64, VR256X>,
+                                 X86VectorVTInfo< 2, EltVT64, VR128X>,
+                                 vextract128_extract,
+                                 EXTRACT_get_vextract128_imm>,
+                                     EVEX_V256, EVEX_CD8<32, CD8VT4>;
+  let Predicates = [HasVLX, HasDQI] in
+    defm NAME # "64x2Z256" : vextract_for_size<Opcode128,
+                                 X86VectorVTInfo< 4, EltVT64, VR256X>,
+                                 X86VectorVTInfo< 2, EltVT64, VR128X>,
+                                 vextract128_extract>,
+                                     VEX_W, EVEX_V256, EVEX_CD8<64, CD8VT2>;
+  let Predicates = [HasDQI] in {
+    defm NAME # "64x2Z" : vextract_for_size<Opcode128,
+                                 X86VectorVTInfo< 8, EltVT64, VR512>,
+                                 X86VectorVTInfo< 2, EltVT64, VR128X>,
+                                 vextract128_extract>,
+                                     VEX_W, EVEX_V512, EVEX_CD8<64, CD8VT2>;
+    defm NAME # "32x8Z" : vextract_for_size<Opcode256,
+                                 X86VectorVTInfo<16, EltVT32, VR512>,
+                                 X86VectorVTInfo< 8, EltVT32, VR256X>,
+                                 vextract256_extract>,
+                                     EVEX_V512, EVEX_CD8<32, CD8VT8>;
+  }
 }
 
 defm VEXTRACTF : vextract_for_type<f32, 0x19, f64, 0x1b>;
@@ -2054,24 +2111,24 @@ def : Pat<(xor (xor VK1:$src1, VK1:$src2), (i1 1)),
                              (COPY_TO_REGCLASS VK1:$src2, VK16)), VK1)>;
 
 // Mask unpacking
-multiclass avx512_mask_unpck<bits<8> opc, string OpcodeStr,
-                           RegisterClass KRC> {
-  let Predicates = [HasAVX512] in
-    def rr : I<opc, MRMSrcReg, (outs KRC:$dst), (ins KRC:$src1, KRC:$src2),
-               !strconcat(OpcodeStr,
-                          "\t{$src2, $src1, $dst|$dst, $src1, $src2}"), []>;
+multiclass avx512_mask_unpck<string Suffix,RegisterClass KRC, ValueType VT,
+                             RegisterClass KRCSrc, Predicate prd> {
+  let Predicates = [prd] in {
+    def rr : I<0x4b, MRMSrcReg, (outs KRC:$dst),
+               (ins KRC:$src1, KRC:$src2),
+               "kunpck"#Suffix#"\t{$src2, $src1, $dst|$dst, $src1, $src2}", []>,
+               VEX_4V, VEX_L;
+
+    def : Pat<(VT (concat_vectors KRCSrc:$src1, KRCSrc:$src2)),
+              (!cast<Instruction>(NAME##rr)
+                        (COPY_TO_REGCLASS KRCSrc:$src2, KRC),
+                        (COPY_TO_REGCLASS KRCSrc:$src1, KRC))>;
+  }
 }
 
-multiclass avx512_mask_unpck_bw<bits<8> opc, string OpcodeStr> {
-  defm BW : avx512_mask_unpck<opc, !strconcat(OpcodeStr, "bw"), VK16>,
-                            VEX_4V, VEX_L, PD;
-}
-
-defm KUNPCK : avx512_mask_unpck_bw<0x4b, "kunpck">;
-def : Pat<(v16i1 (concat_vectors (v8i1 VK8:$src1), (v8i1 VK8:$src2))),
-          (KUNPCKBWrr (COPY_TO_REGCLASS VK8:$src2, VK16),
-                  (COPY_TO_REGCLASS VK8:$src1, VK16))>;
-
+defm KUNPCKBW : avx512_mask_unpck<"bw", VK16, v16i1, VK8, HasAVX512>, PD;
+defm KUNPCKWD : avx512_mask_unpck<"wd", VK32, v32i1, VK16, HasBWI>, PS;
+defm KUNPCKDQ : avx512_mask_unpck<"dq", VK64, v64i1, VK32, HasBWI>, PS, VEX_W;
 
 multiclass avx512_mask_unpck_int<string IntName, string InstName> {
   let Predicates = [HasAVX512] in

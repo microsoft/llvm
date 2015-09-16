@@ -18,6 +18,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
+#include <string>
 
 namespace fuzzer {
 
@@ -80,6 +82,8 @@ class MutationDispatcher {
   /// Mutates data by adding a word from the dictionary.
   size_t Mutate_AddWordFromDictionary(uint8_t *Data, size_t Size,
                                       size_t MaxSize);
+
+  size_t Mutate_ChangeASCIIInteger(uint8_t *Data, size_t Size, size_t MaxSize);
 
   /// Applies one of the above mutations.
   /// Returns the new size of data which could be up to MaxSize.
@@ -159,6 +163,10 @@ class UserSuppliedFuzzer {
 
 /// Runs the fuzzing with the UserSuppliedFuzzer.
 int FuzzerDriver(int argc, char **argv, UserSuppliedFuzzer &USF);
+
+/// More C++-ish interface.
+int FuzzerDriver(const std::vector<std::string> &Args, UserSuppliedFuzzer &USF);
+int FuzzerDriver(const std::vector<std::string> &Args, UserCallback Callback);
 
 }  // namespace fuzzer
 

@@ -42,6 +42,7 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LibCallSemantics.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -846,7 +847,7 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
   NewPN->takeName(PN);
 
   // If we are going to have to insert a new computation, do so right before the
-  // predecessors terminator.
+  // predecessor's terminator.
   if (NonConstBB)
     Builder->SetInsertPoint(NonConstBB->getTerminator());
 
@@ -3072,11 +3073,12 @@ public:
 
 void InstructionCombiningPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
-  AU.addRequired<AliasAnalysis>();
+  AU.addRequired<AAResultsWrapperPass>();
   AU.addRequired<AssumptionCacheTracker>();
   AU.addRequired<TargetLibraryInfoWrapperPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addPreserved<DominatorTreeWrapperPass>();
+  AU.addPreserved<GlobalsAAWrapperPass>();
 }
 
 bool InstructionCombiningPass::runOnFunction(Function &F) {
@@ -3084,7 +3086,7 @@ bool InstructionCombiningPass::runOnFunction(Function &F) {
     return false;
 
   // Required analyses.
-  auto AA = &getAnalysis<AliasAnalysis>();
+  auto AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
   auto &AC = getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
   auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
@@ -3102,7 +3104,8 @@ INITIALIZE_PASS_BEGIN(InstructionCombiningPass, "instcombine",
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
 INITIALIZE_PASS_END(InstructionCombiningPass, "instcombine",
                     "Combine redundant instructions", false, false)
 

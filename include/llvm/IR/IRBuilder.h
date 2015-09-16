@@ -24,6 +24,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ValueHandle.h"
@@ -632,10 +633,10 @@ public:
   /// and with a hint for the number of cases that will be added (for efficient
   /// allocation).
   SwitchInst *CreateSwitch(Value *V, BasicBlock *Dest, unsigned NumCases = 10,
-                           MDNode *BranchWeights = nullptr) {
-    // TODO: Add unpredictable metadata for a switch.
+                           MDNode *BranchWeights = nullptr,
+                           MDNode *Unpredictable = nullptr) {
     return Insert(addBranchMetadata(SwitchInst::Create(V, Dest, NumCases),
-                                    BranchWeights, nullptr));
+                                    BranchWeights, Unpredictable));
   }
 
   /// \brief Create an indirect branch instruction with the specified address
@@ -681,8 +682,8 @@ public:
     return Insert(CleanupReturnInst::Create(CleanupPad, UnwindBB));
   }
 
-  CatchEndPadInst *CreateCleanupEndPad(CleanupPadInst *CleanupPad,
-                                       BasicBlock *UnwindBB = nullptr) {
+  CleanupEndPadInst *CreateCleanupEndPad(CleanupPadInst *CleanupPad,
+                                         BasicBlock *UnwindBB = nullptr) {
     return Insert(CleanupEndPadInst::Create(CleanupPad, UnwindBB));
   }
 
@@ -1632,6 +1633,32 @@ public:
     return CreateExactSDiv(Difference,
                            ConstantExpr::getSizeOf(ArgType->getElementType()),
                            Name);
+  }
+
+  /// \brief Create an invariant.group.barrier intrinsic call, that stops
+  /// optimizer to propagate equality using invariant.group metadata.
+  /// If Ptr type is different from i8*, it's casted to i8* before call
+  /// and casted back to Ptr type after call.
+  Value *CreateInvariantGroupBarrier(Value *Ptr) {
+    Module *M = BB->getParent()->getParent();
+    Function *FnInvariantGroupBarrier = Intrinsic::getDeclaration(M,
+            Intrinsic::invariant_group_barrier);
+
+    Type *ArgumentAndReturnType = FnInvariantGroupBarrier->getReturnType();
+    assert(ArgumentAndReturnType ==
+        FnInvariantGroupBarrier->getFunctionType()->getParamType(0) &&
+        "InvariantGroupBarrier should take and return the same type");
+    Type *PtrType = Ptr->getType();
+
+    bool PtrTypeConversionNeeded = PtrType != ArgumentAndReturnType;
+    if (PtrTypeConversionNeeded)
+      Ptr = CreateBitCast(Ptr, ArgumentAndReturnType);
+
+    CallInst *Fn = CreateCall(FnInvariantGroupBarrier, {Ptr});
+
+    if (PtrTypeConversionNeeded)
+      return CreateBitCast(Fn, PtrType);
+    return Fn;
   }
 
   /// \brief Return a vector value that contains \arg V broadcasted to \p

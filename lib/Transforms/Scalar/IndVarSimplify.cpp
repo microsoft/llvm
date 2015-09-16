@@ -28,9 +28,11 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
+#include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/BasicBlock.h"
@@ -111,6 +113,7 @@ namespace {
       AU.addRequired<ScalarEvolutionWrapperPass>();
       AU.addRequiredID(LoopSimplifyID);
       AU.addRequiredID(LCSSAID);
+      AU.addPreserved<GlobalsAAWrapperPass>();
       AU.addPreserved<ScalarEvolutionWrapperPass>();
       AU.addPreservedID(LoopSimplifyID);
       AU.addPreservedID(LCSSAID);
@@ -505,8 +508,9 @@ Value *IndVarSimplify::ExpandSCEVIfNeeded(SCEVExpander &Rewriter, const SCEV *S,
                                           Type *ResultTy) {
   // Before expanding S into an expensive LLVM expression, see if we can use an
   // already existing value as the expansion for S.
-  if (Value *RetValue = Rewriter.findExistingExpansion(S, InsertPt, L))
-    return RetValue;
+  if (Value *ExistingValue = Rewriter.findExistingExpansion(S, InsertPt, L))
+    if (ExistingValue->getType() == ResultTy)
+      return ExistingValue;
 
   // We didn't find anything, fall back to using SCEVExpander.
   return Rewriter.expandCodeFor(S, ResultTy, InsertPt);

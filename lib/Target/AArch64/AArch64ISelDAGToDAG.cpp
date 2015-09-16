@@ -77,6 +77,21 @@ public:
   bool SelectLogicalShiftedRegister(SDValue N, SDValue &Reg, SDValue &Shift) {
     return SelectShiftedRegister(N, true, Reg, Shift);
   }
+  bool SelectAddrModeIndexed7S8(SDValue N, SDValue &Base, SDValue &OffImm) {
+    return SelectAddrModeIndexed7S(N, 1, Base, OffImm);
+  }
+  bool SelectAddrModeIndexed7S16(SDValue N, SDValue &Base, SDValue &OffImm) {
+    return SelectAddrModeIndexed7S(N, 2, Base, OffImm);
+  }
+  bool SelectAddrModeIndexed7S32(SDValue N, SDValue &Base, SDValue &OffImm) {
+    return SelectAddrModeIndexed7S(N, 4, Base, OffImm);
+  }
+  bool SelectAddrModeIndexed7S64(SDValue N, SDValue &Base, SDValue &OffImm) {
+    return SelectAddrModeIndexed7S(N, 8, Base, OffImm);
+  }
+  bool SelectAddrModeIndexed7S128(SDValue N, SDValue &Base, SDValue &OffImm) {
+    return SelectAddrModeIndexed7S(N, 16, Base, OffImm);
+  }
   bool SelectAddrModeIndexed8(SDValue N, SDValue &Base, SDValue &OffImm) {
     return SelectAddrModeIndexed(N, 1, Base, OffImm);
   }
@@ -164,6 +179,8 @@ public:
 private:
   bool SelectShiftedRegister(SDValue N, bool AllowROR, SDValue &Reg,
                              SDValue &Shift);
+  bool SelectAddrModeIndexed7S(SDValue N, unsigned Size, SDValue &Base,
+                               SDValue &OffImm);
   bool SelectAddrModeIndexed(SDValue N, unsigned Size, SDValue &Base,
                              SDValue &OffImm);
   bool SelectAddrModeUnscaled(SDValue N, unsigned Size, SDValue &Base,
@@ -603,6 +620,51 @@ static bool isWorthFoldingADDlow(SDValue N) {
       return false;
   }
 
+  return true;
+}
+
+/// SelectAddrModeIndexed7S - Select a "register plus scaled signed 7-bit
+/// immediate" address.  The "Size" argument is the size in bytes of the memory
+/// reference, which determines the scale.
+bool AArch64DAGToDAGISel::SelectAddrModeIndexed7S(SDValue N, unsigned Size,
+                                                  SDValue &Base,
+                                                  SDValue &OffImm) {
+  SDLoc dl(N);
+  const DataLayout &DL = CurDAG->getDataLayout();
+  const TargetLowering *TLI = getTargetLowering();
+  if (N.getOpcode() == ISD::FrameIndex) {
+    int FI = cast<FrameIndexSDNode>(N)->getIndex();
+    Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy(DL));
+    OffImm = CurDAG->getTargetConstant(0, dl, MVT::i64);
+    return true;
+  }
+
+  // As opposed to the (12-bit) Indexed addressing mode below, the 7-bit signed
+  // selected here doesn't support labels/immediates, only base+offset.
+
+  if (CurDAG->isBaseWithConstantOffset(N)) {
+    if (ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
+      int64_t RHSC = RHS->getSExtValue();
+      unsigned Scale = Log2_32(Size);
+      if ((RHSC & (Size - 1)) == 0 && RHSC >= -(0x40 << Scale) &&
+          RHSC < (0x40 << Scale)) {
+        Base = N.getOperand(0);
+        if (Base.getOpcode() == ISD::FrameIndex) {
+          int FI = cast<FrameIndexSDNode>(Base)->getIndex();
+          Base = CurDAG->getTargetFrameIndex(FI, TLI->getPointerTy(DL));
+        }
+        OffImm = CurDAG->getTargetConstant(RHSC >> Scale, dl, MVT::i64);
+        return true;
+      }
+    }
+  }
+
+  // Base only. The address will be materialized into a register before
+  // the memory is accessed.
+  //    add x0, Xbase, #offset
+  //    stp x1, x2, [x0]
+  Base = N;
+  OffImm = CurDAG->getTargetConstant(0, dl, MVT::i64);
   return true;
 }
 
@@ -2221,7 +2283,7 @@ AArch64DAGToDAGISel::SelectCVTFixedPosOperand(SDValue N, SDValue &FixedPos,
 // into a single value to be used in the MRS/MSR instruction.
 static int getIntOperandFromRegisterString(StringRef RegString) {
   SmallVector<StringRef, 5> Fields;
-  RegString.split(Fields, ":");
+  RegString.split(Fields, ':');
 
   if (Fields.size() == 1)
     return -1;

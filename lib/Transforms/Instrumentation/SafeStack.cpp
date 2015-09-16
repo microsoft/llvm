@@ -220,11 +220,11 @@ public:
     initializeSafeStackPass(*PassRegistry::getPassRegistry());
   }
 
-  virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-    AU.addRequired<AliasAnalysis>();
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<AAResultsWrapperPass>();
   }
 
-  virtual bool doInitialization(Module &M) {
+  bool doInitialization(Module &M) override {
     DL = &M.getDataLayout();
 
     StackPtrTy = Type::getInt8PtrTy(M.getContext());
@@ -235,8 +235,7 @@ public:
     return false;
   }
 
-  bool runOnFunction(Function &F);
-
+  bool runOnFunction(Function &F) override;
 }; // class SafeStack
 
 Constant *SafeStack::getOrCreateUnsafeStackPtr(Module &M) {
@@ -513,7 +512,7 @@ void SafeStack::moveDynamicAllocasToUnsafeStack(
 }
 
 bool SafeStack::runOnFunction(Function &F) {
-  auto AA = &getAnalysis<AliasAnalysis>();
+  auto AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
 
   DEBUG(dbgs() << "[SafeStack] Function: " << F.getName() << "\n");
 

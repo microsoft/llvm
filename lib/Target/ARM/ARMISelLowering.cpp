@@ -5050,10 +5050,16 @@ static bool isVTRNMask(ArrayRef<int> M, EVT VT, unsigned &WhichResult) {
   if (M.size() != NumElts && M.size() != NumElts*2)
     return false;
 
-  // If the mask is twice as long as the result then we need to check the upper
-  // and lower parts of the mask
+  // If the mask is twice as long as the input vector then we need to check the
+  // upper and lower parts of the mask with a matching value for WhichResult
+  // FIXME: A mask with only even values will be rejected in case the first
+  // element is undefined, e.g. [-1, 4, 2, 6] will be rejected, because only
+  // M[0] is used to determine WhichResult
   for (unsigned i = 0; i < M.size(); i += NumElts) {
-    WhichResult = M[i] == 0 ? 0 : 1;
+    if (M.size() == NumElts * 2)
+      WhichResult = i / NumElts;
+    else
+      WhichResult = M[i] == 0 ? 0 : 1;
     for (unsigned j = 0; j < NumElts; j += 2) {
       if ((M[i+j] >= 0 && (unsigned) M[i+j] != j + WhichResult) ||
           (M[i+j+1] >= 0 && (unsigned) M[i+j+1] != j + NumElts + WhichResult))
@@ -5080,7 +5086,10 @@ static bool isVTRN_v_undef_Mask(ArrayRef<int> M, EVT VT, unsigned &WhichResult){
     return false;
 
   for (unsigned i = 0; i < M.size(); i += NumElts) {
-    WhichResult = M[i] == 0 ? 0 : 1;
+    if (M.size() == NumElts * 2)
+      WhichResult = i / NumElts;
+    else
+      WhichResult = M[i] == 0 ? 0 : 1;
     for (unsigned j = 0; j < NumElts; j += 2) {
       if ((M[i+j] >= 0 && (unsigned) M[i+j] != j + WhichResult) ||
           (M[i+j+1] >= 0 && (unsigned) M[i+j+1] != j + WhichResult))
@@ -11421,8 +11430,6 @@ bool ARMTargetLowering::shouldConvertConstantLoadToIntImm(const APInt &Imm,
   return true;
 }
 
-bool ARMTargetLowering::hasLoadLinkedStoreConditional() const { return true; }
-
 Instruction* ARMTargetLowering::makeDMB(IRBuilder<> &Builder,
                                         ARM_MB::MemBOpt Domain) const {
   Module *M = Builder.GetInsertBlock()->getParent()->getParent();
@@ -11518,19 +11525,26 @@ bool ARMTargetLowering::shouldExpandAtomicStoreInIR(StoreInst *SI) const {
 // FIXME: ldrd and strd are atomic if the CPU has LPAE (e.g. A15 has that
 // guarantee, see DDI0406C ARM architecture reference manual,
 // sections A8.8.72-74 LDRD)
-bool ARMTargetLowering::shouldExpandAtomicLoadInIR(LoadInst *LI) const {
+TargetLowering::AtomicExpansionKind
+ARMTargetLowering::shouldExpandAtomicLoadInIR(LoadInst *LI) const {
   unsigned Size = LI->getType()->getPrimitiveSizeInBits();
-  return (Size == 64) && !Subtarget->isMClass();
+  return ((Size == 64) && !Subtarget->isMClass()) ? AtomicExpansionKind::LLSC
+                                                  : AtomicExpansionKind::None;
 }
 
 // For the real atomic operations, we have ldrex/strex up to 32 bits,
 // and up to 64 bits on the non-M profiles
-TargetLoweringBase::AtomicRMWExpansionKind
+TargetLowering::AtomicExpansionKind
 ARMTargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const {
   unsigned Size = AI->getType()->getPrimitiveSizeInBits();
   return (Size <= (Subtarget->isMClass() ? 32U : 64U))
-             ? AtomicRMWExpansionKind::LLSC
-             : AtomicRMWExpansionKind::None;
+             ? AtomicExpansionKind::LLSC
+             : AtomicExpansionKind::None;
+}
+
+bool ARMTargetLowering::shouldExpandAtomicCmpXchgInIR(
+    AtomicCmpXchgInst *AI) const {
+  return true;
 }
 
 // This has so far only been implemented for MachO.

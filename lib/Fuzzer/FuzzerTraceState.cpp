@@ -67,36 +67,33 @@
   clang  -fPIC -c -g -O2 -std=c++11 Fuzzer*.cpp
   clang++ -O0 -std=c++11 -fsanitize-coverage=edge,trace-cmp \
     -fsanitize=dataflow \
-    test/dfsan/DFSanSimpleCmpTest.cpp Fuzzer*.o
-  ./a.out
+    test/SimpleCmpTest.cpp Fuzzer*.o
+  ./a.out -use_traces=1
 )
 */
 
+#include "FuzzerDFSan.h"
 #include "FuzzerInternal.h"
-#include <sanitizer/dfsan_interface.h>
 
 #include <algorithm>
 #include <cstring>
 #include <unordered_map>
 
+#if !LLVM_FUZZER_SUPPORTS_DFSAN
+// Stubs for dfsan for platforms where dfsan does not exist and weak
+// functions don't work.
 extern "C" {
-__attribute__((weak))
-dfsan_label dfsan_create_label(const char *desc, void *userdata);
-__attribute__((weak))
-void dfsan_set_label(dfsan_label label, void *addr, size_t size);
-__attribute__((weak))
-void dfsan_add_label(dfsan_label label, void *addr, size_t size);
-__attribute__((weak))
-const struct dfsan_label_info *dfsan_get_label_info(dfsan_label label);
-__attribute__((weak))
-dfsan_label dfsan_read_label(const void *addr, size_t size);
+dfsan_label dfsan_create_label(const char *desc, void *userdata) { return 0; }
+void dfsan_set_label(dfsan_label label, void *addr, size_t size) {}
+void dfsan_add_label(dfsan_label label, void *addr, size_t size) {}
+const struct dfsan_label_info *dfsan_get_label_info(dfsan_label label) {
+  return nullptr;
+}
+dfsan_label dfsan_read_label(const void *addr, size_t size) { return 0; }
 }  // extern "C"
+#endif  // !LLVM_FUZZER_SUPPORTS_DFSAN
 
 namespace fuzzer {
-
-static bool ReallyHaveDFSan() {
-  return &dfsan_create_label != nullptr;
-}
 
 // These values are copied from include/llvm/IR/InstrTypes.h.
 // We do not include the LLVM headers here to remain independent.
@@ -165,38 +162,6 @@ struct LabelRange {
     return {(uint16_t)(Idx - 1), Idx};
   }
 };
-
-// A passport for a CMP site. We want to keep track of where the given CMP is
-// and how many times it is evaluated to true or false.
-struct CmpSitePassport {
-  uintptr_t PC;
-  size_t Counter[2];
-
-  bool IsInterestingCmpTarget() {
-    static const size_t kRareEnough = 50;
-    size_t C0 = Counter[0];
-    size_t C1 = Counter[1];
-    return C0 > kRareEnough * (C1 + 1) || C1 > kRareEnough * (C0 + 1);
-  }
-};
-
-// For now, just keep a simple imprecise hash table PC => CmpSitePassport.
-// Potentially, will need to have a compiler support to have a precise mapping
-// and also thread-safety.
-struct CmpSitePassportTable {
-  static const size_t kSize = 99991;  // Prime.
-  CmpSitePassport Passports[kSize];
-
-  CmpSitePassport *GetPassport(uintptr_t PC) {
-    uintptr_t Idx = PC & kSize;
-    CmpSitePassport *Res = &Passports[Idx];
-    if (Res->PC == 0)  // Not thread safe.
-      Res->PC = PC;
-    return Res->PC == PC ? Res : nullptr;
-  }
-};
-
-static CmpSitePassportTable CSPTable;  // Zero initialized.
 
 // For now, very simple: put Size bytes of Data at position Pos.
 struct TraceBasedMutation {
@@ -349,16 +314,8 @@ void TraceState::TraceCmpCallback(uintptr_t PC, size_t CmpSize, size_t CmpType,
                                   uint64_t Arg1, uint64_t Arg2) {
   if (!RecordingTraces) return;
   int Added = 0;
-  CmpSitePassport *CSP = CSPTable.GetPassport(PC);
-  if (!CSP) return;
-  CSP->Counter[ComputeCmp(CmpSize, CmpType, Arg1, Arg2)]++;
-  size_t C0 = CSP->Counter[0];
-  size_t C1 = CSP->Counter[1];
-  // FIXME: is this a good idea or a bad?
-  // if (!CSP->IsInterestingCmpTarget())
-  //  return;
   if (Options.Verbosity >= 3)
-    Printf("TraceCmp: %p %zd/%zd; %zd %zd\n", CSP->PC, C0, C1, Arg1, Arg2);
+    Printf("TraceCmp %zd/%zd: %p %zd %zd\n", CmpSize, CmpType, PC, Arg1, Arg2);
   Added += TryToAddDesiredData(Arg1, Arg2, CmpSize);
   Added += TryToAddDesiredData(Arg2, Arg1, CmpSize);
   if (!Added && CmpSize == 4 && IsTwoByteData(Arg1) && IsTwoByteData(Arg2)) {
