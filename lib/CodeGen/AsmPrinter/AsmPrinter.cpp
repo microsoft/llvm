@@ -102,7 +102,7 @@ static unsigned getGVAlignmentLog2(const GlobalValue *GV, const DataLayout &DL,
 AsmPrinter::AsmPrinter(TargetMachine &tm, std::unique_ptr<MCStreamer> Streamer)
     : MachineFunctionPass(ID), TM(tm), MAI(tm.getMCAsmInfo()),
       OutContext(Streamer->getContext()), OutStreamer(std::move(Streamer)),
-      LastMI(nullptr), LastFn(0), Counter(~0U) {
+      LastMI(nullptr), LastFn(0), Counter(~0U), SM(*this) {
   DD = nullptr;
   MMI = nullptr;
   LI = nullptr;
@@ -965,7 +965,7 @@ void AsmPrinter::EmitFunctionBody() {
   EmitFunctionBodyEnd();
 
   if (!MMI->getLandingPads().empty() || MMI->hasDebugInfo() ||
-      MAI->hasDotTypeDotSizeDirective()) {
+      MAI->hasDotTypeDotSizeDirective() || SM.hasFrameMap()) {
     // Create a symbol for the end of function.
     CurrentFnEnd = createTempSymbol("func_end");
     OutStreamer->EmitLabel(CurrentFnEnd);
@@ -973,14 +973,21 @@ void AsmPrinter::EmitFunctionBody() {
 
   // If the target wants a .size directive for the size of the function, emit
   // it.
-  if (MAI->hasDotTypeDotSizeDirective()) {
+  if (MAI->hasDotTypeDotSizeDirective() || SM.hasFrameMap()) {
     // We can get the size as difference between the function label and the
     // temp label.
     const MCExpr *SizeExp = MCBinaryExpr::createSub(
         MCSymbolRefExpr::create(CurrentFnEnd, OutContext),
         MCSymbolRefExpr::create(CurrentFnSymForSize, OutContext), OutContext);
-    if (auto Sym = dyn_cast<MCSymbolELF>(CurrentFnSym))
-      OutStreamer->emitELFSize(Sym, SizeExp);
+
+    if (SM.hasFrameMap()) {
+      SM.recordFrameMap(SizeExp);
+    }
+
+    if (MAI->hasDotTypeDotSizeDirective()) {
+      if (auto Sym = dyn_cast<MCSymbolELF>(CurrentFnSym))
+        OutStreamer->emitELFSize(Sym, SizeExp);
+    }
   }
 
   for (const HandlerInfo &HI : Handlers) {

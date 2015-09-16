@@ -1,5 +1,7 @@
 ; RUN: llc -o /dev/null -verify-machineinstrs -mtriple=x86_64-apple-darwin -mcpu=corei7 -stop-after machine-sink %s | FileCheck %s --check-prefix=ISEL
 ; RUN: llc -o /dev/null -verify-machineinstrs -mtriple=x86_64-apple-darwin -mcpu=corei7 -fast-isel -fast-isel-abort=1 -stop-after machine-sink %s | FileCheck %s --check-prefix=FAST-ISEL
+; RUN: llc -o /dev/null -verify-machineinstrs -mtriple=x86_64-apple-darwin -mcpu=corei7 -stop-after machine-sink -stackmap-version=2 %s | FileCheck %s --check-prefix=ISEL
+; RUN: llc -o /dev/null -verify-machineinstrs -mtriple=x86_64-apple-darwin -mcpu=corei7 -fast-isel -fast-isel-abort=1 -stop-after machine-sink -stackmap-version=2 %s | FileCheck %s --check-prefix=FAST-ISEL
 
 define void @caller_meta_leaf() {
 entry:

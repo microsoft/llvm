@@ -1,5 +1,8 @@
 ; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7-avx -enable-patchpoint-liveness=false | FileCheck %s
 ; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7-avx                                   | FileCheck -check-prefix=PATCH %s
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7-avx -enable-patchpoint-liveness=false -stackmap-version=2 | FileCheck -check-prefix=V2CHECK %s
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7-avx -stackmap-version=2                                   | FileCheck -check-prefix=V2PATCH %s
+
 ;
 ; Note: Print verbose stackmaps using -debug-only=stackmaps.
 
@@ -174,3 +177,225 @@ entry:
 
 declare void @llvm.experimental.stackmap(i64, i32, ...)
 declare void @llvm.experimental.patchpoint.void(i64, i32, i8*, i32, ...)
+
+; V2CHECK-LABEL:	.section	__LLVM_STACKMAPS,__llvm_stackmaps
+; Header
+; V2CHECK-NEXT:__LLVM_StackMaps:
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	2
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+
+; Constant Array
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:L{{.*}}:
+
+; FrameRecordMap Array
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:L{{.*}}:
+; V2CHECK-NEXT:	.quad	_stackmap_liveness
+; V2CHECK-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	6
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	3
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	_mixed_liveness
+; V2CHECK-NEXT:	.long	L{{.*}}-_mixed_liveness
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	6
+; V2CHECK-NEXT:	.short	3
+; V2CHECK-NEXT:	.short	2
+; V2CHECK-NEXT:	.align	3
+
+; StackMapRecord Array
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:L{{.*}}:
+; V2CHECK-NEXT:	.quad	1
+; V2CHECK-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	2
+; V2CHECK-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	3
+; V2CHECK-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	4
+; V2CHECK-NEXT:	.long	L{{.*}}-_mixed_liveness
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	5
+; V2CHECK-NEXT:	.long	L{{.*}}-_mixed_liveness
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+
+; V2PATCH-LABEL:	.section	__LLVM_STACKMAPS,__llvm_stackmaps
+; V2PATCH-NEXT:__LLVM_StackMaps:
+; Header
+; V2PATCH-NEXT:	.byte	2
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.long	2
+; V2PATCH-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2PATCH-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2PATCH-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2PATCH-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2PATCH-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+
+; Constant Array
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:L{{.*}}:
+
+; FrameRecordMap Array
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:L{{.*}}:
+; V2PATCH-NEXT:	.quad	_stackmap_liveness
+; V2PATCH-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2PATCH-NEXT:	.long	8
+; V2PATCH-NEXT:	.short	9
+; V2PATCH-NEXT:	.short	6
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	3
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:	.quad	_mixed_liveness
+; V2PATCH-NEXT:	.long	L{{.*}}-_mixed_liveness
+; V2PATCH-NEXT:	.long	8
+; V2PATCH-NEXT:	.short	9
+; V2PATCH-NEXT:	.short	6
+; V2PATCH-NEXT:	.short	3
+; V2PATCH-NEXT:	.short	2
+; V2PATCH-NEXT:	.align	3
+
+; StackMapRecord Array
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:L{{.*}}:
+; V2PATCH-NEXT:	.quad	1
+; V2PATCH-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	1
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	1
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:	.quad	2
+; V2PATCH-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	1
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	1
+; V2PATCH-NEXT:	.short	5
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:	.quad	3
+; V2PATCH-NEXT:	.long	L{{.*}}-_stackmap_liveness
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	1
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	6
+; V2PATCH-NEXT:	.short	2
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:	.quad	4
+; V2PATCH-NEXT:	.long	L{{.*}}-_mixed_liveness
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	8
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.align	3
+; V2PATCH-NEXT:	.quad	5
+; V2PATCH-NEXT:	.long	L{{.*}}-_mixed_liveness
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	1
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.short	8
+; V2PATCH-NEXT:	.short	2
+; V2PATCH-NEXT:	.align	3
+
+; Location Array
+; V2PATCH-NEXT:	.align	2
+; V2PATCH-NEXT:L{{.*}}:
+
+; LiveOut Array
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:L{{.*}}:
+; V2PATCH-NEXT:	.short	19
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	16
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	0
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	1
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	8
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	8
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	17
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	32
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	18
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	32
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	19
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	16
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	7
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	8
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	19
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	16
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	7
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	8
+; V2PATCH-NEXT:	.align	1
+; V2PATCH-NEXT:	.short	19
+; V2PATCH-NEXT:	.byte	0
+; V2PATCH-NEXT:	.byte	16
+; V2PATCH-NEXT:	.align	1
+
+

@@ -60,7 +60,8 @@ public:
   void printCOFFExports() override;
   void printCOFFDirectives() override;
   void printCOFFBaseReloc() override;
-  void printStackMap() const override;
+  void printStackMap(int StackMapVersion) const override;
+
 private:
   void printSymbol(const SymbolRef &Sym);
   void printRelocation(const SectionRef &Section, const RelocationRef &Reloc);
@@ -1142,7 +1143,7 @@ void COFFDumper::printCOFFBaseReloc() {
   }
 }
 
-void COFFDumper::printStackMap() const {
+void COFFDumper::printStackMap(int StackMapVersion) const {
   object::SectionRef StackMapSection;
   for (auto Sec : Obj->sections()) {
     StringRef Name;
@@ -1162,11 +1163,21 @@ void COFFDumper::printStackMap() const {
       reinterpret_cast<const uint8_t*>(StackMapContents.data()),
       StackMapContents.size());
 
-  if (Obj->isLittleEndian())
-    prettyPrintStackMap(
-                      llvm::outs(),
-                      StackMapV1Parser<support::little>(StackMapContentsArray));
-  else
-    prettyPrintStackMap(llvm::outs(),
-                        StackMapV1Parser<support::big>(StackMapContentsArray));
+  if (StackMapVersion == 1) {
+    if (Obj->isLittleEndian())
+      prettyPrintStackMapV1(llvm::outs(), StackMapV1Parser<support::little>(
+                                              StackMapContentsArray));
+    else
+      prettyPrintStackMapV1(
+          llvm::outs(), StackMapV1Parser<support::big>(StackMapContentsArray));
+  } else if (StackMapVersion == 2) {
+    if (Obj->isLittleEndian())
+      prettyPrintStackMapV2(llvm::outs(), StackMapV2Parser<support::little>(
+                                              StackMapContentsArray));
+    else
+      prettyPrintStackMapV2(
+          llvm::outs(), StackMapV2Parser<support::big>(StackMapContentsArray));
+  } else {
+    llvm_unreachable("Unsupported stackmap version!");
+  }
 }

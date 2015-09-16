@@ -1,5 +1,7 @@
 ; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7                             | FileCheck %s
 ; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7 -fast-isel -fast-isel-abort=1 | FileCheck %s
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7 -stackmap-version=2 | FileCheck %s --check-prefix=V2CHECK
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7 -fast-isel -fast-isel-abort=1 -stackmap-version=2 | FileCheck %s --check-prefix=V2CHECK
 
 ; CHECK-LABEL:  .section  __LLVM_STACKMAPS,__llvm_stackmaps
 ; CHECK-NEXT:  __LLVM_StackMaps:
@@ -163,3 +165,199 @@ entry:
 }
 
 declare void @llvm.experimental.stackmap(i64, i32, ...)
+
+; V2CHECK-LABEL:	.section	__LLVM_STACKMAPS,__llvm_stackmaps
+; V2CHECK-NEXT:__LLVM_StackMaps:
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	4
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+; V2CHECK-NEXT:	.long	L{{.*}}-__LLVM_StackMaps
+
+; Constant Array
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:L{{.*}}:
+; V2CHECK-NEXT:	.quad	2147483648
+; V2CHECK-NEXT:	.quad	4294967295
+; V2CHECK-NEXT:	.quad	4294967296
+
+; FrameMapRecord Array
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:L{{.*}}:
+; V2CHECK-NEXT:	.quad	_constantargs
+; V2CHECK-NEXT:	.long	L{{.*}}-_constantargs
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	6
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	_liveConstant
+; V2CHECK-NEXT:	.long	L{{.*}}-_liveConstant
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	6
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	_directFrameIdx
+; V2CHECK-NEXT:	.long	L{{.*}}-_directFrameIdx
+; V2CHECK-NEXT:	.long	40
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	6
+; V2CHECK-NEXT:	.short	2
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	_longid
+; V2CHECK-NEXT:	.long	Lfunc_end3-_longid
+; V2CHECK-NEXT:	.long	8
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	6
+; V2CHECK-NEXT:	.short	3
+; V2CHECK-NEXT:	.short	4
+; V2CHECK-NEXT:	.align	3
+
+; StackMapRecord Array
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:L{{.*}}:
+; V2CHECK-NEXT:	.quad	1
+; V2CHECK-NEXT:	.long	L{{.*}}-_constantargs
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	12
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	15
+; V2CHECK-NEXT:	.long	L{{.*}}-_liveConstant
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	12
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	16
+; V2CHECK-NEXT:	.long	L{{.*}}-_directFrameIdx
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	13
+; V2CHECK-NEXT:	.short	1
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	4294967295
+; V2CHECK-NEXT:	.long	L{{.*}}-_longid
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	14
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	4294967296
+; V2CHECK-NEXT:	.long	L{{.*}}-_longid
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	14
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	9223372036854775807
+; V2CHECK-NEXT:	.long	L{{.*}}-_longid
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	14
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+; V2CHECK-NEXT:	.quad	-1
+; V2CHECK-NEXT:	.long	L{{.*}}-_longid
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.byte	0
+; V2CHECK-NEXT:	.short	14
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.align	3
+
+; Location Array
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:L{{.*}}:
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	-1
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	-1
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	65536
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	2000000000
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	2147483647
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	-1
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	-1
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	5
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	0
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	5
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	1
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	5
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	2
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	-1
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	4
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	0
+; V2CHECK-NEXT:	.long	33
+; V2CHECK-NEXT:	.align	2
+; V2CHECK-NEXT:	.byte	2
+; V2CHECK-NEXT:	.byte	8
+; V2CHECK-NEXT:	.short	6
+; V2CHECK-NEXT:	.long	-24
+; V2CHECK-NEXT:	.align	2

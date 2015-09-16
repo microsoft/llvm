@@ -69,11 +69,10 @@ namespace {
   protected:
     MapVector<MCSymbol*, MCSymbol*> TOC;
     const PPCSubtarget *Subtarget;
-    StackMaps SM;
   public:
     explicit PPCAsmPrinter(TargetMachine &TM,
                            std::unique_ptr<MCStreamer> Streamer)
-        : AsmPrinter(TM, std::move(Streamer)), SM(*this) {}
+        : AsmPrinter(TM, std::move(Streamer)) {}
 
     const char *getPassName() const override {
       return "PowerPC Assembly Printer";
@@ -94,10 +93,8 @@ namespace {
 
     void EmitEndOfAsmFile(Module &M) override;
 
-    void LowerSTACKMAP(MCStreamer &OutStreamer, StackMaps &SM,
-                       const MachineInstr &MI);
-    void LowerPATCHPOINT(MCStreamer &OutStreamer, StackMaps &SM,
-                         const MachineInstr &MI);
+    void LowerSTACKMAP(MCStreamer &OutStreamer, const MachineInstr &MI);
+    void LowerPATCHPOINT(MCStreamer &OutStreamer, const MachineInstr &MI);
     void EmitTlsCall(const MachineInstr *MI, MCSymbolRefExpr::VariantKind VK);
     bool runOnMachineFunction(MachineFunction &MF) override {
       Subtarget = &MF.getSubtarget<PPCSubtarget>();
@@ -330,7 +327,7 @@ void PPCAsmPrinter::EmitEndOfAsmFile(Module &M) {
   SM.serializeToStackMapSection();
 }
 
-void PPCAsmPrinter::LowerSTACKMAP(MCStreamer &OutStreamer, StackMaps &SM,
+void PPCAsmPrinter::LowerSTACKMAP(MCStreamer &OutStreamer,
                                   const MachineInstr &MI) {
   unsigned NumNOPBytes = MI.getOperand(1).getImm();
 
@@ -358,7 +355,7 @@ void PPCAsmPrinter::LowerSTACKMAP(MCStreamer &OutStreamer, StackMaps &SM,
 
 // Lower a patchpoint of the form:
 // [<def>], <id>, <numBytes>, <target>, <numArgs>
-void PPCAsmPrinter::LowerPATCHPOINT(MCStreamer &OutStreamer, StackMaps &SM,
+void PPCAsmPrinter::LowerPATCHPOINT(MCStreamer &OutStreamer,
                                     const MachineInstr &MI) {
   SM.recordPatchPoint(MI);
   PatchPointOpers Opers(&MI);
@@ -506,9 +503,9 @@ void PPCAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   case TargetOpcode::DBG_VALUE:
     llvm_unreachable("Should be handled target independently");
   case TargetOpcode::STACKMAP:
-    return LowerSTACKMAP(*OutStreamer, SM, *MI);
+    return LowerSTACKMAP(*OutStreamer, *MI);
   case TargetOpcode::PATCHPOINT:
-    return LowerPATCHPOINT(*OutStreamer, SM, *MI);
+    return LowerPATCHPOINT(*OutStreamer, *MI);
 
   case PPC::MoveGOTtoLR: {
     // Transform %LR = MoveGOTtoLR

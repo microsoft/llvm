@@ -63,7 +63,7 @@ public:
   virtual void printMachOIndirectSymbols() { }
   virtual void printMachOLinkerOptions() { }
 
-  virtual void printStackMap() const = 0;
+  virtual void printStackMap(int StackMapVersion) const = 0;
 
 protected:
   StreamWriter& W;
