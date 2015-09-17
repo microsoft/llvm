@@ -286,6 +286,8 @@ void X86FrameLowering::emitSPUpdate(MachineBasicBlock &MBB,
           .addReg(Reg, getDefRegState(!isSub) | getUndefRegState(isSub));
         if (isSub)
           MI->setFlag(MachineInstr::FrameSetup);
+        else
+          MI->setFlag(MachineInstr::FrameDestroy);
         Offset -= ThisVal;
         continue;
       }
@@ -295,6 +297,8 @@ void X86FrameLowering::emitSPUpdate(MachineBasicBlock &MBB,
         MBB, MBBI, DL, isSub ? -ThisVal : ThisVal, InEpilogue);
     if (isSub)
       MI.setMIFlag(MachineInstr::FrameSetup);
+    else
+      MI.setMIFlag(MachineInstr::FrameDestroy);
 
     Offset -= ThisVal;
   }
@@ -1331,7 +1335,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
 
     // Pop EBP.
     BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::POP64r : X86::POP32r),
-            MachineFramePtr);
+            MachineFramePtr).setMIFlag(MachineInstr::FrameDestroy);
   } else if (hasFP(MF)) {
     // Calculate required stack adjustment.
     uint64_t FrameSize = StackSize - SlotSize;
@@ -1344,7 +1348,8 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
 
     // Pop EBP.
     BuildMI(MBB, MBBI, DL,
-            TII.get(Is64Bit ? X86::POP64r : X86::POP32r), MachineFramePtr);
+            TII.get(Is64Bit ? X86::POP64r : X86::POP32r), MachineFramePtr)
+        .setMIFlag(MachineInstr::FrameDestroy);
   } else {
     NumBytes = StackSize - CSSize;
   }
@@ -1355,8 +1360,9 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     MachineBasicBlock::iterator PI = std::prev(MBBI);
     unsigned Opc = PI->getOpcode();
 
-    if (Opc != X86::POP32r && Opc != X86::POP64r && Opc != X86::DBG_VALUE &&
-        !PI->isTerminator())
+    if ((Opc != X86::POP32r || !PI->getFlag(MachineInstr::FrameDestroy)) &&
+        (Opc != X86::POP64r || !PI->getFlag(MachineInstr::FrameDestroy)) &&
+        Opc != X86::DBG_VALUE && !PI->isTerminator())
       break;
 
     --MBBI;
@@ -1719,7 +1725,8 @@ bool X86FrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
         !X86::GR32RegClass.contains(Reg))
       continue;
 
-    BuildMI(MBB, MI, DL, TII.get(Opc), Reg);
+    BuildMI(MBB, MI, DL, TII.get(Opc), Reg)
+        .setMIFlag(MachineInstr::FrameDestroy);
   }
   return true;
 }
@@ -2184,6 +2191,9 @@ void X86FrameLowering::adjustForHiPEPrologue(
 bool X86FrameLowering::adjustStackWithPops(MachineBasicBlock &MBB,
     MachineBasicBlock::iterator MBBI, DebugLoc DL, int Offset) const {
 
+  if (Offset <= 0)
+    return false;
+
   if (Offset % SlotSize)
     return false;
 
@@ -2204,9 +2214,11 @@ bool X86FrameLowering::adjustStackWithPops(MachineBasicBlock &MBB,
   unsigned FoundRegs = 0;
 
   auto RegMask = Prev->getOperand(1);
-  
-  // Try to find up to NumPops free registers. 
-  for (auto Candidate : X86::GR32_NOREX_NOSPRegClass) {
+
+  auto &RegClass =
+      Is64Bit ? X86::GR64_NOREX_NOSPRegClass : X86::GR32_NOREX_NOSPRegClass;
+  // Try to find up to NumPops free registers.
+  for (auto Candidate : RegClass) {
 
     // Poor man's liveness:
     // Since we're immediately after a call, any register that is clobbered
@@ -2335,6 +2347,7 @@ MachineBasicBlock::iterator X86FrameLowering::restoreWin32EHFrameAndBasePtr(
   int EHRegOffset = getFrameIndexReference(MF, FI, UsedReg);
   int EHRegSize = MFI->getObjectSize(FI);
   int EndOffset = -EHRegOffset - EHRegSize;
+  FuncInfo.EHRegNodeEndOffset = EndOffset;
   assert(EndOffset >= 0 &&
          "end of registration object above normal EBP position!");
   if (UsedReg == FramePtr) {

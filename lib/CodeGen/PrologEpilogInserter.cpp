@@ -822,12 +822,16 @@ void PEI::replaceFrameIndices(MachineFunction &Fn) {
     if (FuncInfo.UnwindHelpFrameIdx != INT_MAX)
       FuncInfo.UnwindHelpFrameOffset = TFI.getFrameIndexReferenceFromSP(
           Fn, FuncInfo.UnwindHelpFrameIdx, FrameReg);
-  } else if (MMI.hasWinEHFuncInfo(F)) {
-    WinEHFuncInfo &FuncInfo = MMI.getWinEHFuncInfo(Fn.getFunction());
-    auto I = FuncInfo.CatchHandlerParentFrameObjIdx.find(F);
-    if (I != FuncInfo.CatchHandlerParentFrameObjIdx.end())
-      FuncInfo.CatchHandlerParentFrameObjOffset[F] =
-          TFI.getFrameIndexReferenceFromSP(Fn, I->second, FrameReg);
+    for (WinEHTryBlockMapEntry &TBME : FuncInfo.TryBlockMap) {
+      for (WinEHHandlerType &H : TBME.HandlerArray) {
+        unsigned UnusedReg;
+        if (H.CatchObj.FrameIndex == INT_MAX)
+          H.CatchObj.FrameOffset = INT_MAX;
+        else
+          H.CatchObj.FrameOffset =
+              TFI.getFrameIndexReference(Fn, H.CatchObj.FrameIndex, UnusedReg);
+      }
+    }
   }
 
   // Store SPAdj at exit of a basic block.
