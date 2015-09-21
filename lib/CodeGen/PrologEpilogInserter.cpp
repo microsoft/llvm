@@ -196,7 +196,7 @@ bool PEI::runOnMachineFunction(MachineFunction &Fn) {
   // place all spills in the entry block, all restores in return blocks.
   calculateSets(Fn);
 
-  // Add the code to save and restore the callee saved registers
+  // Add the code to save and restore the callee saved registers.
   if (!F->hasFnAttribute(Attribute::Naked))
     insertCSRSpillsAndRestores(Fn);
 
@@ -516,7 +516,7 @@ AdjustStackOffset(MachineFrameInfo *MFI, int FrameIdx,
   MaxAlign = std::max(MaxAlign, Align);
 
   // Adjust to alignment boundary.
-  Offset = (Offset + Align - 1) / Align * Align;
+  Offset = RoundUpToAlignment(Offset, Align);
 
   if (StackGrowsDown) {
     DEBUG(dbgs() << "alloc FI(" << FrameIdx << ") at SP[" << -Offset << "]\n");
