@@ -30,6 +30,11 @@
 #include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
 
+static cl::opt<bool>
+VerboseDAGDumping("dag-dump-verbose", cl::Hidden,
+                  cl::desc("Display more information when dumping selection "
+                           "DAG nodes."));
+
 std::string SDNode::getOperationName(const SelectionDAG *G) const {
   switch (getOpcode()) {
   default:
@@ -361,6 +366,27 @@ const char *SDNode::getIndexedModeName(ISD::MemIndexedMode AM) {
   }
 }
 
+namespace {
+class PrintNodeId {
+  const SDNode &Node;
+public:
+  explicit PrintNodeId(const SDNode &Node)
+      : Node(Node) {}
+  void print(raw_ostream &OS) const {
+#ifndef NDEBUG
+    OS << 't' << Node.PersistentId;
+#else
+    OS << (const void*)&Node;
+#endif
+  }
+};
+
+static inline raw_ostream &operator<<(raw_ostream &OS, const PrintNodeId &P) {
+  P.print(OS);
+  return OS;
+}
+}
+
 void SDNode::dump() const { dump(nullptr); }
 void SDNode::dump(const SelectionDAG *G) const {
   print(dbgs(), G);
@@ -368,7 +394,7 @@ void SDNode::dump(const SelectionDAG *G) const {
 }
 
 void SDNode::print_types(raw_ostream &OS, const SelectionDAG *G) const {
-  OS << (const void*)this << ": ";
+  OS << PrintNodeId(*this) << ": ";
 
   for (unsigned i = 0, e = getNumValues(); i != e; ++i) {
     if (i) OS << ",";
@@ -532,43 +558,41 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
        << ']';
   }
 
-  if (unsigned Order = getIROrder())
-      OS << " [ORD=" << Order << ']';
+  if (VerboseDAGDumping) {
+    if (unsigned Order = getIROrder())
+        OS << " [ORD=" << Order << ']';
 
-  if (getNodeId() != -1)
-    OS << " [ID=" << getNodeId() << ']';
+    if (getNodeId() != -1)
+      OS << " [ID=" << getNodeId() << ']';
 
-  if (!G)
-    return;
+    if (!G)
+      return;
 
-  DILocation *L = getDebugLoc();
-  if (!L)
-    return;
+    DILocation *L = getDebugLoc();
+    if (!L)
+      return;
 
-  if (auto *Scope = L->getScope())
-    OS << Scope->getFilename();
-  else
-    OS << "<unknown>";
-  OS << ':' << L->getLine();
-  if (unsigned C = L->getColumn())
-    OS << ':' << C;
+    if (auto *Scope = L->getScope())
+      OS << Scope->getFilename();
+    else
+      OS << "<unknown>";
+    OS << ':' << L->getLine();
+    if (unsigned C = L->getColumn())
+      OS << ':' << C;
+  }
 }
 
 static void DumpNodes(const SDNode *N, unsigned indent, const SelectionDAG *G) {
   for (const SDValue &Op : N->op_values())
     if (Op.getNode()->hasOneUse())
       DumpNodes(Op.getNode(), indent+2, G);
-    else
-      dbgs() << "\n" << std::string(indent+2, ' ')
-             << (void*)Op.getNode() << ": <multiple use>";
 
-  dbgs() << '\n';
   dbgs().indent(indent);
   N->dump(G);
 }
 
 void SelectionDAG::dump() const {
-  dbgs() << "SelectionDAG has " << AllNodes.size() << " nodes:";
+  dbgs() << "SelectionDAG has " << AllNodes.size() << " nodes:\n";
 
   for (allnodes_const_iterator I = allnodes_begin(), E = allnodes_end();
        I != E; ++I) {
@@ -676,8 +700,9 @@ void SDNode::print(raw_ostream &OS, const SelectionDAG *G) const {
   print_types(OS, G);
   for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
     if (i) OS << ", "; else OS << " ";
-    OS << (void*)getOperand(i).getNode();
-    if (unsigned RN = getOperand(i).getResNo())
+    const SDValue Operand = getOperand(i);
+    OS << PrintNodeId(*Operand.getNode());
+    if (unsigned RN = Operand.getResNo())
       OS << ":" << RN;
   }
   print_details(OS, G);
