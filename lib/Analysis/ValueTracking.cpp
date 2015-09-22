@@ -328,7 +328,7 @@ static void computeKnownBitsMul(Value *Op0, Value *Op1, bool NSW,
   }
 
   // If low bits are zero in either operand, output low known-0 bits.
-  // Also compute a conserative estimate for high known-0 bits.
+  // Also compute a conservative estimate for high known-0 bits.
   // More trickiness is possible, but this is sufficient for the
   // interesting case of alignment computation.
   KnownOne.clearAllBits();
@@ -2952,6 +2952,8 @@ static bool isAligned(const Value *Base, APInt Offset, unsigned Align,
     BaseAlign = GV->getAlignment();
   else if (const Argument *A = dyn_cast<Argument>(Base))
     BaseAlign = A->getParamAlignment();
+  else if (auto CS = ImmutableCallSite(Base))
+    BaseAlign = CS.getAttributes().getParamAlignment(AttributeSet::ReturnIndex);
 
   if (!BaseAlign) {
     Type *Ty = Base->getType()->getPointerElementType();
