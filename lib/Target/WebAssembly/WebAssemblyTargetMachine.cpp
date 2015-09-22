@@ -107,7 +107,7 @@ public:
 } // end anonymous namespace
 
 TargetIRAnalysis WebAssemblyTargetMachine::getTargetIRAnalysis() {
-  return TargetIRAnalysis([this](Function &F) {
+  return TargetIRAnalysis([this](const Function &F) {
     return TargetTransformInfo(WebAssemblyTTIImpl(this, F));
   });
 }
@@ -159,8 +159,14 @@ void WebAssemblyPassConfig::addPostRegAlloc() {
   disablePass(&PrologEpilogCodeInserterID);
   // Fails with: should be run after register allocation.
   disablePass(&MachineCopyPropagationID);
+
+  // TODO: Until we get ReverseBranchCondition support, MachineBlockPlacement
+  // can create ugly-looking control flow.
+  disablePass(&MachineBlockPlacementID);
 }
 
 void WebAssemblyPassConfig::addPreSched2() {}
 
-void WebAssemblyPassConfig::addPreEmitPass() {}
+void WebAssemblyPassConfig::addPreEmitPass() {
+  addPass(createWebAssemblyCFGStackify());
+}

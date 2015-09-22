@@ -1074,18 +1074,22 @@ Instruction *InstCombiner::FoldICmpCstShrCst(ICmpInst &I, Value *Op, Value *A,
   if (AP1 == AP2)
     return getICmp(I.ICMP_EQ, A, ConstantInt::getNullValue(A->getType()));
 
-  // Get the distance between the highest bit that's set.
   int Shift;
-  // Both the constants are negative, take their positive to calculate log.
   if (IsAShr && AP1.isNegative())
-    // Get the ones' complement of AP2 and AP1 when computing the distance.
-    Shift = (~AP2).logBase2() - (~AP1).logBase2();
+    Shift = AP1.countLeadingOnes() - AP2.countLeadingOnes();
   else
-    Shift = AP2.logBase2() - AP1.logBase2();
+    Shift = AP1.countLeadingZeros() - AP2.countLeadingZeros();
 
   if (Shift > 0) {
-    if (IsAShr ? AP1 == AP2.ashr(Shift) : AP1 == AP2.lshr(Shift))
+    if (IsAShr && AP1 == AP2.ashr(Shift)) {
+      // There are multiple solutions if we are comparing against -1 and the LHS
+      // of the ashr is not a power of two.
+      if (AP1.isAllOnesValue() && !AP2.isPowerOf2())
+        return getICmp(I.ICMP_UGE, A, ConstantInt::get(A->getType(), Shift));
       return getICmp(I.ICMP_EQ, A, ConstantInt::get(A->getType(), Shift));
+    } else if (AP1 == AP2.lshr(Shift)) {
+      return getICmp(I.ICMP_EQ, A, ConstantInt::get(A->getType(), Shift));
+    }
   }
   // Shifting const2 will never be equal to const1.
   return getConstant(false);
@@ -1145,6 +1149,14 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
 
   switch (LHSI->getOpcode()) {
   case Instruction::Trunc:
+    if (RHS->isOne() && RHSV.getBitWidth() > 1) {
+      // icmp slt trunc(signum(V)) 1 --> icmp slt V, 1
+      Value *V = nullptr;
+      if (ICI.getPredicate() == ICmpInst::ICMP_SLT &&
+          match(LHSI->getOperand(0), m_Signum(m_Value(V))))
+        return new ICmpInst(ICmpInst::ICMP_SLT, V,
+                            ConstantInt::get(V->getType(), 1));
+    }
     if (ICI.isEquality() && LHSI->hasOneUse()) {
       // Simplify icmp eq (trunc x to i8), 42 -> icmp eq x, 42|highbits if all
       // of the high bits truncated out of x are known.
@@ -1467,6 +1479,15 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
     break;
 
   case Instruction::Or: {
+    if (RHS->isOne()) {
+      // icmp slt signum(V) 1 --> icmp slt V, 1
+      Value *V = nullptr;
+      if (ICI.getPredicate() == ICmpInst::ICMP_SLT &&
+          match(LHSI, m_Signum(m_Value(V))))
+        return new ICmpInst(ICmpInst::ICMP_SLT, V,
+                            ConstantInt::get(V->getType(), 1));
+    }
+
     if (!ICI.isEquality() || !RHS->isNullValue() || !LHSI->hasOneUse())
       break;
     Value *P, *Q;

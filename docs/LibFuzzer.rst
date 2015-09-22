@@ -237,7 +237,7 @@ to find Heartbleed with LibFuzzer::
     SSL_free(server);
   }
   EOF
-  # Build the fuzzer. 
+  # Build the fuzzer.
   clang++ -g handshake-fuzz.cc  -fsanitize=address \
     openssl-1.0.1f/libssl.a openssl-1.0.1f/libcrypto.a Fuzzer*.o
   # Run 20 independent fuzzer jobs.
@@ -350,6 +350,23 @@ llvm-as-fuzzer
 
 Tracking bug: https://llvm.org/bugs/show_bug.cgi?id=24639
 
+llvm-mc-fuzzer
+--------------
+
+This tool fuzzes the MC layer. Currently it is only able to fuzz the
+disassembler but it is hoped that assembly, and round-trip verification will be
+added in future.
+
+When run in dissassembly mode, the inputs are opcodes to be disassembled. The
+fuzzer will consume as many instructions as possible and will stop when it
+finds an invalid instruction or runs out of data.
+
+Please note that the command line interface differs from that of other fuzzers.
+The fuzzer arguments are specified with ``-fuzzer-args`` while other arguments
+control the operation mode and target in a similar manner to ``llvm-mc``.
+
+Unfortunately, this fuzzer is currently unable to use the -jobs option.
+
 Buildbot
 --------
 
@@ -453,7 +470,15 @@ Trophies
 
   * llvm-as: https://llvm.org/bugs/show_bug.cgi?id=24639
 
+  * Disassembler:
 
+    * Mips: Discovered a number of untested instructions for the Mips target
+      (see valid-mips*.s in http://reviews.llvm.org/rL247405,
+      http://reviews.llvm.org/rL247414, http://reviews.llvm.org/rL247416,
+      http://reviews.llvm.org/rL247417, http://reviews.llvm.org/rL247420,
+      and http://reviews.llvm.org/rL247422) as well some instructions that
+      successfully disassembled on ISA's where they were not valid (see
+      invalid-xfail.s files in the same commits).
 
 .. _pcre2: http://www.pcre.org/
 

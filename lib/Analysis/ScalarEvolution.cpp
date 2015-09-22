@@ -1878,8 +1878,7 @@ CollectAddOperandsWithScales(DenseMap<const SCEV *, APInt> &M,
         // the map.
         SmallVector<const SCEV *, 4> MulOps(Mul->op_begin()+1, Mul->op_end());
         const SCEV *Key = SE.getMulExpr(MulOps);
-        std::pair<DenseMap<const SCEV *, APInt>::iterator, bool> Pair =
-          M.insert(std::make_pair(Key, NewScale));
+        auto Pair = M.insert(std::make_pair(Key, NewScale));
         if (Pair.second) {
           NewOps.push_back(Pair.first->first);
         } else {
@@ -8394,8 +8393,11 @@ ScalarEvolution::ScalarEvolution(ScalarEvolution &&Arg)
 ScalarEvolution::~ScalarEvolution() {
   // Iterate through all the SCEVUnknown instances and call their
   // destructors, so that they release their references to their values.
-  for (SCEVUnknown *U = FirstUnknown; U; U = U->Next)
-    U->~SCEVUnknown();
+  for (SCEVUnknown *U = FirstUnknown; U;) {
+    SCEVUnknown *Tmp = U;
+    U = U->Next;
+    Tmp->~SCEVUnknown();
+  }
   FirstUnknown = nullptr;
 
   ValueExprMap.clear();

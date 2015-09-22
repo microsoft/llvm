@@ -167,6 +167,20 @@ bool WinEHStatePass::runOnFunction(Function &F) {
   if (!isMSVCEHPersonality(Personality))
     return false;
 
+  // Skip this function if there are no EH pads and we aren't using IR-level
+  // outlining.
+  if (WinEHParentName.empty()) {
+    bool HasPads = false;
+    for (BasicBlock &BB : F) {
+      if (BB.isEHPad()) {
+        HasPads = true;
+        break;
+      }
+    }
+    if (!HasPads)
+      return false;
+  }
+
   // Disable frame pointer elimination in this function.
   // FIXME: Do the nested handlers need to keep the parent ebp in ebp, or can we
   // use an arbitrary register?
@@ -423,23 +437,6 @@ void WinEHStatePass::addCXXStateStores(Function &F, WinEHFuncInfo &FuncInfo) {
   // Set up RegNodeEscapeIndex
   int RegNodeEscapeIndex = escapeRegNode(F);
   FuncInfo.EHRegNodeEscapeIndex = RegNodeEscapeIndex;
-
-  // Only insert stores in catch handlers.
-  Constant *FI8 =
-      ConstantExpr::getBitCast(&F, Type::getInt8PtrTy(TheModule->getContext()));
-  for (auto P : FuncInfo.HandlerBaseState) {
-    Function *Handler = const_cast<Function *>(P.first);
-    int BaseState = P.second;
-    IRBuilder<> Builder(&Handler->getEntryBlock(),
-                        Handler->getEntryBlock().begin());
-    // FIXME: Find and reuse such a call if present.
-    Value *ParentFP = Builder.CreateCall(FrameAddress, {Builder.getInt32(1)});
-    Value *RecoveredRegNode = Builder.CreateCall(
-        FrameRecover, {FI8, ParentFP, Builder.getInt32(RegNodeEscapeIndex)});
-    RecoveredRegNode =
-        Builder.CreateBitCast(RecoveredRegNode, RegNodeTy->getPointerTo(0));
-    addStateStoresToFunclet(RecoveredRegNode, FuncInfo, *Handler, BaseState);
-  }
 }
 
 /// Escape RegNode so that we can access it from child handlers. Find the call
@@ -503,15 +500,6 @@ void WinEHStatePass::addStateStoresToFunclet(Value *ParentRegNode,
         insertStateNumberStore(ParentRegNode, II, State);
       }
     }
-
-    // Insert calls to llvm.x86.seh.restoreframe at catchret destinations.  In
-    // SEH, insert them before the catchret.
-    // FIXME: We should probably do this as part of catchret lowering in the
-    // DAG.
-    if (auto *CR = dyn_cast<CatchReturnInst>(BB.getTerminator()))
-      insertRestoreFrame(Personality == EHPersonality::MSVC_X86SEH
-                             ? CR->getParent()
-                             : CR->getSuccessor());
   }
 }
 

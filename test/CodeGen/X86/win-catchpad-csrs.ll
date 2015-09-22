@@ -5,15 +5,11 @@
 %eh.CatchableType = type { i32, i8*, i32, i32, i32, i32, i8* }
 %eh.CatchableTypeArray.1 = type { i32, [1 x %eh.CatchableType*] }
 %eh.ThrowInfo = type { i32, i8*, i8*, i8* }
-%eh.CatchHandlerType = type { i32, i8* }
 
 $"\01??_R0H@8" = comdat any
 
 @"\01??_7type_info@@6B@" = external constant i8*
 @"\01??_R0H@8" = linkonce_odr global %rtti.TypeDescriptor2 { i8** @"\01??_7type_info@@6B@", i8* null, [3 x i8] c".H\00" }, comdat
-
-@llvm.eh.handlertype.H.0 = private unnamed_addr constant %eh.CatchHandlerType { i32 0, i8* bitcast (%rtti.TypeDescriptor2* @"\01??_R0H@8" to i8*) }, section "llvm.metadata"
-@llvm.eh.handlertype.H.1 = private unnamed_addr constant %eh.CatchHandlerType { i32 1, i8* bitcast (%rtti.TypeDescriptor2* @"\01??_R0H@8" to i8*) }, section "llvm.metadata"
 
 declare i32 @getint()
 declare void @useints(...)
@@ -31,7 +27,7 @@ entry:
           to label %try.cont unwind label %catch.dispatch
 
 catch.dispatch:                                   ; preds = %entry
-  %0 = catchpad [%eh.CatchHandlerType* @llvm.eh.handlertype.H.0, i8* null]
+  %0 = catchpad [%rtti.TypeDescriptor2* @"\01??_R0H@8", i32 0, i8* null]
           to label %catch unwind label %catchendblock
 
 catch:
@@ -63,14 +59,17 @@ catchendblock:                                    ; preds = %catch,
 ; X86: movl $0, -{{[0-9]+}}(%ebp)
 ; X86: movl $1, (%esp)
 ; X86: calll _f
-; X86: [[contbb:Ltmp[0-9]+]]: # Block address taken
-; X86: movl -{{[0-9]+}}(%ebp), %esp
-; X86: addl ${{[0-9]+}}, %esp
+; X86: [[contbb:LBB0_[0-9]+]]: # %try.cont
 ; X86: popl %esi
 ; X86: popl %edi
 ; X86: popl %ebx
 ; X86: popl %ebp
 ; X86: retl
+
+; X86: [[restorebb:LBB0_[0-9]+]]:
+; X86: movl -16(%ebp), %esp
+; X86: addl $12, %ebp
+; X86: jmp [[contbb]]
 
 ; X86: [[catch1bb:LBB0_[0-9]+]]: # %catch{{$}}
 ; X86: pushl %ebp
@@ -80,9 +79,9 @@ catchendblock:                                    ; preds = %catch,
 ; X86: movl $1, -{{[0-9]+}}(%ebp)
 ; X86: movl $2, (%esp)
 ; X86: calll _f
-; X86: movl $[[contbb]], %eax
-; X86-NEXT: addl $16, %esp
+; X86: addl $16, %esp
 ; X86-NEXT: popl %ebp
+; X86-NEXT: movl $[[restorebb]], %eax
 ; X86-NEXT: retl
 
 ; X86: L__ehtable$try_catch_catch:
@@ -112,7 +111,7 @@ catchendblock:                                    ; preds = %catch,
 ; X64: callq useints
 ; X64: movl $1, %ecx
 ; X64: callq f
-; X64: [[contbb:.Ltmp[0-9]+]]: # Block address taken
+; X64: [[contbb:\.LBB0_[0-9]+]]: # %try.cont
 ; X64: addq $40, %rsp
 ; X64: popq %rbp
 ; X64: retq
@@ -124,9 +123,9 @@ catchendblock:                                    ; preds = %catch,
 ; X64: subq $32, %rsp
 ; X64: movl $2, %ecx
 ; X64: callq f
-; X64: leaq [[contbb]](%rip), %rax
 ; X64: addq $32, %rsp
 ; X64: popq %rbp
+; X64: leaq [[contbb]](%rip), %rax
 ; X64: retq
 
 ; X64: $handlerMap$0$try_catch_catch:
