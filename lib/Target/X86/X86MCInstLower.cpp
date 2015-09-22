@@ -830,6 +830,7 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
   assert(Subtarget->is64Bit() && "Statepoint currently only supports X86-64");
 
   StatepointOpers SOpers(&MI);
+  MCSymbol *CallLabel = nullptr;
   if (unsigned PatchBytes = SOpers.getNumPatchBytes()) {
     EmitNops(*OutStreamer, PatchBytes, Subtarget->is64Bit(),
              getSubtargetInfo());
@@ -870,12 +871,16 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
     MCInst CallInst;
     CallInst.setOpcode(CallOpcode);
     CallInst.addOperand(CallTargetMCOp);
+
+    MCContext &OutContext = OutStreamer->getContext();
+    CallLabel = OutContext.createTempSymbol();
+    OutStreamer->EmitLabel(CallLabel);
     OutStreamer->EmitInstruction(CallInst, getSubtargetInfo());
   }
 
   // Record our statepoint node in the same section used by STACKMAP
   // and PATCHPOINT
-  SM.recordStatepoint(MI);
+  SM.recordStatepoint(MI, CallLabel);
 }
 
 void X86AsmPrinter::LowerFAULTING_LOAD_OP(const MachineInstr &MI,

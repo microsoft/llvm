@@ -27,7 +27,6 @@ class MCSymbol;
 
 class LLVM_LIBRARY_VISIBILITY X86AsmPrinter : public AsmPrinter {
   const X86Subtarget *Subtarget;
-  StackMaps SM;
   FaultMaps FM;
 
   // This utility class tracks the length of a stackmap instruction's 'shadow'.
@@ -90,8 +89,7 @@ class LLVM_LIBRARY_VISIBILITY X86AsmPrinter : public AsmPrinter {
  public:
    explicit X86AsmPrinter(TargetMachine &TM,
                           std::unique_ptr<MCStreamer> Streamer)
-       : AsmPrinter(TM, std::move(Streamer)), SM(*this), FM(*this),
-         SMShadowTracker(TM) {}
+       : AsmPrinter(TM, std::move(Streamer)), FM(*this), SMShadowTracker(TM) {}
 
   const char *getPassName() const override {
     return "X86 Assembly / Object Emitter";

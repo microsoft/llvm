@@ -48,12 +48,11 @@ namespace {
 
 class AArch64AsmPrinter : public AsmPrinter {
   AArch64MCInstLower MCInstLowering;
-  StackMaps SM;
 
 public:
   AArch64AsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer)
       : AsmPrinter(TM, std::move(Streamer)), MCInstLowering(OutContext, *this),
-        SM(*this), AArch64FI(nullptr) {}
+        AArch64FI(nullptr) {}
 
   const char *getPassName() const override {
     return "AArch64 Assembly Printer";
@@ -65,10 +64,8 @@ public:
     return MCInstLowering.lowerOperand(MO, MCOp);
   }
 
-  void LowerSTACKMAP(MCStreamer &OutStreamer, StackMaps &SM,
-                     const MachineInstr &MI);
-  void LowerPATCHPOINT(MCStreamer &OutStreamer, StackMaps &SM,
-                       const MachineInstr &MI);
+  void LowerSTACKMAP(MCStreamer &OutStreamer, const MachineInstr &MI);
+  void LowerPATCHPOINT(MCStreamer &OutStreamer, const MachineInstr &MI);
   /// \brief tblgen'erated driver function for lowering simple MI->MC
   /// pseudo instructions.
   bool emitPseudoExpansionLowering(MCStreamer &OutStreamer,
@@ -362,7 +359,7 @@ void AArch64AsmPrinter::PrintDebugValueComment(const MachineInstr *MI,
   printOperand(MI, NOps - 2, OS);
 }
 
-void AArch64AsmPrinter::LowerSTACKMAP(MCStreamer &OutStreamer, StackMaps &SM,
+void AArch64AsmPrinter::LowerSTACKMAP(MCStreamer &OutStreamer,
                                       const MachineInstr &MI) {
   unsigned NumNOPBytes = MI.getOperand(1).getImm();
 
@@ -390,7 +387,7 @@ void AArch64AsmPrinter::LowerSTACKMAP(MCStreamer &OutStreamer, StackMaps &SM,
 
 // Lower a patchpoint of the form:
 // [<def>], <id>, <numBytes>, <target>, <numArgs>
-void AArch64AsmPrinter::LowerPATCHPOINT(MCStreamer &OutStreamer, StackMaps &SM,
+void AArch64AsmPrinter::LowerPATCHPOINT(MCStreamer &OutStreamer,
                                         const MachineInstr &MI) {
   SM.recordPatchPoint(MI);
 
@@ -536,10 +533,10 @@ void AArch64AsmPrinter::EmitInstruction(const MachineInstr *MI) {
   }
 
   case TargetOpcode::STACKMAP:
-    return LowerSTACKMAP(*OutStreamer, SM, *MI);
+    return LowerSTACKMAP(*OutStreamer, *MI);
 
   case TargetOpcode::PATCHPOINT:
-    return LowerPATCHPOINT(*OutStreamer, SM, *MI);
+    return LowerPATCHPOINT(*OutStreamer, *MI);
   }
 
   // Finally, do the automated lowerings for everything else.

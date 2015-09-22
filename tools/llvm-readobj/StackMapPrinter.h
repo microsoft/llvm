@@ -16,7 +16,7 @@ namespace llvm {
 
 // Pretty print a stackmap to the given ostream.
 template <typename OStreamT, typename StackMapParserT>
-void prettyPrintStackMap(OStreamT &OS, const StackMapParserT &SMP) {
+void prettyPrintStackMapV1(OStreamT &OS, const StackMapParserT &SMP) {
 
   OS << "LLVM StackMap Version: " << SMP.getVersion()
      << "\nNum Functions: " << SMP.getNumFunctions();
@@ -75,6 +75,66 @@ void prettyPrintStackMap(OStreamT &OS, const StackMapParserT &SMP) {
 
 }
 
+// Pretty print a stackmap to the given ostream.
+template <typename OStreamT, typename StackMapParserT>
+void prettyPrintStackMapV2(OStreamT &OS, const StackMapParserT &SMP) {
+
+  OS << "LLVM StackMap Version: " << SMP.getVersion()
+     << "\nNum Functions: " << SMP.getNumFunctions();
+
+  // Functions:
+  for (const auto &F : SMP.functions()) {
+    OS << "\n  Function address: " << F.getFunctionAddress()
+       << ", functionk size: " << F.getFunctionSize()
+       << ", stack size: " << F.getStackSize()
+       << ", flags: " << (uint32_t)F.getFlags()
+       << ", frameBaseReg: " << F.getFrameBaseRegister()
+       << ", stackMapRecordIndex: " << F.getStackMapRecordIndex()
+       << ", # stackMapRecord: " << F.getNumStackMapRecords() << "\n";
+
+    for (const auto &S : F.stackmaprecords()) {
+      OS << "\n   StackMapRecord ID: " << S.getID()
+         << ", InstructionOffset: " << S.getInstructionOffset()
+         << ", CallSize: " << (uint32_t)S.getCallSize()
+         << ", Flags: " << (uint32_t)S.getFlags()
+         << ", LocationIndex: " << S.getLocationIndex()
+         << ", # Location: " << S.getNumLocations()
+         << ", LiveOutIndex: " << S.getLiveOutIndex()
+         << ", # LiveOut: " << S.getNumLiveOuts() << "\n";
+
+      unsigned LocationIndex = 0;
+      for (const auto &Loc : S.locations()) {
+        OS << "\n      #" << ++LocationIndex << ": ";
+        switch (Loc.getKind()) {
+        case StackMapParserT::LocationKind::Register:
+          OS << "Register R#" << Loc.getDwarfRegNum();
+          break;
+        case StackMapParserT::LocationKind::Direct:
+          OS << "Direct R#" << Loc.getDwarfRegNum() << " + " << Loc.getOffset();
+          break;
+        case StackMapParserT::LocationKind::Indirect:
+          OS << "Indirect [R#" << Loc.getDwarfRegNum() << " + "
+             << Loc.getOffset() << "]";
+          break;
+        case StackMapParserT::LocationKind::Constant:
+          OS << "Constant " << Loc.getSmallConstant();
+          break;
+        case StackMapParserT::LocationKind::ConstantIndex:
+          OS << "ConstantIndex #" << Loc.getConstantIndex() << " ("
+             << SMP.getConstant(Loc.getConstantIndex()).getValue() << ")";
+          break;
+        }
+      }
+
+      OS << "\n      " << S.getNumLiveOuts() << " live-outs: [ ";
+      for (const auto &LO : S.liveouts())
+        OS << "R#" << LO.getDwarfRegNum() << " (" << LO.getSizeInBytes()
+           << "-bytes) ";
+      OS << "]\n";
+    }
+  }
+  OS << "\n";
+}
 }
 
 #endif

@@ -1,4 +1,5 @@
 ; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7 | FileCheck %s
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7 -stackmap-version=2 | FileCheck %s
 
 define void @nop_test() {
 entry:

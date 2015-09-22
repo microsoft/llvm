@@ -217,6 +217,9 @@ namespace opts {
   PrintStackMap("stackmap",
                 cl::desc("Display contents of stackmap section"));
 
+  cl::opt<int> StackMapVersion(
+      "stackmap-version", cl::init(1),
+      cl::desc("Specify the stackmap encoding version (default = 1)"));
 } // namespace opts
 
 namespace llvm {
@@ -358,7 +361,7 @@ static void dumpObject(const ObjectFile *Obj) {
       Dumper->printMachODysymtab();
   }
   if (opts::PrintStackMap)
-    Dumper->printStackMap();
+    Dumper->printStackMap(opts::StackMapVersion);
 }
 
 /// @brief Dumps each object file in \a Arc;
