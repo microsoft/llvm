@@ -1372,11 +1372,42 @@ unsigned ConnectedVNInfoEqClasses::Classify(const LiveInterval *LI) {
   return EqClass.getNumClasses();
 }
 
-void ConnectedVNInfoEqClasses::Distribute(LiveInterval *LIV[],
-                                          MachineRegisterInfo &MRI) {
-  assert(LIV[0] && "LIV[0] must be set");
-  LiveInterval &LI = *LIV[0];
+template<typename LiveRangeT, typename EqClassesT>
+static void DistributeRange(LiveRangeT &LR, LiveRangeT *SplitLRs[],
+                            EqClassesT VNIClasses) {
+  // Move segments to new intervals.
+  LiveRange::iterator J = LR.begin(), E = LR.end();
+  while (J != E && VNIClasses[J->valno->id] == 0)
+    ++J;
+  for (LiveRange::iterator I = J; I != E; ++I) {
+    if (unsigned eq = VNIClasses[I->valno->id]) {
+      assert((SplitLRs[eq-1]->empty() || SplitLRs[eq-1]->expiredAt(I->start)) &&
+             "New intervals should be empty");
+      SplitLRs[eq-1]->segments.push_back(*I);
+    } else
+      *J++ = *I;
+  }
+  LR.segments.erase(J, E);
 
+  // Transfer VNInfos to their new owners and renumber them.
+  unsigned j = 0, e = LR.getNumValNums();
+  while (j != e && VNIClasses[j] == 0)
+    ++j;
+  for (unsigned i = j; i != e; ++i) {
+    VNInfo *VNI = LR.getValNumInfo(i);
+    if (unsigned eq = VNIClasses[i]) {
+      VNI->id = SplitLRs[eq-1]->getNumValNums();
+      SplitLRs[eq-1]->valnos.push_back(VNI);
+    } else {
+      VNI->id = j;
+      LR.valnos[j++] = VNI;
+    }
+  }
+  LR.valnos.resize(j);
+}
+
+void ConnectedVNInfoEqClasses::Distribute(LiveInterval &LI, LiveInterval *LIV[],
+                                          MachineRegisterInfo &MRI) {
   // Rewrite instructions.
   for (MachineRegisterInfo::reg_iterator RI = MRI.reg_begin(LI.reg),
        RE = MRI.reg_end(); RI != RE;) {
@@ -1398,38 +1429,41 @@ void ConnectedVNInfoEqClasses::Distribute(LiveInterval *LIV[],
     // NULL. If the use is tied to a def, VNI will be the defined value.
     if (!VNI)
       continue;
-    MO.setReg(LIV[getEqClass(VNI)]->reg);
+    if (unsigned EqClass = getEqClass(VNI))
+      MO.setReg(LIV[EqClass-1]->reg);
   }
 
-  // Move runs to new intervals.
-  LiveInterval::iterator J = LI.begin(), E = LI.end();
-  while (J != E && EqClass[J->valno->id] == 0)
-    ++J;
-  for (LiveInterval::iterator I = J; I != E; ++I) {
-    if (unsigned eq = EqClass[I->valno->id]) {
-      assert((LIV[eq]->empty() || LIV[eq]->expiredAt(I->start)) &&
-             "New intervals should be empty");
-      LIV[eq]->segments.push_back(*I);
-    } else
-      *J++ = *I;
-  }
-  // TODO: do not cheat anymore by simply cleaning all subranges
-  LI.clearSubRanges();
-  LI.segments.erase(J, E);
-
-  // Transfer VNInfos to their new owners and renumber them.
-  unsigned j = 0, e = LI.getNumValNums();
-  while (j != e && EqClass[j] == 0)
-    ++j;
-  for (unsigned i = j; i != e; ++i) {
-    VNInfo *VNI = LI.getValNumInfo(i);
-    if (unsigned eq = EqClass[i]) {
-      VNI->id = LIV[eq]->getNumValNums();
-      LIV[eq]->valnos.push_back(VNI);
-    } else {
-      VNI->id = j;
-      LI.valnos[j++] = VNI;
+  // Distribute subregister liveranges.
+  if (LI.hasSubRanges()) {
+    unsigned NumComponents = EqClass.getNumClasses();
+    SmallVector<unsigned, 8> VNIMapping;
+    SmallVector<LiveInterval::SubRange*, 8> SubRanges;
+    BumpPtrAllocator &Allocator = LIS.getVNInfoAllocator();
+    for (LiveInterval::SubRange &SR : LI.subranges()) {
+      // Create new subranges in the split intervals and construct a mapping
+      // for the VNInfos in the subrange.
+      unsigned NumValNos = SR.valnos.size();
+      VNIMapping.clear();
+      VNIMapping.reserve(NumValNos);
+      SubRanges.clear();
+      SubRanges.resize(NumComponents-1, nullptr);
+      for (unsigned I = 0; I < NumValNos; ++I) {
+        const VNInfo &VNI = *SR.valnos[I];
+        const VNInfo *MainRangeVNI = LI.getVNInfoAt(VNI.def);
+        assert(MainRangeVNI != nullptr
+               && "SubRange def must have corresponding main range def");
+        unsigned ComponentNum = getEqClass(MainRangeVNI);
+        VNIMapping.push_back(ComponentNum);
+        if (ComponentNum > 0 && SubRanges[ComponentNum-1] == nullptr) {
+          SubRanges[ComponentNum-1]
+            = LIV[ComponentNum-1]->createSubRange(Allocator, SR.LaneMask);
+        }
+      }
+      DistributeRange(SR, SubRanges.data(), VNIMapping);
     }
+    LI.removeEmptySubRanges();
   }
-  LI.valnos.resize(j);
+
+  // Distribute main liverange.
+  DistributeRange(LI, LIV, EqClass);
 }

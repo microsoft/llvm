@@ -2625,9 +2625,8 @@ Value *InnerLoopVectorizer::getOrCreateTripCount(Loop *L) {
   BackedgeTakenCount = SE->getNoopOrZeroExtend(BackedgeTakenCount, IdxTy);
   
   // Get the total trip count from the count by adding 1.
-  const SCEV *ExitCount =
-    SE->getAddExpr(BackedgeTakenCount,
-                   SE->getConstant(BackedgeTakenCount->getType(), 1));
+  const SCEV *ExitCount = SE->getAddExpr(
+      BackedgeTakenCount, SE->getOne(BackedgeTakenCount->getType()));
 
   const DataLayout &DL = L->getHeader()->getModule()->getDataLayout();
 
@@ -3654,10 +3653,12 @@ void InnerLoopVectorizer::vectorizeBlockInLoop(BasicBlock *BB, PhiVector *PV) {
       VectorParts &B = getVectorValue(it->getOperand(1));
       for (unsigned Part = 0; Part < UF; ++Part) {
         Value *C = nullptr;
-        if (FCmp)
+        if (FCmp) {
           C = Builder.CreateFCmp(Cmp->getPredicate(), A[Part], B[Part]);
-        else
+          cast<FCmpInst>(C)->copyFastMathFlags(it);
+        } else {
           C = Builder.CreateICmp(Cmp->getPredicate(), A[Part], B[Part]);
+        }
         Entry[Part] = C;
       }
 

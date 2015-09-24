@@ -13,7 +13,7 @@
 #include "MachOUtils.h"
 #include "NonRelocatableStringpool.h"
 #include "llvm/ADT/IntervalMap.h"
-#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/DIE.h"
@@ -248,6 +248,14 @@ public:
     return LocationAttributes;
   }
 
+  void setHasInterestingContent() { HasInterestingContent = true; }
+  bool hasInterestingContent() { return HasInterestingContent; }
+
+  /// Mark every DIE in this unit as kept. This function also
+  /// marks variables as InDebugMap so that they appear in the
+  /// reconstructed accelerator tables.
+  void markEverythingAsKept();
+
   /// \brief Compute the end offset for this unit. Must be
   /// called after the CU's DIEs have been cloned.
   /// \returns the next unit offset (which is also the current
@@ -368,7 +376,14 @@ private:
 
   /// Is this unit subject to the ODR rule?
   bool HasODR;
+  /// Did a DIE actually contain a valid reloc?
+  bool HasInterestingContent;
 };
+
+void CompileUnit::markEverythingAsKept() {
+  for (auto &I : Info)
+    I.Keep = true;
+}
 
 uint64_t CompileUnit::computeNextUnitOffset() {
   NextUnitOffset = StartOffset + 11 /* Header size */;
@@ -1096,6 +1111,9 @@ public:
   /// \brief Link the contents of the DebugMap.
   bool link(const DebugMap &);
 
+  void reportWarning(const Twine &Warning, const DWARFUnit *Unit = nullptr,
+                     const DWARFDebugInfoEntryMinimal *DIE = nullptr) const;
+
 private:
   /// \brief Called at the start of a debug object link.
   void startDebugObject(DWARFContext &, DebugMapObject &);
@@ -1174,6 +1192,22 @@ private:
                          const DebugMapObject &DMO, CompileUnit &CU,
                          unsigned Flags);
 
+  /// If this compile unit is really a skeleton CU that points to a
+  /// clang module, register it in ClangModules and return true.
+  ///
+  /// A skeleton CU is a CU without children, a DW_AT_gnu_dwo_name
+  /// pointing to the module, and a DW_AT_gnu_dwo_id with the module
+  /// hash.
+  bool registerModuleReference(const DWARFDebugInfoEntryMinimal &CUDie,
+                               const DWARFUnit &Unit, DebugMap &ModuleMap,
+                               unsigned Indent = 0);
+
+  /// Recursively add the debug info in this clang module .pcm
+  /// file (and all the modules imported by it in a bottom-up fashion)
+  /// to Units.
+  void loadClangModule(StringRef Filename, StringRef ModulePath,
+                       DebugMap &ModuleMap, unsigned Indent = 0);
+
   /// \brief Flags passed to DwarfLinker::lookForDIEsToKeep
   enum TravesalFlags {
     TF_Keep = 1 << 0,            ///< Mark the traversed DIEs as kept.
@@ -1186,7 +1220,7 @@ private:
 
   /// \brief Mark the passed DIE as well as all the ones it depends on
   /// as kept.
-  void keepDIEAndDenpendencies(RelocationManager &RelocMgr,
+  void keepDIEAndDependencies(RelocationManager &RelocMgr,
                                const DWARFDebugInfoEntryMinimal &DIE,
                                CompileUnit::DIEInfo &MyInfo,
                                const DebugMapObject &DMO, CompileUnit &CU,
@@ -1372,16 +1406,6 @@ private:
   /// \defgroup Helpers Various helper methods.
   ///
   /// @{
-  const DWARFDebugInfoEntryMinimal *
-  resolveDIEReference(const DWARFFormValue &RefValue, const DWARFUnit &Unit,
-                      const DWARFDebugInfoEntryMinimal &DIE,
-                      CompileUnit *&ReferencedCU);
-
-  CompileUnit *getUnitForOffset(unsigned Offset);
-
-  void reportWarning(const Twine &Warning, const DWARFUnit *Unit = nullptr,
-                     const DWARFDebugInfoEntryMinimal *DIE = nullptr) const;
-
   bool createStreamer(Triple TheTriple, StringRef OutputFilename);
 
   /// \brief Attempt to load a debug object from disk.
@@ -1390,12 +1414,12 @@ private:
                                                  const DebugMap &Map);
   /// @}
 
-private:
   std::string OutputFilename;
   LinkOptions Options;
   BinaryHolder BinHolder;
   std::unique_ptr<DwarfStreamer> Streamer;
   uint64_t OutputDebugInfoSize;
+  unsigned UnitID; ///< A unique ID that identifies each compile unit.
 
   /// The units of the current debug map object.
   std::vector<CompileUnit> Units;
@@ -1423,11 +1447,15 @@ private:
   /// Offset of the last CIE that has been emitted in the output
   /// debug_frame section.
   uint32_t LastCIEOffset;
+
+  /// FIXME: We may need to use something more resilient than the PCM filename.
+  StringSet<> ClangModules;
 };
 
-/// \brief Similar to DWARFUnitSection::getUnitForOffset(), but
-/// returning our CompileUnit object instead.
-CompileUnit *DwarfLinker::getUnitForOffset(unsigned Offset) {
+/// Similar to DWARFUnitSection::getUnitForOffset(), but returning our
+/// CompileUnit object instead.
+static CompileUnit *getUnitForOffset(MutableArrayRef<CompileUnit> Units,
+                                     unsigned Offset) {
   auto CU =
       std::upper_bound(Units.begin(), Units.end(), Offset,
                        [](uint32_t LHS, const CompileUnit &RHS) {
@@ -1436,21 +1464,22 @@ CompileUnit *DwarfLinker::getUnitForOffset(unsigned Offset) {
   return CU != Units.end() ? &*CU : nullptr;
 }
 
-/// \brief Resolve the DIE attribute reference that has been
+/// Resolve the DIE attribute reference that has been
 /// extracted in \p RefValue. The resulting DIE migh be in another
 /// CompileUnit which is stored into \p ReferencedCU.
 /// \returns null if resolving fails for any reason.
-const DWARFDebugInfoEntryMinimal *DwarfLinker::resolveDIEReference(
+static const DWARFDebugInfoEntryMinimal *resolveDIEReference(
+    const DwarfLinker &Linker, MutableArrayRef<CompileUnit> Units,
     const DWARFFormValue &RefValue, const DWARFUnit &Unit,
     const DWARFDebugInfoEntryMinimal &DIE, CompileUnit *&RefCU) {
   assert(RefValue.isFormClass(DWARFFormValue::FC_Reference));
   uint64_t RefOffset = *RefValue.getAsReference(&Unit);
 
-  if ((RefCU = getUnitForOffset(RefOffset)))
+  if ((RefCU = getUnitForOffset(Units, RefOffset)))
     if (const auto *RefDie = RefCU->getOrigUnit().getDIEForOffset(RefOffset))
       return RefDie;
 
-  reportWarning("could not find referenced DIE", &Unit, &DIE);
+  Linker.reportWarning("could not find referenced DIE", &Unit, &DIE);
   return nullptr;
 }
 
@@ -2067,7 +2096,7 @@ unsigned DwarfLinker::shouldKeepDIE(RelocationManager &RelocMgr,
 /// back to lookForDIEsToKeep while adding TF_DependencyWalk to the
 /// TraversalFlags to inform it that it's not doing the primary DIE
 /// tree walk.
-void DwarfLinker::keepDIEAndDenpendencies(RelocationManager &RelocMgr,
+void DwarfLinker::keepDIEAndDependencies(RelocationManager &RelocMgr,
                                           const DWARFDebugInfoEntryMinimal &Die,
                                           CompileUnit::DIEInfo &MyInfo,
                                           const DebugMapObject &DMO,
@@ -2102,7 +2131,8 @@ void DwarfLinker::keepDIEAndDenpendencies(RelocationManager &RelocMgr,
     Val.extractValue(Data, &Offset, &Unit);
     CompileUnit *ReferencedCU;
     if (const auto *RefDIE =
-            resolveDIEReference(Val, Unit, Die, ReferencedCU)) {
+            resolveDIEReference(*this, MutableArrayRef<CompileUnit>(Units), Val,
+                                Unit, Die, ReferencedCU)) {
       uint32_t RefIdx = ReferencedCU->getOrigUnit().getDIEIndex(RefDIE);
       CompileUnit::DIEInfo &Info = ReferencedCU->getInfo(RefIdx);
       // If the referenced DIE has a DeclContext that has already been
@@ -2151,7 +2181,7 @@ void DwarfLinker::lookForDIEsToKeep(RelocationManager &RelocMgr,
   if ((Flags & TF_DependencyWalk) && AlreadyKept)
     return;
 
-  // We must not call shouldKeepDIE while called from keepDIEAndDenpendencies,
+  // We must not call shouldKeepDIE while called from keepDIEAndDependencies,
   // because it would screw up the relocation finding logic.
   if (!(Flags & TF_DependencyWalk))
     Flags = shouldKeepDIE(RelocMgr, Die, CU, MyInfo, Flags);
@@ -2159,7 +2189,7 @@ void DwarfLinker::lookForDIEsToKeep(RelocationManager &RelocMgr,
   // If it is a newly kept DIE mark it as well as all its dependencies as kept.
   if (!AlreadyKept && (Flags & TF_Keep)) {
     bool UseOdr = (Flags & TF_DependencyWalk) ? (Flags & TF_ODR) : CU.hasODR();
-    keepDIEAndDenpendencies(RelocMgr, Die, MyInfo, DMO, CU, UseOdr);
+    keepDIEAndDependencies(RelocMgr, Die, MyInfo, DMO, CU, UseOdr);
   }
   // The TF_ParentWalk flag tells us that we are currently walking up
   // the parent chain of a required DIE, and we don't want to mark all
@@ -2231,7 +2261,7 @@ unsigned DwarfLinker::DIECloner::cloneDieReferenceAttribute(
   DeclContext *Ctxt = nullptr;
 
   const DWARFDebugInfoEntryMinimal *RefDie =
-      Linker.resolveDIEReference(Val, U, InputDIE, RefUnit);
+      resolveDIEReference(Linker, CompileUnits, Val, U, InputDIE, RefUnit);
 
   // If the referenced DIE is not found,  drop the attribute.
   if (!RefDie)
@@ -2592,7 +2622,13 @@ DIE *DwarfLinker::DIECloner::cloneDIE(
 
   // Extract and clone every attribute.
   DataExtractor Data = U.getDebugInfoExtractor();
-  uint32_t NextOffset = U.getDIEAtIndex(Idx + 1)->getOffset();
+  // Point to the next DIE (generally there is always at least a NULL
+  // entry after the current one). If this is a lone
+  // DW_TAG_compile_unit without any children, point to the next unit.
+  uint32_t NextOffset =
+    (Idx + 1 < U.getNumDIEs())
+    ? U.getDIEAtIndex(Idx + 1)->getOffset()
+    : U.getNextUnitOffset();
   AttributesInfo AttrInfo;
 
   // We could copy the data only if we need to aply a relocation to
@@ -3055,6 +3091,38 @@ void DwarfLinker::DIECloner::copyAbbrev(
   Linker.AssignAbbrev(Copy);
 }
 
+bool DwarfLinker::registerModuleReference(
+    const DWARFDebugInfoEntryMinimal &CUDie, const DWARFUnit &Unit,
+    DebugMap &ModuleMap, unsigned Indent) {
+  std::string PCMfile =
+      CUDie.getAttributeValueAsString(&Unit, dwarf::DW_AT_GNU_dwo_name, "");
+  if (PCMfile.empty())
+    return false;
+
+  // Clang module DWARF skeleton CUs abuse this for the path to the module.
+  std::string PCMpath =
+      CUDie.getAttributeValueAsString(&Unit, dwarf::DW_AT_comp_dir, "");
+
+  if (Options.Verbose) {
+    outs().indent(Indent);
+    outs() << "Found clang module reference " << PCMfile;
+  }
+
+  if (ClangModules.count(PCMfile)) {
+    if (Options.Verbose)
+      outs() << " [cached].\n";
+    return true;
+  }
+  if (Options.Verbose)
+    outs() << " ...\n";
+
+  // Cyclic dependencies are disallowed by Clang, but we still
+  // shouldn't run into an infinite loop, so mark it as processed now.
+  ClangModules.insert(PCMfile);
+  loadClangModule(PCMfile, PCMpath, ModuleMap, Indent + 2);
+  return true;
+}
+
 ErrorOr<const object::ObjectFile &>
 DwarfLinker::loadObject(BinaryHolder &BinaryHolder, DebugMapObject &Obj,
                         const DebugMap &Map) {
@@ -3068,6 +3136,58 @@ DwarfLinker::loadObject(BinaryHolder &BinaryHolder, DebugMapObject &Obj,
   if (std::error_code EC = ErrOrObj.getError())
     reportWarning(Twine(Obj.getObjectFilename()) + ": " + EC.message());
   return ErrOrObj;
+}
+
+void DwarfLinker::loadClangModule(StringRef Filename, StringRef ModulePath,
+                                  DebugMap &ModuleMap, unsigned Indent) {
+  SmallString<80> Path(Options.PrependPath);
+  if (sys::path::is_relative(Filename))
+    sys::path::append(Path, ModulePath, Filename);
+  else
+    sys::path::append(Path, Filename);
+  BinaryHolder ObjHolder(Options.Verbose);
+  auto &Obj =
+      ModuleMap.addDebugMapObject(Path, sys::TimeValue::PosixZeroTime());
+  auto ErrOrObj = loadObject(ObjHolder, Obj, ModuleMap);
+  if (!ErrOrObj) {
+    ClangModules.erase(ClangModules.find(Filename));
+    return;
+  }
+
+  // FIXME: At this point dsymutil should verify the DW_AT_gnu_dwo_id
+  // against the module hash of the clang module.
+
+  CompileUnit *Unit = nullptr;
+
+  // Setup access to the debug info.
+  DWARFContextInMemory DwarfContext(*ErrOrObj);
+  RelocationManager RelocMgr(*this);
+  for (const auto &CU : DwarfContext.compile_units()) {
+    auto *CUDie = CU->getUnitDIE(false);
+    // Recursively get all modules imported by this one.
+    if (!registerModuleReference(*CUDie, *CU, ModuleMap, Indent)) {
+      // Add this module.
+      if (Unit) {
+        errs() << Filename << ": Clang modules are expected to have exactly"
+               << " 1 compile unit.\n";
+        exitDsymutil(1);
+      }
+      Unit = new CompileUnit(*CU, UnitID++, !Options.NoODR);
+      Unit->setHasInterestingContent();
+      gatherDIEParents(CUDie, 0, *Unit, &ODRContexts.getRoot(), StringPool,
+                       ODRContexts);
+      // Keep everything.
+      Unit->markEverythingAsKept();
+    }
+  }
+  if (Options.Verbose) {
+    outs().indent(Indent);
+    outs() << "cloning .debug_info from " << Filename << "\n";
+  }
+
+  DIECloner(*this, RelocMgr, DIEAlloc, MutableArrayRef<CompileUnit>(*Unit),
+            Options)
+      .cloneAllCompileUnits(DwarfContext);
 }
 
 void DwarfLinker::DIECloner::cloneAllCompileUnits(
@@ -3117,7 +3237,9 @@ bool DwarfLinker::link(const DebugMap &Map) {
   // Size of the DIEs (and headers) generated for the linked output.
   OutputDebugInfoSize = 0;
   // A unique ID that identifies each compile unit.
-  unsigned UnitID = 0;
+  UnitID = 0;
+  DebugMap ModuleMap(Map.getTriple(), Map.getBinaryPath());
+
   for (const auto &Obj : Map.objects()) {
     CurrentDebugObject = Obj.get();
 
@@ -3147,9 +3269,11 @@ bool DwarfLinker::link(const DebugMap &Map) {
         outs() << "Input compilation unit:";
         CUDie->dump(outs(), CU.get(), 0);
       }
-      Units.emplace_back(*CU, UnitID++, !Options.NoODR);
-      gatherDIEParents(CUDie, 0, Units.back(), &ODRContexts.getRoot(),
-                       StringPool, ODRContexts);
+      if (!registerModuleReference(*CUDie, *CU, ModuleMap)) {
+        Units.emplace_back(*CU, UnitID++, !Options.NoODR);
+        gatherDIEParents(CUDie, 0, Units.back(), &ODRContexts.getRoot(),
+                         StringPool, ODRContexts);
+      }
     }
 
     // Then mark all the DIEs that need to be present in the linked

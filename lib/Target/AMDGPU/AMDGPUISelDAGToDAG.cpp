@@ -40,6 +40,7 @@ class AMDGPUDAGToDAGISel : public SelectionDAGISel {
   // Subtarget - Keep a pointer to the AMDGPU Subtarget around so that we can
   // make the right decision when generating code for different targets.
   const AMDGPUSubtarget *Subtarget;
+
 public:
   AMDGPUDAGToDAGISel(TargetMachine &TM);
   virtual ~AMDGPUDAGToDAGISel();
@@ -512,8 +513,8 @@ SDNode *AMDGPUDAGToDAGISel::Select(SDNode *N) {
         return SelectCode(NewValue.getNode());
       }
 
-      // getNode() may fold the bitcast if its input was another bitcast.  If that
-      // happens we should only select the new store.
+      // getNode() may fold the bitcast if its input was another bitcast.  If
+      // that happens we should only select the new store.
       N = NewStore.getNode();
     }
 
@@ -585,7 +586,6 @@ SDNode *AMDGPUDAGToDAGISel::Select(SDNode *N) {
 
     return getS_BFE(Signed ? AMDGPU::S_BFE_I32 : AMDGPU::S_BFE_U32, SDLoc(N),
                     N->getOperand(0), OffsetVal, WidthVal);
-
   }
   case AMDGPUISD::DIV_SCALE: {
     return SelectDIV_SCALE(N);
@@ -610,7 +610,6 @@ SDNode *AMDGPUDAGToDAGISel::Select(SDNode *N) {
 
   return SelectCode(N);
 }
-
 
 bool AMDGPUDAGToDAGISel::checkType(const Value *Ptr, unsigned AS) {
   assert(AS != 0 && "Use checkPrivateAddress instead.");
@@ -857,7 +856,8 @@ SDNode *AMDGPUDAGToDAGISel::SelectDIV_SCALE(SDNode *N) {
   unsigned Opc
     = (VT == MVT::f64) ? AMDGPU::V_DIV_SCALE_F64 : AMDGPU::V_DIV_SCALE_F32;
 
-  // src0_modifiers, src0, src1_modifiers, src1, src2_modifiers, src2, clamp, omod
+  // src0_modifiers, src0, src1_modifiers, src1, src2_modifiers, src2, clamp,
+  // omod
   SDValue Ops[8];
 
   SelectVOP3Mods0(N->getOperand(0), Ops[1], Ops[0], Ops[6], Ops[7]);
@@ -1081,7 +1081,6 @@ void AMDGPUDAGToDAGISel::SelectMUBUF(SDValue Addr, SDValue &Ptr,
   VAddr = CurDAG->getTargetConstant(0, DL, MVT::i32);
   Ptr = Addr;
   Offset = CurDAG->getTargetConstant(0, DL, MVT::i16);
-
 }
 
 bool AMDGPUDAGToDAGISel::SelectMUBUFAddr64(SDValue Addr, SDValue &SRsrc,
@@ -1113,8 +1112,8 @@ bool AMDGPUDAGToDAGISel::SelectMUBUFAddr64(SDValue Addr, SDValue &SRsrc,
 
 bool AMDGPUDAGToDAGISel::SelectMUBUFAddr64(SDValue Addr, SDValue &SRsrc,
                                            SDValue &VAddr, SDValue &SOffset,
-					   SDValue &Offset,
-					   SDValue &SLC) const {
+                                           SDValue &Offset,
+                                           SDValue &SLC) const {
   SLC = CurDAG->getTargetConstant(0, SDLoc(Addr), MVT::i1);
   SDValue GLC, TFE;
 
@@ -1365,7 +1364,6 @@ SDNode *AMDGPUDAGToDAGISel::SelectAddrSpaceCast(SDNode *N) {
       Src,
       CurDAG->getTargetConstant(AMDGPU::sub0, DL, MVT::i32));
   }
-
 
   if (DestSize > SrcSize) {
     assert(SrcSize == 32 && DestSize == 64);

@@ -1212,8 +1212,8 @@ tryInstructionTransform(MachineBasicBlock::iterator &mi,
   // use this variable to check later. Because it might be better.
   // For example, we can just use `leal (%rsi,%rdi), %eax` and `ret`
   // instead of the following code.
-  //   addl	%esi, %edi
-  //   movl	%edi, %eax
+  //   addl     %esi, %edi
+  //   movl     %edi, %eax
   //   ret
   bool Commuted = false;
 
@@ -1536,7 +1536,6 @@ TwoAddressInstructionPass::processTiedPairs(MachineInstr *MI,
     SrcRegMap[RegA] = RegB;
   }
 
-
   if (AllUsesCopied) {
     if (!IsEarlyClobber) {
       // Replace other (un-tied) uses of regB with LastCopiedReg.
@@ -1661,8 +1660,8 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &Func) {
           unsigned DstReg = mi->getOperand(DstIdx).getReg();
           if (SrcReg != DstReg &&
               tryInstructionTransform(mi, nmi, SrcIdx, DstIdx, Dist, false)) {
-            // The tied operands have been eliminated or shifted further down the
-            // block to ease elimination. Continue processing with 'nmi'.
+            // The tied operands have been eliminated or shifted further down
+            // the block to ease elimination. Continue processing with 'nmi'.
             TiedOperands.clear();
             mi = nmi;
             continue;
