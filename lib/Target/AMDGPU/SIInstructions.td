@@ -30,7 +30,9 @@ def isGCN : Predicate<"Subtarget->getGeneration() "
                       ">= AMDGPUSubtarget::SOUTHERN_ISLANDS">,
             AssemblerPredicate<"FeatureGCN">;
 def isSI : Predicate<"Subtarget->getGeneration() "
-                      "== AMDGPUSubtarget::SOUTHERN_ISLANDS">;
+                      "== AMDGPUSubtarget::SOUTHERN_ISLANDS">,
+           AssemblerPredicate<"FeatureSouthernIslands">;
+
 
 def has16BankLDS : Predicate<"Subtarget->getLDSBankCount() == 16">;
 def has32BankLDS : Predicate<"Subtarget->getLDSBankCount() == 32">;
@@ -91,7 +93,9 @@ defm S_BUFFER_LOAD_DWORDX16 : SMRD_Helper <
 } // mayLoad = 1
 
 //def S_MEMTIME : SMRD_ <0x0000001e, "s_memtime", []>;
-//def S_DCACHE_INV : SMRD_ <0x0000001f, "s_dcache_inv", []>;
+
+defm S_DCACHE_INV : SMRD_Inval <smrd<0x1f, 0x20>, "s_dcache_inv",
+  int_amdgcn_s_dcache_inv>;
 
 //===----------------------------------------------------------------------===//
 // SOP1 Instructions
@@ -1028,9 +1032,12 @@ defm BUFFER_ATOMIC_XOR : MUBUF_Atomic <
 //def BUFFER_ATOMIC_FCMPSWAP_X2 : MUBUF_X2 <mubuf<0x5e>, "buffer_atomic_fcmpswap_x2", []>; // isn't on VI
 //def BUFFER_ATOMIC_FMIN_X2 : MUBUF_X2 <mubuf<0x5f>, "buffer_atomic_fmin_x2", []>; // isn't on VI
 //def BUFFER_ATOMIC_FMAX_X2 : MUBUF_X2 <mubuf<0x60>, "buffer_atomic_fmax_x2", []>; // isn't on VI
-//def BUFFER_WBINVL1_SC : MUBUF_WBINVL1 <mubuf<0x70>, "buffer_wbinvl1_sc", []>; // isn't on CI & VI
-//def BUFFER_WBINVL1_VOL : MUBUF_WBINVL1 <mubuf<0x70, 0x3f>, "buffer_wbinvl1_vol", []>; // isn't on SI
-//def BUFFER_WBINVL1 : MUBUF_WBINVL1 <mubuf<0x71, 0x3e>, "buffer_wbinvl1", []>;
+
+let SubtargetPredicate = isSI in {
+defm BUFFER_WBINVL1_SC : MUBUF_Invalidate <mubuf<0x70>, "buffer_wbinvl1_sc", int_amdgcn_buffer_wbinvl1_sc>; // isn't on CI & VI
+}
+
+defm BUFFER_WBINVL1 : MUBUF_Invalidate <mubuf<0x71, 0x3e>, "buffer_wbinvl1", int_amdgcn_buffer_wbinvl1>;
 
 //===----------------------------------------------------------------------===//
 // MTBUF Instructions

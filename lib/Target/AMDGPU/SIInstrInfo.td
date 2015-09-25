@@ -73,9 +73,12 @@ class sopk <bits<5> si, bits<5> vi = si> {
 }
 
 // Specify an SMRD opcode for SI and SMEM opcode for VI
-class smrd<bits<5> si, bits<5> vi = si> {
-  field bits<5> SI = si;
-  field bits<8> VI = { 0, 0, 0, vi };
+
+// FIXME: This should really be bits<5> si, Tablegen crashes if
+// parameter default value is other parameter with different bit size
+class smrd<bits<8> si, bits<8> vi = si> {
+  field bits<5> SI = si{4-0};
+  field bits<8> VI = vi;
 }
 
 // Execpt for the NONE field, this must be kept in sync with the SISubtarget enum
@@ -899,8 +902,8 @@ class SMRD_Real_si <bits<5> op, string opName, bit imm, dag outs, dag ins,
 }
 
 class SMRD_Real_vi <bits<8> op, string opName, bit imm, dag outs, dag ins,
-                    string asm> :
-  SMRD <outs, ins, asm, []>,
+                    string asm, list<dag> pattern = []> :
+  SMRD <outs, ins, asm, pattern>,
   SMEMe_vi <op, imm>,
   SIMCInstr<opName, SISubtarget.VI> {
   let AssemblerPredicates = [isVI];
@@ -918,6 +921,33 @@ multiclass SMRD_m <smrd op, string opName, bit imm, dag outs, dag ins,
   let glc = 0 in {
     def _vi : SMRD_Real_vi <op.VI, opName, imm, outs, ins, asm>;
   }
+}
+
+multiclass SMRD_Inval <smrd op, string opName,
+                       SDPatternOperator node> {
+  let hasSideEffects = 1, mayStore = 1 in {
+    def "" : SMRD_Pseudo <opName, (outs), (ins), [(node)]>;
+
+    let sbase = 0, offset = 0 in {
+      let sdst = 0 in {
+        def _si : SMRD_Real_si <op.SI, opName, 0, (outs), (ins), opName>;
+      }
+
+      let glc = 0, sdata = 0 in {
+        def _vi : SMRD_Real_vi <op.VI, opName, 0, (outs), (ins), opName>;
+      }
+    }
+  }
+}
+
+class SMEM_Inval <bits<8> op, string opName, SDPatternOperator node> :
+  SMRD_Real_vi<op, opName, 0, (outs), (ins), opName, [(node)]> {
+  let hasSideEffects = 1;
+  let mayStore = 1;
+  let sbase = 0;
+  let sdata = 0;
+  let glc = 0;
+  let offset = 0;
 }
 
 multiclass SMRD_Helper <smrd op, string opName, RegisterClass baseClass,
@@ -2332,7 +2362,7 @@ multiclass MUBUF_Atomic <mubuf op, string name, RegisterClass rc,
         op, name#"_rtn_offset", (outs rc:$vdata),
         (ins rc:$vdata_in, SReg_128:$srsrc, SCSrc_32:$soffset,
              mbuf_offset:$offset, slc:$slc),
-        name#" $vdata, $srsrc, $soffset"#"$offset"#" glc $slc",
+        name#" $vdata, $srsrc, $soffset"#"$offset"#" glc$slc",
         [(set vt:$vdata,
          (atomic (MUBUFOffsetAtomic v4i32:$srsrc, i32:$soffset, i16:$offset,
                                     i1:$slc), vt:$vdata_in))], 1
@@ -2453,6 +2483,23 @@ multiclass MUBUF_Store_Helper <mubuf op, string name, RegisterClass vdataClass,
                                                    i1:$glc, i1:$slc, i1:$tfe))]>;
     }
   } // End mayLoad = 0, mayStore = 1
+}
+
+// For cache invalidation instructions.
+multiclass MUBUF_Invalidate <mubuf op, string opName, SDPatternOperator node> {
+  let hasSideEffects = 1, mayStore = 1, AsmMatchConverter = "" in {
+    def "" : MUBUF_Pseudo <opName, (outs), (ins), [(node)]>;
+
+    // Set everything to 0.
+    let offset = 0, offen = 0, idxen = 0, glc = 0, vaddr = 0,
+        vdata = 0, srsrc = 0, slc = 0, tfe = 0, soffset = 0 in {
+      let addr64 = 0 in {
+        def _si : MUBUF_Real_si <op, opName, (outs), (ins), opName>;
+      }
+
+      def _vi : MUBUF_Real_vi <op, opName, (outs), (ins), opName>;
+    }
+  } // End hasSideEffects = 1, mayStore = 1, AsmMatchConverter = ""
 }
 
 class FLAT_Load_Helper <bits<7> op, string asm, RegisterClass regClass> :
