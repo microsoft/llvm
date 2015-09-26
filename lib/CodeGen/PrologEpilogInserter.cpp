@@ -92,9 +92,6 @@ private:
                            int &SPAdj);
   void scavengeFrameVirtualRegs(MachineFunction &Fn);
   void insertPrologEpilogCode(MachineFunction &Fn);
-
-  // Convenience for recognizing return blocks.
-  bool isReturnBlock(const MachineBasicBlock *MBB) const;
 };
 } // namespace
 
@@ -129,10 +126,6 @@ void PEI::getAnalysisUsage(AnalysisUsage &AU) const {
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
-bool PEI::isReturnBlock(const MachineBasicBlock* MBB) const {
-  return (MBB && !MBB->empty() && MBB->back().isReturn());
-}
-
 /// Compute the set of return blocks
 void PEI::calculateSets(MachineFunction &Fn) {
   const MachineFrameInfo *MFI = Fn.getFrameInfo();
@@ -149,7 +142,7 @@ void PEI::calculateSets(MachineFunction &Fn) {
     // If RestoreBlock does not have any successor and is not a return block
     // then the end point is unreachable and we do not need to insert any
     // epilogue.
-    if (!RestoreBlock->succ_empty() || isReturnBlock(RestoreBlock))
+    if (!RestoreBlock->succ_empty() || RestoreBlock->isReturnBlock())
       RestoreBlocks.push_back(RestoreBlock);
     return;
   }
@@ -159,7 +152,7 @@ void PEI::calculateSets(MachineFunction &Fn) {
   for (MachineBasicBlock &MBB : Fn) {
     if (MBB.isEHFuncletEntry())
       SaveBlocks.push_back(&MBB);
-    if (isReturnBlock(&MBB))
+    if (MBB.isReturnBlock())
       RestoreBlocks.push_back(&MBB);
   }
 }
@@ -409,7 +402,7 @@ static void updateLiveness(MachineFunction &MF) {
     const MachineBasicBlock *CurBB = WorkList.pop_back_val();
     // By construction, the region that is after the save point is
     // dominated by the Save and post-dominated by the Restore.
-    if (CurBB == Save)
+    if (CurBB == Save && Save != Restore)
       continue;
     // Enqueue all the successors not already visited.
     // Those are by construction either before Save or after Restore.
@@ -421,10 +414,13 @@ static void updateLiveness(MachineFunction &MF) {
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
 
   for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
-    for (MachineBasicBlock *MBB : Visited)
+    for (MachineBasicBlock *MBB : Visited) {
+      MCPhysReg Reg = CSI[i].getReg();
       // Add the callee-saved register as live-in.
       // It's killed at the spill.
-      MBB->addLiveIn(CSI[i].getReg());
+      if (!MBB->isLiveIn(Reg))
+        MBB->addLiveIn(Reg);
+    }
   }
 }
 

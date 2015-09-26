@@ -26,7 +26,6 @@
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include <algorithm>
@@ -889,7 +888,7 @@ void LiveInterval::constructMainRangeFromSubranges(
   Segment CurrentSegment;
   bool ConstructingSegment = false;
   bool NeedVNIFixup = false;
-  unsigned ActiveMask = 0;
+  LaneBitmask ActiveMask = 0;
   SlotIndex Pos = First;
   while (true) {
     SlotIndex NextPos = Last;
@@ -899,7 +898,7 @@ void LiveInterval::constructMainRangeFromSubranges(
       END_SEGMENT,
     } Event = NOTHING;
     // Which subregister lanes are affected by the current event.
-    unsigned EventMask = 0;
+    LaneBitmask EventMask = 0;
     // Whether a BEGIN_SEGMENT is also a valno definition point.
     bool IsDef = false;
     // Find the next begin or end of a subrange segment. Combine masks if we
@@ -1066,7 +1065,7 @@ void LiveInterval::print(raw_ostream &OS) const {
   super::print(OS);
   // Print subranges
   for (const SubRange &SR : subranges()) {
-    OS << format(" L%04X ", SR.LaneMask) << SR;
+    OS << " L" << PrintLaneMask(SR.LaneMask) << ' ' << SR;
   }
 }
 
@@ -1101,8 +1100,8 @@ void LiveInterval::verify(const MachineRegisterInfo *MRI) const {
   super::verify();
 
   // Make sure SubRanges are fine and LaneMasks are disjunct.
-  unsigned Mask = 0;
-  unsigned MaxMask = MRI != nullptr ? MRI->getMaxLaneMaskForVReg(reg) : ~0u;
+  LaneBitmask Mask = 0;
+  LaneBitmask MaxMask = MRI != nullptr ? MRI->getMaxLaneMaskForVReg(reg) : ~0u;
   for (const SubRange &SR : subranges()) {
     // Subrange lanemask should be disjunct to any previous subrange masks.
     assert((Mask & SR.LaneMask) == 0);

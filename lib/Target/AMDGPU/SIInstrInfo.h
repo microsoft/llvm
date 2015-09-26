@@ -305,7 +305,8 @@ public:
                  unsigned HalfImmOp, unsigned HalfSGPROp,
                  MachineInstr *&Lo, MachineInstr *&Hi) const;
 
-  void moveSMRDToVALU(MachineInstr *MI, MachineRegisterInfo &MRI) const;
+  void moveSMRDToVALU(MachineInstr *MI, MachineRegisterInfo &MRI,
+                      SmallVectorImpl<MachineInstr *> &Worklist) const;
 
   /// \brief Replace this instruction's opcode with the equivalent VALU
   /// opcode.  This function will also move the users of \p MI to the
@@ -338,8 +339,10 @@ public:
 
   /// \brief Returns the operand named \p Op.  If \p MI does not have an
   /// operand named \c Op, this function returns nullptr.
+  LLVM_READONLY
   MachineOperand *getNamedOperand(MachineInstr &MI, unsigned OperandName) const;
 
+  LLVM_READONLY
   const MachineOperand *getNamedOperand(const MachineInstr &MI,
                                         unsigned OpName) const {
     return getNamedOperand(const_cast<MachineInstr &>(MI), OpName);
