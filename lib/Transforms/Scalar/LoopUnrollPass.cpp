@@ -415,12 +415,18 @@ private:
     auto *GV = dyn_cast<GlobalVariable>(AddressIt->second.Base);
     // We're only interested in loads that can be completely folded to a
     // constant.
-    if (!GV || !GV->hasInitializer() || !GV->isConstant())
+    if (!GV || !GV->hasDefinitiveInitializer() || !GV->isConstant())
       return false;
 
     ConstantDataSequential *CDS =
         dyn_cast<ConstantDataSequential>(GV->getInitializer());
     if (!CDS)
+      return false;
+
+    // We might have a vector load from an array. FIXME: for now we just bail
+    // out in this case, but we should be able to resolve and simplify such
+    // loads.
+    if(!CDS->isElementTypeCompatible(I.getType()))
       return false;
 
     int ElemSize = CDS->getElementType()->getPrimitiveSizeInBits() / 8U;

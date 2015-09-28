@@ -995,6 +995,14 @@ public:
     return false;
   }
 
+  /// Return true if the target stores SafeStack pointer at a fixed offset in
+  /// some non-standard address space, and populates the address space and
+  /// offset as appropriate.
+  virtual bool getSafeStackPointerLocation(unsigned & /*AddressSpace*/,
+                                           unsigned & /*Offset*/) const {
+    return false;
+  }
+
   /// Returns true if a cast between SrcAS and DestAS is a noop.
   virtual bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const {
     return false;
@@ -1096,6 +1104,14 @@ public:
       return nullptr;
   }
   /// @}
+
+  // Emits code that executes when the comparison result in the ll/sc
+  // expansion of a cmpxchg instruction is such that the store-conditional will
+  // not execute.  This makes it possible to balance out the load-linked with
+  // a dedicated instruction, if desired.
+  // E.g., on ARM, if ldrex isn't followed by strex, the exclusive monitor would
+  // be unnecessarily held, except if clrex, inserted by this hook, is executed.
+  virtual void emitAtomicCmpXchgNoStoreLLBalance(IRBuilder<> &Builder) const {}
 
   /// Returns true if the given (atomic) store should be expanded by the
   /// IR-level AtomicExpand pass into an "atomic xchg" which ignores its input.

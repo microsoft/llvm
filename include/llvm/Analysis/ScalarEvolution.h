@@ -507,6 +507,13 @@ namespace llvm {
                        bool Inverse);
 
     /// Test whether the condition described by Pred, LHS, and RHS is true
+    /// whenever the condition described by FoundPred, FoundLHS, FoundRHS is
+    /// true.
+    bool isImpliedCond(ICmpInst::Predicate Pred, const SCEV *LHS,
+                       const SCEV *RHS, ICmpInst::Predicate FoundPred,
+                       const SCEV *FoundLHS, const SCEV *FoundRHS);
+
+    /// Test whether the condition described by Pred, LHS, and RHS is true
     /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
     /// true.
     bool isImpliedCondOperands(ICmpInst::Predicate Pred,
@@ -528,6 +535,17 @@ namespace llvm {
                                         const SCEV *LHS, const SCEV *RHS,
                                         const SCEV *FoundLHS,
                                         const SCEV *FoundRHS);
+
+    /// Test whether the condition described by Pred, LHS, and RHS is true
+    /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
+    /// true.
+    ///
+    /// This routine tries to rule out certain kinds of integer overflow, and
+    /// then tries to reason about arithmetic properties of the predicates.
+    bool isImpliedCondOperandsViaNoOverflow(ICmpInst::Predicate Pred,
+                                            const SCEV *LHS, const SCEV *RHS,
+                                            const SCEV *FoundLHS,
+                                            const SCEV *FoundRHS);
 
     /// If we know that the specified Phi is in the header of its containing
     /// loop, we know the loop executes a constant number of times, and the PHI
@@ -678,6 +696,12 @@ namespace llvm {
     const SCEV *getUMinExpr(const SCEV *LHS, const SCEV *RHS);
     const SCEV *getUnknown(Value *V);
     const SCEV *getCouldNotCompute();
+
+    /// \brief Return a SCEV for the constant 0 of a specific type.
+    const SCEV *getZero(Type *Ty) { return getConstant(Ty, 0); }
+
+    /// \brief Return a SCEV for the constant 1 of a specific type.
+    const SCEV *getOne(Type *Ty) { return getConstant(Ty, 1); }
 
     /// Return an expression for sizeof AllocTy that is type IntTy
     ///

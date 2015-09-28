@@ -609,6 +609,11 @@ static void computeKnownBitsFromDominatingCondition(Value *V, APInt &KnownZero,
   if (!Q.DT || !Q.CxtI)
     return;
   Instruction *Cxt = const_cast<Instruction *>(Q.CxtI);
+  // The context instruction might be in a statically unreachable block.  If
+  // so, asking dominator queries may yield suprising results.  (e.g. the block
+  // may not have a dom tree node)
+  if (!Q.DT->isReachableFromEntry(Cxt->getParent()))
+    return;
 
   // Avoid useless work
   if (auto VI = dyn_cast<Instruction>(V))
@@ -655,7 +660,9 @@ static void computeKnownBitsFromDominatingCondition(Value *V, APInt &KnownZero,
     // instruction.  Finding a condition where one path dominates the context
     // isn't enough because both the true and false cases could merge before
     // the context instruction we're actually interested in.  Instead, we need
-    // to ensure that the taken *edge* dominates the context instruction.
+    // to ensure that the taken *edge* dominates the context instruction.  We
+    // know that the edge must be reachable since we started from a reachable
+    // block.
     BasicBlock *BB0 = BI->getSuccessor(0);
     BasicBlockEdge Edge(BI->getParent(), BB0);
     if (!Edge.isSingleEdge() || !Q.DT->dominates(Edge, Q.CxtI->getParent()))
@@ -1533,6 +1540,7 @@ void computeKnownBits(Value *V, APInt &KnownZero, APInt &KnownOne,
 
   if (Operator *I = dyn_cast<Operator>(V))
     computeKnownBitsFromOperator(I, KnownZero, KnownOne, DL, Depth, Q);
+
   // computeKnownBitsFromAssume and computeKnownBitsFromDominatingCondition
   // strictly refines KnownZero and KnownOne. Therefore, we run them after
   // computeKnownBitsFromOperator.
@@ -1820,6 +1828,23 @@ bool isKnownNonZero(Value *V, const DataLayout &DL, unsigned Depth,
     ComputeSignBit(X, XKnownNonNegative, XKnownNegative, DL, Depth, Q);
     if (XKnownNegative)
       return true;
+
+    // If the shifter operand is a constant, and all of the bits shifted
+    // out are known to be zero, and X is known non-zero then at least one
+    // non-zero bit must remain.
+    if (ConstantInt *Shift = dyn_cast<ConstantInt>(Y)) {
+      APInt KnownZero(BitWidth, 0);
+      APInt KnownOne(BitWidth, 0);
+      computeKnownBits(X, KnownZero, KnownOne, DL, Depth, Q);
+      
+      auto ShiftVal = Shift->getLimitedValue(BitWidth - 1);
+      // Is there a known one in the portion not shifted out?
+      if (KnownOne.countLeadingZeros() < BitWidth - ShiftVal)
+        return true;
+      // Are all the bits to be shifted out known zero?
+      if (KnownZero.countTrailingOnes() >= ShiftVal)
+        return isKnownNonZero(X, DL, Depth, Q);
+    }
   }
   // div exact can only produce a zero if the dividend is zero.
   else if (match(V, m_Exact(m_IDiv(m_Value(X), m_Value())))) {

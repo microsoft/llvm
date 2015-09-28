@@ -142,7 +142,7 @@ void AggressiveAntiDepBreaker::StartBlock(MachineBasicBlock *BB) {
   assert(!State);
   State = new AggressiveAntiDepState(TRI->getNumRegs(), BB);
 
-  bool IsReturnBlock = (!BB->empty() && BB->back().isReturn());
+  bool IsReturnBlock = BB->isReturnBlock();
   std::vector<unsigned> &KillIndices = State->GetKillIndices();
   std::vector<unsigned> &DefIndices = State->GetDefIndices();
 
@@ -224,12 +224,7 @@ bool AggressiveAntiDepBreaker::IsImplicitDefUse(MachineInstr *MI,
   if (Reg == 0)
     return false;
 
-  MachineOperand *Op = nullptr;
-  if (MO.isDef())
-    Op = MI->findRegisterUseOperand(Reg, true);
-  else
-    Op = MI->findRegisterDefOperand(Reg);
-
+  MachineOperand *Op = MI->findRegisterUseOperand(Reg, /*isKill=*/MO.isDef());
   return(Op && Op->isImplicit());
 }
 

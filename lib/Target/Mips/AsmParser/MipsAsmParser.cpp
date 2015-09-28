@@ -118,6 +118,9 @@ class MipsAsmParser : public MCTargetAsmParser {
   bool IsPicEnabled;
   bool IsCpRestoreSet;
   int CpRestoreOffset;
+  unsigned CpSaveLocation;
+  /// If true, then CpSaveLocation is a register, otherwise it's an offset.
+  bool     CpSaveLocationIsRegister;
 
   // Print a warning along with its fix-it message at the given range.
   void printWarningWithFixIt(const Twine &Msg, const Twine &FixMsg,
@@ -240,6 +243,7 @@ class MipsAsmParser : public MCTargetAsmParser {
   bool parseDirectiveCpLoad(SMLoc Loc);
   bool parseDirectiveCpRestore(SMLoc Loc);
   bool parseDirectiveCPSetup();
+  bool parseDirectiveCPReturn();
   bool parseDirectiveNaN();
   bool parseDirectiveSet();
   bool parseDirectiveOption();
@@ -4926,16 +4930,19 @@ bool MipsAsmParser::parseDirectiveCPSetup() {
 
   ResTy = parseAnyRegister(TmpReg);
   if (ResTy == MatchOperand_NoMatch) {
-    const AsmToken &Tok = Parser.getTok();
-    if (Tok.is(AsmToken::Integer)) {
-      Save = Tok.getIntVal();
-      SaveIsReg = false;
-      Parser.Lex();
-    } else {
-      reportParseError("expected save register or stack offset");
+    const MCExpr *OffsetExpr;
+    int64_t OffsetVal;
+    SMLoc ExprLoc = getLexer().getLoc();
+
+    if (Parser.parseExpression(OffsetExpr) ||
+        !OffsetExpr->evaluateAsAbsolute(OffsetVal)) {
+      reportParseError(ExprLoc, "expected save register or stack offset");
       Parser.eatToEndOfStatement();
       return false;
     }
+
+    Save = OffsetVal;
+    SaveIsReg = false;
   } else {
     MipsOperand &SaveOpnd = static_cast<MipsOperand &>(*TmpReg[0]);
     if (!SaveOpnd.isGPRAsmReg()) {
@@ -4961,8 +4968,17 @@ bool MipsAsmParser::parseDirectiveCPSetup() {
   }
   const MCSymbolRefExpr *Ref = static_cast<const MCSymbolRefExpr *>(Expr);
 
+  CpSaveLocation = Save;
+  CpSaveLocationIsRegister = SaveIsReg;
+
   getTargetStreamer().emitDirectiveCpsetup(FuncReg, Save, Ref->getSymbol(),
                                            SaveIsReg);
+  return false;
+}
+
+bool MipsAsmParser::parseDirectiveCPReturn() {
+  getTargetStreamer().emitDirectiveCpreturn(CpSaveLocation,
+                                            CpSaveLocationIsRegister);
   return false;
 }
 
@@ -5682,6 +5698,9 @@ bool MipsAsmParser::ParseDirective(AsmToken DirectiveID) {
 
   if (IDVal == ".cpsetup")
     return parseDirectiveCPSetup();
+
+  if (IDVal == ".cpreturn")
+    return parseDirectiveCPReturn();
 
   if (IDVal == ".module")
     return parseDirectiveModule();

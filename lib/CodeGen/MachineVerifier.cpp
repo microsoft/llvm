@@ -42,7 +42,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
@@ -213,9 +212,9 @@ namespace {
     void report(const char *msg, const MachineBasicBlock *MBB,
                 const LiveInterval &LI);
     void report(const char *msg, const MachineFunction *MF,
-                const LiveRange &LR, unsigned Reg, unsigned LaneMask);
+                const LiveRange &LR, unsigned Reg, LaneBitmask LaneMask);
     void report(const char *msg, const MachineBasicBlock *MBB,
-                const LiveRange &LR, unsigned Reg, unsigned LaneMask);
+                const LiveRange &LR, unsigned Reg, LaneBitmask LaneMask);
 
     void verifyInlineAsm(const MachineInstr *MI);
 
@@ -233,7 +232,7 @@ namespace {
     void verifyLiveRangeSegment(const LiveRange&,
                                 const LiveRange::const_iterator I, unsigned,
                                 unsigned);
-    void verifyLiveRange(const LiveRange&, unsigned, unsigned LaneMask = 0);
+    void verifyLiveRange(const LiveRange&, unsigned, LaneBitmask LaneMask = 0);
 
     void verifyStackFrame();
 
@@ -442,22 +441,22 @@ void MachineVerifier::report(const char *msg, const MachineBasicBlock *MBB,
 
 void MachineVerifier::report(const char *msg, const MachineBasicBlock *MBB,
                              const LiveRange &LR, unsigned Reg,
-                             unsigned LaneMask) {
+                             LaneBitmask LaneMask) {
   report(msg, MBB);
   errs() << "- liverange:   " << LR << '\n';
   errs() << "- register:    " << PrintReg(Reg, TRI) << '\n';
   if (LaneMask != 0)
-    errs() << "- lanemask:    " << format("%04X\n", LaneMask);
+    errs() << "- lanemask:    " << PrintLaneMask(LaneMask) << '\n';
 }
 
 void MachineVerifier::report(const char *msg, const MachineFunction *MF,
                              const LiveRange &LR, unsigned Reg,
-                             unsigned LaneMask) {
+                             LaneBitmask LaneMask) {
   report(msg, MF);
   errs() << "- liverange:   " << LR << '\n';
   errs() << "- register:    " << PrintReg(Reg, TRI) << '\n';
   if (LaneMask != 0)
-    errs() << "- lanemask:    " << format("%04X\n", LaneMask);
+    errs() << "- lanemask:    " << PrintLaneMask(LaneMask) << '\n';
 }
 
 void MachineVerifier::markReachable(const MachineBasicBlock *MBB) {
@@ -1403,7 +1402,7 @@ void MachineVerifier::verifyLiveIntervals() {
 
 void MachineVerifier::verifyLiveRangeValue(const LiveRange &LR,
                                            const VNInfo *VNI, unsigned Reg,
-                                           unsigned LaneMask) {
+                                           LaneBitmask LaneMask) {
   if (VNI->isUnused())
     return;
 
@@ -1494,7 +1493,8 @@ void MachineVerifier::verifyLiveRangeValue(const LiveRange &LR,
 
 void MachineVerifier::verifyLiveRangeSegment(const LiveRange &LR,
                                              const LiveRange::const_iterator I,
-                                             unsigned Reg, unsigned LaneMask) {
+                                             unsigned Reg, LaneBitmask LaneMask)
+{
   const LiveRange::Segment &S = *I;
   const VNInfo *VNI = S.valno;
   assert(VNI && "Live segment has no valno");
@@ -1667,7 +1667,7 @@ void MachineVerifier::verifyLiveRangeSegment(const LiveRange &LR,
 }
 
 void MachineVerifier::verifyLiveRange(const LiveRange &LR, unsigned Reg,
-                                      unsigned LaneMask) {
+                                      LaneBitmask LaneMask) {
   for (const VNInfo *VNI : LR.valnos)
     verifyLiveRangeValue(LR, VNI, Reg, LaneMask);
 
@@ -1680,8 +1680,8 @@ void MachineVerifier::verifyLiveInterval(const LiveInterval &LI) {
   assert(TargetRegisterInfo::isVirtualRegister(Reg));
   verifyLiveRange(LI, Reg);
 
-  unsigned Mask = 0;
-  unsigned MaxMask = MRI->getMaxLaneMaskForVReg(Reg);
+  LaneBitmask Mask = 0;
+  LaneBitmask MaxMask = MRI->getMaxLaneMaskForVReg(Reg);
   for (const LiveInterval::SubRange &SR : LI.subranges()) {
     if ((Mask & SR.LaneMask) != 0)
       report("Lane masks of sub ranges overlap in live interval", MF, LI);
