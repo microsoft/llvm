@@ -782,8 +782,17 @@ bool SIInstrInfo::expandPostRAPseudo(MachineBasicBlock::iterator MI) const {
   return true;
 }
 
-MachineInstr *SIInstrInfo::commuteInstruction(MachineInstr *MI,
-                                              bool NewMI) const {
+/// Commutes the operands in the given instruction.
+/// The commutable operands are specified by their indices OpIdx0 and OpIdx1.
+///
+/// Do not call this method for a non-commutable instruction or for
+/// non-commutable pair of operand indices OpIdx0 and OpIdx1.
+/// Even though the instruction is commutable, the method may still
+/// fail to commute the operands, null pointer is returned in such cases.
+MachineInstr *SIInstrInfo::commuteInstructionImpl(MachineInstr *MI,
+                                                  bool NewMI,
+                                                  unsigned OpIdx0,
+                                                  unsigned OpIdx1) const {
   int CommutedOpcode = commuteOpcode(*MI);
   if (CommutedOpcode == -1)
     return nullptr;
@@ -796,6 +805,13 @@ MachineInstr *SIInstrInfo::commuteInstruction(MachineInstr *MI,
 
   int Src1Idx = AMDGPU::getNamedOperandIdx(MI->getOpcode(),
                                            AMDGPU::OpName::src1);
+
+  if ((OpIdx0 != static_cast<unsigned>(Src0Idx) ||
+       OpIdx1 != static_cast<unsigned>(Src1Idx)) &&
+      (OpIdx0 != static_cast<unsigned>(Src1Idx) ||
+       OpIdx1 != static_cast<unsigned>(Src0Idx)))
+    return nullptr;
+
   MachineOperand &Src1 = MI->getOperand(Src1Idx);
 
   // Make sure it's legal to commute operands for VOP2.
@@ -841,7 +857,7 @@ MachineInstr *SIInstrInfo::commuteInstruction(MachineInstr *MI,
     Src1.ChangeToRegister(Reg, false);
     Src1.setSubReg(SubReg);
   } else {
-    MI = TargetInstrInfo::commuteInstruction(MI, NewMI);
+    MI = TargetInstrInfo::commuteInstructionImpl(MI, NewMI, OpIdx0, OpIdx1);
   }
 
   if (MI)
@@ -854,8 +870,8 @@ MachineInstr *SIInstrInfo::commuteInstruction(MachineInstr *MI,
 // between the true commutable operands, and the base
 // TargetInstrInfo::commuteInstruction uses it.
 bool SIInstrInfo::findCommutedOpIndices(MachineInstr *MI,
-                                        unsigned &SrcOpIdx1,
-                                        unsigned &SrcOpIdx2) const {
+                                        unsigned &SrcOpIdx0,
+                                        unsigned &SrcOpIdx1) const {
   const MCInstrDesc &MCID = MI->getDesc();
   if (!MCID.isCommutable())
     return false;
@@ -866,7 +882,8 @@ bool SIInstrInfo::findCommutedOpIndices(MachineInstr *MI,
     return false;
 
   // FIXME: Workaround TargetInstrInfo::commuteInstruction asserting on
-  // immediate.
+  // immediate. Also, immediate src0 operand is not handled in
+  // SIInstrInfo::commuteInstruction();
   if (!MI->getOperand(Src0Idx).isReg())
     return false;
 
@@ -874,18 +891,22 @@ bool SIInstrInfo::findCommutedOpIndices(MachineInstr *MI,
   if (Src1Idx == -1)
     return false;
 
-  if (!MI->getOperand(Src1Idx).isReg())
+  MachineOperand &Src1 = MI->getOperand(Src1Idx);
+  if (Src1.isImm()) {
+    // SIInstrInfo::commuteInstruction() does support commuting the immediate
+    // operand src1 in 2 and 3 operand instructions.
+    if (!isVOP2(MI->getOpcode()) && !isVOP3(MI->getOpcode()))
+      return false;
+  } else if (Src1.isReg()) {
+    // If any source modifiers are set, the generic instruction commuting won't
+    // understand how to copy the source modifiers.
+    if (hasModifiersSet(*MI, AMDGPU::OpName::src0_modifiers) ||
+        hasModifiersSet(*MI, AMDGPU::OpName::src1_modifiers))
+      return false;
+  } else
     return false;
 
-  // If any source modifiers are set, the generic instruction commuting won't
-  // understand how to copy the source modifiers.
-  if (hasModifiersSet(*MI, AMDGPU::OpName::src0_modifiers) ||
-      hasModifiersSet(*MI, AMDGPU::OpName::src1_modifiers))
-    return false;
-
-  SrcOpIdx1 = Src0Idx;
-  SrcOpIdx2 = Src1Idx;
-  return true;
+  return fixCommutedOpIndices(SrcOpIdx0, SrcOpIdx1, Src0Idx, Src1Idx);
 }
 
 MachineInstr *SIInstrInfo::buildMovInstr(MachineBasicBlock *MBB,
@@ -1472,11 +1493,17 @@ unsigned SIInstrInfo::getVALUOp(const MachineInstr &MI) {
   case AMDGPU::S_CMP_LT_I32: return AMDGPU::V_CMP_LT_I32_e32;
   case AMDGPU::S_CMP_LE_I32: return AMDGPU::V_CMP_LE_I32_e32;
   case AMDGPU::S_LOAD_DWORD_IMM:
-  case AMDGPU::S_LOAD_DWORD_SGPR: return AMDGPU::BUFFER_LOAD_DWORD_ADDR64;
+  case AMDGPU::S_LOAD_DWORD_SGPR:
+  case AMDGPU::S_LOAD_DWORD_IMM_ci:
+    return AMDGPU::BUFFER_LOAD_DWORD_ADDR64;
   case AMDGPU::S_LOAD_DWORDX2_IMM:
-  case AMDGPU::S_LOAD_DWORDX2_SGPR: return AMDGPU::BUFFER_LOAD_DWORDX2_ADDR64;
+  case AMDGPU::S_LOAD_DWORDX2_SGPR:
+  case AMDGPU::S_LOAD_DWORDX2_IMM_ci:
+    return AMDGPU::BUFFER_LOAD_DWORDX2_ADDR64;
   case AMDGPU::S_LOAD_DWORDX4_IMM:
-  case AMDGPU::S_LOAD_DWORDX4_SGPR: return AMDGPU::BUFFER_LOAD_DWORDX4_ADDR64;
+  case AMDGPU::S_LOAD_DWORDX4_SGPR:
+  case AMDGPU::S_LOAD_DWORDX4_IMM_ci:
+    return AMDGPU::BUFFER_LOAD_DWORDX4_ADDR64;
   case AMDGPU::S_BCNT1_I32_B32: return AMDGPU::V_BCNT_U32_B32_e64;
   case AMDGPU::S_FF1_I32_B32: return AMDGPU::V_FFBL_B32_e32;
   case AMDGPU::S_FLBIT_I32_B32: return AMDGPU::V_FFBH_U32_e32;
@@ -2010,9 +2037,9 @@ void SIInstrInfo::splitSMRD(MachineInstr *MI,
                   .addOperand(*SOff);
     unsigned OffsetSGPR = MRI.createVirtualRegister(&AMDGPU::SReg_32RegClass);
     BuildMI(*MBB, MI, DL, get(AMDGPU::S_ADD_I32), OffsetSGPR)
-            .addOperand(*SOff)
-            .addImm(HalfSize);
-    Hi = BuildMI(*MBB, MI, DL, get(HalfSGPROp))
+      .addReg(SOff->getReg(), 0, SOff->getSubReg())
+      .addImm(HalfSize);
+    Hi = BuildMI(*MBB, MI, DL, get(HalfSGPROp), RegHi)
                   .addReg(SBase->getReg(), getKillRegState(IsKill),
                           SBase->getSubReg())
                   .addReg(OffsetSGPR);
@@ -2309,27 +2336,9 @@ void SIInstrInfo::moveToVALU(MachineInstr &TopInst) const {
     }
 
     // Update the destination register class.
-
-    const TargetRegisterClass *NewDstRC = getOpRegClass(*Inst, 0);
-
-    switch (Opcode) {
-      // For target instructions, getOpRegClass just returns the virtual
-      // register class associated with the operand, so we need to find an
-      // equivalent VGPR register class in order to move the instruction to the
-      // VALU.
-    case AMDGPU::COPY:
-    case AMDGPU::PHI:
-    case AMDGPU::REG_SEQUENCE:
-    case AMDGPU::INSERT_SUBREG:
-      if (RI.hasVGPRs(NewDstRC))
-        continue;
-      NewDstRC = RI.getEquivalentVGPRClass(NewDstRC);
-      if (!NewDstRC)
-        continue;
-      break;
-    default:
-      break;
-    }
+    const TargetRegisterClass *NewDstRC = getDestEquivalentVGPRClass(*Inst);
+    if (!NewDstRC)
+      continue;
 
     unsigned DstReg = Inst->getOperand(0).getReg();
     unsigned NewDstReg = MRI.createVirtualRegister(NewDstRC);
@@ -2592,6 +2601,30 @@ void SIInstrInfo::addUsersToMoveToVALUWorklist(
     if (!canReadVGPR(UseMI, I.getOperandNo())) {
       Worklist.push_back(&UseMI);
     }
+  }
+}
+
+const TargetRegisterClass *SIInstrInfo::getDestEquivalentVGPRClass(
+  const MachineInstr &Inst) const {
+  const TargetRegisterClass *NewDstRC = getOpRegClass(Inst, 0);
+
+  switch (Inst.getOpcode()) {
+  // For target instructions, getOpRegClass just returns the virtual register
+  // class associated with the operand, so we need to find an equivalent VGPR
+  // register class in order to move the instruction to the VALU.
+  case AMDGPU::COPY:
+  case AMDGPU::PHI:
+  case AMDGPU::REG_SEQUENCE:
+  case AMDGPU::INSERT_SUBREG:
+    if (RI.hasVGPRs(NewDstRC))
+      return nullptr;
+
+    NewDstRC = RI.getEquivalentVGPRClass(NewDstRC);
+    if (!NewDstRC)
+      return nullptr;
+    return NewDstRC;
+  default:
+    return NewDstRC;
   }
 }
 
