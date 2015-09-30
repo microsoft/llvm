@@ -290,8 +290,11 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   const Function *WinEHParentFn = MMI.getWinEHParent(&fn);
   if (Personality == EHPersonality::MSVC_CXX)
     calculateWinCXXEHStateNumbers(WinEHParentFn, EHInfo);
-  else
+  else if (Personality == EHPersonality::MSVC_Win64SEH ||
+           Personality == EHPersonality::MSVC_X86SEH)
     calculateSEHStateNumbers(WinEHParentFn, EHInfo);
+  else if (Personality == EHPersonality::CoreCLR)
+    calculateClrEHStateNumbers(WinEHParentFn, EHInfo);
 
   // Map all BB references in the WinEH data to MBBs.
   for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
@@ -313,6 +316,10 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   for (SEHUnwindMapEntry &UME : EHInfo.SEHUnwindMap) {
     const BasicBlock *BB = UME.Handler.get<const BasicBlock *>();
     UME.Handler = MBBMap[BB];
+  }
+  for (ClrEHUnwindMapEntry &CME : EHInfo.ClrEHUnwindMap) {
+    const BasicBlock *BB = CME.Handler.get<const BasicBlock *>();
+    CME.Handler = MBBMap[BB];
   }
 
   // If there's an explicit EH registration node on the stack, record its
