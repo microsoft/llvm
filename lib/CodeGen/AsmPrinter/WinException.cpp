@@ -81,7 +81,7 @@ void WinException::beginFunction(const MachineFunction *MF) {
     F->needsUnwindTableEntry();
 
   shouldEmitPersonality =
-    forceEmitPersonality || ((hasLandingPads || hasEHFunclets || F != ParentF) &&
+      forceEmitPersonality || ((hasLandingPads || hasEHFunclets) &&
                                PerEncoding != dwarf::DW_EH_PE_omit && Per);
 
   unsigned LSDAEncoding = TLOF.getLSDAEncoding();
@@ -776,34 +776,6 @@ void WinException::emitExceptHandlerTable(const MachineFunction *MF) {
       CurState++;
     }
   }
-}
-
-static int getRank(HandlerTreeNode *Node) {
-  int Rank = 0;
-  while (Node != nullptr) {
-    ++Rank;
-    Node = Node->Parent;
-  }
-  return Rank;
-}
-static HandlerTreeNode *getAncestor(HandlerTreeNode *Left, HandlerTreeNode *Right) {
-  int LeftRank = getRank(Left);
-  int RightRank = getRank(Right);
-
-  while (LeftRank < RightRank) {
-    Right = Right->Parent;
-  }
-
-  while (RightRank < LeftRank) {
-    Left = Left->Parent;
-  }
-
-  while (Left != Right) {
-    Left = Left->Parent;
-    Right = Right->Parent;
-  }
-
-  return Left;
 }
 
 static int getRank(WinEHFuncInfo &FuncInfo, int State) {

@@ -237,8 +237,6 @@ public:
 private:
   void addSEHHandlersForLPads(ArrayRef<const LandingPadInst *> LPads);
 
-  void buildHandlerTree(ArrayRef<const LandingPadInst *> LPads);
-
   /// LiveOutRegInfo - Information about live out vregs.
   IndexedMap<LiveOutInfo, VirtReg2IndexFunctor> LiveOutRegInfo;
 };

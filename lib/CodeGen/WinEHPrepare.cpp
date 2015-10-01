@@ -121,8 +121,7 @@ private:
                                 const LandingPadInst *OriginalLPad,
                                 FrameVarInfoMap &VarInfo);
   Function *createHandlerFunc(Function *ParentFn, Type *RetTy,
-                              const Twine &Name, Module *M,
-                              Function *Previous, Value *&ParentFP);
+                              const Twine &Name, Module *M, Value *&ParentFP);
   bool outlineHandler(ActionHandler *Action, Function *SrcFn,
                       LandingPadInst *LPad, BasicBlock *StartBB,
                       FrameVarInfoMap &VarInfo);
@@ -614,8 +613,7 @@ void WinEHPrepare::identifyEHBlocks(Function &F,
   //   not follow llvm.eh.endcatch blocks, which mark a transition from
   //   exceptional to normal control.
 
-  if ((Personality == EHPersonality::MSVC_CXX)
-      || (Personality == EHPersonality::CoreCLR))
+  if (Personality == EHPersonality::MSVC_CXX)
     findCXXEHReturnPoints(F, EHReturnBlocks);
   else
     findSEHEHReturnPoints(F, EHReturnBlocks);
@@ -703,8 +701,7 @@ void WinEHPrepare::demoteValuesLiveAcrossHandlers(
     for (Instruction &I : BB) {
       for (Value *Op : I.operands()) {
         // Don't demote static allocas, constants, and labels.
-        if (isa<Constant>(Op) || isa<BasicBlock>(Op) || isa<InlineAsm>(Op)
-            || isa<MetadataAsValue>(Op))
+        if (isa<Constant>(Op) || isa<BasicBlock>(Op) || isa<InlineAsm>(Op))
           continue;
         auto *AI = dyn_cast<AllocaInst>(Op);
         if (AI && AI->isStaticAlloca())
@@ -1411,7 +1408,7 @@ void WinEHPrepare::addStubInvokeToHandlerIfNeeded(Function *Handler) {
 // usually doesn't build LLVM IR, so that's probably the wrong place.
 Function *WinEHPrepare::createHandlerFunc(Function *ParentFn, Type *RetTy,
                                           const Twine &Name, Module *M,
-                                          Function *Previous, Value *&ParentFP) {
+                                          Value *&ParentFP) {
   // x64 uses a two-argument prototype where the parent FP is the second
   // argument. x86 uses no arguments, just the incoming EBP value.
   LLVMContext &Context = M->getContext();
@@ -1425,14 +1422,7 @@ Function *WinEHPrepare::createHandlerFunc(Function *ParentFn, Type *RetTy,
   }
 
   Function *Handler =
-      Function::Create(FnType, GlobalVariable::InternalLinkage, Name);
-  if (Previous) {
-    // Caller requested outlined function to be inserted in a particular spot
-    // in the module.
-    M->getFunctionList().insertAfter(Previous, Handler);
-  } else {
-    M->getFunctionList().push_back(Handler);
-  }
+      Function::Create(FnType, GlobalVariable::InternalLinkage, Name, M);
   BasicBlock *Entry = BasicBlock::Create(Context, "entry");
   Handler->getBasicBlockList().push_front(Entry);
   if (TheTriple.getArch() == Triple::x86_64) {
@@ -1463,20 +1453,11 @@ bool WinEHPrepare::outlineHandler(ActionHandler *Action, Function *SrcFn,
   Value *ParentFP;
   Function *Handler;
   if (Action->getType() == Catch) {
-    Function *PreviousFn = nullptr;
-    if (TheTriple.isWindowsCoreCLREnvironment()) {
-      // CoreCLR requires filter handlers be inserted immediately after the
-      // associated filter function
-      if (auto *CatchAction = dyn_cast<CatchHandler>(Action))
-        PreviousFn =
-            dyn_cast<Function>(CatchAction->getSelector()->stripPointerCasts());
-    }
     Handler = createHandlerFunc(SrcFn, Int8PtrType, SrcFn->getName() + ".catch", M,
-                                PreviousFn, ParentFP);
+                                ParentFP);
   } else {
     Handler = createHandlerFunc(SrcFn, Type::getVoidTy(Context),
-                                SrcFn->getName() + ".cleanup", M, nullptr,
-                                ParentFP);
+                                SrcFn->getName() + ".cleanup", M, ParentFP);
   }
   Handler->setPersonalityFn(SrcFn->getPersonalityFn());
   HandlerToParentFP[Handler] = ParentFP;
@@ -2178,8 +2159,7 @@ void WinEHPrepare::mapLandingPadBlocks(LandingPadInst *LPad,
           // rethrow exceptions but code called from catches can. For SEH, it
           // isn't important if some finally code before a catch-all is executed
           // out of line or after recovering from the exception.
-          if ((Personality == EHPersonality::MSVC_CXX) ||
-              (Personality == EHPersonality::CoreCLR))
+          if (Personality == EHPersonality::MSVC_CXX)
             findCleanupHandlers(Actions, BB, BB);
         } else {
           // If an action was not found, it means that the control flows
