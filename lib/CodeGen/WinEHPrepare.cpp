@@ -121,8 +121,7 @@ private:
                                 const LandingPadInst *OriginalLPad,
                                 FrameVarInfoMap &VarInfo);
   Function *createHandlerFunc(Function *ParentFn, Type *RetTy,
-                              const Twine &Name, Module *M,
-                              Function *Previous, Value *&ParentFP);
+                              const Twine &Name, Module *M, Value *&ParentFP);
   bool outlineHandler(ActionHandler *Action, Function *SrcFn,
                       LandingPadInst *LPad, BasicBlock *StartBB,
                       FrameVarInfoMap &VarInfo);
@@ -614,8 +613,7 @@ void WinEHPrepare::identifyEHBlocks(Function &F,
   //   not follow llvm.eh.endcatch blocks, which mark a transition from
   //   exceptional to normal control.
 
-  if ((Personality == EHPersonality::MSVC_CXX)
-      || (Personality == EHPersonality::CoreCLR))
+  if (Personality == EHPersonality::MSVC_CXX)
     findCXXEHReturnPoints(F, EHReturnBlocks);
   else
     findSEHEHReturnPoints(F, EHReturnBlocks);
@@ -703,8 +701,7 @@ void WinEHPrepare::demoteValuesLiveAcrossHandlers(
     for (Instruction &I : BB) {
       for (Value *Op : I.operands()) {
         // Don't demote static allocas, constants, and labels.
-        if (isa<Constant>(Op) || isa<BasicBlock>(Op) || isa<InlineAsm>(Op)
-            || isa<MetadataAsValue>(Op))
+        if (isa<Constant>(Op) || isa<BasicBlock>(Op) || isa<InlineAsm>(Op))
           continue;
         auto *AI = dyn_cast<AllocaInst>(Op);
         if (AI && AI->isStaticAlloca())
@@ -1411,7 +1408,7 @@ void WinEHPrepare::addStubInvokeToHandlerIfNeeded(Function *Handler) {
 // usually doesn't build LLVM IR, so that's probably the wrong place.
 Function *WinEHPrepare::createHandlerFunc(Function *ParentFn, Type *RetTy,
                                           const Twine &Name, Module *M,
-                                          Function *Previous, Value *&ParentFP) {
+                                          Value *&ParentFP) {
   // x64 uses a two-argument prototype where the parent FP is the second
   // argument. x86 uses no arguments, just the incoming EBP value.
   LLVMContext &Context = M->getContext();
@@ -1425,14 +1422,7 @@ Function *WinEHPrepare::createHandlerFunc(Function *ParentFn, Type *RetTy,
   }
 
   Function *Handler =
-      Function::Create(FnType, GlobalVariable::InternalLinkage, Name);
-  if (Previous) {
-    // Caller requested outlined function to be inserted in a particular spot
-    // in the module.
-    M->getFunctionList().insertAfter(Previous, Handler);
-  } else {
-    M->getFunctionList().push_back(Handler);
-  }
+      Function::Create(FnType, GlobalVariable::InternalLinkage, Name, M);
   BasicBlock *Entry = BasicBlock::Create(Context, "entry");
   Handler->getBasicBlockList().push_front(Entry);
   if (TheTriple.getArch() == Triple::x86_64) {
@@ -1463,20 +1453,11 @@ bool WinEHPrepare::outlineHandler(ActionHandler *Action, Function *SrcFn,
   Value *ParentFP;
   Function *Handler;
   if (Action->getType() == Catch) {
-    Function *PreviousFn = nullptr;
-    if (TheTriple.isWindowsCoreCLREnvironment()) {
-      // CoreCLR requires filter handlers be inserted immediately after the
-      // associated filter function
-      if (auto *CatchAction = dyn_cast<CatchHandler>(Action))
-        PreviousFn =
-            dyn_cast<Function>(CatchAction->getSelector()->stripPointerCasts());
-    }
     Handler = createHandlerFunc(SrcFn, Int8PtrType, SrcFn->getName() + ".catch", M,
-                                PreviousFn, ParentFP);
+                                ParentFP);
   } else {
     Handler = createHandlerFunc(SrcFn, Type::getVoidTy(Context),
-                                SrcFn->getName() + ".cleanup", M, nullptr,
-                                ParentFP);
+                                SrcFn->getName() + ".cleanup", M, ParentFP);
   }
   Handler->setPersonalityFn(SrcFn->getPersonalityFn());
   HandlerToParentFP[Handler] = ParentFP;
@@ -2178,8 +2159,7 @@ void WinEHPrepare::mapLandingPadBlocks(LandingPadInst *LPad,
           // rethrow exceptions but code called from catches can. For SEH, it
           // isn't important if some finally code before a catch-all is executed
           // out of line or after recovering from the exception.
-          if ((Personality == EHPersonality::MSVC_CXX) ||
-              (Personality == EHPersonality::CoreCLR))
+          if (Personality == EHPersonality::MSVC_CXX)
             findCleanupHandlers(Actions, BB, BB);
         } else {
           // If an action was not found, it means that the control flows
@@ -2857,6 +2837,93 @@ void llvm::calculateWinCXXEHStateNumbers(const Function *Fn,
     if (!doesEHPadUnwindToCaller(FirstNonPHI))
       continue;
     calculateExplicitCXXStateNumbers(FuncInfo, BB, -1);
+  }
+}
+
+static int addClrEHHandler(WinEHFuncInfo &FuncInfo, int ParentState,
+                           ClrHandlerType HandlerType, uint32_t TypeToken,
+                           const BasicBlock *Handler) {
+  ClrEHUnwindMapEntry Entry;
+  Entry.Parent = ParentState;
+  Entry.Handler = Handler;
+  Entry.HandlerType = HandlerType;
+  Entry.TypeToken = TypeToken;
+  FuncInfo.ClrEHUnwindMap.push_back(Entry);
+  return FuncInfo.ClrEHUnwindMap.size() - 1;
+}
+
+void llvm::calculateClrEHStateNumbers(const Function *Fn,
+                                      WinEHFuncInfo &FuncInfo) {
+  // Return if it's already been done.
+  if (!FuncInfo.EHPadStateMap.empty())
+    return;
+
+  SmallVector<std::pair<const Instruction *, int>, 8> Worklist;
+
+  // Each pad needs to be able to refer to its parent, so scan the function
+  // looking for top-level handlers and seed the worklist with them.
+  for (const BasicBlock &BB : *Fn) {
+    if (!BB.isEHPad())
+      continue;
+    if (BB.isLandingPad())
+      report_fatal_error("CoreCLR EH cannot use landingpads");
+    const Instruction *FirstNonPHI = BB.getFirstNonPHI();
+    if (!doesEHPadUnwindToCaller(FirstNonPHI))
+      continue;
+    // queue this with sentinel parent state -1 to mean unwind to caller.
+    Worklist.emplace_back(FirstNonPHI, -1);
+  }
+
+  while (!Worklist.empty()) {
+    const Instruction *Pad;
+    int ParentState;
+    std::tie(Pad, ParentState) = Worklist.pop_back_val();
+
+    int PredState;
+    if (const CleanupEndPadInst *EndPad = dyn_cast<CleanupEndPadInst>(Pad)) {
+      FuncInfo.EHPadStateMap[EndPad] = ParentState;
+      // Queue the cleanuppad, in case it doesn't have a cleanupret.
+      Worklist.emplace_back(EndPad->getCleanupPad(), ParentState);
+      // Preds of the endpad should get the parent state.
+      PredState = ParentState;
+    } else if (const CleanupPadInst *Cleanup = dyn_cast<CleanupPadInst>(Pad)) {
+      if (FuncInfo.EHPadStateMap[Pad] != 0) {
+        // We might redundantly push a cleanup on the worklist through multiple
+        // of its exits.  Just ignore this redundant entry.
+        continue;
+      }
+      // CoreCLR personality uses arity to distinguish faults from finallies.
+      const BasicBlock *PadBlock = Cleanup->getParent();
+      ClrHandlerType HandlerType =
+          (Cleanup->getNumOperands() ? ClrHandlerType::Fault
+                                     : ClrHandlerType::Finally);
+      int NewState =
+          addClrEHHandler(FuncInfo, ParentState, HandlerType, 0, PadBlock);
+      FuncInfo.EHPadStateMap[Cleanup] = NewState;
+      // Propagate the new state to all preds of the cleanup
+      PredState = NewState;
+    } else if (const CatchEndPadInst *EndPad = dyn_cast<CatchEndPadInst>(Pad)) {
+      FuncInfo.EHPadStateMap[EndPad] = ParentState;
+      // Preds of the endpad should get the parent state.
+      PredState = ParentState;
+    } else if (const CatchPadInst *Catch = dyn_cast<CatchPadInst>(Pad)) {
+      const BasicBlock *Handler = Catch->getNormalDest();
+      uint32_t TypeToken = static_cast<uint32_t>(
+          cast<ConstantInt>(Catch->getArgOperand(0))->getZExtValue());
+      int NewState = addClrEHHandler(FuncInfo, ParentState,
+                                     ClrHandlerType::Catch, TypeToken, Handler);
+      FuncInfo.EHPadStateMap[Catch] = NewState;
+      // Preds of the catch get its state
+      PredState = NewState;
+    } else {
+      llvm_unreachable("Unexpected EH pad");
+    }
+
+    // Queue all predecessors with the given state
+    for (const BasicBlock *Pred : predecessors(Pad->getParent())) {
+      if ((Pred = getEHPadFromPredecessor(Pred)))
+        Worklist.emplace_back(Pred->getFirstNonPHI(), PredState);
+    }
   }
 }
 

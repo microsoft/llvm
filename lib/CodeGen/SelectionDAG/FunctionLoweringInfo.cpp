@@ -290,8 +290,11 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   const Function *WinEHParentFn = MMI.getWinEHParent(&fn);
   if (Personality == EHPersonality::MSVC_CXX)
     calculateWinCXXEHStateNumbers(WinEHParentFn, EHInfo);
-  else
+  else if (Personality == EHPersonality::MSVC_Win64SEH ||
+           Personality == EHPersonality::MSVC_X86SEH)
     calculateSEHStateNumbers(WinEHParentFn, EHInfo);
+  else if (Personality == EHPersonality::CoreCLR)
+    calculateClrEHStateNumbers(WinEHParentFn, EHInfo);
 
   // Map all BB references in the WinEH data to MBBs.
   for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
@@ -314,6 +317,10 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
     const BasicBlock *BB = UME.Handler.get<const BasicBlock *>();
     UME.Handler = MBBMap[BB];
   }
+  for (ClrEHUnwindMapEntry &CME : EHInfo.ClrEHUnwindMap) {
+    const BasicBlock *BB = CME.Handler.get<const BasicBlock *>();
+    CME.Handler = MBBMap[BB];
+  }
 
   // If there's an explicit EH registration node on the stack, record its
   // frame index.
@@ -331,8 +338,6 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
       MachineBasicBlock *LPadMBB = MBBMap[LP->getParent()];
       MMI.addWinEHState(LPadMBB, EHInfo.EHPadStateMap[LP]);
     }
-  } else if (Personality == EHPersonality::CoreCLR) {
-    buildHandlerTree(LPads);
   }
 }
 
@@ -371,76 +376,6 @@ void FunctionLoweringInfo::addSEHHandlersForLPads(
         MMI.addSEHCleanupHandler(LPadMBB, Fini);
       }
     }
-  }
-}
-
-void FunctionLoweringInfo::buildHandlerTree(ArrayRef<const LandingPadInst *> LPads) {
-  MachineModuleInfo &MMI = MF->getMMI();
-  ClrEHFuncInfo &Info = MMI.getClrEHFuncInfo(Fn);
-  DenseMap<const Function *, HandlerTreeNode *> PadNodeMap;
-
-  // Iterate over all landing pads with llvm.eh.actions calls.
-  for (const LandingPadInst *LP : LPads) {
-    const IntrinsicInst *ActionsCall =
-      dyn_cast<IntrinsicInst>(LP->getNextNode());
-    if (!ActionsCall ||
-        ActionsCall->getIntrinsicID() != Intrinsic::eh_actions)
-        continue;
-
-    // Parse the llvm.eh.actions call we found.
-    MachineBasicBlock *LPadMBB = MBBMap[LP->getParent()];
-    SmallVector<std::unique_ptr<ActionHandler>, 4> Actions;
-    parseEHActions(ActionsCall, Actions);
-
-    // Iterate EH actions from most to least precedence, which means
-    // iterating in reverse.
-    HandlerTreeNode *Parent = nullptr;
-    for (auto I = Actions.rbegin(), E = Actions.rend(); I != E; ++I) {
-      ActionHandler *Action = I->get();
-      const Function *Handler = cast<Function>(Action->getHandlerBlockOrFunc());
-      HandlerTreeNode *&Current = PadNodeMap[Handler];
-      Info.Handlers.insert(Handler);
-      if (Current == nullptr) {
-        Current = new HandlerTreeNode();
-        Current->Parent = Parent;
-        Current->Handler = Handler;
-        CatchHandler *TheCatchHandler = dyn_cast<CatchHandler>(Action);
-        if (TheCatchHandler == nullptr) {
-          assert(isa<CleanupHandler>(Action));
-          // This is a fault or finally.  TODO: figure out if these need to
-          // be reported differently.
-          Current->CatchType = 0;
-          Current->Kind = HandlerTreeNode::ClauseKind::Finally;
-        } else {
-          assert(isa<Operator>(TheCatchHandler->getSelector()) && "Expected IntToPtr(handlerToken)");
-          Operator *IntToPtr = cast<Operator>(TheCatchHandler->getSelector());
-          if (IntToPtr->getOpcode() == CastInst::BitCast) {
-            // This is a filter handler.
-            const Function *FilterFunction =
-                cast<Function>(IntToPtr->stripPointerCasts());
-            Current->FilterFunction = FilterFunction;
-            Current->Kind = HandlerTreeNode::ClauseKind::Filter;
-            Info.Handlers.insert(FilterFunction);
-          } else {
-            // This is a catch handler.
-            assert(IntToPtr->getOpcode() == CastInst::IntToPtr &&
-                   "Expected IntToPtr(handlerToken)");
-            Value *TokenValue = IntToPtr->getOperand(0);
-            assert(isa<Constant>(TokenValue) && "Need literal token value");
-            uint64_t extendedToken =
-                *(cast<Constant>(TokenValue)->getUniqueInteger().getRawData());
-            uint32_t token = (uint32_t)extendedToken;
-            Current->CatchType = token;
-            Current->Kind = HandlerTreeNode::ClauseKind::Catch;
-          }
-        }
-      } else {
-        assert(Current->Parent == Parent);
-      }
-      Parent = Current;
-    }
-
-    MMI.addHandlerTreeNode(LPadMBB, Parent);
   }
 }
 
