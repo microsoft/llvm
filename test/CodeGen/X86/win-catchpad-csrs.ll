@@ -71,17 +71,18 @@ catchendblock:                                    ; preds = %catch,
 ; X86: addl $12, %ebp
 ; X86: jmp [[contbb]]
 
-; X86: [[catch1bb:LBB0_[0-9]+]]: # %catch{{$}}
+; X86: "?catch$[[catch1bb:[0-9]+]]@?0?try_catch_catch@4HA":
+; X86: LBB0_[[catch1bb]]: # %catch{{$}}
 ; X86: pushl %ebp
 ; X86-NOT: pushl
-; X86: addl $12, %ebp
 ; X86: subl $16, %esp
+; X86: addl $12, %ebp
 ; X86: movl $1, -{{[0-9]+}}(%ebp)
 ; X86: movl $2, (%esp)
 ; X86: calll _f
-; X86: addl $16, %esp
+; X86: movl $[[restorebb]], %eax
+; X86-NEXT: addl $16, %esp
 ; X86-NEXT: popl %ebp
-; X86-NEXT: movl $[[restorebb]], %eax
 ; X86-NEXT: retl
 
 ; X86: L__ehtable$try_catch_catch:
@@ -89,7 +90,7 @@ catchendblock:                                    ; preds = %catch,
 ; X86:   .long   0
 ; X86:   .long   "??_R0H@8"
 ; X86:   .long   0
-; X86:   .long   [[catch1bb]]
+; X86:   .long   "?catch$[[catch1bb]]@?0?try_catch_catch@4HA"
 
 ; X64-LABEL: try_catch_catch:
 ; X64: pushq %rbp
@@ -104,6 +105,7 @@ catchendblock:                                    ; preds = %catch,
 ; X64: .seh_stackalloc 40
 ; X64: leaq 32(%rsp), %rbp
 ; X64: .seh_setframe 5, 32
+; X64: .seh_endprologue
 ; X64: callq getint
 ; X64: callq getint
 ; X64: callq getint
@@ -116,21 +118,25 @@ catchendblock:                                    ; preds = %catch,
 ; X64: popq %rbp
 ; X64: retq
 
-; X64: [[catch1bb:\.LBB0_[0-9]+]]: # %catch{{$}}
+; X64: "?catch$[[catch1bb:[0-9]+]]@?0?try_catch_catch@4HA":
+; X64: LBB0_[[catch1bb]]: # %catch{{$}}
 ; X64: movq %rdx, 16(%rsp)
 ; X64: pushq %rbp
-; X64: movq %rdx, %rbp
+; X64: .seh_pushreg 5
 ; X64: subq $32, %rsp
+; X64: .seh_stackalloc 32
+; X64: leaq 32(%rdx), %rbp
+; X64: .seh_endprologue
 ; X64: movl $2, %ecx
 ; X64: callq f
+; X64: leaq [[contbb]](%rip), %rax
 ; X64: addq $32, %rsp
 ; X64: popq %rbp
-; X64: leaq [[contbb]](%rip), %rax
 ; X64: retq
 
 ; X64: $handlerMap$0$try_catch_catch:
 ; X64:   .long   0
 ; X64:   .long   "??_R0H@8"@IMGREL
 ; X64:   .long   0
-; X64:   .long   [[catch1bb]]@IMGREL
+; X64:   .long   "?catch$[[catch1bb]]@?0?try_catch_catch@4HA"@IMGREL
 ; X64:   .long   56
