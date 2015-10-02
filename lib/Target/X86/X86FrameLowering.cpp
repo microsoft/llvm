@@ -999,8 +999,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
     // Save EBP/RBP into the appropriate stack slot.
     BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
-        .addReg(MachineFramePtr, RegState::Kill)
-        .setMIFlag(MachineInstr::FrameSetup);
+      .addReg(MachineFramePtr, RegState::Kill)
+      .setMIFlag(MachineInstr::FrameSetup);
 
     if (NeedsDwarfCFI) {
       // Mark the place where EBP/RBP was saved.
@@ -1056,7 +1056,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   bool PushedRegs = false;
   int StackOffset = 2 * stackGrowth;
 
-  while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup) &&
+  while (MBBI != MBB.end() &&
+         MBBI->getFlag(MachineInstr::FrameSetup) &&
          (MBBI->getOpcode() == X86::PUSH32r ||
           MBBI->getOpcode() == X86::PUSH64r)) {
     PushedRegs = true;
@@ -1073,9 +1074,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     }
 
     if (NeedsWinCFI) {
-      BuildMI(MBB, MBBI, DL, TII.get(X86::SEH_PushReg))
-          .addImm(Reg)
-          .setMIFlag(MachineInstr::FrameSetup);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::SEH_PushReg)).addImm(Reg).setMIFlag(
+          MachineInstr::FrameSetup);
     }
   }
 
@@ -1116,8 +1116,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
       // Save EAX
       BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
-          .addReg(X86::EAX, RegState::Kill)
-          .setMIFlag(MachineInstr::FrameSetup);
+        .addReg(X86::EAX, RegState::Kill)
+        .setMIFlag(MachineInstr::FrameSetup);
     }
 
     if (Is64Bit) {
@@ -1140,8 +1140,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       // Allocate NumBytes-4 bytes on stack in case of isEAXAlive.
       // We'll also use 4 already allocated bytes for EAX.
       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
-          .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
-          .setMIFlag(MachineInstr::FrameSetup);
+        .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
+        .setMIFlag(MachineInstr::FrameSetup);
     }
 
     // Call __chkstk, __chkstk_ms, or __alloca.
@@ -1149,9 +1149,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
     if (isEAXAlive) {
       // Restore EAX
-      MachineInstr *MI =
-          addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm), X86::EAX),
-                       StackPtr, false, NumBytes - 4);
+      MachineInstr *MI = addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm),
+                                              X86::EAX),
+                                      StackPtr, false, NumBytes - 4);
       MI->setFlag(MachineInstr::FrameSetup);
       MBB.insert(MBBI, MI);
     }
@@ -1230,16 +1230,16 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     // Update the base pointer with the current stack pointer.
     unsigned Opc = Uses64BitFramePtr ? X86::MOV64rr : X86::MOV32rr;
     BuildMI(MBB, MBBI, DL, TII.get(Opc), BasePtr)
-        .addReg(StackPtr)
-        .setMIFlag(MachineInstr::FrameSetup);
+      .addReg(StackPtr)
+      .setMIFlag(MachineInstr::FrameSetup);
     if (X86FI->getRestoreBasePointer()) {
       // Stash value of base pointer.  Saving RSP instead of EBP shortens
       // dependence chain. Used by SjLj EH.
       unsigned Opm = Uses64BitFramePtr ? X86::MOV64mr : X86::MOV32mr;
-      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(Opm)), FramePtr, true,
-                   X86FI->getRestoreBasePointerOffset())
-          .addReg(StackPtr)
-          .setMIFlag(MachineInstr::FrameSetup);
+      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(Opm)),
+                   FramePtr, true, X86FI->getRestoreBasePointerOffset())
+        .addReg(StackPtr)
+        .setMIFlag(MachineInstr::FrameSetup);
     }
 
     if (X86FI->getHasSEHFramePtrSave()) {
