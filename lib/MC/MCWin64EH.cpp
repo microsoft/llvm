@@ -208,15 +208,9 @@ static void EmitUnwindInfo(MCStreamer &streamer, WinEH::FrameInfo *info) {
     EmitRuntimeFunction(streamer, info->ChainedParent);
   else if (flags &
            ((Win64EH::UNW_TerminateHandler|Win64EH::UNW_ExceptionHandler) << 3)) {
-    if (streamer.getContext().getObjectFileInfo()->getTargetTriple().isWindowsCoreCLREnvironment()) {
-      // CoreCLR runtime expects the personality slot in the unwind info to be null
-      assert(classifyEHPersonality(info->ExceptionHandler->getName()) == EHPersonality::CoreCLR);
-      streamer.EmitIntValue(0, 4);
-    } else {
-      streamer.EmitValue(MCSymbolRefExpr::create(info->ExceptionHandler,
-                         MCSymbolRefExpr::VK_COFF_IMGREL32,
-                         context), 4);
-    }
+    streamer.EmitValue(MCSymbolRefExpr::create(info->ExceptionHandler,
+                        MCSymbolRefExpr::VK_COFF_IMGREL32,
+                        context), 4);
   }
   else if (numCodes == 0) {
     // The minimum size of an UNWIND_INFO struct is 8 bytes. If we're not
