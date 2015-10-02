@@ -58,12 +58,12 @@ static cl::opt<unsigned> DomConditionsMaxDepth("dom-conditions-max-depth",
 /// conditions?
 static cl::opt<unsigned> DomConditionsMaxDomBlocks("dom-conditions-dom-blocks",
                                                    cl::Hidden,
-                                                   cl::init(20000));
+                                                   cl::init(20));
 
 // Controls the number of uses of the value searched for possible
 // dominating comparisons.
 static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
-                                              cl::Hidden, cl::init(2000));
+                                              cl::Hidden, cl::init(20));
 
 // If true, don't consider only compares whose only use is a branch.
 static cl::opt<bool> DomConditionsSingleCmpUse("dom-conditions-single-cmp-use",
@@ -1409,6 +1409,37 @@ static void computeKnownBitsFromOperator(Operator *I, APInt &KnownZero,
   }
 }
 
+static unsigned getAlignment(Value *V, const DataLayout &DL) {
+  unsigned Align = 0;
+  if (auto *GO = dyn_cast<GlobalObject>(V)) {
+    Align = GO->getAlignment();
+    if (Align == 0) {
+      if (auto *GVar = dyn_cast<GlobalVariable>(GO)) {
+        Type *ObjectType = GVar->getType()->getElementType();
+        if (ObjectType->isSized()) {
+          // If the object is defined in the current Module, we'll be giving
+          // it the preferred alignment. Otherwise, we have to assume that it
+          // may only have the minimum ABI alignment.
+          if (GVar->isStrongDefinitionForLinker())
+            Align = DL.getPreferredAlignment(GVar);
+          else
+            Align = DL.getABITypeAlignment(ObjectType);
+        }
+      }
+    }
+  } else if (Argument *A = dyn_cast<Argument>(V)) {
+    Align = A->getType()->isPointerTy() ? A->getParamAlignment() : 0;
+
+    if (!Align && A->hasStructRetAttr()) {
+      // An sret parameter has at least the ABI alignment of the return type.
+      Type *EltTy = cast<PointerType>(A->getType())->getElementType();
+      if (EltTy->isSized())
+        Align = DL.getABITypeAlignment(EltTy);
+    }
+  }
+  return Align;
+}
+
 /// Determine which bits of V are known to be either zero or one and return
 /// them in the KnownZero/KnownOne bit sets.
 ///
@@ -1469,59 +1500,6 @@ void computeKnownBits(Value *V, APInt &KnownZero, APInt &KnownOne,
     return;
   }
 
-  // The address of an aligned GlobalValue has trailing zeros.
-  if (auto *GO = dyn_cast<GlobalObject>(V)) {
-    unsigned Align = GO->getAlignment();
-    if (Align == 0) {
-      if (auto *GVar = dyn_cast<GlobalVariable>(GO)) {
-        Type *ObjectType = GVar->getType()->getElementType();
-        if (ObjectType->isSized()) {
-          // If the object is defined in the current Module, we'll be giving
-          // it the preferred alignment. Otherwise, we have to assume that it
-          // may only have the minimum ABI alignment.
-          if (GVar->isStrongDefinitionForLinker())
-            Align = DL.getPreferredAlignment(GVar);
-          else
-            Align = DL.getABITypeAlignment(ObjectType);
-        }
-      }
-    }
-    if (Align > 0)
-      KnownZero = APInt::getLowBitsSet(BitWidth,
-                                       countTrailingZeros(Align));
-    else
-      KnownZero.clearAllBits();
-    KnownOne.clearAllBits();
-    return;
-  }
-
-  if (Argument *A = dyn_cast<Argument>(V)) {
-    unsigned Align = A->getType()->isPointerTy() ? A->getParamAlignment() : 0;
-
-    if (!Align && A->hasStructRetAttr()) {
-      // An sret parameter has at least the ABI alignment of the return type.
-      Type *EltTy = cast<PointerType>(A->getType())->getElementType();
-      if (EltTy->isSized())
-        Align = DL.getABITypeAlignment(EltTy);
-    }
-
-    if (Align)
-      KnownZero = APInt::getLowBitsSet(BitWidth, countTrailingZeros(Align));
-    else
-      KnownZero.clearAllBits();
-    KnownOne.clearAllBits();
-
-    // Don't give up yet... there might be an assumption that provides more
-    // information...
-    computeKnownBitsFromAssume(V, KnownZero, KnownOne, DL, Depth, Q);
-
-    // Or a dominating condition for that matter
-    if (EnableDomConditions && Depth <= DomConditionsMaxDepth)
-      computeKnownBitsFromDominatingCondition(V, KnownZero, KnownOne, DL,
-                                              Depth, Q);
-    return;
-  }
-
   // Start out not knowing anything.
   KnownZero.clearAllBits(); KnownOne.clearAllBits();
 
@@ -1540,6 +1518,13 @@ void computeKnownBits(Value *V, APInt &KnownZero, APInt &KnownOne,
 
   if (Operator *I = dyn_cast<Operator>(V))
     computeKnownBitsFromOperator(I, KnownZero, KnownOne, DL, Depth, Q);
+
+  // Aligned pointers have trailing zeros - refine KnownZero set
+  if (V->getType()->isPointerTy()) {
+    unsigned Align = getAlignment(V, DL);
+    if (Align)
+      KnownZero |= APInt::getLowBitsSet(BitWidth, countTrailingZeros(Align));
+  }
 
   // computeKnownBitsFromAssume and computeKnownBitsFromDominatingCondition
   // strictly refines KnownZero and KnownOne. Therefore, we run them after
@@ -1903,6 +1888,26 @@ bool isKnownNonZero(Value *V, const DataLayout &DL, unsigned Depth,
     if (isKnownNonZero(SI->getTrueValue(), DL, Depth, Q) &&
         isKnownNonZero(SI->getFalseValue(), DL, Depth, Q))
       return true;
+  }
+  // PHI
+  else if (PHINode *PN = dyn_cast<PHINode>(V)) {
+    // Try and detect a recurrence that monotonically increases from a
+    // starting value, as these are common as induction variables.
+    if (PN->getNumIncomingValues() == 2) {
+      Value *Start = PN->getIncomingValue(0);
+      Value *Induction = PN->getIncomingValue(1);
+      if (isa<ConstantInt>(Induction) && !isa<ConstantInt>(Start))
+        std::swap(Start, Induction);
+      if (ConstantInt *C = dyn_cast<ConstantInt>(Start)) {
+        if (!C->isZero() && !C->isNegative()) {
+          ConstantInt *X;
+          if ((match(Induction, m_NSWAdd(m_Specific(PN), m_ConstantInt(X))) ||
+               match(Induction, m_NUWAdd(m_Specific(PN), m_ConstantInt(X)))) &&
+              !X->isNegative())
+            return true;
+        }
+      }
+    }
   }
 
   if (!BitWidth) return false;
@@ -2979,6 +2984,11 @@ static bool isAligned(const Value *Base, APInt Offset, unsigned Align,
     BaseAlign = A->getParamAlignment();
   else if (auto CS = ImmutableCallSite(Base))
     BaseAlign = CS.getAttributes().getParamAlignment(AttributeSet::ReturnIndex);
+  else if (const LoadInst *LI = dyn_cast<LoadInst>(Base))
+    if (MDNode *MD = LI->getMetadata(LLVMContext::MD_align)) {
+      ConstantInt *CI = mdconst::extract<ConstantInt>(MD->getOperand(0));
+      BaseAlign = CI->getLimitedValue();
+    }
 
   if (!BaseAlign) {
     Type *Ty = Base->getType()->getPointerElementType();

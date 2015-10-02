@@ -73,38 +73,46 @@ catchendblock:                                    ; preds = %catch, %catch.2, %c
 ; X86: [[contbb:LBB0_[0-9]+]]: # %try.cont
 ; X86: retl
 
-; X86: [[restorebb:LBB0_[0-9]+]]: # %invoke.cont.3
+; FIXME: These should be de-duplicated.
+; X86: [[restorebb1:LBB0_[0-9]+]]: # %invoke.cont.2
 ; X86: movl -16(%ebp), %esp
 ; X86: addl $12, %ebp
 ; X86: jmp [[contbb]]
 
-; X86: [[catch1bb:LBB0_[0-9]+]]: # %catch{{$}}
-; X86: pushl %ebp
+; X86: [[restorebb2:LBB0_[0-9]+]]: # %invoke.cont.3
+; X86: movl -16(%ebp), %esp
 ; X86: addl $12, %ebp
+; X86: jmp [[contbb]]
+
+; X86: "?catch$[[catch1bb:[0-9]+]]@?0?try_catch_catch@4HA":
+; X86: LBB0_[[catch1bb]]: # %catch{{$}}
+; X86: pushl %ebp
 ; X86: subl $8, %esp
+; X86: addl $12, %ebp
 ; X86: movl -32(%ebp), %[[e_reg:[a-z]+]]
 ; X86: movl $1, -{{[0-9]+}}(%ebp)
 ; X86: leal -[[local_offs]](%ebp), %[[addr_reg:[a-z]+]]
 ; X86-DAG: movl %[[addr_reg]], 4(%esp)
 ; X86-DAG: movl %[[e_reg]], (%esp)
 ; X86: calll _f
+; X86-NEXT: movl $[[restorebb1]], %eax
 ; X86-NEXT: addl $8, %esp
 ; X86-NEXT: popl %ebp
-; X86-NEXT: movl $[[restorebb]], %eax
 ; X86-NEXT: retl
 
-; X86: [[catch2bb:LBB0_[0-9]+]]: # %catch.2{{$}}
+; X86: "?catch$[[catch2bb:[0-9]+]]@?0?try_catch_catch@4HA":
+; X86: LBB0_[[catch2bb]]: # %catch.2{{$}}
 ; X86: pushl %ebp
-; X86: addl $12, %ebp
 ; X86: subl $8, %esp
+; X86: addl $12, %ebp
 ; X86: movl $1, -{{[0-9]+}}(%ebp)
 ; X86: leal -[[local_offs]](%ebp), %[[addr_reg:[a-z]+]]
 ; X86-DAG: movl %[[addr_reg]], 4(%esp)
 ; X86-DAG: movl $3, (%esp)
 ; X86: calll _f
+; X86-NEXT: movl $[[restorebb2]], %eax
 ; X86-NEXT: addl $8, %esp
 ; X86-NEXT: popl %ebp
-; X86-NEXT: movl $[[restorebb]], %eax
 ; X86-NEXT: retl
 
 ; X86: L__ehtable$try_catch_catch:
@@ -112,19 +120,22 @@ catchendblock:                                    ; preds = %catch, %catch.2, %c
 ; X86-NEXT:   .long   0
 ; X86-NEXT:   .long   "??_R0H@8"
 ; X86-NEXT:   .long   -20
-; X86-NEXT:   .long   [[catch1bb]]
+; X86-NEXT:   .long   "?catch$[[catch1bb]]@?0?try_catch_catch@4HA"
 ; X86-NEXT:   .long   64
 ; X86-NEXT:   .long   0
 ; X86-NEXT:   .long   0
-; X86-NEXT:   .long   [[catch2bb]]
+; X86-NEXT:   .long   "?catch$[[catch2bb]]@?0?try_catch_catch@4HA"
 
 ; X64-LABEL: try_catch_catch:
+; X64: Lfunc_begin0:
 ; X64: pushq %rbp
 ; X64: .seh_pushreg 5
 ; X64: subq $48, %rsp
 ; X64: .seh_stackalloc 48
 ; X64: leaq 48(%rsp), %rbp
 ; X64: .seh_setframe 5, 48
+; X64: .seh_endprologue
+; X64: .Ltmp0
 ; X64-DAG: leaq -[[local_offs:[0-9]+]](%rbp), %rdx
 ; X64-DAG: movl $1, %ecx
 ; X64: callq f
@@ -133,41 +144,80 @@ catchendblock:                                    ; preds = %catch, %catch.2, %c
 ; X64: popq %rbp
 ; X64: retq
 
-; X64: [[catch1bb:\.LBB0_[0-9]+]]: # %catch{{$}}
+; X64: "?catch$[[catch1bb:[0-9]+]]@?0?try_catch_catch@4HA":
+; X64: LBB0_[[catch1bb]]: # %catch{{$}}
 ; X64: movq %rdx, 16(%rsp)
 ; X64: pushq %rbp
-; X64: movq %rdx, %rbp
+; X64: .seh_pushreg 5
 ; X64: subq $32, %rsp
+; X64: .seh_stackalloc 32
+; X64: leaq 48(%rdx), %rbp
+; X64: .seh_endprologue
+; X64-DAG: .Ltmp4
 ; X64-DAG: leaq -[[local_offs]](%rbp), %rdx
 ; X64-DAG: movl [[e_addr:[-0-9]+]](%rbp), %ecx
 ; X64: callq f
-; X64: addq $32, %rsp
+; X64: leaq [[contbb]](%rip), %rax
+; X64-NEXT: addq $32, %rsp
 ; X64-NEXT: popq %rbp
-; X64-NEXT: leaq [[contbb]](%rip), %rax
 ; X64-NEXT: retq
 
-; X64: [[catch2bb:\.LBB0_[0-9]+]]: # %catch.2{{$}}
+; X64: "?catch$[[catch2bb:[0-9]+]]@?0?try_catch_catch@4HA":
+; X64: LBB0_[[catch2bb]]: # %catch.2{{$}}
 ; X64: movq %rdx, 16(%rsp)
 ; X64: pushq %rbp
-; X64: movq %rdx, %rbp
+; X64: .seh_pushreg 5
 ; X64: subq $32, %rsp
+; X64: .seh_stackalloc 32
+; X64: leaq 48(%rdx), %rbp
+; X64: .seh_endprologue
 ; X64-DAG: leaq -[[local_offs]](%rbp), %rdx
 ; X64-DAG: movl $3, %ecx
 ; X64: callq f
-; X64: addq $32, %rsp
+; X64: .Ltmp3
+; X64: leaq [[contbb]](%rip), %rax
+; X64-NEXT: addq $32, %rsp
 ; X64-NEXT: popq %rbp
-; X64-NEXT: leaq [[contbb]](%rip), %rax
 ; X64-NEXT: retq
 
+; X64: $cppxdata$try_catch_catch:
+; X64-NEXT: .long   429065506
+; X64-NEXT: .long   2
+; X64-NEXT: .long   ($stateUnwindMap$try_catch_catch)@IMGREL
+; X64-NEXT: .long   1
+; X64-NEXT: .long   ($tryMap$try_catch_catch)@IMGREL
+; X64-NEXT: .long   4
+; X64-NEXT: .long   ($ip2state$try_catch_catch)@IMGREL
+; X64-NEXT: .long   32
+; X64-NEXT: .long   0
+; X64-NEXT: .long   1
+
+; X64: $tryMap$try_catch_catch:
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   1
+; X64-NEXT: .long   2
+; X64-NEXT: .long   ($handlerMap$0$try_catch_catch)@IMGREL
+
 ; X64: $handlerMap$0$try_catch_catch:
-; X64:   .long   0
-; X64:   .long   "??_R0H@8"@IMGREL
+; X64-NEXT:   .long   0
+; X64-NEXT:   .long   "??_R0H@8"@IMGREL
 ; FIXME: This should probably be offset from rsp, not rbp.
-; X64:   .long   [[e_addr]]
-; X64:   .long   [[catch1bb]]@IMGREL
-; X64:   .long   56
-; X64:   .long   64
-; X64:   .long   0
-; X64:   .long   0
-; X64:   .long   [[catch2bb]]@IMGREL
-; X64:   .long   56
+; X64-NEXT:   .long   [[e_addr]]
+; X64-NEXT:   .long   "?catch$[[catch1bb]]@?0?try_catch_catch@4HA"@IMGREL
+; X64-NEXT:   .long   56
+; X64-NEXT:   .long   64
+; X64-NEXT:   .long   0
+; X64-NEXT:   .long   0
+; X64-NEXT:   .long   "?catch$[[catch2bb]]@?0?try_catch_catch@4HA"@IMGREL
+; X64-NEXT:   .long   56
+
+; X64: $ip2state$try_catch_catch:
+; X64-NEXT: .long   .Lfunc_begin0@IMGREL
+; X64-NEXT: .long   -1
+; X64-NEXT: .long   .Ltmp0@IMGREL
+; X64-NEXT: .long   0
+; X64-NEXT: .long   .Ltmp4@IMGREL
+; X64-NEXT: .long   1
+; X64-NEXT: .long   .Ltmp3@IMGREL+1
+; X64-NEXT: .long   -1

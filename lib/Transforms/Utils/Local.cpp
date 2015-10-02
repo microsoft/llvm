@@ -17,6 +17,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/InstructionSimplify.h"
@@ -419,6 +420,49 @@ bool llvm::RecursivelyDeleteDeadPHINode(PHINode *PN,
   return false;
 }
 
+static bool
+simplifyAndDCEInstruction(Instruction *I,
+                          SmallSetVector<Instruction *, 16> &WorkList,
+                          const DataLayout &DL,
+                          const TargetLibraryInfo *TLI) {
+  if (isInstructionTriviallyDead(I, TLI)) {
+    // Null out all of the instruction's operands to see if any operand becomes
+    // dead as we go.
+    for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i) {
+      Value *OpV = I->getOperand(i);
+      I->setOperand(i, nullptr);
+
+      if (!OpV->use_empty() || I == OpV)
+        continue;
+
+      // If the operand is an instruction that became dead as we nulled out the
+      // operand, and if it is 'trivially' dead, delete it in a future loop
+      // iteration.
+      if (Instruction *OpI = dyn_cast<Instruction>(OpV))
+        if (isInstructionTriviallyDead(OpI, TLI))
+          WorkList.insert(OpI);
+    }
+
+    I->eraseFromParent();
+
+    return true;
+  }
+
+  if (Value *SimpleV = SimplifyInstruction(I, DL)) {
+    // Add the users to the worklist. CAREFUL: an instruction can use itself,
+    // in the case of a phi node.
+    for (User *U : I->users())
+      if (U != I)
+        WorkList.insert(cast<Instruction>(U));
+
+    // Replace the instruction with its simplified value.
+    I->replaceAllUsesWith(SimpleV);
+    I->eraseFromParent();
+    return true;
+  }
+  return false;
+}
+
 /// SimplifyInstructionsInBlock - Scan the specified basic block and try to
 /// simplify any instructions in it and recursively delete dead instructions.
 ///
@@ -427,6 +471,7 @@ bool llvm::RecursivelyDeleteDeadPHINode(PHINode *PN,
 bool llvm::SimplifyInstructionsInBlock(BasicBlock *BB,
                                        const TargetLibraryInfo *TLI) {
   bool MadeChange = false;
+  const DataLayout &DL = BB->getModule()->getDataLayout();
 
 #ifndef NDEBUG
   // In debug builds, ensure that the terminator of the block is never replaced
@@ -436,21 +481,24 @@ bool llvm::SimplifyInstructionsInBlock(BasicBlock *BB,
   AssertingVH<Instruction> TerminatorVH(--BB->end());
 #endif
 
-  for (BasicBlock::iterator BI = BB->begin(), E = --BB->end(); BI != E; ) {
+  SmallSetVector<Instruction *, 16> WorkList;
+  // Iterate over the original function, only adding insts to the worklist
+  // if they actually need to be revisited. This avoids having to pre-init
+  // the worklist with the entire function's worth of instructions.
+  for (BasicBlock::iterator BI = BB->begin(), E = std::prev(BB->end()); BI != E;) {
     assert(!BI->isTerminator());
-    Instruction *Inst = BI++;
+    Instruction *I = &*BI;
+    ++BI;
 
-    WeakVH BIHandle(BI);
-    if (recursivelySimplifyInstruction(Inst, TLI)) {
-      MadeChange = true;
-      if (BIHandle != BI)
-        BI = BB->begin();
-      continue;
-    }
+    // We're visiting this instruction now, so make sure it's not in the
+    // worklist from an earlier visit.
+    if (!WorkList.count(I))
+      MadeChange |= simplifyAndDCEInstruction(I, WorkList, DL, TLI);
+  }
 
-    MadeChange |= RecursivelyDeleteTriviallyDeadInstructions(Inst, TLI);
-    if (BIHandle != BI)
-      BI = BB->begin();
+  while (!WorkList.empty()) {
+    Instruction *I = WorkList.pop_back_val();
+    MadeChange |= simplifyAndDCEInstruction(I, WorkList, DL, TLI);
   }
   return MadeChange;
 }
@@ -1088,7 +1136,7 @@ DbgDeclareInst *llvm::FindAllocaDbgDeclare(Value *V) {
 }
 
 bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
-                                      DIBuilder &Builder, bool Deref) {
+                                      DIBuilder &Builder, bool Deref, int Offset) {
   DbgDeclareInst *DDI = FindAllocaDbgDeclare(AI);
   if (!DDI)
     return false;
@@ -1097,22 +1145,30 @@ bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
   auto *DIExpr = DDI->getExpression();
   assert(DIVar && "Missing variable");
 
-  if (Deref) {
+  if (Deref || Offset) {
     // Create a copy of the original DIDescriptor for user variable, prepending
     // "deref" operation to a list of address elements, as new llvm.dbg.declare
     // will take a value storing address of the memory for variable, not
     // alloca itself.
     SmallVector<uint64_t, 4> NewDIExpr;
-    NewDIExpr.push_back(dwarf::DW_OP_deref);
+    if (Deref)
+      NewDIExpr.push_back(dwarf::DW_OP_deref);
+    if (Offset > 0) {
+      NewDIExpr.push_back(dwarf::DW_OP_plus);
+      NewDIExpr.push_back(Offset);
+    } else if (Offset < 0) {
+      NewDIExpr.push_back(dwarf::DW_OP_minus);
+      NewDIExpr.push_back(-Offset);
+    }
     if (DIExpr)
       NewDIExpr.append(DIExpr->elements_begin(), DIExpr->elements_end());
     DIExpr = Builder.createExpression(NewDIExpr);
   }
 
-  // Insert llvm.dbg.declare in the same basic block as the original alloca,
-  // and remove old llvm.dbg.declare.
-  BasicBlock *BB = AI->getParent();
-  Builder.insertDeclare(NewAllocaAddress, DIVar, DIExpr, Loc, BB);
+  // Insert llvm.dbg.declare immediately after the original alloca, and remove
+  // old llvm.dbg.declare.
+  Builder.insertDeclare(NewAllocaAddress, DIVar, DIExpr, Loc,
+                        AI->getNextNode());
   DDI->eraseFromParent();
   return true;
 }
