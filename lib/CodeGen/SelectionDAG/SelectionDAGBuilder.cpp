@@ -1168,9 +1168,21 @@ void SelectionDAGBuilder::visitCatchRet(const CatchReturnInst &I) {
   MachineBasicBlock *TargetMBB = FuncInfo.MBBMap[I.getSuccessor()];
   FuncInfo.MBB->addSuccessor(TargetMBB);
 
+  // Figure out the funclet membership for the catchret's successor.
+  // This will be used by the FuncletLayout pass to determine how to order the
+  // BB's.
+  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
+  WinEHFuncInfo &EHInfo =
+      MMI.getWinEHFuncInfo(DAG.getMachineFunction().getFunction());
+  const BasicBlock *SuccessorColor = EHInfo.CatchRetSuccessorColorMap[&I];
+  assert(SuccessorColor && "No parent funclet for catchret!");
+  MachineBasicBlock *SuccessorColorMBB = FuncInfo.MBBMap[SuccessorColor];
+  assert(SuccessorColorMBB && "No MBB for SuccessorColor!");
+
   // Create the terminator node.
   SDValue Ret = DAG.getNode(ISD::CATCHRET, getCurSDLoc(), MVT::Other,
-                            getControlRoot(), DAG.getBasicBlock(TargetMBB));
+                            getControlRoot(), DAG.getBasicBlock(TargetMBB),
+                            DAG.getBasicBlock(SuccessorColorMBB));
   DAG.setRoot(Ret);
 }
 
@@ -2205,7 +2217,11 @@ void SelectionDAGBuilder::visitIndirectBr(const IndirectBrInst &I) {
                           getValue(I.getAddress())));
 }
 
-void SelectionDAGBuilder::visitUnreachable(const UnreachableInst &I) {}
+void SelectionDAGBuilder::visitUnreachable(const UnreachableInst &I) {
+  if (DAG.getTarget().Options.TrapUnreachable)
+    DAG.setRoot(
+        DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, DAG.getRoot()));
+}
 
 void SelectionDAGBuilder::visitFSub(const User &I) {
   // -0.0 - X --> fneg
