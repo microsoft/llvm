@@ -869,10 +869,9 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
   // invoke.
   int PendingState = NullState;
   // HandlerStack is a stack of (PendingStartLabel, PendingState) pairs for
-  // try regions we entered before the most recently visited invoke but which
-  // we haven't yet exited.  It starts with a sentinel entry.
+  // try regions we entered before entering the PendingState try but which
+  // we haven't yet exited.
   SmallVector<std::pair<MCSymbol *, int>, 4> HandlerStack;
-  HandlerStack.emplace_back(PendingStartLabel, PendingState);
   // PendingEndLabel is the EH label following the most recently visited
   // invoke.
   MCSymbol *PendingEndLabel = nullptr;
@@ -886,8 +885,26 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
   std::unique_ptr<MCSymbol *[]> EndSymbolMap(new MCSymbol *[NumStates]);
   SmallVector<int, 4> MinClauseMap((size_t)NumStates, NumStates);
 
+  // Helper to emit any pending clauses up to the specified ancestor state.
+  auto RewindPendingTo = [&](int AncestorState) {
+    while (PendingState != AncestorState) {
+      // Close the pending clause
+      Clauses.push_back(
+          {PendingStartLabel, PendingEndLabel, PendingState, EnclosingState});
+      // Now the parent handler is pending
+      PendingState = FuncInfo.ClrEHUnwindMap[PendingState].Parent;
+      // Pop the new start label from the handler stack if we've exited all
+      // descendants of the corresponding handler.
+      if (!HandlerStack.empty() && HandlerStack.back().second == PendingState)
+        PendingStartLabel = HandlerStack.pop_back_val().first;
+    }
+  };
+
   for (const auto &MBB : *MF) {
     if (MBB.isEHFuncletEntry()) {
+      // First, close any pending clauses from the last funclet, so that we
+      // don't try to emit clauses that span funclets.
+      RewindPendingTo(NullState);
       // Emit the offset to the start of this funclet.
       MCSymbol *HandlerSymbol = getMCSymbolForMBBOrGV(Asm, &MBB);
       OS.EmitValue(getOffset(HandlerSymbol, FuncBeginSym), 4);
@@ -936,26 +953,18 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
 
       // Close any try regions we're not still under
       int AncestorState = getAncestor(FuncInfo, PendingState, NewState);
-      while (PendingState != AncestorState) {
-        Clauses.push_back(
-            {PendingStartLabel, PendingEndLabel, PendingState, EnclosingState});
-        if (!HandlerStack.empty() && HandlerStack.back().second == PendingState)
-          // Pop the new start label from the handler stack.
-          std::tie(PendingStartLabel, PendingState) =
-              HandlerStack.pop_back_val();
-        else
-          PendingState = FuncInfo.ClrEHUnwindMap[PendingState].Parent;
+      RewindPendingTo(AncestorState);
+
+      if (NewState != PendingState) {
+        // Save the previous pending start/label on the stack and update to
+        // the newly-pending start/state.
+        HandlerStack.emplace_back(PendingStartLabel, PendingState);
+        PendingStartLabel = NewStartLabel;
+        PendingState = NewState;
       }
 
-      if (NewState != NullState) {
-        // Mark the new start label
-        HandlerStack.emplace_back(NewStartLabel, NewState);
-      }
-
-      // Update the current state
-      PendingStartLabel = NewStartLabel;
+      // Extend the pending clause to the new end label.
       PendingEndLabel = NewEndLabel;
-      PendingState = NewState;
     }
   }
 
@@ -964,16 +973,8 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
   OS.EmitValue(getOffset(FuncEndSym, FuncBeginSym), 4);
 
   // Close any trailing regions
-  while (PendingState != NullState) {
-    Clauses.push_back(
-        {PendingStartLabel, PendingEndLabel, PendingState, EnclosingState});
-    if (!HandlerStack.empty() && HandlerStack.back().second == PendingState)
-      // Pop the new start label from the handler stack.
-      std::tie(PendingStartLabel, PendingState) = HandlerStack.pop_back_val();
-    else
-      PendingState = FuncInfo.ClrEHUnwindMap[PendingState].Parent;
-  }
-  assert(HandlerStack.size() == 1);
+  RewindPendingTo(NullState);
+  assert(HandlerStack.empty());
 
   // Now emit the clause info, starting with the number of clauses.
   OS.EmitIntValue(Clauses.size(), 4);
