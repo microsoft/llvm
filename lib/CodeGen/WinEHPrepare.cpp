@@ -2887,7 +2887,8 @@ void llvm::calculateClrEHStateNumbers(const Function *Fn,
       // Preds of the endpad should get the parent state.
       PredState = ParentState;
     } else if (const CleanupPadInst *Cleanup = dyn_cast<CleanupPadInst>(Pad)) {
-      if (FuncInfo.EHPadStateMap[Pad] != 0) {
+      // A cleanup can have multiple exits; don't re-process after the first.
+      if (FuncInfo.EHPadStateMap.find(Pad) != FuncInfo.EHPadStateMap.end()) {
         // We might redundantly push a cleanup on the worklist through multiple
         // of its exits.  Just ignore this redundant entry.
         continue;
