@@ -938,9 +938,6 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
         // terminates with an "unwind to caller" endpad.
         if (NewState == NullState)
           continue;
-        int &MinEnclosingState = MinClauseMap[NewState];
-        if (EnclosingState < MinEnclosingState)
-          MinEnclosingState = EnclosingState;
         VisitingInvoke = true;
       } else if (!VisitingInvoke && MI.isCall() &&
                  !callToNoUnwindFunction(&MI)) {
@@ -961,6 +958,15 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
       RewindPendingTo(AncestorState);
 
       if (NewState != PendingState) {
+        // For each clause we're starting, update the MinClauseMap so we can
+        // know which is the topmost funclet containing a clause targeting
+        // it.
+        for (int EnteredState = NewState; EnteredState != PendingState;
+             EnteredState = FuncInfo.ClrEHUnwindMap[EnteredState].Parent) {
+          int &MinEnclosingState = MinClauseMap[EnteredState];
+          if (EnclosingState < MinEnclosingState)
+            MinEnclosingState = EnclosingState;
+        }
         // Save the previous pending start/label on the stack and update to
         // the newly-pending start/state.
         HandlerStack.emplace_back(PendingStartLabel, PendingState);
