@@ -933,6 +933,11 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
         // This is the label immediately before an invoke
         NewStartLabel = Label;
         std::tie(NewState, NewEndLabel) = StateAndEnd->second;
+        // Ignore this label if the state recorded on it is the null state.
+        // This happens for invokes that unwind to a chain of endpads that
+        // terminates with an "unwind to caller" endpad.
+        if (NewState == NullState)
+          continue;
         int &MinEnclosingState = MinClauseMap[NewState];
         if (EnclosingState < MinEnclosingState)
           MinEnclosingState = EnclosingState;
