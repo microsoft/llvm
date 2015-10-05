@@ -104,10 +104,8 @@ public:
     MBBI = I;
   }
 
-  MachineBasicBlock::iterator getCurrentPosition() const {
-    return MBBI;
-  }
-  
+  MachineBasicBlock::iterator getCurrentPosition() const { return MBBI; }
+
   /// Return if a specific register is currently used.
   bool isRegUsed(unsigned Reg, bool includeReserved = true) const;
 
@@ -169,10 +167,10 @@ private:
   /// Processes the current instruction and fill the KillRegUnits and
   /// DefRegUnits bit vectors.
   void determineKillsAndDefs();
-  
+
   /// Add all Reg Units that Reg contains to BV.
   void addRegUnits(BitVector &BV, unsigned Reg);
-  
+
   /// Return the candidate register that is unused for the longest after
   /// StartMI. UseMI is set to the instruction where the search stopped.
   ///
