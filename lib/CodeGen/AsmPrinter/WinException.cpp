@@ -828,10 +828,10 @@ void WinException::emitCLRExceptionTable(const MachineFunction *MF) {
   MCSymbol *FuncEndSym = Asm->getFunctionEnd();
 
   struct ClrClause {
-    MCSymbol *StartLabel;
-    MCSymbol *EndLabel;
-    int State;
-    int EnclosingState;
+    MCSymbol *StartLabel; // Start of protected regino
+    MCSymbol *EndLabel;   // End of protected region
+    int State;            // State of handler protecting the protected region
+    int EnclosingState;   // State of funclet enclosing the protected region
   };
   SmallVector<ClrClause, 8> Clauses;
 
