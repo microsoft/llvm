@@ -17,7 +17,6 @@
 
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/IR/CallingConv.h"
-#include "llvm/IR/Function.h"
 
 namespace llvm {
 
