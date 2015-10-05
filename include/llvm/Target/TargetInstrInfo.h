@@ -54,12 +54,17 @@ class TargetInstrInfo : public MCInstrInfo {
   TargetInstrInfo(const TargetInstrInfo &) = delete;
   void operator=(const TargetInstrInfo &) = delete;
 public:
-  TargetInstrInfo(unsigned CFSetupOpcode = ~0u, unsigned CFDestroyOpcode = ~0u)
-    : CallFrameSetupOpcode(CFSetupOpcode),
-      CallFrameDestroyOpcode(CFDestroyOpcode) {
-  }
+  TargetInstrInfo(unsigned CFSetupOpcode = ~0u, unsigned CFDestroyOpcode = ~0u,
+                  unsigned CatchRetOpcode = ~0u)
+      : CallFrameSetupOpcode(CFSetupOpcode),
+        CallFrameDestroyOpcode(CFDestroyOpcode),
+        CatchRetOpcode(CatchRetOpcode) {}
 
   virtual ~TargetInstrInfo();
+
+  static bool isGenericOpcode(unsigned Opc) {
+    return Opc <= TargetOpcode::GENERIC_OP_END;
+  }
 
   /// Given a machine instruction descriptor, returns the register
   /// class constraint for OpNum, or NULL.
@@ -145,6 +150,8 @@ public:
   ///
   unsigned getCallFrameSetupOpcode() const { return CallFrameSetupOpcode; }
   unsigned getCallFrameDestroyOpcode() const { return CallFrameDestroyOpcode; }
+
+  unsigned getCatchReturnOpcode() const { return CatchRetOpcode; }
 
   /// Returns the actual stack pointer adjustment made by an instruction
   /// as part of a call sequence. By default, only call frame setup/destroy
@@ -1398,6 +1405,7 @@ public:
 
 private:
   unsigned CallFrameSetupOpcode, CallFrameDestroyOpcode;
+  unsigned CatchRetOpcode;
 };
 
 /// \brief Provide DenseMapInfo for TargetInstrInfo::RegSubRegPair.

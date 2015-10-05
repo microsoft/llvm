@@ -3597,151 +3597,295 @@ ScalarEvolution::ForgetSymbolicName(Instruction *PN, const SCEV *SymName) {
   }
 }
 
-/// createNodeForPHI - PHI nodes have two cases.  Either the PHI node exists in
-/// a loop header, making it a potential recurrence, or it doesn't.
-///
-const SCEV *ScalarEvolution::createNodeForPHI(PHINode *PN) {
-  if (const Loop *L = LI.getLoopFor(PN->getParent()))
-    if (L->getHeader() == PN->getParent()) {
-      // The loop may have multiple entrances or multiple exits; we can analyze
-      // this phi as an addrec if it has a unique entry value and a unique
-      // backedge value.
-      Value *BEValueV = nullptr, *StartValueV = nullptr;
-      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
-        Value *V = PN->getIncomingValue(i);
-        if (L->contains(PN->getIncomingBlock(i))) {
-          if (!BEValueV) {
-            BEValueV = V;
-          } else if (BEValueV != V) {
-            BEValueV = nullptr;
+const SCEV *ScalarEvolution::createAddRecFromPHI(PHINode *PN) {
+  const Loop *L = LI.getLoopFor(PN->getParent());
+  if (!L || L->getHeader() != PN->getParent())
+    return nullptr;
+
+  // The loop may have multiple entrances or multiple exits; we can analyze
+  // this phi as an addrec if it has a unique entry value and a unique
+  // backedge value.
+  Value *BEValueV = nullptr, *StartValueV = nullptr;
+  for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+    Value *V = PN->getIncomingValue(i);
+    if (L->contains(PN->getIncomingBlock(i))) {
+      if (!BEValueV) {
+        BEValueV = V;
+      } else if (BEValueV != V) {
+        BEValueV = nullptr;
+        break;
+      }
+    } else if (!StartValueV) {
+      StartValueV = V;
+    } else if (StartValueV != V) {
+      StartValueV = nullptr;
+      break;
+    }
+  }
+  if (BEValueV && StartValueV) {
+    // While we are analyzing this PHI node, handle its value symbolically.
+    const SCEV *SymbolicName = getUnknown(PN);
+    assert(ValueExprMap.find_as(PN) == ValueExprMap.end() &&
+           "PHI node already processed?");
+    ValueExprMap.insert(std::make_pair(SCEVCallbackVH(PN, this), SymbolicName));
+
+    // Using this symbolic name for the PHI, analyze the value coming around
+    // the back-edge.
+    const SCEV *BEValue = getSCEV(BEValueV);
+
+    // NOTE: If BEValue is loop invariant, we know that the PHI node just
+    // has a special value for the first iteration of the loop.
+
+    // If the value coming around the backedge is an add with the symbolic
+    // value we just inserted, then we found a simple induction variable!
+    if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(BEValue)) {
+      // If there is a single occurrence of the symbolic value, replace it
+      // with a recurrence.
+      unsigned FoundIndex = Add->getNumOperands();
+      for (unsigned i = 0, e = Add->getNumOperands(); i != e; ++i)
+        if (Add->getOperand(i) == SymbolicName)
+          if (FoundIndex == e) {
+            FoundIndex = i;
             break;
           }
-        } else if (!StartValueV) {
-          StartValueV = V;
-        } else if (StartValueV != V) {
-          StartValueV = nullptr;
-          break;
+
+      if (FoundIndex != Add->getNumOperands()) {
+        // Create an add with everything but the specified operand.
+        SmallVector<const SCEV *, 8> Ops;
+        for (unsigned i = 0, e = Add->getNumOperands(); i != e; ++i)
+          if (i != FoundIndex)
+            Ops.push_back(Add->getOperand(i));
+        const SCEV *Accum = getAddExpr(Ops);
+
+        // This is not a valid addrec if the step amount is varying each
+        // loop iteration, but is not itself an addrec in this loop.
+        if (isLoopInvariant(Accum, L) ||
+            (isa<SCEVAddRecExpr>(Accum) &&
+             cast<SCEVAddRecExpr>(Accum)->getLoop() == L)) {
+          SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap;
+
+          // If the increment doesn't overflow, then neither the addrec nor
+          // the post-increment will overflow.
+          if (const AddOperator *OBO = dyn_cast<AddOperator>(BEValueV)) {
+            if (OBO->getOperand(0) == PN) {
+              if (OBO->hasNoUnsignedWrap())
+                Flags = setFlags(Flags, SCEV::FlagNUW);
+              if (OBO->hasNoSignedWrap())
+                Flags = setFlags(Flags, SCEV::FlagNSW);
+            }
+          } else if (GEPOperator *GEP = dyn_cast<GEPOperator>(BEValueV)) {
+            // If the increment is an inbounds GEP, then we know the address
+            // space cannot be wrapped around. We cannot make any guarantee
+            // about signed or unsigned overflow because pointers are
+            // unsigned but we may have a negative index from the base
+            // pointer. We can guarantee that no unsigned wrap occurs if the
+            // indices form a positive value.
+            if (GEP->isInBounds() && GEP->getOperand(0) == PN) {
+              Flags = setFlags(Flags, SCEV::FlagNW);
+
+              const SCEV *Ptr = getSCEV(GEP->getPointerOperand());
+              if (isKnownPositive(getMinusSCEV(getSCEV(GEP), Ptr)))
+                Flags = setFlags(Flags, SCEV::FlagNUW);
+            }
+
+            // We cannot transfer nuw and nsw flags from subtraction
+            // operations -- sub nuw X, Y is not the same as add nuw X, -Y
+            // for instance.
+          }
+
+          const SCEV *StartVal = getSCEV(StartValueV);
+          const SCEV *PHISCEV = getAddRecExpr(StartVal, Accum, L, Flags);
+
+          // Since the no-wrap flags are on the increment, they apply to the
+          // post-incremented value as well.
+          if (isLoopInvariant(Accum, L))
+            (void)getAddRecExpr(getAddExpr(StartVal, Accum), Accum, L, Flags);
+
+          // Okay, for the entire analysis of this edge we assumed the PHI
+          // to be symbolic.  We now need to go back and purge all of the
+          // entries for the scalars that use the symbolic expression.
+          ForgetSymbolicName(PN, SymbolicName);
+          ValueExprMap[SCEVCallbackVH(PN, this)] = PHISCEV;
+          return PHISCEV;
         }
       }
-      if (BEValueV && StartValueV) {
-        // While we are analyzing this PHI node, handle its value symbolically.
-        const SCEV *SymbolicName = getUnknown(PN);
-        assert(ValueExprMap.find_as(PN) == ValueExprMap.end() &&
-               "PHI node already processed?");
-        ValueExprMap.insert(std::make_pair(SCEVCallbackVH(PN, this), SymbolicName));
+    } else if (const SCEVAddRecExpr *AddRec =
+                   dyn_cast<SCEVAddRecExpr>(BEValue)) {
+      // Otherwise, this could be a loop like this:
+      //     i = 0;  for (j = 1; ..; ++j) { ....  i = j; }
+      // In this case, j = {1,+,1}  and BEValue is j.
+      // Because the other in-value of i (0) fits the evolution of BEValue
+      // i really is an addrec evolution.
+      if (AddRec->getLoop() == L && AddRec->isAffine()) {
+        const SCEV *StartVal = getSCEV(StartValueV);
 
-        // Using this symbolic name for the PHI, analyze the value coming around
-        // the back-edge.
-        const SCEV *BEValue = getSCEV(BEValueV);
+        // If StartVal = j.start - j.stride, we can use StartVal as the
+        // initial step of the addrec evolution.
+        if (StartVal ==
+            getMinusSCEV(AddRec->getOperand(0), AddRec->getOperand(1))) {
+          // FIXME: For constant StartVal, we should be able to infer
+          // no-wrap flags.
+          const SCEV *PHISCEV = getAddRecExpr(StartVal, AddRec->getOperand(1),
+                                              L, SCEV::FlagAnyWrap);
 
-        // NOTE: If BEValue is loop invariant, we know that the PHI node just
-        // has a special value for the first iteration of the loop.
-
-        // If the value coming around the backedge is an add with the symbolic
-        // value we just inserted, then we found a simple induction variable!
-        if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(BEValue)) {
-          // If there is a single occurrence of the symbolic value, replace it
-          // with a recurrence.
-          unsigned FoundIndex = Add->getNumOperands();
-          for (unsigned i = 0, e = Add->getNumOperands(); i != e; ++i)
-            if (Add->getOperand(i) == SymbolicName)
-              if (FoundIndex == e) {
-                FoundIndex = i;
-                break;
-              }
-
-          if (FoundIndex != Add->getNumOperands()) {
-            // Create an add with everything but the specified operand.
-            SmallVector<const SCEV *, 8> Ops;
-            for (unsigned i = 0, e = Add->getNumOperands(); i != e; ++i)
-              if (i != FoundIndex)
-                Ops.push_back(Add->getOperand(i));
-            const SCEV *Accum = getAddExpr(Ops);
-
-            // This is not a valid addrec if the step amount is varying each
-            // loop iteration, but is not itself an addrec in this loop.
-            if (isLoopInvariant(Accum, L) ||
-                (isa<SCEVAddRecExpr>(Accum) &&
-                 cast<SCEVAddRecExpr>(Accum)->getLoop() == L)) {
-              SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap;
-
-              // If the increment doesn't overflow, then neither the addrec nor
-              // the post-increment will overflow.
-              if (const AddOperator *OBO = dyn_cast<AddOperator>(BEValueV)) {
-                if (OBO->getOperand(0) == PN) {
-                  if (OBO->hasNoUnsignedWrap())
-                    Flags = setFlags(Flags, SCEV::FlagNUW);
-                  if (OBO->hasNoSignedWrap())
-                    Flags = setFlags(Flags, SCEV::FlagNSW);
-                }
-              } else if (GEPOperator *GEP = dyn_cast<GEPOperator>(BEValueV)) {
-                // If the increment is an inbounds GEP, then we know the address
-                // space cannot be wrapped around. We cannot make any guarantee
-                // about signed or unsigned overflow because pointers are
-                // unsigned but we may have a negative index from the base
-                // pointer. We can guarantee that no unsigned wrap occurs if the
-                // indices form a positive value.
-                if (GEP->isInBounds() && GEP->getOperand(0) == PN) {
-                  Flags = setFlags(Flags, SCEV::FlagNW);
-
-                  const SCEV *Ptr = getSCEV(GEP->getPointerOperand());
-                  if (isKnownPositive(getMinusSCEV(getSCEV(GEP), Ptr)))
-                    Flags = setFlags(Flags, SCEV::FlagNUW);
-                }
-
-                // We cannot transfer nuw and nsw flags from subtraction
-                // operations -- sub nuw X, Y is not the same as add nuw X, -Y
-                // for instance.
-              }
-
-              const SCEV *StartVal = getSCEV(StartValueV);
-              const SCEV *PHISCEV = getAddRecExpr(StartVal, Accum, L, Flags);
-
-              // Since the no-wrap flags are on the increment, they apply to the
-              // post-incremented value as well.
-              if (isLoopInvariant(Accum, L))
-                (void)getAddRecExpr(getAddExpr(StartVal, Accum),
-                                    Accum, L, Flags);
-
-              // Okay, for the entire analysis of this edge we assumed the PHI
-              // to be symbolic.  We now need to go back and purge all of the
-              // entries for the scalars that use the symbolic expression.
-              ForgetSymbolicName(PN, SymbolicName);
-              ValueExprMap[SCEVCallbackVH(PN, this)] = PHISCEV;
-              return PHISCEV;
-            }
-          }
-        } else if (const SCEVAddRecExpr *AddRec =
-                     dyn_cast<SCEVAddRecExpr>(BEValue)) {
-          // Otherwise, this could be a loop like this:
-          //     i = 0;  for (j = 1; ..; ++j) { ....  i = j; }
-          // In this case, j = {1,+,1}  and BEValue is j.
-          // Because the other in-value of i (0) fits the evolution of BEValue
-          // i really is an addrec evolution.
-          if (AddRec->getLoop() == L && AddRec->isAffine()) {
-            const SCEV *StartVal = getSCEV(StartValueV);
-
-            // If StartVal = j.start - j.stride, we can use StartVal as the
-            // initial step of the addrec evolution.
-            if (StartVal == getMinusSCEV(AddRec->getOperand(0),
-                                         AddRec->getOperand(1))) {
-              // FIXME: For constant StartVal, we should be able to infer
-              // no-wrap flags.
-              const SCEV *PHISCEV =
-                getAddRecExpr(StartVal, AddRec->getOperand(1), L,
-                              SCEV::FlagAnyWrap);
-
-              // Okay, for the entire analysis of this edge we assumed the PHI
-              // to be symbolic.  We now need to go back and purge all of the
-              // entries for the scalars that use the symbolic expression.
-              ForgetSymbolicName(PN, SymbolicName);
-              ValueExprMap[SCEVCallbackVH(PN, this)] = PHISCEV;
-              return PHISCEV;
-            }
-          }
+          // Okay, for the entire analysis of this edge we assumed the PHI
+          // to be symbolic.  We now need to go back and purge all of the
+          // entries for the scalars that use the symbolic expression.
+          ForgetSymbolicName(PN, SymbolicName);
+          ValueExprMap[SCEVCallbackVH(PN, this)] = PHISCEV;
+          return PHISCEV;
         }
       }
     }
+  }
+
+  return nullptr;
+}
+
+// Checks if the SCEV S is available at BB.  S is considered available at BB
+// if S can be materialized at BB without introducing a fault.
+static bool IsAvailableOnEntry(const Loop *L, DominatorTree &DT, const SCEV *S,
+                               BasicBlock *BB) {
+  struct CheckAvailable {
+    bool TraversalDone = false;
+    bool Available = true;
+
+    const Loop *L = nullptr;  // The loop BB is in (can be nullptr)
+    BasicBlock *BB = nullptr;
+    DominatorTree &DT;
+
+    CheckAvailable(const Loop *L, BasicBlock *BB, DominatorTree &DT)
+      : L(L), BB(BB), DT(DT) {}
+
+    bool setUnavailable() {
+      TraversalDone = true;
+      Available = false;
+      return false;
+    }
+
+    bool follow(const SCEV *S) {
+      switch (S->getSCEVType()) {
+      case scConstant: case scTruncate: case scZeroExtend: case scSignExtend:
+      case scAddExpr: case scMulExpr: case scUMaxExpr: case scSMaxExpr:
+      // These expressions are available if their operand(s) is/are.
+      return true;
+
+      case scAddRecExpr: {
+        // We allow add recurrences that are on the loop BB is in, or some
+        // outer loop.  This guarantees availability because the value of the
+        // add recurrence at BB is simply the "current" value of the induction
+        // variable.  We can relax this in the future; for instance an add
+        // recurrence on a sibling dominating loop is also available at BB.
+        const auto *ARLoop = cast<SCEVAddRecExpr>(S)->getLoop();
+        if (L && (ARLoop == L || ARLoop->contains(L)))
+          return true;
+
+        return setUnavailable();
+      }
+
+      case scUnknown: {
+        // For SCEVUnknown, we check for simple dominance.
+        const auto *SU = cast<SCEVUnknown>(S);
+        Value *V = SU->getValue();
+
+        if (isa<Argument>(V))
+          return false;
+
+        if (isa<Instruction>(V) && DT.dominates(cast<Instruction>(V), BB))
+          return false;
+
+        return setUnavailable();
+      }
+
+      case scUDivExpr:
+      case scCouldNotCompute:
+      // We do not try to smart about these at all.
+      return setUnavailable();
+      }
+      llvm_unreachable("switch should be fully covered!");
+    }
+
+    bool isDone() { return TraversalDone; }
+  };
+
+  CheckAvailable CA(L, BB, DT);
+  SCEVTraversal<CheckAvailable> ST(CA);
+
+  ST.visitAll(S);
+  return CA.Available;
+}
+
+// Try to match a control flow sequence that branches out at BI and merges back
+// at Merge into a "C ? LHS : RHS" select pattern.  Return true on a successful
+// match.
+static bool BrPHIToSelect(DominatorTree &DT, BranchInst *BI, PHINode *Merge,
+                          Value *&C, Value *&LHS, Value *&RHS) {
+  C = BI->getCondition();
+
+  BasicBlockEdge LeftEdge(BI->getParent(), BI->getSuccessor(0));
+  BasicBlockEdge RightEdge(BI->getParent(), BI->getSuccessor(1));
+
+  if (!LeftEdge.isSingleEdge())
+    return false;
+
+  assert(RightEdge.isSingleEdge() && "Follows from LeftEdge.isSingleEdge()");
+
+  Use &LeftUse = Merge->getOperandUse(0);
+  Use &RightUse = Merge->getOperandUse(1);
+
+  if (DT.dominates(LeftEdge, LeftUse) && DT.dominates(RightEdge, RightUse)) {
+    LHS = LeftUse;
+    RHS = RightUse;
+    return true;
+  }
+
+  if (DT.dominates(LeftEdge, RightUse) && DT.dominates(RightEdge, LeftUse)) {
+    LHS = RightUse;
+    RHS = LeftUse;
+    return true;
+  }
+
+  return false;
+}
+
+const SCEV *ScalarEvolution::createNodeFromSelectLikePHI(PHINode *PN) {
+  if (PN->getNumIncomingValues() == 2) {
+    const Loop *L = LI.getLoopFor(PN->getParent());
+
+    // Try to match
+    //
+    //  br %cond, label %left, label %right
+    // left:
+    //  br label %merge
+    // right:
+    //  br label %merge
+    // merge:
+    //  V = phi [ %x, %left ], [ %y, %right ]
+    //
+    // as "select %cond, %x, %y"
+
+    BasicBlock *IDom = DT[PN->getParent()]->getIDom()->getBlock();
+    assert(IDom && "At least the entry block should dominate PN");
+
+    auto *BI = dyn_cast<BranchInst>(IDom->getTerminator());
+    Value *Cond = nullptr, *LHS = nullptr, *RHS = nullptr;
+
+    if (BI && BI->isConditional() &&
+        BrPHIToSelect(DT, BI, PN, Cond, LHS, RHS) &&
+        IsAvailableOnEntry(L, DT, getSCEV(LHS), PN->getParent()) &&
+        IsAvailableOnEntry(L, DT, getSCEV(RHS), PN->getParent()))
+      return createNodeForSelectOrPHI(PN, Cond, LHS, RHS);
+  }
+
+  return nullptr;
+}
+
+const SCEV *ScalarEvolution::createNodeForPHI(PHINode *PN) {
+  if (const SCEV *S = createAddRecFromPHI(PN))
+    return S;
+
+  if (const SCEV *S = createNodeFromSelectLikePHI(PN))
+    return S;
 
   // If the PHI has a single incoming value, follow that value, unless the
   // PHI's incoming blocks are in a different loop, in which case doing so
@@ -3754,6 +3898,100 @@ const SCEV *ScalarEvolution::createNodeForPHI(PHINode *PN) {
 
   // If it's not a loop phi, we can't handle it yet.
   return getUnknown(PN);
+}
+
+const SCEV *ScalarEvolution::createNodeForSelectOrPHI(Instruction *I,
+                                                      Value *Cond,
+                                                      Value *TrueVal,
+                                                      Value *FalseVal) {
+  // Try to match some simple smax or umax patterns.
+  auto *ICI = dyn_cast<ICmpInst>(Cond);
+  if (!ICI)
+    return getUnknown(I);
+
+  Value *LHS = ICI->getOperand(0);
+  Value *RHS = ICI->getOperand(1);
+
+  switch (ICI->getPredicate()) {
+  case ICmpInst::ICMP_SLT:
+  case ICmpInst::ICMP_SLE:
+    std::swap(LHS, RHS);
+  // fall through
+  case ICmpInst::ICMP_SGT:
+  case ICmpInst::ICMP_SGE:
+    // a >s b ? a+x : b+x  ->  smax(a, b)+x
+    // a >s b ? b+x : a+x  ->  smin(a, b)+x
+    if (getTypeSizeInBits(LHS->getType()) <= getTypeSizeInBits(I->getType())) {
+      const SCEV *LS = getNoopOrSignExtend(getSCEV(LHS), I->getType());
+      const SCEV *RS = getNoopOrSignExtend(getSCEV(RHS), I->getType());
+      const SCEV *LA = getSCEV(TrueVal);
+      const SCEV *RA = getSCEV(FalseVal);
+      const SCEV *LDiff = getMinusSCEV(LA, LS);
+      const SCEV *RDiff = getMinusSCEV(RA, RS);
+      if (LDiff == RDiff)
+        return getAddExpr(getSMaxExpr(LS, RS), LDiff);
+      LDiff = getMinusSCEV(LA, RS);
+      RDiff = getMinusSCEV(RA, LS);
+      if (LDiff == RDiff)
+        return getAddExpr(getSMinExpr(LS, RS), LDiff);
+    }
+    break;
+  case ICmpInst::ICMP_ULT:
+  case ICmpInst::ICMP_ULE:
+    std::swap(LHS, RHS);
+  // fall through
+  case ICmpInst::ICMP_UGT:
+  case ICmpInst::ICMP_UGE:
+    // a >u b ? a+x : b+x  ->  umax(a, b)+x
+    // a >u b ? b+x : a+x  ->  umin(a, b)+x
+    if (getTypeSizeInBits(LHS->getType()) <= getTypeSizeInBits(I->getType())) {
+      const SCEV *LS = getNoopOrZeroExtend(getSCEV(LHS), I->getType());
+      const SCEV *RS = getNoopOrZeroExtend(getSCEV(RHS), I->getType());
+      const SCEV *LA = getSCEV(TrueVal);
+      const SCEV *RA = getSCEV(FalseVal);
+      const SCEV *LDiff = getMinusSCEV(LA, LS);
+      const SCEV *RDiff = getMinusSCEV(RA, RS);
+      if (LDiff == RDiff)
+        return getAddExpr(getUMaxExpr(LS, RS), LDiff);
+      LDiff = getMinusSCEV(LA, RS);
+      RDiff = getMinusSCEV(RA, LS);
+      if (LDiff == RDiff)
+        return getAddExpr(getUMinExpr(LS, RS), LDiff);
+    }
+    break;
+  case ICmpInst::ICMP_NE:
+    // n != 0 ? n+x : 1+x  ->  umax(n, 1)+x
+    if (getTypeSizeInBits(LHS->getType()) <= getTypeSizeInBits(I->getType()) &&
+        isa<ConstantInt>(RHS) && cast<ConstantInt>(RHS)->isZero()) {
+      const SCEV *One = getOne(I->getType());
+      const SCEV *LS = getNoopOrZeroExtend(getSCEV(LHS), I->getType());
+      const SCEV *LA = getSCEV(TrueVal);
+      const SCEV *RA = getSCEV(FalseVal);
+      const SCEV *LDiff = getMinusSCEV(LA, LS);
+      const SCEV *RDiff = getMinusSCEV(RA, One);
+      if (LDiff == RDiff)
+        return getAddExpr(getUMaxExpr(One, LS), LDiff);
+    }
+    break;
+  case ICmpInst::ICMP_EQ:
+    // n == 0 ? 1+x : n+x  ->  umax(n, 1)+x
+    if (getTypeSizeInBits(LHS->getType()) <= getTypeSizeInBits(I->getType()) &&
+        isa<ConstantInt>(RHS) && cast<ConstantInt>(RHS)->isZero()) {
+      const SCEV *One = getOne(I->getType());
+      const SCEV *LS = getNoopOrZeroExtend(getSCEV(LHS), I->getType());
+      const SCEV *LA = getSCEV(TrueVal);
+      const SCEV *RA = getSCEV(FalseVal);
+      const SCEV *LDiff = getMinusSCEV(LA, One);
+      const SCEV *RDiff = getMinusSCEV(RA, LS);
+      if (LDiff == RDiff)
+        return getAddExpr(getUMaxExpr(One, LS), LDiff);
+    }
+    break;
+  default:
+    break;
+  }
+
+  return getUnknown(I);
 }
 
 /// createNodeForGEP - Expand GEP instructions into add and multiply
@@ -4470,94 +4708,13 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
     return createNodeForPHI(cast<PHINode>(U));
 
   case Instruction::Select:
-    // This could be a smax or umax that was lowered earlier.
-    // Try to recover it.
-    if (ICmpInst *ICI = dyn_cast<ICmpInst>(U->getOperand(0))) {
-      Value *LHS = ICI->getOperand(0);
-      Value *RHS = ICI->getOperand(1);
-      switch (ICI->getPredicate()) {
-      case ICmpInst::ICMP_SLT:
-      case ICmpInst::ICMP_SLE:
-        std::swap(LHS, RHS);
-        // fall through
-      case ICmpInst::ICMP_SGT:
-      case ICmpInst::ICMP_SGE:
-        // a >s b ? a+x : b+x  ->  smax(a, b)+x
-        // a >s b ? b+x : a+x  ->  smin(a, b)+x
-        if (getTypeSizeInBits(LHS->getType()) <=
-            getTypeSizeInBits(U->getType())) {
-          const SCEV *LS = getNoopOrSignExtend(getSCEV(LHS), U->getType());
-          const SCEV *RS = getNoopOrSignExtend(getSCEV(RHS), U->getType());
-          const SCEV *LA = getSCEV(U->getOperand(1));
-          const SCEV *RA = getSCEV(U->getOperand(2));
-          const SCEV *LDiff = getMinusSCEV(LA, LS);
-          const SCEV *RDiff = getMinusSCEV(RA, RS);
-          if (LDiff == RDiff)
-            return getAddExpr(getSMaxExpr(LS, RS), LDiff);
-          LDiff = getMinusSCEV(LA, RS);
-          RDiff = getMinusSCEV(RA, LS);
-          if (LDiff == RDiff)
-            return getAddExpr(getSMinExpr(LS, RS), LDiff);
-        }
-        break;
-      case ICmpInst::ICMP_ULT:
-      case ICmpInst::ICMP_ULE:
-        std::swap(LHS, RHS);
-        // fall through
-      case ICmpInst::ICMP_UGT:
-      case ICmpInst::ICMP_UGE:
-        // a >u b ? a+x : b+x  ->  umax(a, b)+x
-        // a >u b ? b+x : a+x  ->  umin(a, b)+x
-        if (getTypeSizeInBits(LHS->getType()) <=
-            getTypeSizeInBits(U->getType())) {
-          const SCEV *LS = getNoopOrZeroExtend(getSCEV(LHS), U->getType());
-          const SCEV *RS = getNoopOrZeroExtend(getSCEV(RHS), U->getType());
-          const SCEV *LA = getSCEV(U->getOperand(1));
-          const SCEV *RA = getSCEV(U->getOperand(2));
-          const SCEV *LDiff = getMinusSCEV(LA, LS);
-          const SCEV *RDiff = getMinusSCEV(RA, RS);
-          if (LDiff == RDiff)
-            return getAddExpr(getUMaxExpr(LS, RS), LDiff);
-          LDiff = getMinusSCEV(LA, RS);
-          RDiff = getMinusSCEV(RA, LS);
-          if (LDiff == RDiff)
-            return getAddExpr(getUMinExpr(LS, RS), LDiff);
-        }
-        break;
-      case ICmpInst::ICMP_NE:
-        // n != 0 ? n+x : 1+x  ->  umax(n, 1)+x
-        if (getTypeSizeInBits(LHS->getType()) <=
-                getTypeSizeInBits(U->getType()) &&
-            isa<ConstantInt>(RHS) && cast<ConstantInt>(RHS)->isZero()) {
-          const SCEV *One = getOne(U->getType());
-          const SCEV *LS = getNoopOrZeroExtend(getSCEV(LHS), U->getType());
-          const SCEV *LA = getSCEV(U->getOperand(1));
-          const SCEV *RA = getSCEV(U->getOperand(2));
-          const SCEV *LDiff = getMinusSCEV(LA, LS);
-          const SCEV *RDiff = getMinusSCEV(RA, One);
-          if (LDiff == RDiff)
-            return getAddExpr(getUMaxExpr(One, LS), LDiff);
-        }
-        break;
-      case ICmpInst::ICMP_EQ:
-        // n == 0 ? 1+x : n+x  ->  umax(n, 1)+x
-        if (getTypeSizeInBits(LHS->getType()) <=
-                getTypeSizeInBits(U->getType()) &&
-            isa<ConstantInt>(RHS) && cast<ConstantInt>(RHS)->isZero()) {
-          const SCEV *One = getOne(U->getType());
-          const SCEV *LS = getNoopOrZeroExtend(getSCEV(LHS), U->getType());
-          const SCEV *LA = getSCEV(U->getOperand(1));
-          const SCEV *RA = getSCEV(U->getOperand(2));
-          const SCEV *LDiff = getMinusSCEV(LA, One);
-          const SCEV *RDiff = getMinusSCEV(RA, LS);
-          if (LDiff == RDiff)
-            return getAddExpr(getUMaxExpr(One, LS), LDiff);
-        }
-        break;
-      default:
-        break;
-      }
-    }
+    // U can also be a select constant expr, which let fall through.  Since
+    // createNodeForSelect only works for a condition that is an `ICmpInst`, and
+    // constant expressions cannot have instructions as operands, we'd have
+    // returned getUnknown for a select constant expressions anyway.
+    if (isa<Instruction>(U))
+      return createNodeForSelectOrPHI(cast<Instruction>(U), U->getOperand(0),
+                                      U->getOperand(1), U->getOperand(2));
 
   default: // We cannot analyze this expression.
     break;
@@ -6764,6 +6921,9 @@ bool ScalarEvolution::isKnownPredicate(ICmpInst::Predicate Pred,
   if (LeftGuarded && RightGuarded)
     return true;
 
+  if (isKnownPredicateViaSplitting(Pred, LHS, RHS))
+    return true;
+
   // Otherwise see what can be done with known constant ranges.
   return isKnownPredicateWithRanges(Pred, LHS, RHS);
 }
@@ -6966,6 +7126,31 @@ ScalarEvolution::isKnownPredicateWithRanges(ICmpInst::Predicate Pred,
     // the values are known to be equal.
     break;
   }
+  return false;
+}
+
+bool ScalarEvolution::isKnownPredicateViaSplitting(ICmpInst::Predicate Pred,
+                                                   const SCEV *LHS,
+                                                   const SCEV *RHS) {
+  if (ProvingSplitPredicate)
+    return false;
+
+  // Allowing arbitrary number of activations of isKnownPredicateViaSplitting on
+  // the stack can result in exponential time complexity.
+  SaveAndRestore<bool> Restore(ProvingSplitPredicate, true);
+
+  // If L >= 0 then I `ult` L <=> I >= 0 && I `slt` L
+  //
+  // To prove L >= 0 we use isKnownNonNegative whereas to prove I >= 0 we use
+  // isKnownPredicate.  isKnownPredicate is more powerful, but also more
+  // expensive; and using isKnownNonNegative(RHS) is sufficient for most of the
+  // interesting cases seen in practice.  We can consider "upgrading" L >= 0 to
+  // use isKnownPredicate later if needed.
+  if (Pred == ICmpInst::ICMP_ULT && isKnownNonNegative(RHS) &&
+      isKnownPredicate(CmpInst::ICMP_SGE, LHS, getZero(LHS->getType())) &&
+      isKnownPredicate(CmpInst::ICMP_SLT, LHS, RHS))
+    return true;
+
   return false;
 }
 
@@ -8529,14 +8714,15 @@ ScalarEvolution::ScalarEvolution(Function &F, TargetLibraryInfo &TLI,
                                  LoopInfo &LI)
     : F(F), TLI(TLI), AC(AC), DT(DT), LI(LI),
       CouldNotCompute(new SCEVCouldNotCompute()),
-      WalkingBEDominatingConds(false), ValuesAtScopes(64), LoopDispositions(64),
-      BlockDispositions(64), FirstUnknown(nullptr) {}
+      WalkingBEDominatingConds(false), ProvingSplitPredicate(false),
+      ValuesAtScopes(64), LoopDispositions(64), BlockDispositions(64),
+      FirstUnknown(nullptr) {}
 
 ScalarEvolution::ScalarEvolution(ScalarEvolution &&Arg)
     : F(Arg.F), TLI(Arg.TLI), AC(Arg.AC), DT(Arg.DT), LI(Arg.LI),
       CouldNotCompute(std::move(Arg.CouldNotCompute)),
       ValueExprMap(std::move(Arg.ValueExprMap)),
-      WalkingBEDominatingConds(false),
+      WalkingBEDominatingConds(false), ProvingSplitPredicate(false),
       BackedgeTakenCounts(std::move(Arg.BackedgeTakenCounts)),
       ConstantEvolutionLoopExitValue(
           std::move(Arg.ConstantEvolutionLoopExitValue)),
@@ -8573,6 +8759,7 @@ ScalarEvolution::~ScalarEvolution() {
 
   assert(PendingLoopPredicates.empty() && "isImpliedCond garbage");
   assert(!WalkingBEDominatingConds && "isLoopBackedgeGuardedByCond garbage!");
+  assert(!ProvingSplitPredicate && "ProvingSplitPredicate garbage!");
 }
 
 bool ScalarEvolution::hasLoopInvariantBackedgeTakenCount(const Loop *L) {

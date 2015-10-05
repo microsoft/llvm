@@ -131,6 +131,8 @@ struct SEHUnwindMapEntry {
   /// this state. This indexes into SEHUnwindMap.
   int ToState = -1;
 
+  bool IsFinally = false;
+
   /// Holds the filter expression function.
   const Function *Filter = nullptr;
 
@@ -170,6 +172,8 @@ struct ClrEHUnwindMapEntry {
 
 struct WinEHFuncInfo {
   DenseMap<const Instruction *, int> EHPadStateMap;
+  DenseMap<const CatchReturnInst *, const BasicBlock *>
+      CatchRetSuccessorColorMap;
   DenseMap<MCSymbol *, std::pair<int, MCSymbol *>> InvokeToStateMap;
   SmallVector<WinEHUnwindMapEntry, 4> UnwindMap;
   SmallVector<WinEHTryBlockMapEntry, 4> TryBlockMap;
@@ -203,5 +207,8 @@ void calculateSEHStateNumbers(const Function *ParentFn,
                               WinEHFuncInfo &FuncInfo);
 
 void calculateClrEHStateNumbers(const Function *Fn, WinEHFuncInfo &FuncInfo);
+
+void calculateCatchReturnSuccessorColors(const Function *Fn,
+                                         WinEHFuncInfo &FuncInfo);
 }
 #endif // LLVM_CODEGEN_WINEHFUNCINFO_H

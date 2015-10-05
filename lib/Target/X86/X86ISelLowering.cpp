@@ -2942,20 +2942,6 @@ static SDValue getMOVL(SelectionDAG &DAG, SDLoc dl, EVT VT, SDValue V1,
   return DAG.getVectorShuffle(VT, dl, V1, V2, &Mask[0]);
 }
 
-/// Check if the fall through instruction after a call site is unreachable.
-/// FIXME: This will fail if there are interesting non-code generating IR
-/// instructions between the call and the unreachable (lifetime.end). In
-/// practice, this should be rare because optimizations like to delete non-call
-/// code before unreachable.
-static bool isCallFollowedByUnreachable(ImmutableCallSite CS) {
-  const Instruction *NextInst;
-  if (auto *II = dyn_cast<InvokeInst>(CS.getInstruction()))
-    NextInst = II->getNormalDest()->getFirstNonPHIOrDbg();
-  else
-    NextInst = CS.getInstruction()->getNextNode();
-  return isa<UnreachableInst>(NextInst);
-}
-
 SDValue
 X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                              SmallVectorImpl<SDValue> &InVals) const {
@@ -3459,15 +3445,6 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                                                      true),
                                InFlag, dl);
     InFlag = Chain.getValue(1);
-  }
-
-  if (Subtarget->isTargetWin64() && CLI.CS) {
-    // Look for a call followed by unreachable. On Win64, we need to ensure that
-    // the call does not accidentally fall through to something that looks like
-    // an epilogue. We do this by inserting a DEBUGTRAP, which lowers to int3,
-    // which is what MSVC emits after noreturn calls.
-    if (isCallFollowedByUnreachable(*CLI.CS))
-      Chain = DAG.getNode(ISD::DEBUGTRAP, dl, MVT::Other, Chain);
   }
 
   // Handle result values, copying them out of physregs into vregs that we
@@ -15077,29 +15054,12 @@ static SDValue LowerExtendedLoad(SDValue Op, const X86Subtarget *Subtarget,
       return Sext;
     }
 
-    // Otherwise we'll shuffle the small elements in the high bits of the
-    // larger type and perform an arithmetic shift. If the shift is not legal
-    // it's better to scalarize.
-    assert(TLI.isOperationLegalOrCustom(ISD::SRA, RegVT) &&
-           "We can't implement a sext load without an arithmetic right shift!");
+    // Otherwise we'll use SIGN_EXTEND_VECTOR_INREG to sign extend the lowest
+    // lanes.
+    assert(TLI.isOperationLegalOrCustom(ISD::SIGN_EXTEND_VECTOR_INREG, RegVT) &&
+           "We can't implement a sext load without SIGN_EXTEND_VECTOR_INREG!");
 
-    // Redistribute the loaded elements into the different locations.
-    SmallVector<int, 16> ShuffleVec(NumElems * SizeRatio, -1);
-    for (unsigned i = 0; i != NumElems; ++i)
-      ShuffleVec[i * SizeRatio + SizeRatio - 1] = i;
-
-    SDValue Shuff = DAG.getVectorShuffle(
-        WideVecVT, dl, SlicedVec, DAG.getUNDEF(WideVecVT), &ShuffleVec[0]);
-
-    Shuff = DAG.getBitcast(RegVT, Shuff);
-
-    // Build the arithmetic shift.
-    unsigned Amt = RegVT.getVectorElementType().getSizeInBits() -
-                   MemVT.getVectorElementType().getSizeInBits();
-    Shuff =
-        DAG.getNode(ISD::SRA, dl, RegVT, Shuff,
-                    DAG.getConstant(Amt, dl, RegVT));
-
+    SDValue Shuff = DAG.getSignExtendVectorInReg(SlicedVec, dl, RegVT);
     DAG.ReplaceAllUsesOfValueWith(SDValue(Ld, 1), TF);
     return Shuff;
   }
@@ -16040,11 +16000,16 @@ static SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, const X86Subtarget *Subtarget
                                               RoundingMode, Sae),
                                   Mask, Src0, Subtarget, DAG);
     }
-    case INTR_TYPE_2OP_MASK: {
+    case INTR_TYPE_2OP_MASK:
+    case INTR_TYPE_2OP_IMM8_MASK: {
       SDValue Src1 = Op.getOperand(1);
       SDValue Src2 = Op.getOperand(2);
       SDValue PassThru = Op.getOperand(3);
       SDValue Mask = Op.getOperand(4);
+
+      if (IntrData->Type == INTR_TYPE_2OP_IMM8_MASK)
+        Src2 = DAG.getNode(ISD::TRUNCATE, dl, MVT::i8, Src2);
+
       // We specify 2 possible opcodes for intrinsics with rounding modes.
       // First, we check if the intrinsic may have non-default rounding mode,
       // (IntrData->Opc1 != 0), then we check the rounding mode operand.

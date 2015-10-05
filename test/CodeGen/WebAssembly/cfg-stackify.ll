@@ -200,7 +200,7 @@ loop:
 ; CHECK-LABEL: simple_loop
 ; CHECK-NOT: br
 ; CHECK: BB8_1:
-; CHECK: (loop $BB8_1)
+; CHECK: (loop $BB8_2)
 ; CHECK: (brif $BB8_1 @4)
 ; CHECK: (return @2)
 define i32 @simple_loop(i32* %p, i32 %a) {
@@ -271,4 +271,34 @@ ft:
 exit:
   store volatile i32 4, i32* %p
   ret i32 0
+}
+
+; Test that nested loops are handled.
+
+declare void @bar()
+
+define void @test3(i32 %w)  {
+entry:
+  br i1 undef, label %outer.ph, label %exit
+
+outer.ph:
+  br label %outer
+
+outer:
+  %tobool = icmp eq i32 undef, 0
+  br i1 %tobool, label %inner, label %unreachable
+
+unreachable:
+  unreachable
+
+inner:
+  %c = icmp eq i32 undef, %w
+  br i1 %c, label %if.end, label %inner
+
+exit:
+  ret void
+
+if.end:
+  call void @bar()
+  br label %outer
 }

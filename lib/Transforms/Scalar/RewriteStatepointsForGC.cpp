@@ -76,7 +76,7 @@ namespace {
 struct RewriteStatepointsForGC : public ModulePass {
   static char ID; // Pass identification, replacement for typeid
 
-  RewriteStatepointsForGC() : ModulePass(ID), MustTrackBasePointers(true) {
+  RewriteStatepointsForGC() : ModulePass(ID) {
     initializeRewriteStatepointsForGCPass(*PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F);
@@ -102,10 +102,6 @@ struct RewriteStatepointsForGC : public ModulePass {
     AU.addRequired<TargetTransformInfoWrapperPass>();
   }
 
-  // For each GC-pointer, whether the base pointer must be explicitly
-  // tracked and reported to the runtime.
-  bool MustTrackBasePointers;
-
   /// The IR fed into RewriteStatepointsForGC may have had attributes implying
   /// dereferenceability that are no longer valid/correct after
   /// RewriteStatepointsForGC has run.  This is because semantically, after
@@ -124,9 +120,8 @@ struct RewriteStatepointsForGC : public ModulePass {
 
 char RewriteStatepointsForGC::ID = 0;
 
-ModulePass *llvm::createRewriteStatepointsForGCPass(bool TrackBasePointers) {
+ModulePass *llvm::createRewriteStatepointsForGCPass() {
   RewriteStatepointsForGC *RewritePass = new RewriteStatepointsForGC();
-  RewritePass->MustTrackBasePointers = TrackBasePointers;
   return RewritePass;
 }
 
@@ -224,6 +219,35 @@ static bool isHandledGCPointerType(Type *T) {
     if (isGCPointerType(VT->getElementType()))
       return true;
   return false;
+}
+
+static bool isRelocatablePointer(Value *V) {
+  if (isa<Constant>(V)) {
+    // The choice to exclude all things constant here is slightly subtle.
+    // There are two independent reasons:
+    // - We assume that things which are constant (from LLVM's definition)
+    // do not move at runtime.  For example, the address of a global
+    // variable is fixed, even though it's contents may not be.
+    // - Second, we can't disallow arbitrary inttoptr constants even
+    // if the language frontend does.  Optimization passes are free to
+    // locally exploit facts without respect to global reachability.  This
+    // can create sections of code which are dynamically unreachable and
+    // contain just about anything.  (see constants.ll in tests)
+    return false;
+  }
+
+  if (isa<AllocaInst>(V->stripPointerCasts())) {
+    // A stack location cast as a managed pointer 
+    // cannot be relocated by the runtime.
+    return false;
+  }
+
+  return true;
+}
+
+static bool isTrackedGcPointer(Value *V) {
+  return isHandledGCPointerType(V->getType())
+    && isRelocatablePointer(V);
 }
 
 #ifndef NDEBUG
@@ -357,6 +381,10 @@ findBaseDefiningValueOfVector(Value *I) {
   assert(!isa<GlobalVariable>(I) &&
          "unexpected global variable found in base of vector");
 
+  // We must not see the address of a local as a vector value.
+  assert(!isa<AllocaInst>(I) &&
+    "unexpected local variable found in base of vector");
+
   // inlining could possibly introduce phi node that contains
   // undef if callee has multiple returns
   if (isa<UndefValue>(I))
@@ -402,6 +430,9 @@ findBaseDefiningValueOfVector(Value *I) {
 /// (i.e. a PHI or Select of two derived pointers), or c) involves a change
 /// from pointer to vector type or back.
 static BaseDefiningValueResult findBaseDefiningValue(Value *I) {
+  assert(isHandledGCPointerType(I->getType()) && 
+    "Can only find the base of a handled GC-pointer");
+
   if (I->getType()->isVectorTy())
     return findBaseDefiningValueOfVector(I);
   
@@ -443,11 +474,57 @@ static BaseDefiningValueResult findBaseDefiningValue(Value *I) {
   }
 
   if (CastInst *CI = dyn_cast<CastInst>(I)) {
+    // Handle the case casts to a GC pointer type.
+    //
+    // Runtimes like the CLR permit casts to GC-pointer type.
+    // In these cases, consider the cast instruction as the 
+    // Base pointer.
+    //
+    // Assumptions:
+    //  1) The front-end introduces only safe casts to a GC-pointer
+    //  2) The gc-pointer so obtained is a base-pointer
+    //  3) Optimizer does not make up its own casts 
+    //  4) Optimizer does not move casts beyond GC-safe points, since the
+    //     cast may not be valid at that location.
+    //
+    // TODO: Assumption (4) is NOT true for addrspacecast instrction.
+    // Issue https://github.com/dotnet/llilc/issues/872 tracks this.
+    //  
+    // One option to solve #872 is:
+    // (a) Introduce a new instruction (say GCCast) that has mobility constraints 
+    // (b) Perform native-pointer <-> gc-pointer casts only using this instruction.
+    //
+    // If we have a GCCast instruction, 
+    //   - Case 1 below should be re-written in terms of GCCast instruction.
+    //   - Case 2 will go away, since int to gc-pointer conversion directly 
+    //     is not allowed
+    //   - This will also prevent cases like the following, where we may encounter a 
+    //     ConstantExpr involving bitcasts. For example:
+    //        @_out = external global i64
+    //        %3 = phi %Object*[bitcast(i64* @_out to %Object addrspace(1)*), % 1], 
+    //                         [bitcast(i64* @_out to %Object addrspace(1)*), % 2] 
+
     Value *Def = CI->stripPointerCasts();
-    // If we find a cast instruction here, it means we've found a cast which is
-    // not simply a pointer cast (i.e. an inttoptr).  We don't know how to
-    // handle int->ptr conversion.
-    assert(!isa<CastInst>(Def) && "shouldn't find another cast here");
+
+    if (!isGCPointerType(Def->getType())) {
+      // Case 1: Native-pointer to GC pointer cast.
+      // For example:
+      //   %1 = aloca Object
+      //   %2 = addrspacecast Object* %1 to %Object addrspace(1)*
+      return BaseDefiningValueResult(CI, true);
+    }
+
+    if (isa<CastInst>(Def)) {
+      // Case 2: Int to gc-pointer cast
+      // If we find a cast instruction here, it means we've found a cast which is
+      // not simply a pointer cast (i.e. an inttoptr).  For example:
+      //   %2 = inttoptr i64 %1 to %Object addrspace(1)*
+      // Assume that the cast value is correct, and is a base pointer
+     return BaseDefiningValueResult(Def, true);
+    }
+
+    // Case 3: Cast between GC-pointer Types
+    //    %2 = bitcast %Object1 addrspace(1)* %1 to %Object2 addrspace(1)*
     return findBaseDefiningValue(Def);
   }
 
@@ -706,9 +783,6 @@ static Value *findBasePointer(Value *I, Pass *P, DefiningValueMapTy &cache) {
   // If the runtime does not require base-pointers to be tracked
   // explicitly, simply return the pointer as its own base.
   // In this case, findBasePointer is an identity mapping.
-  if (!RewritePass->MustTrackBasePointers) {
-    return I;
-  }
 
   Value *def = findBaseOrBDV(I, cache);
 
@@ -763,6 +837,7 @@ static Value *findBasePointer(Value *I, Pass *P, DefiningValueMapTy &cache) {
       assert(!isKnownBaseResult(Current) && "why did it get added?");
 
       auto visitIncomingValue = [&](Value *InVal) {
+
         Value *Base = findBaseOrBDV(InVal, cache);
         if (isKnownBaseResult(Base))
           // Known bases won't need new instructions introduced and can be
@@ -1170,15 +1245,23 @@ findBasePointers(const StatepointLiveSetTy &live, Pass *P,
     Value *base = findBasePointer(ptr, P, DVCache);
     assert(base && "failed to find base pointer");
     PointerToBase[ptr] = base;
+
     assert((!isa<Instruction>(base) || !isa<Instruction>(ptr) ||
             DT->dominates(cast<Instruction>(base)->getParent(),
                           cast<Instruction>(ptr)->getParent())) &&
            "The base we found better dominate the derived pointer");
 
+    // The base pointer can a be nullptr in cases like:
+    // %3 = phi i8 addrspace(1)* [ null, %1 ], [ null, %2 ]
+    // 
+    // If BasePtr is null, the base/derived pointers will be dropped from
+    // the liveset, and therefore should not be a problem to the Verified.
+    //
+    // In other cases, deriving from a base-pointer 
     // If you see this trip and like to live really dangerously, the code should
     // be correct, just with idioms the verifier can't handle.  You can try
     // disabling the verifier at your own substantial risk.
-    assert(!isa<ConstantPointerNull>(base) &&
+    assert((isa<PHINode>(ptr->stripPointerCasts()) || !isa<ConstantPointerNull>(base)) &&
            "the relocation code needs adjustment to handle the relocation of "
            "a null pointer constant without causing false positives in the "
            "safepoint ir verifier.");
@@ -1328,16 +1411,21 @@ static void CreateGCRelocates(ArrayRef<llvm::Value *> LiveVariables,
     Intrinsic::getDeclaration(M, Intrinsic::experimental_gc_relocate, Types);
 
   for (unsigned i = 0; i < LiveVariables.size(); i++) {
+    Value *BasePtr = BasePtrs[i];
+    Value *LivePtr = LiveVariables[i];
+
+    assert(isTrackedGcPointer(BasePtr) && "Relocating an untracked pointer");
+
     // Generate the gc.relocate call and save the result
     Value *BaseIdx =
-      Builder.getInt32(LiveStart + find_index(LiveVariables, BasePtrs[i]));
+      Builder.getInt32(LiveStart + find_index(LiveVariables, BasePtr));
     Value *LiveIdx =
-      Builder.getInt32(LiveStart + find_index(LiveVariables, LiveVariables[i]));
+      Builder.getInt32(LiveStart + find_index(LiveVariables, LivePtr));
 
     // only specify a debug name if we can give a useful one
     CallInst *Reloc = Builder.CreateCall(
         GCRelocateDecl, {StatepointToken, BaseIdx, LiveIdx},
-        suffixed_name_or(LiveVariables[i], ".relocated", ""));
+        suffixed_name_or(LivePtr, ".relocated", ""));
     // Trick CodeGen into thinking there are lots of free registers at this
     // fake call.
     Reloc->setCallingConv(CallingConv::Cold);
@@ -2613,17 +2701,7 @@ static void computeLiveInValues(BasicBlock::reverse_iterator rbegin,
     for (Value *V : I->operands()) {
       assert(!isUnhandledGCPointerType(V->getType()) &&
              "support for FCA unimplemented");
-      if (isHandledGCPointerType(V->getType()) && !isa<Constant>(V)) {
-        // The choice to exclude all things constant here is slightly subtle.
-        // There are two independent reasons:
-        // - We assume that things which are constant (from LLVM's definition)
-        // do not move at runtime.  For example, the address of a global
-        // variable is fixed, even though it's contents may not be.
-        // - Second, we can't disallow arbitrary inttoptr constants even
-        // if the language frontend does.  Optimization passes are free to
-        // locally exploit facts without respect to global reachability.  This
-        // can create sections of code which are dynamically unreachable and
-        // contain just about anything.  (see constants.ll in tests)
+      if (isTrackedGcPointer(V)) {
         LiveTmp.insert(V);
       }
     }
@@ -2639,7 +2717,7 @@ static void computeLiveOutSeed(BasicBlock *BB, DenseSet<Value *> &LiveTmp) {
       Value *V = Phi->getIncomingValueForBlock(BB);
       assert(!isUnhandledGCPointerType(V->getType()) &&
              "support for FCA unimplemented");
-      if (isHandledGCPointerType(V->getType()) && !isa<Constant>(V)) {
+      if (isTrackedGcPointer(V)) {
         LiveTmp.insert(V);
       }
     }
@@ -2784,8 +2862,8 @@ static void recomputeLiveInValues(GCPtrLivenessData &RevisedLivenessData,
                                   const CallSite &CS,
                                   PartiallyConstructedSafepointRecord &Info) {
   Instruction *Inst = CS.getInstruction();
-  StatepointLiveSetTy Updated;
-  findLiveSetAtInst(Inst, RevisedLivenessData, Updated);
+  StatepointLiveSetTy UpdatedLiveSet;
+  findLiveSetAtInst(Inst, RevisedLivenessData, UpdatedLiveSet);
 
 #ifndef NDEBUG
   DenseSet<Value *> Bases;
@@ -2793,17 +2871,50 @@ static void recomputeLiveInValues(GCPtrLivenessData &RevisedLivenessData,
     Bases.insert(KVPair.second);
   }
 #endif
-  // We may have base pointers which are now live that weren't before.  We need
-  // to update the PointerToBase structure to reflect this.
-  for (auto V : Updated)
+  DenseSet<Value *> DerivedPtrsToErase;
+  for (auto V : UpdatedLiveSet) {
     if (!Info.PointerToBase.count(V)) {
+      // We may have base pointers which are now live that weren't before.  We need
+      // to update the PointerToBase structure to reflect this.
       assert(Bases.count(V) && "can't find base for unexpected live value");
       Info.PointerToBase[V] = V;
       continue;
     }
+    else {
+      // Even though a derived pointer looks like a a relocatable gc-pointer, 
+      // remove it from the updated live-set if we know that the base pointer 
+      // is a non-relocatable value. For example: 
+      //
+      //  %loc0 = alloca %Object
+      //  %1 = addrspacecast %Object* %loc0 to %Object addrspace(1)*
+      //  ...
+      //  %4 = phi %Object addrspace(1)* [ %1, %2 ], [ %1, %3 ]
+      //
+      // Here, we need not report the derived pointer %4, 
+      // since we know that the base pointer %1 is a stack location.
+
+      Value *BasePointer = Info.PointerToBase[V];
+      if (!isRelocatablePointer(BasePointer)) {
+        DerivedPtrsToErase.insert(V);
+        assert((UpdatedLiveSet.count(BasePointer) == 0) &&
+          "LiveSet contains a non-relocatable pointer");
+      }
+      else {
+        assert(isTrackedGcPointer(BasePointer) &&
+          "Non-GC Base-pointer found");
+        assert((UpdatedLiveSet.count(BasePointer) != 0) &&
+          "LiveSet doesn't contain a tracked pointer");
+      }
+    }
+  }
+
+  for (auto V : DerivedPtrsToErase) {
+    UpdatedLiveSet.erase(V);
+    Info.PointerToBase.erase(V);
+  }
 
 #ifndef NDEBUG
-  for (auto V : Updated) {
+  for (auto V : UpdatedLiveSet) {
     assert(Info.PointerToBase.count(V) &&
            "must be able to find base for live value");
   }
@@ -2813,15 +2924,15 @@ static void recomputeLiveInValues(GCPtrLivenessData &RevisedLivenessData,
   // more precise then the one inherent in the base pointer analysis
   DenseSet<Value *> ToErase;
   for (auto KVPair : Info.PointerToBase)
-    if (!Updated.count(KVPair.first))
+    if (!UpdatedLiveSet.count(KVPair.first))
       ToErase.insert(KVPair.first);
   for (auto V : ToErase)
     Info.PointerToBase.erase(V);
 
 #ifndef NDEBUG
   for (auto KVPair : Info.PointerToBase)
-    assert(Updated.count(KVPair.first) && "record for non-live value");
+    assert(UpdatedLiveSet.count(KVPair.first) && "record for non-live value");
 #endif
 
-  Info.liveset = Updated;
+  Info.liveset = UpdatedLiveSet;
 }
