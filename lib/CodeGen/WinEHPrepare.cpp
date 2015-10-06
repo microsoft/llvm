@@ -3243,7 +3243,8 @@ void WinEHPrepare::cloneCommonBlocks(
     for (BasicBlock *BB : BlocksInFunclet)
       // Loop over all instructions, fixing each one as we find it...
       for (Instruction &I : *BB)
-        RemapInstruction(&I, VMap, RF_IgnoreMissingEntries);
+        RemapInstruction(&I, VMap,
+                         RF_IgnoreMissingEntries | RF_NoModuleLevelChanges);
 
     // Check to see if SuccBB has PHI nodes. If so, we need to add entries to
     // the PHI nodes for NewBB now.
