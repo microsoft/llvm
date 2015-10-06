@@ -980,6 +980,9 @@ public:
       && (getConstantMemOff() % 4 == 0) && getMemBase()->isRegIdx()
       && (getMemBase()->getGPR32Reg() == Mips::SP);
   }
+  bool isUImm5Lsl2() const {
+    return (isImm() && isConstantImm() && isShiftedUInt<5, 2>(getConstantImm()));
+  }
   bool isRegList16() const {
     if (!isRegList())
       return false;
@@ -2085,7 +2088,7 @@ bool MipsAsmParser::expandJalWithRegs(MCInst &Inst, SMLoc IDLoc,
       JalrInst.setOpcode(Mips::JALRS16_MM);
       JalrInst.addOperand(FirstRegOp);
     } else if (inMicroMipsMode()) {
-      JalrInst.setOpcode(Mips::JALR16_MM);
+      JalrInst.setOpcode(hasMips32r6() ? Mips::JALRC16_MMR6 : Mips::JALR16_MM);
       JalrInst.addOperand(FirstRegOp);
     } else {
       JalrInst.setOpcode(Mips::JALR);
@@ -2104,9 +2107,12 @@ bool MipsAsmParser::expandJalWithRegs(MCInst &Inst, SMLoc IDLoc,
   }
   Instructions.push_back(JalrInst);
 
-  // If .set reorder is active, emit a NOP after it.
-  if (AssemblerOptions.back()->isReorder())
+  // If .set reorder is active and branch instruction has a delay slot,
+  // emit a NOP after it.
+  const MCInstrDesc &MCID = getInstDesc(JalrInst.getOpcode());
+  if (MCID.hasDelaySlot() && AssemblerOptions.back()->isReorder()) {
     createNop(hasShortDelaySlot(JalrInst.getOpcode()), IDLoc, Instructions);
+  }
 
   return false;
 }
@@ -2341,14 +2347,11 @@ bool MipsAsmParser::loadAndAddSymbolAddress(
     SMLoc IDLoc, SmallVectorImpl<MCInst> &Instructions) {
   warnIfNoMacro(IDLoc);
 
-  // FIXME: The way we're handling symbols right now prevents simple expressions
-  //        like foo+8. We'll be able to fix this once our unary operators (%hi
-  //        and similar) are treated as operators rather than as fixup types.
-  const MCSymbolRefExpr *Symbol = cast<MCSymbolRefExpr>(SymExpr);
-  const MCSymbolRefExpr *HiExpr = MCSymbolRefExpr::create(
-      &Symbol->getSymbol(), MCSymbolRefExpr::VK_Mips_ABS_HI, getContext());
-  const MCSymbolRefExpr *LoExpr = MCSymbolRefExpr::create(
-      &Symbol->getSymbol(), MCSymbolRefExpr::VK_Mips_ABS_LO, getContext());
+  const MCExpr *Symbol = cast<MCExpr>(SymExpr);
+  const MipsMCExpr *HiExpr = MipsMCExpr::create(
+      MCSymbolRefExpr::VK_Mips_ABS_HI, Symbol, getContext());
+  const MipsMCExpr *LoExpr = MipsMCExpr::create(
+      MCSymbolRefExpr::VK_Mips_ABS_LO, Symbol, getContext());
 
   bool UseSrcReg = SrcReg != Mips::NoRegister;
 
@@ -2360,10 +2363,10 @@ bool MipsAsmParser::loadAndAddSymbolAddress(
     if (!ATReg)
       return true;
 
-    const MCSymbolRefExpr *HighestExpr = MCSymbolRefExpr::create(
-        &Symbol->getSymbol(), MCSymbolRefExpr::VK_Mips_HIGHEST, getContext());
-    const MCSymbolRefExpr *HigherExpr = MCSymbolRefExpr::create(
-        &Symbol->getSymbol(), MCSymbolRefExpr::VK_Mips_HIGHER, getContext());
+    const MipsMCExpr *HighestExpr = MipsMCExpr::create(
+        MCSymbolRefExpr::VK_Mips_HIGHEST, Symbol, getContext());
+    const MipsMCExpr *HigherExpr = MipsMCExpr::create(
+        MCSymbolRefExpr::VK_Mips_HIGHER, Symbol, getContext());
 
     if (UseSrcReg && (DstReg == SrcReg)) {
       // If $rs is the same as $rd:
