@@ -216,14 +216,17 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
     // are really data, and no instructions can live here.
     if (BB->isEHPad()) {
       const Instruction *I = BB->getFirstNonPHI();
+      // FIXME: Don't mark SEH functions without __finally blocks as having
+      // funclets.
       if (!isa<LandingPadInst>(I))
         MMI.setHasEHFunclets(true);
-      if (isa<CatchPadInst>(I) || isa<CatchEndPadInst>(I) ||
-          isa<CleanupEndPadInst>(I)) {
+      if (isa<CatchEndPadInst>(I) || isa<CleanupEndPadInst>(I)) {
         assert(&*BB->begin() == I &&
                "WinEHPrepare failed to remove PHIs from imaginary BBs");
         continue;
       }
+      if (isa<CatchPadInst>(I) || isa<CleanupPadInst>(I))
+        assert(&*BB->begin() == I && "WinEHPrepare failed to demote PHIs");
     }
 
     MachineBasicBlock *MBB = mf.CreateMachineBasicBlock(BB);
@@ -273,11 +276,11 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
       LPads.push_back(LPI);
   }
 
-  // If this is an MSVC EH personality, we need to do a bit more work.
+  // If this personality uses funclets, we need to do a bit more work.
   if (!Fn->hasPersonalityFn())
     return;
   EHPersonality Personality = classifyEHPersonality(Fn->getPersonalityFn());
-  if (!isMSVCEHPersonality(Personality))
+  if (!isFuncletEHPersonality(Personality))
     return;
 
   if (Personality == EHPersonality::MSVC_Win64SEH ||
@@ -292,6 +295,8 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
     calculateWinCXXEHStateNumbers(WinEHParentFn, EHInfo);
   else if (isAsynchronousEHPersonality(Personality))
     calculateSEHStateNumbers(WinEHParentFn, EHInfo);
+  else if (Personality == EHPersonality::CoreCLR)
+    calculateClrEHStateNumbers(WinEHParentFn, EHInfo);
 
   calculateCatchReturnSuccessorColors(WinEHParentFn, EHInfo);
 
@@ -315,6 +320,10 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
   for (SEHUnwindMapEntry &UME : EHInfo.SEHUnwindMap) {
     const BasicBlock *BB = UME.Handler.get<const BasicBlock *>();
     UME.Handler = MBBMap[BB];
+  }
+  for (ClrEHUnwindMapEntry &CME : EHInfo.ClrEHUnwindMap) {
+    const BasicBlock *BB = CME.Handler.get<const BasicBlock *>();
+    CME.Handler = MBBMap[BB];
   }
 
   // If there's an explicit EH registration node on the stack, record its
@@ -566,6 +575,17 @@ int FunctionLoweringInfo::getArgumentFrameIndex(const Argument *A) {
     return I->second;
   DEBUG(dbgs() << "Argument does not have assigned frame index!\n");
   return 0;
+}
+
+unsigned FunctionLoweringInfo::getCatchPadExceptionPointerVReg(
+    const Value *CPI, const TargetRegisterClass *RC) {
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+  auto I = CatchPadExceptionPointers.insert({CPI, 0});
+  unsigned &VReg = I.first->second;
+  if (I.second)
+    VReg = MRI.createVirtualRegister(RC);
+  assert(VReg && "null vreg in exception pointer table!");
+  return VReg;
 }
 
 /// ComputeUsesVAFloatArgument - Determine if any floating-point values are

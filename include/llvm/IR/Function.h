@@ -34,28 +34,14 @@ class FunctionType;
 class LLVMContext;
 class DISubprogram;
 
-template<> struct ilist_traits<Argument>
-  : public SymbolTableListTraits<Argument, Function> {
-
-  Argument *createSentinel() const {
-    return static_cast<Argument*>(&Sentinel);
-  }
-  static void destroySentinel(Argument*) {}
-
-  Argument *provideInitialHead() const { return createSentinel(); }
-  Argument *ensureHead(Argument*) const { return createSentinel(); }
-  static void noteHead(Argument*, Argument*) {}
-
-  static ValueSymbolTable *getSymTab(Function *ItemParent);
-
-private:
-  mutable ilist_half_node<Argument> Sentinel;
-};
+template <>
+struct SymbolTableListSentinelTraits<Argument>
+    : public ilist_half_embedded_sentinel_traits<Argument> {};
 
 class Function : public GlobalObject, public ilist_node<Function> {
 public:
-  typedef iplist<Argument> ArgumentListType;
-  typedef iplist<BasicBlock> BasicBlockListType;
+  typedef SymbolTableList<Argument> ArgumentListType;
+  typedef SymbolTableList<BasicBlock> BasicBlockListType;
 
   // BasicBlock iterators...
   typedef BasicBlockListType::iterator iterator;
@@ -92,7 +78,7 @@ private:
                                 (Value ? Mask : 0u));
   }
 
-  friend class SymbolTableListTraits<Function, Module>;
+  friend class SymbolTableListTraits<Function>;
 
   void setParent(Module *parent);
 
@@ -436,13 +422,13 @@ public:
     CheckLazyArguments();
     return ArgumentList;
   }
-  static iplist<Argument> Function::*getSublistAccess(Argument*) {
+  static ArgumentListType Function::*getSublistAccess(Argument*) {
     return &Function::ArgumentList;
   }
 
   const BasicBlockListType &getBasicBlockList() const { return BasicBlocks; }
         BasicBlockListType &getBasicBlockList()       { return BasicBlocks; }
-  static iplist<BasicBlock> Function::*getSublistAccess(BasicBlock*) {
+  static BasicBlockListType Function::*getSublistAccess(BasicBlock*) {
     return &Function::BasicBlocks;
   }
 
@@ -625,16 +611,6 @@ private:
 
   void clearMetadata();
 };
-
-inline ValueSymbolTable *
-ilist_traits<BasicBlock>::getSymTab(Function *F) {
-  return F ? &F->getValueSymbolTable() : nullptr;
-}
-
-inline ValueSymbolTable *
-ilist_traits<Argument>::getSymTab(Function *F) {
-  return F ? &F->getValueSymbolTable() : nullptr;
-}
 
 template <>
 struct OperandTraits<Function> : public OptionalOperandTraits<Function> {};

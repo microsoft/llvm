@@ -27,6 +27,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+
 using namespace llvm;
 
 static inline uint64_t ScaleAddrDelta(MCContext &Context, uint64_t AddrDelta) {
@@ -244,7 +245,6 @@ static void emitAbsValue(MCStreamer &OS, const MCExpr *Value, unsigned Size) {
 std::pair<MCSymbol *, MCSymbol *>
 MCDwarfLineTableHeader::Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
                              ArrayRef<char> StandardOpcodeLengths) const {
-
   MCContext &context = MCOS->getContext();
 
   // Create a symbol at the beginning of the line table.
@@ -842,7 +842,7 @@ void MCGenDwarfInfo::Emit(MCStreamer *MCOS) {
     LineSectionSymbol = MCOS->getDwarfLineTableSymbol(0);
   MCSymbol *AbbrevSectionSymbol = nullptr;
   MCSymbol *InfoSectionSymbol = nullptr;
-  MCSymbol *RangesSectionSymbol = NULL;
+  MCSymbol *RangesSectionSymbol = nullptr;
 
   // Create end symbols for each section, and remove empty sections
   MCOS->getContext().finalizeDwarfSections(*MCOS);
@@ -1145,6 +1145,11 @@ void FrameEmitterImpl::EmitCFIInstruction(MCObjectStreamer &Streamer,
     if (!IsEH)
       Reg = MRI->getDwarfRegNum(MRI->getLLVMRegNum(Reg, true), false);
     Streamer.EmitIntValue(dwarf::DW_CFA_restore | Reg, 1);
+    return;
+  }
+  case MCCFIInstruction::OpGnuArgsSize: {
+    Streamer.EmitIntValue(dwarf::DW_CFA_GNU_args_size, 1);
+    Streamer.EmitULEB128IntValue(Instr.getOffset());
     return;
   }
   case MCCFIInstruction::OpEscape:
@@ -1458,7 +1463,7 @@ namespace {
     bool IsSignalFrame;
     bool IsSimple;
   };
-}
+} // anonymous namespace
 
 namespace llvm {
   template <>
@@ -1485,7 +1490,7 @@ namespace llvm {
         LHS.IsSimple == RHS.IsSimple;
     }
   };
-}
+} // namespace llvm
 
 void MCDwarfFrameEmitter::Emit(MCObjectStreamer &Streamer, MCAsmBackend *MAB,
                                bool IsEH) {

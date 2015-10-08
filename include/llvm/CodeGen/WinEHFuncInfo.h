@@ -147,7 +147,6 @@ struct WinEHHandlerType {
   /// index, and after PEI, becomes a raw offset.
   union {
     const AllocaInst *Alloca;
-    int FrameOffset;
     int FrameIndex;
   } CatchObj = {};
   GlobalVariable *TypeDescriptor;
@@ -161,6 +160,15 @@ struct WinEHTryBlockMapEntry {
   SmallVector<WinEHHandlerType, 1> HandlerArray;
 };
 
+enum class ClrHandlerType { Catch, Finally, Fault, Filter };
+
+struct ClrEHUnwindMapEntry {
+  MBBOrBasicBlock Handler;
+  uint32_t TypeToken;
+  int Parent;
+  ClrHandlerType HandlerType;
+};
+
 struct WinEHFuncInfo {
   DenseMap<const Instruction *, int> EHPadStateMap;
   DenseMap<const CatchReturnInst *, const BasicBlock *>
@@ -169,8 +177,8 @@ struct WinEHFuncInfo {
   SmallVector<WinEHUnwindMapEntry, 4> UnwindMap;
   SmallVector<WinEHTryBlockMapEntry, 4> TryBlockMap;
   SmallVector<SEHUnwindMapEntry, 4> SEHUnwindMap;
+  SmallVector<ClrEHUnwindMapEntry, 4> ClrEHUnwindMap;
   int UnwindHelpFrameIdx = INT_MAX;
-  int UnwindHelpFrameOffset = -1;
 
   int getLastStateNumber() const { return UnwindMap.size() - 1; }
 
@@ -195,6 +203,8 @@ void calculateWinCXXEHStateNumbers(const Function *ParentFn,
 
 void calculateSEHStateNumbers(const Function *ParentFn,
                               WinEHFuncInfo &FuncInfo);
+
+void calculateClrEHStateNumbers(const Function *Fn, WinEHFuncInfo &FuncInfo);
 
 void calculateCatchReturnSuccessorColors(const Function *Fn,
                                          WinEHFuncInfo &FuncInfo);

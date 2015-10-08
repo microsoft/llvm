@@ -396,6 +396,14 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
     setLibcallCallingConv(RTLIB::FPEXT_F16_F32, CallingConv::ARM_APCS);
   }
 
+  // In EABI, these functions have an __aeabi_ prefix, but in GNUEABI they have
+  // a __gnu_ prefix (which is the default).
+  if (Subtarget->isTargetAEABI()) {
+    setLibcallName(RTLIB::FPROUND_F32_F16, "__aeabi_f2h");
+    setLibcallName(RTLIB::FPROUND_F64_F16, "__aeabi_d2h");
+    setLibcallName(RTLIB::FPEXT_F16_F32,   "__aeabi_h2f");
+  }
+
   if (Subtarget->isThumb1Only())
     addRegisterClass(MVT::i32, &ARM::tGPRRegClass);
   else
@@ -9800,32 +9808,6 @@ static SDValue PerformSTORECombine(SDNode *N,
   return SDValue();
 }
 
-// isConstVecPow2 - Return true if each vector element is a power of 2, all
-// elements are the same constant, C, and Log2(C) ranges from 1 to 32.
-static bool isConstVecPow2(SDValue ConstVec, bool isSigned, uint64_t &C)
-{
-  integerPart cN;
-  integerPart c0 = 0;
-  for (unsigned I = 0, E = ConstVec.getValueType().getVectorNumElements();
-       I != E; I++) {
-    ConstantFPSDNode *C = dyn_cast<ConstantFPSDNode>(ConstVec.getOperand(I));
-    if (!C)
-      return false;
-
-    bool isExact;
-    APFloat APF = C->getValueAPF();
-    if (APF.convertToInteger(&cN, 64, isSigned, APFloat::rmTowardZero, &isExact)
-        != APFloat::opOK || !isExact)
-      return false;
-
-    c0 = (I == 0) ? cN : c0;
-    if (!isPowerOf2_64(cN) || c0 != cN || Log2_64(c0) < 1 || Log2_64(c0) > 32)
-      return false;
-  }
-  C = c0;
-  return true;
-}
-
 /// PerformVCVTCombine - VCVT (floating-point to fixed-point, Advanced SIMD)
 /// can replace combinations of VMUL and VCVT (floating-point to integer)
 /// when the VMUL has a constant operand that is a power of 2.
@@ -9835,30 +9817,25 @@ static bool isConstVecPow2(SDValue ConstVec, bool isSigned, uint64_t &C)
 ///  vcvt.s32.f32    d16, d16
 /// becomes:
 ///  vcvt.s32.f32    d16, d16, #3
-static SDValue PerformVCVTCombine(SDNode *N,
-                                  TargetLowering::DAGCombinerInfo &DCI,
+static SDValue PerformVCVTCombine(SDNode *N, SelectionDAG &DAG,
                                   const ARMSubtarget *Subtarget) {
-  SelectionDAG &DAG = DCI.DAG;
-  SDValue Op = N->getOperand(0);
-
-  if (!Subtarget->hasNEON() || !Op.getValueType().isVector() ||
-      Op.getOpcode() != ISD::FMUL)
+  if (!Subtarget->hasNEON())
     return SDValue();
 
-  uint64_t C;
-  SDValue N0 = Op->getOperand(0);
-  SDValue ConstVec = Op->getOperand(1);
-  bool isSigned = N->getOpcode() == ISD::FP_TO_SINT;
+  SDValue Op = N->getOperand(0);
+  if (!Op.getValueType().isVector() || Op.getOpcode() != ISD::FMUL)
+    return SDValue();
 
-  if (ConstVec.getOpcode() != ISD::BUILD_VECTOR ||
-      !isConstVecPow2(ConstVec, isSigned, C))
+  SDValue ConstVec = Op->getOperand(1);
+  if (!isa<BuildVectorSDNode>(ConstVec))
     return SDValue();
 
   MVT FloatTy = Op.getSimpleValueType().getVectorElementType();
+  uint32_t FloatBits = FloatTy.getSizeInBits();
   MVT IntTy = N->getSimpleValueType(0).getVectorElementType();
+  uint32_t IntBits = IntTy.getSizeInBits();
   unsigned NumLanes = Op.getValueType().getVectorNumElements();
-  if (FloatTy.getSizeInBits() != 32 || IntTy.getSizeInBits() > 32 ||
-      NumLanes > 4) {
+  if (FloatBits != 32 || IntBits > 32 || NumLanes > 4) {
     // These instructions only exist converting from f32 to i32. We can handle
     // smaller integers by generating an extra truncate, but larger ones would
     // be lossy. We also can't handle more then 4 lanes, since these intructions
@@ -9866,16 +9843,22 @@ static SDValue PerformVCVTCombine(SDNode *N,
     return SDValue();
   }
 
+  BitVector UndefElements;
+  BuildVectorSDNode *BV = cast<BuildVectorSDNode>(ConstVec);
+  int32_t C = BV->getConstantFPSplatPow2ToLog2Int(&UndefElements, 33);
+  if (C == -1 || C == 0 || C > 32)
+    return SDValue();
+
   SDLoc dl(N);
+  bool isSigned = N->getOpcode() == ISD::FP_TO_SINT;
   unsigned IntrinsicOpcode = isSigned ? Intrinsic::arm_neon_vcvtfp2fxs :
     Intrinsic::arm_neon_vcvtfp2fxu;
-  SDValue FixConv =  DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl,
-                                 NumLanes == 2 ? MVT::v2i32 : MVT::v4i32,
-                                 DAG.getConstant(IntrinsicOpcode, dl, MVT::i32),
-                                 N0,
-                                 DAG.getConstant(Log2_64(C), dl, MVT::i32));
+  SDValue FixConv = DAG.getNode(
+      ISD::INTRINSIC_WO_CHAIN, dl, NumLanes == 2 ? MVT::v2i32 : MVT::v4i32,
+      DAG.getConstant(IntrinsicOpcode, dl, MVT::i32), Op->getOperand(0),
+      DAG.getConstant(C, dl, MVT::i32));
 
-  if (IntTy.getSizeInBits() < FloatTy.getSizeInBits())
+  if (IntBits < FloatBits)
     FixConv = DAG.getNode(ISD::TRUNCATE, dl, N->getValueType(0), FixConv);
 
   return FixConv;
@@ -9890,38 +9873,44 @@ static SDValue PerformVCVTCombine(SDNode *N,
 ///  vdiv.f32        d16, d17, d16
 /// becomes:
 ///  vcvt.f32.s32    d16, d16, #3
-static SDValue PerformVDIVCombine(SDNode *N,
-                                  TargetLowering::DAGCombinerInfo &DCI,
+static SDValue PerformVDIVCombine(SDNode *N, SelectionDAG &DAG,
                                   const ARMSubtarget *Subtarget) {
-  SelectionDAG &DAG = DCI.DAG;
+  if (!Subtarget->hasNEON())
+    return SDValue();
+
   SDValue Op = N->getOperand(0);
   unsigned OpOpcode = Op.getNode()->getOpcode();
-
-  if (!Subtarget->hasNEON() || !N->getValueType(0).isVector() ||
+  if (!N->getValueType(0).isVector() ||
       (OpOpcode != ISD::SINT_TO_FP && OpOpcode != ISD::UINT_TO_FP))
     return SDValue();
 
-  uint64_t C;
   SDValue ConstVec = N->getOperand(1);
-  bool isSigned = OpOpcode == ISD::SINT_TO_FP;
-
-  if (ConstVec.getOpcode() != ISD::BUILD_VECTOR ||
-      !isConstVecPow2(ConstVec, isSigned, C))
+  if (!isa<BuildVectorSDNode>(ConstVec))
     return SDValue();
 
   MVT FloatTy = N->getSimpleValueType(0).getVectorElementType();
+  uint32_t FloatBits = FloatTy.getSizeInBits();
   MVT IntTy = Op.getOperand(0).getSimpleValueType().getVectorElementType();
-  if (FloatTy.getSizeInBits() != 32 || IntTy.getSizeInBits() > 32) {
+  uint32_t IntBits = IntTy.getSizeInBits();
+  unsigned NumLanes = Op.getValueType().getVectorNumElements();
+  if (FloatBits != 32 || IntBits > 32 || NumLanes > 4) {
     // These instructions only exist converting from i32 to f32. We can handle
     // smaller integers by generating an extra extend, but larger ones would
-    // be lossy.
+    // be lossy. We also can't handle more then 4 lanes, since these intructions
+    // only support v2i32/v4i32 types.
     return SDValue();
   }
 
+  BitVector UndefElements;
+  BuildVectorSDNode *BV = cast<BuildVectorSDNode>(ConstVec);
+  int32_t C = BV->getConstantFPSplatPow2ToLog2Int(&UndefElements, 33);
+  if (C == -1 || C == 0 || C > 32)
+    return SDValue();
+
   SDLoc dl(N);
+  bool isSigned = OpOpcode == ISD::SINT_TO_FP;
   SDValue ConvInput = Op.getOperand(0);
-  unsigned NumLanes = Op.getValueType().getVectorNumElements();
-  if (IntTy.getSizeInBits() < FloatTy.getSizeInBits())
+  if (IntBits < FloatBits)
     ConvInput = DAG.getNode(isSigned ? ISD::SIGN_EXTEND : ISD::ZERO_EXTEND,
                             dl, NumLanes == 2 ? MVT::v2i32 : MVT::v4i32,
                             ConvInput);
@@ -9931,7 +9920,7 @@ static SDValue PerformVDIVCombine(SDNode *N,
   return DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl,
                      Op.getValueType(),
                      DAG.getConstant(IntrinsicOpcode, dl, MVT::i32),
-                     ConvInput, DAG.getConstant(Log2_64(C), dl, MVT::i32));
+                     ConvInput, DAG.getConstant(C, dl, MVT::i32));
 }
 
 /// Getvshiftimm - Check if this is a valid build_vector for the immediate
@@ -10315,8 +10304,10 @@ SDValue ARMTargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::VECTOR_SHUFFLE: return PerformVECTOR_SHUFFLECombine(N, DCI.DAG);
   case ARMISD::VDUPLANE: return PerformVDUPLANECombine(N, DCI);
   case ISD::FP_TO_SINT:
-  case ISD::FP_TO_UINT: return PerformVCVTCombine(N, DCI, Subtarget);
-  case ISD::FDIV:       return PerformVDIVCombine(N, DCI, Subtarget);
+  case ISD::FP_TO_UINT:
+    return PerformVCVTCombine(N, DCI.DAG, Subtarget);
+  case ISD::FDIV:
+    return PerformVDIVCombine(N, DCI.DAG, Subtarget);
   case ISD::INTRINSIC_WO_CHAIN: return PerformIntrinsicCombine(N, DCI.DAG);
   case ISD::SHL:
   case ISD::SRA:
@@ -11821,9 +11812,9 @@ bool ARMTargetLowering::lowerInterleavedLoad(
   unsigned VecSize = DL.getTypeAllocSizeInBits(VecTy);
   bool EltIs64Bits = DL.getTypeAllocSizeInBits(EltTy) == 64;
 
-  // Skip illegal vector types and vector types of i64/f64 element (vldN doesn't
-  // support i64/f64 element).
-  if ((VecSize != 64 && VecSize != 128) || EltIs64Bits)
+  // Skip if we do not have NEON and skip illegal vector types and vector types
+  // with i64/f64 elements (vldN doesn't support i64/f64 elements).
+  if (!Subtarget->hasNEON() || (VecSize != 64 && VecSize != 128) || EltIs64Bits)
     return false;
 
   // A pointer vector can not be the return type of the ldN intrinsics. Need to
@@ -11911,9 +11902,10 @@ bool ARMTargetLowering::lowerInterleavedStore(StoreInst *SI,
   unsigned SubVecSize = DL.getTypeAllocSizeInBits(SubVecTy);
   bool EltIs64Bits = DL.getTypeAllocSizeInBits(EltTy) == 64;
 
-  // Skip illegal sub vector types and vector types of i64/f64 element (vstN
-  // doesn't support i64/f64 element).
-  if ((SubVecSize != 64 && SubVecSize != 128) || EltIs64Bits)
+  // Skip if we do not have NEON and skip illegal vector types and vector types
+  // with i64/f64 elements (vstN doesn't support i64/f64 elements).
+  if (!Subtarget->hasNEON() || (SubVecSize != 64 && SubVecSize != 128) ||
+      EltIs64Bits)
     return false;
 
   Value *Op0 = SVI->getOperand(0);

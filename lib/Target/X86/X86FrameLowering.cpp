@@ -1313,6 +1313,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   bool IsWin64Prologue = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
   bool NeedsWinCFI =
       IsWin64Prologue && MF.getFunction()->needsUnwindTableEntry();
+  bool IsFunclet = isFuncletReturnInstr(MBBI);
 
   // Get the number of bytes to allocate from the FrameInfo.
   uint64_t StackSize = MFI->getStackSize();
@@ -1426,8 +1427,10 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
 
   // If dynamic alloca is used, then reset esp to point to the last callee-saved
   // slot before popping them off! Same applies for the case, when stack was
-  // realigned.
-  if (TRI->needsStackRealignment(MF) || MFI->hasVarSizedObjects()) {
+  // realigned. Don't do this if this was a funclet epilogue, since the funclets
+  // will not do realignment or dynamic stack allocation.
+  if ((TRI->needsStackRealignment(MF) || MFI->hasVarSizedObjects()) &&
+      !IsFunclet) {
     if (TRI->needsStackRealignment(MF))
       MBBI = FirstCSPop;
     unsigned SEHFrameOffset = calculateSetFPREG(SEHStackAllocAmt);
@@ -2329,14 +2332,31 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
     // If the stack pointer can be changed after prologue, turn the
     // adjcallstackup instruction into a 'sub ESP, <amt>' and the
     // adjcallstackdown instruction into 'add ESP, <amt>'
-    if (Amount == 0)
-      return;
 
     // We need to keep the stack aligned properly.  To do this, we round the
     // amount of space needed for the outgoing arguments up to the next
     // alignment boundary.
     unsigned StackAlign = getStackAlignment();
     Amount = RoundUpToAlignment(Amount, StackAlign);
+
+    // If we have any exception handlers in this function, and we adjust
+    // the SP before calls, we may need to indicate this to the unwinder,
+    // using GNU_ARGS_SIZE. Note that this may be necessary
+    // even when Amount == 0, because the preceding function may have
+    // set a non-0 GNU_ARGS_SIZE.
+    // TODO: We don't need to reset this between subsequent functions,
+    // if it didn't change.
+    bool HasDwarfEHHandlers =
+      !MF.getTarget().getMCAsmInfo()->usesWindowsCFI() &&
+      !MF.getMMI().getLandingPads().empty();
+
+    if (HasDwarfEHHandlers && !isDestroy && 
+        MF.getInfo<X86MachineFunctionInfo>()->getHasPushSequences())
+      BuildCFI(MBB, I, DL,
+               MCCFIInstruction::createGnuArgsSize(nullptr, Amount));
+
+    if (Amount == 0)
+      return;
 
     // Factor out the amount that gets handled inside the sequence
     // (Pushes of argument for frame setup, callee pops for frame destroy)

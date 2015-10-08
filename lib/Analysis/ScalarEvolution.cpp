@@ -1616,12 +1616,12 @@ const SCEV *ScalarEvolution::getSignExtendExpr(const SCEV *Op,
   }
 
   // sext(C1 + (C2 * x)) --> C1 + sext(C2 * x) if C1 < C2
-  if (auto SA = dyn_cast<SCEVAddExpr>(Op)) {
+  if (auto *SA = dyn_cast<SCEVAddExpr>(Op)) {
     if (SA->getNumOperands() == 2) {
-      auto SC1 = dyn_cast<SCEVConstant>(SA->getOperand(0));
-      auto SMul = dyn_cast<SCEVMulExpr>(SA->getOperand(1));
+      auto *SC1 = dyn_cast<SCEVConstant>(SA->getOperand(0));
+      auto *SMul = dyn_cast<SCEVMulExpr>(SA->getOperand(1));
       if (SMul && SC1) {
-        if (auto SC2 = dyn_cast<SCEVConstant>(SMul->getOperand(0))) {
+        if (auto *SC2 = dyn_cast<SCEVConstant>(SMul->getOperand(0))) {
           const APInt &C1 = SC1->getValue()->getValue();
           const APInt &C2 = SC2->getValue()->getValue();
           if (C1.isStrictlyPositive() && C2.isStrictlyPositive() &&
@@ -1735,8 +1735,8 @@ const SCEV *ScalarEvolution::getSignExtendExpr(const SCEV *Op,
       // If Start and Step are constants, check if we can apply this
       // transformation:
       // sext{C1,+,C2} --> C1 + sext{0,+,C2} if C1 < C2
-      auto SC1 = dyn_cast<SCEVConstant>(Start);
-      auto SC2 = dyn_cast<SCEVConstant>(Step);
+      auto *SC1 = dyn_cast<SCEVConstant>(Start);
+      auto *SC2 = dyn_cast<SCEVConstant>(Step);
       if (SC1 && SC2) {
         const APInt &C1 = SC1->getValue()->getValue();
         const APInt &C2 = SC2->getValue()->getValue();
@@ -3904,6 +3904,11 @@ const SCEV *ScalarEvolution::createNodeForSelectOrPHI(Instruction *I,
                                                       Value *Cond,
                                                       Value *TrueVal,
                                                       Value *FalseVal) {
+  // Handle "constant" branch or select. This can occur for instance when a
+  // loop pass transforms an inner loop and moves on to process the outer loop.
+  if (auto *CI = dyn_cast<ConstantInt>(Cond))
+    return getSCEV(CI->isOne() ? TrueVal : FalseVal);
+
   // Try to match some simple smax or umax patterns.
   auto *ICI = dyn_cast<ICmpInst>(Cond);
   if (!ICI)
@@ -5724,8 +5729,7 @@ Constant *
 ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
                                                    const APInt &BEs,
                                                    const Loop *L) {
-  DenseMap<PHINode*, Constant*>::const_iterator I =
-    ConstantEvolutionLoopExitValue.find(PN);
+  auto I = ConstantEvolutionLoopExitValue.find(PN);
   if (I != ConstantEvolutionLoopExitValue.end())
     return I->second;
 
@@ -5742,10 +5746,10 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
   // entry must be a constant (coming in from outside of the loop), and the
   // second must be derived from the same PHI.
   bool SecondIsBackedge = L->contains(PN->getIncomingBlock(1));
-  PHINode *PHI = nullptr;
-  for (BasicBlock::iterator I = Header->begin();
-       (PHI = dyn_cast<PHINode>(I)); ++I) {
-    Constant *StartCST =
+  for (auto &I : *Header) {
+    PHINode *PHI = dyn_cast<PHINode>(&I);
+    if (!PHI) break;
+    auto *StartCST =
       dyn_cast<Constant>(PHI->getIncomingValue(!SecondIsBackedge));
     if (!StartCST) continue;
     CurrentIterVals[PHI] = StartCST;
@@ -5781,23 +5785,21 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
     // cease to be able to evaluate one of them or if they stop evolving,
     // because that doesn't necessarily prevent us from computing PN.
     SmallVector<std::pair<PHINode *, Constant *>, 8> PHIsToCompute;
-    for (DenseMap<Instruction *, Constant *>::const_iterator
-           I = CurrentIterVals.begin(), E = CurrentIterVals.end(); I != E; ++I){
-      PHINode *PHI = dyn_cast<PHINode>(I->first);
+    for (const auto &I : CurrentIterVals) {
+      PHINode *PHI = dyn_cast<PHINode>(I.first);
       if (!PHI || PHI == PN || PHI->getParent() != Header) continue;
-      PHIsToCompute.push_back(std::make_pair(PHI, I->second));
+      PHIsToCompute.emplace_back(PHI, I.second);
     }
     // We use two distinct loops because EvaluateExpression may invalidate any
     // iterators into CurrentIterVals.
-    for (SmallVectorImpl<std::pair<PHINode *, Constant*> >::const_iterator
-             I = PHIsToCompute.begin(), E = PHIsToCompute.end(); I != E; ++I) {
-      PHINode *PHI = I->first;
+    for (const auto &I : PHIsToCompute) {
+      PHINode *PHI = I.first;
       Constant *&NextPHI = NextIterVals[PHI];
       if (!NextPHI) {   // Not already computed.
         Value *BEValue = PHI->getIncomingValue(SecondIsBackedge);
         NextPHI = EvaluateExpression(BEValue, L, CurrentIterVals, DL, &TLI);
       }
-      if (NextPHI != I->second)
+      if (NextPHI != I.second)
         StoppedEvolving = false;
     }
 
@@ -5832,11 +5834,12 @@ const SCEV *ScalarEvolution::ComputeExitCountExhaustively(const Loop *L,
   // One entry must be a constant (coming in from outside of the loop), and the
   // second must be derived from the same PHI.
   bool SecondIsBackedge = L->contains(PN->getIncomingBlock(1));
-  PHINode *PHI = nullptr;
-  for (BasicBlock::iterator I = Header->begin();
-       (PHI = dyn_cast<PHINode>(I)); ++I) {
-    Constant *StartCST =
-      dyn_cast<Constant>(PHI->getIncomingValue(!SecondIsBackedge));
+  for (auto &I : *Header) {
+    PHINode *PHI = dyn_cast<PHINode>(&I);
+    if (!PHI)
+      break;
+    auto *StartCST =
+        dyn_cast<Constant>(PHI->getIncomingValue(!SecondIsBackedge));
     if (!StartCST) continue;
     CurrentIterVals[PHI] = StartCST;
   }
@@ -5849,7 +5852,7 @@ const SCEV *ScalarEvolution::ComputeExitCountExhaustively(const Loop *L,
   unsigned MaxIterations = MaxBruteForceIterations;   // Limit analysis.
   const DataLayout &DL = F.getParent()->getDataLayout();
   for (unsigned IterationNum = 0; IterationNum != MaxIterations;++IterationNum){
-    ConstantInt *CondVal = dyn_cast_or_null<ConstantInt>(
+    auto *CondVal = dyn_cast_or_null<ConstantInt>(
         EvaluateExpression(Cond, L, CurrentIterVals, DL, &TLI));
 
     // Couldn't symbolically evaluate.
@@ -5867,15 +5870,12 @@ const SCEV *ScalarEvolution::ComputeExitCountExhaustively(const Loop *L,
     // calling EvaluateExpression on them because that may invalidate iterators
     // into CurrentIterVals.
     SmallVector<PHINode *, 8> PHIsToCompute;
-    for (DenseMap<Instruction *, Constant *>::const_iterator
-           I = CurrentIterVals.begin(), E = CurrentIterVals.end(); I != E; ++I){
-      PHINode *PHI = dyn_cast<PHINode>(I->first);
+    for (const auto &I : CurrentIterVals) {
+      PHINode *PHI = dyn_cast<PHINode>(I.first);
       if (!PHI || PHI->getParent() != Header) continue;
       PHIsToCompute.push_back(PHI);
     }
-    for (SmallVectorImpl<PHINode *>::const_iterator I = PHIsToCompute.begin(),
-             E = PHIsToCompute.end(); I != E; ++I) {
-      PHINode *PHI = *I;
+    for (PHINode *PHI : PHIsToCompute) {
       Constant *&NextPHI = NextIterVals[PHI];
       if (NextPHI) continue;    // Already computed!
 
@@ -7132,7 +7132,7 @@ ScalarEvolution::isKnownPredicateWithRanges(ICmpInst::Predicate Pred,
 bool ScalarEvolution::isKnownPredicateViaSplitting(ICmpInst::Predicate Pred,
                                                    const SCEV *LHS,
                                                    const SCEV *RHS) {
-  if (ProvingSplitPredicate)
+  if (Pred != ICmpInst::ICMP_ULT || ProvingSplitPredicate)
     return false;
 
   // Allowing arbitrary number of activations of isKnownPredicateViaSplitting on
@@ -7146,7 +7146,7 @@ bool ScalarEvolution::isKnownPredicateViaSplitting(ICmpInst::Predicate Pred,
   // expensive; and using isKnownNonNegative(RHS) is sufficient for most of the
   // interesting cases seen in practice.  We can consider "upgrading" L >= 0 to
   // use isKnownPredicate later if needed.
-  if (Pred == ICmpInst::ICMP_ULT && isKnownNonNegative(RHS) &&
+  if (isKnownNonNegative(RHS) &&
       isKnownPredicate(CmpInst::ICMP_SGE, LHS, getZero(LHS->getType())) &&
       isKnownPredicate(CmpInst::ICMP_SLT, LHS, RHS))
     return true;
@@ -8525,7 +8525,7 @@ void ScalarEvolution::computeAccessFunctions(
   if (Sizes.empty())
     return;
 
-  if (auto AR = dyn_cast<SCEVAddRecExpr>(Expr))
+  if (auto *AR = dyn_cast<SCEVAddRecExpr>(Expr))
     if (!AR->isAffine())
       return;
 

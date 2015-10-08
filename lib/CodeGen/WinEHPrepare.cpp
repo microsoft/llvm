@@ -433,9 +433,14 @@ bool WinEHPrepare::runOnFunction(Function &Fn) {
   // Classify the personality to see what kind of preparation we need.
   Personality = classifyEHPersonality(Fn.getPersonalityFn());
 
-  // Do nothing if this is not an MSVC personality.
-  if (!isMSVCEHPersonality(Personality))
+  // Do nothing if this is not a funclet-based personality.
+  if (!isFuncletEHPersonality(Personality))
     return false;
+
+  // Remove unreachable blocks.  It is not valuable to assign them a color and
+  // their existence can trick us into thinking values are alive when they are
+  // not.
+  removeUnreachableBlocks(Fn);
 
   SmallVector<LandingPadInst *, 4> LPads;
   SmallVector<ResumeInst *, 4> Resumes;
@@ -1614,7 +1619,7 @@ void WinEHPrepare::processSEHCatchHandler(CatchHandler *CatchAction,
   }
   IRBuilder<> Builder(HandlerBB->getFirstInsertionPt());
   Function *EHCodeFn = Intrinsic::getDeclaration(
-      StartBB->getParent()->getParent(), Intrinsic::eh_exceptioncode);
+      StartBB->getParent()->getParent(), Intrinsic::eh_exceptioncode_old);
   Value *Code = Builder.CreateCall(EHCodeFn, {}, "sehcode");
   Code = Builder.CreateIntToPtr(Code, SEHExceptionCodeSlot->getAllocatedType());
   Builder.CreateStore(Code, SEHExceptionCodeSlot);
@@ -2612,7 +2617,7 @@ static void addTryBlockMapEntry(WinEHFuncInfo &FuncInfo, int TryLow,
     else
       HT.TypeDescriptor = cast<GlobalVariable>(TypeInfo->stripPointerCasts());
     HT.Adjectives = cast<ConstantInt>(CPI->getArgOperand(1))->getZExtValue();
-    HT.Handler = CPI->getNormalDest();
+    HT.Handler = CPI->getParent();
     HT.CatchObjRecoverIdx = -2;
     if (isa<ConstantPointerNull>(CPI->getArgOperand(2)))
       HT.CatchObj.Alloca = nullptr;
@@ -2770,8 +2775,7 @@ static void calculateExplicitSEHStateNumbers(WinEHFuncInfo &FuncInfo,
     const Function *Filter = dyn_cast<Function>(FilterOrNull);
     assert((Filter || FilterOrNull->isNullValue()) &&
            "unexpected filter value");
-    int TryState =
-        addSEHExcept(FuncInfo, ParentState, Filter, CPI->getNormalDest());
+    int TryState = addSEHExcept(FuncInfo, ParentState, Filter, CatchPadBB);
 
     // Everything in the __try block uses TryState as its parent state.
     FuncInfo.EHPadStateMap[CPI] = TryState;
@@ -2864,6 +2868,91 @@ void llvm::calculateWinCXXEHStateNumbers(const Function *Fn,
   }
 }
 
+static int addClrEHHandler(WinEHFuncInfo &FuncInfo, int ParentState,
+                           ClrHandlerType HandlerType, uint32_t TypeToken,
+                           const BasicBlock *Handler) {
+  ClrEHUnwindMapEntry Entry;
+  Entry.Parent = ParentState;
+  Entry.Handler = Handler;
+  Entry.HandlerType = HandlerType;
+  Entry.TypeToken = TypeToken;
+  FuncInfo.ClrEHUnwindMap.push_back(Entry);
+  return FuncInfo.ClrEHUnwindMap.size() - 1;
+}
+
+void llvm::calculateClrEHStateNumbers(const Function *Fn,
+                                      WinEHFuncInfo &FuncInfo) {
+  // Return if it's already been done.
+  if (!FuncInfo.EHPadStateMap.empty())
+    return;
+
+  SmallVector<std::pair<const Instruction *, int>, 8> Worklist;
+
+  // Each pad needs to be able to refer to its parent, so scan the function
+  // looking for top-level handlers and seed the worklist with them.
+  for (const BasicBlock &BB : *Fn) {
+    if (!BB.isEHPad())
+      continue;
+    if (BB.isLandingPad())
+      report_fatal_error("CoreCLR EH cannot use landingpads");
+    const Instruction *FirstNonPHI = BB.getFirstNonPHI();
+    if (!doesEHPadUnwindToCaller(FirstNonPHI))
+      continue;
+    // queue this with sentinel parent state -1 to mean unwind to caller.
+    Worklist.emplace_back(FirstNonPHI, -1);
+  }
+
+  while (!Worklist.empty()) {
+    const Instruction *Pad;
+    int ParentState;
+    std::tie(Pad, ParentState) = Worklist.pop_back_val();
+
+    int PredState;
+    if (const CleanupEndPadInst *EndPad = dyn_cast<CleanupEndPadInst>(Pad)) {
+      FuncInfo.EHPadStateMap[EndPad] = ParentState;
+      // Queue the cleanuppad, in case it doesn't have a cleanupret.
+      Worklist.emplace_back(EndPad->getCleanupPad(), ParentState);
+      // Preds of the endpad should get the parent state.
+      PredState = ParentState;
+    } else if (const CleanupPadInst *Cleanup = dyn_cast<CleanupPadInst>(Pad)) {
+      // A cleanup can have multiple exits; don't re-process after the first.
+      if (FuncInfo.EHPadStateMap.count(Pad))
+        continue;
+      // CoreCLR personality uses arity to distinguish faults from finallies.
+      const BasicBlock *PadBlock = Cleanup->getParent();
+      ClrHandlerType HandlerType =
+          (Cleanup->getNumOperands() ? ClrHandlerType::Fault
+                                     : ClrHandlerType::Finally);
+      int NewState =
+          addClrEHHandler(FuncInfo, ParentState, HandlerType, 0, PadBlock);
+      FuncInfo.EHPadStateMap[Cleanup] = NewState;
+      // Propagate the new state to all preds of the cleanup
+      PredState = NewState;
+    } else if (const CatchEndPadInst *EndPad = dyn_cast<CatchEndPadInst>(Pad)) {
+      FuncInfo.EHPadStateMap[EndPad] = ParentState;
+      // Preds of the endpad should get the parent state.
+      PredState = ParentState;
+    } else if (const CatchPadInst *Catch = dyn_cast<CatchPadInst>(Pad)) {
+      const BasicBlock *PadBlock = Catch->getParent();
+      uint32_t TypeToken = static_cast<uint32_t>(
+          cast<ConstantInt>(Catch->getArgOperand(0))->getZExtValue());
+      int NewState = addClrEHHandler(FuncInfo, ParentState,
+                                     ClrHandlerType::Catch, TypeToken, PadBlock);
+      FuncInfo.EHPadStateMap[Catch] = NewState;
+      // Preds of the catch get its state
+      PredState = NewState;
+    } else {
+      llvm_unreachable("Unexpected EH pad");
+    }
+
+    // Queue all predecessors with the given state
+    for (const BasicBlock *Pred : predecessors(Pad->getParent())) {
+      if ((Pred = getEHPadFromPredecessor(Pred)))
+        Worklist.emplace_back(Pred->getFirstNonPHI(), PredState);
+    }
+  }
+}
+
 void WinEHPrepare::replaceTerminatePadWithCleanup(Function &F) {
   if (Personality != EHPersonality::MSVC_CXX)
     return;
@@ -2935,12 +3024,11 @@ colorFunclets(Function &F, SmallVectorImpl<BasicBlock *> &EntryBlocks,
       // Mark this as a funclet head as a member of itself.
       FuncletBlocks[Visiting].insert(Visiting);
       // Queue exits with the parent color.
-      for (User *Exit : VisitingHead->users()) {
-        for (BasicBlock *Succ :
-             successors(cast<Instruction>(Exit)->getParent())) {
-          if (BlockColors[Succ].insert(Color).second) {
-            Worklist.push_back({Succ, Color});
-          }
+      for (User *U : VisitingHead->users()) {
+        if (auto *Exit = dyn_cast<TerminatorInst>(U)) {
+          for (BasicBlock *Succ : successors(Exit->getParent()))
+            if (BlockColors[Succ].insert(Color).second)
+              Worklist.push_back({Succ, Color});
         }
       }
       // Handle CatchPad specially since its successors need different colors.
@@ -3040,7 +3128,9 @@ void llvm::calculateCatchReturnSuccessorColors(const Function *Fn,
 
     // The users of a catchpad are always catchrets.
     for (User *Exit : CatchPad->users()) {
-      auto *CatchReturn = cast<CatchReturnInst>(Exit);
+      auto *CatchReturn = dyn_cast<CatchReturnInst>(Exit);
+      if (!CatchReturn)
+        continue;
       BasicBlock *CatchRetSuccessor = CatchReturn->getSuccessor();
       std::set<BasicBlock *> &SuccessorColors = BlockColors[CatchRetSuccessor];
       assert(SuccessorColors.size() == 1 && "Expected BB to be monochrome!");
@@ -3137,6 +3227,10 @@ void WinEHPrepare::cloneCommonBlocks(
       Orig2Clone[BB] = CBB;
     }
 
+    // If nothing was cloned, we're done cloning in this funclet.
+    if (Orig2Clone.empty())
+      continue;
+
     // Update our color mappings to reflect that one block has lost a color and
     // another has gained a color.
     for (auto &BBMapping : Orig2Clone) {
@@ -3150,12 +3244,13 @@ void WinEHPrepare::cloneCommonBlocks(
       BlockColors[OldBlock].erase(FuncletPadBB);
     }
 
-    // Loop over all of the instructions in the function, fixing up operand
+    // Loop over all of the instructions in this funclet, fixing up operand
     // references as we go.  This uses VMap to do all the hard work.
     for (BasicBlock *BB : BlocksInFunclet)
       // Loop over all instructions, fixing each one as we find it...
       for (Instruction &I : *BB)
-        RemapInstruction(&I, VMap, RF_IgnoreMissingEntries);
+        RemapInstruction(&I, VMap,
+                         RF_IgnoreMissingEntries | RF_NoModuleLevelChanges);
 
     // Check to see if SuccBB has PHI nodes. If so, we need to add entries to
     // the PHI nodes for NewBB now.
@@ -3318,11 +3413,6 @@ void WinEHPrepare::verifyPreparedFunclets(Function &F) {
 
 bool WinEHPrepare::prepareExplicitEH(
     Function &F, SmallVectorImpl<BasicBlock *> &EntryBlocks) {
-  // Remove unreachable blocks.  It is not valuable to assign them a color and
-  // their existence can trick us into thinking values are alive when they are
-  // not.
-  removeUnreachableBlocks(F);
-
   replaceTerminatePadWithCleanup(F);
 
   // Determine which blocks are reachable from which funclet entries.

@@ -38,6 +38,7 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
 
 WinException::WinException(AsmPrinter *A) : EHStreamer(A) {
@@ -113,10 +114,10 @@ void WinException::endFunction(const MachineFunction *MF) {
   if (F->hasPersonalityFn())
     Per = classifyEHPersonality(F->getPersonalityFn());
 
-  // Get rid of any dead landing pads if we're not using a Windows EH scheme. In
-  // Windows EH schemes, the landing pad is not actually reachable. It only
-  // exists so that we can emit the right table data.
-  if (!isMSVCEHPersonality(Per))
+  // Get rid of any dead landing pads if we're not using funclets. In funclet
+  // schemes, the landing pad is not actually reachable. It only exists so
+  // that we can emit the right table data.
+  if (!isFuncletEHPersonality(Per))
     MMI->TidyLandingPads();
 
   endFunclet();
@@ -290,6 +291,14 @@ const MCExpr *WinException::getLabelPlusOne(MCSymbol *Label) {
   return MCBinaryExpr::createAdd(create32bitRef(Label),
                                  MCConstantExpr::create(1, Asm->OutContext),
                                  Asm->OutContext);
+}
+
+int WinException::getFrameIndexOffset(int FrameIndex) {
+  const TargetFrameLowering &TFI = *Asm->MF->getSubtarget().getFrameLowering();
+  unsigned UnusedReg;
+  if (Asm->MAI->usesWindowsCFI())
+    return TFI.getFrameIndexReferenceFromSP(*Asm->MF, FrameIndex, UnusedReg);
+  return TFI.getFrameIndexReference(*Asm->MF, FrameIndex, UnusedReg);
 }
 
 namespace {
@@ -468,7 +477,8 @@ void WinException::emitCSpecificHandlerTable(const MachineFunction *MF) {
             const MCExpr *ExceptOrNull;
             auto *Handler = UME.Handler.get<MachineBasicBlock *>();
             if (UME.IsFinally) {
-              FilterOrFinally = create32bitRef(Handler->getSymbol());
+              FilterOrFinally =
+                  create32bitRef(getMCSymbolForMBBOrGV(Asm, Handler));
               ExceptOrNull = MCConstantExpr::create(0, Ctx);
             } else {
               // For an except, the filter can be 1 (catch-all) or a function
@@ -599,6 +609,10 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
     emitEHRegistrationOffsetLabel(FuncInfo, FuncLinkageName);
   }
 
+  int UnwindHelpOffset = 0;
+  if (Asm->MAI->usesWindowsCFI())
+    UnwindHelpOffset = getFrameIndexOffset(FuncInfo.UnwindHelpFrameIdx);
+
   MCSymbol *UnwindMapXData = nullptr;
   MCSymbol *TryBlockMapXData = nullptr;
   MCSymbol *IPToStateXData = nullptr;
@@ -637,7 +651,7 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   OS.EmitIntValue(IPToStateTable.size(), 4);           // IPMapEntries
   OS.EmitValue(create32bitRef(IPToStateXData), 4);     // IPToStateMap
   if (Asm->MAI->usesWindowsCFI())
-    OS.EmitIntValue(FuncInfo.UnwindHelpFrameOffset, 4); // UnwindHelp
+    OS.EmitIntValue(UnwindHelpOffset, 4);              // UnwindHelp
   OS.EmitIntValue(0, 4);                               // ESTypeList
   OS.EmitIntValue(1, 4);                               // EHFlags
 
@@ -714,8 +728,8 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
                   FuncLinkageName, HT.CatchObjRecoverIdx);
           FrameAllocOffsetRef = MCSymbolRefExpr::create(
               FrameAllocOffset, MCSymbolRefExpr::VK_None, Asm->OutContext);
-        } else if (HT.CatchObj.FrameOffset != INT_MAX) {
-          int Offset = HT.CatchObj.FrameOffset;
+        } else if (HT.CatchObj.FrameIndex != INT_MAX) {
+          int Offset = getFrameIndexOffset(HT.CatchObj.FrameIndex);
           // For 32-bit, the catch object offset is relative to the end of the
           // EH registration node. For 64-bit, it's relative to SP at the end of
           // the prologue.
@@ -791,7 +805,7 @@ void WinException::computeIP2StateTable(
       // Emit an entry indicating that PCs after 'Label' have this EH state.
       if (I.State != LastEHState)
         IPToStateTable.push_back(
-            std::make_pair(create32bitRef(I.BeginLabel), I.State));
+            std::make_pair(getLabelPlusOne(I.BeginLabel), I.State));
       LastEHState = I.State;
       LastEndLabel = I.EndLabel;
     }
