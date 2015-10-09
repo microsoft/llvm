@@ -104,14 +104,12 @@ static bool isCCLiveOut(MachineBasicBlock &MBB) {
   return false;
 }
 
-// Return true if any CC result of MI would reflect the value of subreg
-// SubReg of Reg.
-static bool resultTests(MachineInstr *MI, unsigned Reg, unsigned SubReg) {
+// Return true if any CC result of MI would reflect the value of Reg.
+static bool resultTests(MachineInstr *MI, unsigned Reg) {
   if (MI->getNumOperands() > 0 &&
       MI->getOperand(0).isReg() &&
       MI->getOperand(0).isDef() &&
-      MI->getOperand(0).getReg() == Reg &&
-      MI->getOperand(0).getSubReg() == SubReg)
+      MI->getOperand(0).getReg() == Reg)
     return true;
 
   switch (MI->getOpcode()) {
@@ -127,8 +125,7 @@ static bool resultTests(MachineInstr *MI, unsigned Reg, unsigned SubReg) {
   case SystemZ::LTEBR:
   case SystemZ::LTDBR:
   case SystemZ::LTXBR:
-    if (MI->getOperand(1).getReg() == Reg &&
-        MI->getOperand(1).getSubReg() == SubReg)
+    if (MI->getOperand(1).getReg() == Reg)
       return true;
   }
 
@@ -156,6 +153,30 @@ Reference SystemZElimCompare::getRegReferences(MachineInstr *MI, unsigned Reg) {
     }
   }
   return Ref;
+}
+
+// Return true if this is a load and test which can be optimized the
+// same way as compare instruction.
+static bool isLoadAndTestAsCmp(MachineInstr *MI) {
+  // If we during isel used a load-and-test as a compare with 0, the
+  // def operand is dead.
+  return ((MI->getOpcode() == SystemZ::LTEBR ||
+	   MI->getOpcode() == SystemZ::LTDBR ||
+	   MI->getOpcode() == SystemZ::LTXBR) &&
+	  MI->getOperand(0).isDead());
+}
+
+// Return the source register of Compare, which is the unknown value
+// being tested.
+static unsigned getCompareSourceReg(MachineInstr *Compare) {
+  unsigned reg = 0;
+  if (Compare->isCompare())
+    reg = Compare->getOperand(0).getReg();
+  else if (isLoadAndTestAsCmp(Compare))
+    reg = Compare->getOperand(1).getReg();
+  assert (reg);
+
+  return reg;
 }
 
 // Compare compares the result of MI against zero.  If MI is an addition
@@ -188,7 +209,7 @@ SystemZElimCompare::convertToBRCT(MachineInstr *MI, MachineInstr *Compare,
   // We already know that there are no references to the register between
   // MI and Compare.  Make sure that there are also no references between
   // Compare and Branch.
-  unsigned SrcReg = Compare->getOperand(0).getReg();
+  unsigned SrcReg = getCompareSourceReg(Compare);
   MachineBasicBlock::iterator MBBI = Compare, MBBE = Branch;
   for (++MBBI; MBBI != MBBE; ++MBBI)
     if (getRegReferences(MBBI, SrcReg))
@@ -205,7 +226,7 @@ SystemZElimCompare::convertToBRCT(MachineInstr *MI, MachineInstr *Compare,
     .addOperand(MI->getOperand(1))
     .addOperand(Target)
     .addReg(SystemZ::CC, RegState::ImplicitDefine);
-  MI->removeFromParent();
+  MI->eraseFromParent();
   return true;
 }
 
@@ -308,6 +329,10 @@ static bool isCompareZero(MachineInstr *Compare) {
     return true;
 
   default:
+
+    if (isLoadAndTestAsCmp(Compare))
+      return true;
+
     return (Compare->getNumExplicitOperands() == 2 &&
             Compare->getOperand(1).isImm() &&
             Compare->getOperand(1).getImm() == 0);
@@ -325,8 +350,7 @@ optimizeCompareZero(MachineInstr *Compare,
     return false;
 
   // Search back for CC results that are based on the first operand.
-  unsigned SrcReg = Compare->getOperand(0).getReg();
-  unsigned SrcSubReg = Compare->getOperand(0).getSubReg();
+  unsigned SrcReg = getCompareSourceReg(Compare);
   MachineBasicBlock &MBB = *Compare->getParent();
   MachineBasicBlock::iterator MBBI = Compare, MBBE = MBB.begin();
   Reference CCRefs;
@@ -334,7 +358,7 @@ optimizeCompareZero(MachineInstr *Compare,
   while (MBBI != MBBE) {
     --MBBI;
     MachineInstr *MI = MBBI;
-    if (resultTests(MI, SrcReg, SrcSubReg)) {
+    if (resultTests(MI, SrcReg)) {
       // Try to remove both MI and Compare by converting a branch to BRCT(G).
       // We don't care in this case whether CC is modified between MI and
       // Compare.
@@ -435,21 +459,20 @@ bool SystemZElimCompare::processBlock(MachineBasicBlock &MBB) {
   while (MBBI != MBB.begin()) {
     MachineInstr *MI = --MBBI;
     if (CompleteCCUsers &&
-        MI->isCompare() &&
+        (MI->isCompare() || isLoadAndTestAsCmp(MI)) &&
         (optimizeCompareZero(MI, CCUsers) ||
          fuseCompareAndBranch(MI, CCUsers))) {
       ++MBBI;
-      MI->removeFromParent();
+      MI->eraseFromParent();
       Changed = true;
       CCUsers.clear();
-      CompleteCCUsers = true;
       continue;
     }
 
     Reference CCRefs(getRegReferences(MI, SystemZ::CC));
     if (CCRefs.Def) {
       CCUsers.clear();
-      CompleteCCUsers = !CCRefs.IndirectDef;
+      CompleteCCUsers = true;
     }
     if (CompleteCCUsers && CCRefs.Use)
       CCUsers.push_back(MI);

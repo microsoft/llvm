@@ -2434,12 +2434,9 @@ MachineBasicBlock::iterator X86FrameLowering::restoreWin32EHStackPointers(
   int EHRegOffset = getFrameIndexReference(MF, FI, UsedReg);
   int EndOffset = -EHRegOffset - EHRegSize;
   FuncInfo.EHRegNodeEndOffset = EndOffset;
-  assert(EndOffset >= 0 &&
-         "end of registration object above normal EBP position!");
 
   if (UsedReg == FramePtr) {
     // ADD $offset, %ebp
-    assert(UsedReg == FramePtr);
     unsigned ADDri = getADDriOpcode(false, EndOffset);
     BuildMI(MBB, MBBI, DL, TII.get(ADDri), FramePtr)
         .addReg(FramePtr)
@@ -2447,8 +2444,9 @@ MachineBasicBlock::iterator X86FrameLowering::restoreWin32EHStackPointers(
         .setMIFlag(MachineInstr::FrameSetup)
         ->getOperand(3)
         .setIsDead();
-  } else {
-    assert(UsedReg == BasePtr);
+    assert(EndOffset >= 0 &&
+           "end of registration object above normal EBP position!");
+  } else if (UsedReg == BasePtr) {
     // LEA offset(%ebp), %esi
     addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::LEA32r), BasePtr),
                  FramePtr, false, EndOffset)
@@ -2461,6 +2459,8 @@ MachineBasicBlock::iterator X86FrameLowering::restoreWin32EHStackPointers(
     addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32rm), FramePtr),
                  UsedReg, true, Offset)
         .setMIFlag(MachineInstr::FrameSetup);
+  } else {
+    llvm_unreachable("32-bit frames with WinEH must use FramePtr or BasePtr");
   }
   return MBBI;
 }

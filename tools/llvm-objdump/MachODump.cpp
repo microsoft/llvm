@@ -1667,6 +1667,7 @@ struct DisassembleInfo {
   uint64_t adrp_addr;
   uint32_t adrp_inst;
   BindTable *bindtable;
+  uint32_t depth;
 };
 
 // SymbolizerGetOpInfo() is the operand information call back function.
@@ -2339,6 +2340,8 @@ static const char *get_pointer_64(uint64_t Address, uint32_t &offset,
   for (unsigned SectIdx = 0; SectIdx != info->Sections->size(); SectIdx++) {
     uint64_t SectAddress = ((*(info->Sections))[SectIdx]).getAddress();
     uint64_t SectSize = ((*(info->Sections))[SectIdx]).getSize();
+    if (SectSize == 0)
+      continue;
     if (objc_only) {
       StringRef SectName;
       ((*(info->Sections))[SectIdx]).getName(SectName);
@@ -4463,9 +4466,13 @@ static void print_class64_t(uint64_t p, struct DisassembleInfo *info) {
   bool is_meta_class;
   print_class_ro64_t((c.data + n_value) & ~0x7, info, is_meta_class);
 
-  if (!is_meta_class) {
-    outs() << "Meta Class\n";
-    print_class64_t(c.isa + isa_n_value, info);
+  if (!is_meta_class &&
+      c.isa + isa_n_value != p &&
+      c.isa + isa_n_value != 0 &&
+      info->depth < 100) {
+      info->depth++;
+      outs() << "Meta Class\n";
+      print_class64_t(c.isa + isa_n_value, info);
   }
 }
 
@@ -5113,6 +5120,7 @@ static void printObjc2_64bit_MetaData(MachOObjectFile *O, bool verbose) {
   info.adrp_addr = 0;
   info.adrp_inst = 0;
 
+  info.depth = 0;
   const SectionRef CL = get_section(O, "__OBJC2", "__class_list");
   if (CL != SectionRef()) {
     info.S = CL;

@@ -25,7 +25,6 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/Statepoint.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ValueHandle.h"
@@ -76,7 +75,7 @@ public:
   /// inserted into a block.
   void ClearInsertionPoint() {
     BB = nullptr;
-    InsertPt = nullptr;
+    InsertPt.reset(nullptr);
   }
 
   BasicBlock *GetInsertBlock() const { return BB; }
@@ -94,8 +93,8 @@ public:
   /// the specified instruction.
   void SetInsertPoint(Instruction *I) {
     BB = I->getParent();
-    InsertPt = I;
-    assert(I != BB->end() && "Can't read debug loc from end()");
+    InsertPt = I->getIterator();
+    assert(InsertPt != BB->end() && "Can't read debug loc from end()");
     SetCurrentDebugLocation(I->getDebugLoc());
   }
 
@@ -449,7 +448,7 @@ public:
   /// \brief Create a call to the experimental.gc.statepoint intrinsic to
   /// start a new statepoint sequence.
   CallInst *CreateGCStatepointCall(uint64_t ID, uint32_t NumPatchBytes,
-                                   Value *ActualCallee, StatepointFlags Flags,
+                                   Value *ActualCallee, uint32_t Flags,
                                    ArrayRef<Use> CallArgs,
                                    ArrayRef<Use> TransitionArgs,
                                    ArrayRef<Use> DeoptArgs,
@@ -478,7 +477,7 @@ public:
   /// start a new statepoint sequence.
   InvokeInst *CreateGCStatepointInvoke(
       uint64_t ID, uint32_t NumPatchBytes, Value *ActualInvokee,
-      BasicBlock *NormalDest, BasicBlock *UnwindDest, StatepointFlags Flags,
+      BasicBlock *NormalDest, BasicBlock *UnwindDest, uint32_t Flags,
       ArrayRef<Use> InvokeArgs, ArrayRef<Use> TransitionArgs,
       ArrayRef<Use> DeoptArgs, ArrayRef<Value *> GCArgs,
       const Twine &Name = "");

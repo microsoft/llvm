@@ -1960,10 +1960,10 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
            "SCEVAddExpr operand types don't match!");
 #endif
 
-  Flags = StrengthenNoWrapFlags(this, scAddExpr, Ops, Flags);
-
   // Sort by complexity, this groups all similar expression types together.
   GroupByComplexity(Ops, &LI);
+
+  Flags = StrengthenNoWrapFlags(this, scAddExpr, Ops, Flags);
 
   // If there are any constants, fold them together.
   unsigned Idx = 0;
@@ -2368,10 +2368,10 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
            "SCEVMulExpr operand types don't match!");
 #endif
 
-  Flags = StrengthenNoWrapFlags(this, scMulExpr, Ops, Flags);
-
   // Sort by complexity, this groups all similar expression types together.
   GroupByComplexity(Ops, &LI);
+
+  Flags = StrengthenNoWrapFlags(this, scMulExpr, Ops, Flags);
 
   // If there are any constants, fold them together.
   unsigned Idx = 0;
@@ -4878,10 +4878,10 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
   if (!Pair.second)
     return Pair.first->second;
 
-  // ComputeBackedgeTakenCount may allocate memory for its result. Inserting it
+  // computeBackedgeTakenCount may allocate memory for its result. Inserting it
   // into the BackedgeTakenCounts map transfers ownership. Otherwise, the result
   // must be cleared in this scope.
-  BackedgeTakenInfo Result = ComputeBackedgeTakenCount(L);
+  BackedgeTakenInfo Result = computeBackedgeTakenCount(L);
 
   if (Result.getExact(this) != getCouldNotCompute()) {
     assert(isLoopInvariant(Result.getExact(this), L) &&
@@ -4934,7 +4934,7 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
   }
 
   // Re-lookup the insert position, since the call to
-  // ComputeBackedgeTakenCount above could result in a
+  // computeBackedgeTakenCount above could result in a
   // recusive call to getBackedgeTakenInfo (on a different
   // loop), which would invalidate the iterator computed
   // earlier.
@@ -5115,10 +5115,10 @@ void ScalarEvolution::BackedgeTakenInfo::clear() {
   delete[] ExitNotTaken.getNextExit();
 }
 
-/// ComputeBackedgeTakenCount - Compute the number of times the backedge
+/// computeBackedgeTakenCount - Compute the number of times the backedge
 /// of the specified loop will execute.
 ScalarEvolution::BackedgeTakenInfo
-ScalarEvolution::ComputeBackedgeTakenCount(const Loop *L) {
+ScalarEvolution::computeBackedgeTakenCount(const Loop *L) {
   SmallVector<BasicBlock *, 8> ExitingBlocks;
   L->getExitingBlocks(ExitingBlocks);
 
@@ -5132,7 +5132,7 @@ ScalarEvolution::ComputeBackedgeTakenCount(const Loop *L) {
   // and compute maxBECount.
   for (unsigned i = 0, e = ExitingBlocks.size(); i != e; ++i) {
     BasicBlock *ExitBB = ExitingBlocks[i];
-    ExitLimit EL = ComputeExitLimit(L, ExitBB);
+    ExitLimit EL = computeExitLimit(L, ExitBB);
 
     // 1. For each exit that can be computed, add an entry to ExitCounts.
     // CouldComputeBECount is true only if all exits can be computed.
@@ -5174,13 +5174,11 @@ ScalarEvolution::ComputeBackedgeTakenCount(const Loop *L) {
   return BackedgeTakenInfo(ExitCounts, CouldComputeBECount, MaxBECount);
 }
 
-/// ComputeExitLimit - Compute the number of times the backedge of the specified
-/// loop will execute if it exits via the specified block.
 ScalarEvolution::ExitLimit
-ScalarEvolution::ComputeExitLimit(const Loop *L, BasicBlock *ExitingBlock) {
+ScalarEvolution::computeExitLimit(const Loop *L, BasicBlock *ExitingBlock) {
 
-  // Okay, we've chosen an exiting block.  See what condition causes us to
-  // exit at this block and remember the exit block and whether all other targets
+  // Okay, we've chosen an exiting block.  See what condition causes us to exit
+  // at this block and remember the exit block and whether all other targets
   // lead to the loop header.
   bool MustExecuteLoopHeader = true;
   BasicBlock *Exit = nullptr;
@@ -5243,19 +5241,19 @@ ScalarEvolution::ComputeExitLimit(const Loop *L, BasicBlock *ExitingBlock) {
   if (BranchInst *BI = dyn_cast<BranchInst>(Term)) {
     assert(BI->isConditional() && "If unconditional, it can't be in loop!");
     // Proceed to the next level to examine the exit condition expression.
-    return ComputeExitLimitFromCond(L, BI->getCondition(), BI->getSuccessor(0),
+    return computeExitLimitFromCond(L, BI->getCondition(), BI->getSuccessor(0),
                                     BI->getSuccessor(1),
                                     /*ControlsExit=*/IsOnlyExit);
   }
 
   if (SwitchInst *SI = dyn_cast<SwitchInst>(Term))
-    return ComputeExitLimitFromSingleExitSwitch(L, SI, Exit,
+    return computeExitLimitFromSingleExitSwitch(L, SI, Exit,
                                                 /*ControlsExit=*/IsOnlyExit);
 
   return getCouldNotCompute();
 }
 
-/// ComputeExitLimitFromCond - Compute the number of times the
+/// computeExitLimitFromCond - Compute the number of times the
 /// backedge of the specified loop will execute if its exit condition
 /// were a conditional branch of ExitCond, TBB, and FBB.
 ///
@@ -5264,7 +5262,7 @@ ScalarEvolution::ComputeExitLimit(const Loop *L, BasicBlock *ExitingBlock) {
 /// condition is true and can infer that failing to meet the condition prior to
 /// integer wraparound results in undefined behavior.
 ScalarEvolution::ExitLimit
-ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
+ScalarEvolution::computeExitLimitFromCond(const Loop *L,
                                           Value *ExitCond,
                                           BasicBlock *TBB,
                                           BasicBlock *FBB,
@@ -5274,9 +5272,9 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
     if (BO->getOpcode() == Instruction::And) {
       // Recurse on the operands of the and.
       bool EitherMayExit = L->contains(TBB);
-      ExitLimit EL0 = ComputeExitLimitFromCond(L, BO->getOperand(0), TBB, FBB,
+      ExitLimit EL0 = computeExitLimitFromCond(L, BO->getOperand(0), TBB, FBB,
                                                ControlsExit && !EitherMayExit);
-      ExitLimit EL1 = ComputeExitLimitFromCond(L, BO->getOperand(1), TBB, FBB,
+      ExitLimit EL1 = computeExitLimitFromCond(L, BO->getOperand(1), TBB, FBB,
                                                ControlsExit && !EitherMayExit);
       const SCEV *BECount = getCouldNotCompute();
       const SCEV *MaxBECount = getCouldNotCompute();
@@ -5309,9 +5307,9 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
     if (BO->getOpcode() == Instruction::Or) {
       // Recurse on the operands of the or.
       bool EitherMayExit = L->contains(FBB);
-      ExitLimit EL0 = ComputeExitLimitFromCond(L, BO->getOperand(0), TBB, FBB,
+      ExitLimit EL0 = computeExitLimitFromCond(L, BO->getOperand(0), TBB, FBB,
                                                ControlsExit && !EitherMayExit);
-      ExitLimit EL1 = ComputeExitLimitFromCond(L, BO->getOperand(1), TBB, FBB,
+      ExitLimit EL1 = computeExitLimitFromCond(L, BO->getOperand(1), TBB, FBB,
                                                ControlsExit && !EitherMayExit);
       const SCEV *BECount = getCouldNotCompute();
       const SCEV *MaxBECount = getCouldNotCompute();
@@ -5346,7 +5344,7 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
   // With an icmp, it may be feasible to compute an exact backedge-taken count.
   // Proceed to the next level to examine the icmp.
   if (ICmpInst *ExitCondICmp = dyn_cast<ICmpInst>(ExitCond))
-    return ComputeExitLimitFromICmp(L, ExitCondICmp, TBB, FBB, ControlsExit);
+    return computeExitLimitFromICmp(L, ExitCondICmp, TBB, FBB, ControlsExit);
 
   // Check for a constant condition. These are normally stripped out by
   // SimplifyCFG, but ScalarEvolution may be used by a pass which wishes to
@@ -5362,14 +5360,11 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
   }
 
   // If it's not an integer or pointer comparison then compute it the hard way.
-  return ComputeExitCountExhaustively(L, ExitCond, !L->contains(TBB));
+  return computeExitCountExhaustively(L, ExitCond, !L->contains(TBB));
 }
 
-/// ComputeExitLimitFromICmp - Compute the number of times the
-/// backedge of the specified loop will execute if its exit condition
-/// were a conditional branch of the ICmpInst ExitCond, TBB, and FBB.
 ScalarEvolution::ExitLimit
-ScalarEvolution::ComputeExitLimitFromICmp(const Loop *L,
+ScalarEvolution::computeExitLimitFromICmp(const Loop *L,
                                           ICmpInst *ExitCond,
                                           BasicBlock *TBB,
                                           BasicBlock *FBB,
@@ -5386,7 +5381,7 @@ ScalarEvolution::ComputeExitLimitFromICmp(const Loop *L,
   if (LoadInst *LI = dyn_cast<LoadInst>(ExitCond->getOperand(0)))
     if (Constant *RHS = dyn_cast<Constant>(ExitCond->getOperand(1))) {
       ExitLimit ItCnt =
-        ComputeLoadConstantCompareExitLimit(LI, RHS, L, Cond);
+        computeLoadConstantCompareExitLimit(LI, RHS, L, Cond);
       if (ItCnt.hasAnyInfo())
         return ItCnt;
     }
@@ -5451,7 +5446,7 @@ ScalarEvolution::ComputeExitLimitFromICmp(const Loop *L,
   }
   default:
 #if 0
-    dbgs() << "ComputeBackedgeTakenCount ";
+    dbgs() << "computeBackedgeTakenCount ";
     if (ExitCond->getOperand(0)->getType()->isUnsigned())
       dbgs() << "[unsigned] ";
     dbgs() << *LHS << "   "
@@ -5460,11 +5455,11 @@ ScalarEvolution::ComputeExitLimitFromICmp(const Loop *L,
 #endif
     break;
   }
-  return ComputeExitCountExhaustively(L, ExitCond, !L->contains(TBB));
+  return computeExitCountExhaustively(L, ExitCond, !L->contains(TBB));
 }
 
 ScalarEvolution::ExitLimit
-ScalarEvolution::ComputeExitLimitFromSingleExitSwitch(const Loop *L,
+ScalarEvolution::computeExitLimitFromSingleExitSwitch(const Loop *L,
                                                       SwitchInst *Switch,
                                                       BasicBlock *ExitingBlock,
                                                       bool ControlsExit) {
@@ -5497,11 +5492,11 @@ EvaluateConstantChrecAtConstant(const SCEVAddRecExpr *AddRec, ConstantInt *C,
   return cast<SCEVConstant>(Val)->getValue();
 }
 
-/// ComputeLoadConstantCompareExitLimit - Given an exit condition of
+/// computeLoadConstantCompareExitLimit - Given an exit condition of
 /// 'icmp op load X, cst', try to see if we can compute the backedge
 /// execution count.
 ScalarEvolution::ExitLimit
-ScalarEvolution::ComputeLoadConstantCompareExitLimit(
+ScalarEvolution::computeLoadConstantCompareExitLimit(
   LoadInst *LI,
   Constant *RHS,
   const Loop *L,
@@ -5742,22 +5737,36 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
   BasicBlock *Header = L->getHeader();
   assert(PN->getParent() == Header && "Can't evaluate PHI not in loop header!");
 
-  // Since the loop is canonicalized, the PHI node must have two entries.  One
+  BasicBlock *Latch = L->getLoopLatch();
+  if (!Latch)
+    return nullptr;
+
+  // Since the loop has one latch, the PHI node must have two entries.  One
   // entry must be a constant (coming in from outside of the loop), and the
   // second must be derived from the same PHI.
-  bool SecondIsBackedge = L->contains(PN->getIncomingBlock(1));
+
+  BasicBlock *NonLatch = Latch == PN->getIncomingBlock(0)
+                             ? PN->getIncomingBlock(1)
+                             : PN->getIncomingBlock(0);
+
+  assert(PN->getNumIncomingValues() == 2 && "Follows from having one latch!");
+
+  // Note: not all PHI nodes in the same block have to have their incoming
+  // values in the same order, so we use the basic block to look up the incoming
+  // value, not an index.
+
   for (auto &I : *Header) {
     PHINode *PHI = dyn_cast<PHINode>(&I);
     if (!PHI) break;
     auto *StartCST =
-      dyn_cast<Constant>(PHI->getIncomingValue(!SecondIsBackedge));
+        dyn_cast<Constant>(PHI->getIncomingValueForBlock(NonLatch));
     if (!StartCST) continue;
     CurrentIterVals[PHI] = StartCST;
   }
   if (!CurrentIterVals.count(PN))
     return RetVal = nullptr;
 
-  Value *BEValue = PN->getIncomingValue(SecondIsBackedge);
+  Value *BEValue = PN->getIncomingValueForBlock(Latch);
 
   // Execute the loop symbolically to determine the exit value.
   if (BEs.getActiveBits() >= 32)
@@ -5796,7 +5805,7 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
       PHINode *PHI = I.first;
       Constant *&NextPHI = NextIterVals[PHI];
       if (!NextPHI) {   // Not already computed.
-        Value *BEValue = PHI->getIncomingValue(SecondIsBackedge);
+        Value *BEValue = PHI->getIncomingValueForBlock(Latch);
         NextPHI = EvaluateExpression(BEValue, L, CurrentIterVals, DL, &TLI);
       }
       if (NextPHI != I.second)
@@ -5812,12 +5821,7 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
   }
 }
 
-/// ComputeExitCountExhaustively - If the loop is known to execute a
-/// constant number of times (the condition evolves only from constants),
-/// try to evaluate a few iterations of the loop until we get the exit
-/// condition gets a value of ExitWhen (true or false).  If we cannot
-/// evaluate the trip count of the loop, return getCouldNotCompute().
-const SCEV *ScalarEvolution::ComputeExitCountExhaustively(const Loop *L,
+const SCEV *ScalarEvolution::computeExitCountExhaustively(const Loop *L,
                                                           Value *Cond,
                                                           bool ExitWhen) {
   PHINode *PN = getConstantEvolvingPHI(Cond, L);
@@ -5831,15 +5835,24 @@ const SCEV *ScalarEvolution::ComputeExitCountExhaustively(const Loop *L,
   BasicBlock *Header = L->getHeader();
   assert(PN->getParent() == Header && "Can't evaluate PHI not in loop header!");
 
-  // One entry must be a constant (coming in from outside of the loop), and the
-  // second must be derived from the same PHI.
-  bool SecondIsBackedge = L->contains(PN->getIncomingBlock(1));
+  BasicBlock *Latch = L->getLoopLatch();
+  assert(Latch && "Should follow from NumIncomingValues == 2!");
+
+  // NonLatch is the preheader, or something equivalent.
+  BasicBlock *NonLatch = Latch == PN->getIncomingBlock(0)
+                             ? PN->getIncomingBlock(1)
+                             : PN->getIncomingBlock(0);
+
+  // Note: not all PHI nodes in the same block have to have their incoming
+  // values in the same order, so we use the basic block to look up the incoming
+  // value, not an index.
+
   for (auto &I : *Header) {
     PHINode *PHI = dyn_cast<PHINode>(&I);
     if (!PHI)
       break;
     auto *StartCST =
-        dyn_cast<Constant>(PHI->getIncomingValue(!SecondIsBackedge));
+      dyn_cast<Constant>(PHI->getIncomingValueForBlock(NonLatch));
     if (!StartCST) continue;
     CurrentIterVals[PHI] = StartCST;
   }
@@ -5879,7 +5892,7 @@ const SCEV *ScalarEvolution::ComputeExitCountExhaustively(const Loop *L,
       Constant *&NextPHI = NextIterVals[PHI];
       if (NextPHI) continue;    // Already computed!
 
-      Value *BEValue = PHI->getIncomingValue(SecondIsBackedge);
+      Value *BEValue = PHI->getIncomingValueForBlock(Latch);
       NextPHI = EvaluateExpression(BEValue, L, CurrentIterVals, DL, &TLI);
     }
     CurrentIterVals.swap(NextIterVals);

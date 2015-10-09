@@ -1604,6 +1604,10 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::CONCAT_VECTORS,     MVT::v64i1, Legal);
     setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v32i1, Custom);
     setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v64i1, Custom);
+    setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v32i16, Custom);
+    setOperationAction(ISD::INSERT_SUBVECTOR,   MVT::v64i8, Custom);
+    setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v32i16, Custom);
+    setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v64i8, Custom);
     setOperationAction(ISD::SELECT,             MVT::v32i1, Custom);
     setOperationAction(ISD::SELECT,             MVT::v64i1, Custom);
     setOperationAction(ISD::SIGN_EXTEND,        MVT::v32i8, Custom);
@@ -1615,6 +1619,8 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     setOperationAction(ISD::ZERO_EXTEND,        MVT::v64i8, Custom);
     setOperationAction(ISD::INSERT_VECTOR_ELT,  MVT::v32i1, Custom);
     setOperationAction(ISD::INSERT_VECTOR_ELT,  MVT::v64i1, Custom);
+    setOperationAction(ISD::INSERT_VECTOR_ELT,  MVT::v32i16, Custom);
+    setOperationAction(ISD::INSERT_VECTOR_ELT,  MVT::v64i8, Custom);
     setOperationAction(ISD::VSELECT,            MVT::v32i16, Legal);
     setOperationAction(ISD::VSELECT,            MVT::v64i8, Legal);
     setOperationAction(ISD::TRUNCATE,           MVT::v32i1, Custom);
@@ -11082,8 +11088,13 @@ static bool BUILD_VECTORtoBlendMask(BuildVectorSDNode *BuildVector,
                                     unsigned &MaskValue) {
   MaskValue = 0;
   unsigned NumElems = BuildVector->getNumOperands();
+  
   // There are 2 lanes if (NumElems > 8), and 1 lane otherwise.
+  // We don't handle the >2 lanes case right now.
   unsigned NumLanes = (NumElems - 1) / 8 + 1;
+  if (NumLanes > 2)
+    return false;
+
   unsigned NumElemsInLane = NumElems / NumLanes;
 
   // Blend for v16i16 should be symmetric for the both lanes.
@@ -11098,16 +11109,21 @@ static bool BUILD_VECTORtoBlendMask(BuildVectorSDNode *BuildVector,
     if (isa<ConstantSDNode>(SndLaneEltCond))
       Lane2Cond = !isZero(SndLaneEltCond);
 
+    unsigned LaneMask = 0;
     if (Lane1Cond == Lane2Cond || Lane2Cond < 0)
       // Lane1Cond != 0, means we want the first argument.
       // Lane1Cond == 0, means we want the second argument.
       // The encoding of this argument is 0 for the first argument, 1
       // for the second. Therefore, invert the condition.
-      MaskValue |= !Lane1Cond << i;
+      LaneMask = !Lane1Cond << i;
     else if (Lane1Cond < 0)
-      MaskValue |= !Lane2Cond << i;
+      LaneMask = !Lane2Cond << i;
     else
       return false;
+
+    MaskValue |= LaneMask;
+    if (NumLanes == 2)
+      MaskValue |= LaneMask << NumElemsInLane;
   }
   return true;
 }
