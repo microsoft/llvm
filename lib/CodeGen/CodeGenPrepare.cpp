@@ -245,7 +245,7 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
   while (MadeChange) {
     MadeChange = false;
     for (Function::iterator I = F.begin(); I != F.end(); ) {
-      BasicBlock *BB = I++;
+      BasicBlock *BB = &*I++;
       bool ModifiedDTOnIteration = false;
       MadeChange |= optimizeBlock(*BB, ModifiedDTOnIteration);
 
@@ -315,7 +315,7 @@ bool CodeGenPrepare::eliminateFallThrough(Function &F) {
   bool Changed = false;
   // Scan all of the blocks in the function, except for the entry block.
   for (Function::iterator I = std::next(F.begin()), E = F.end(); I != E;) {
-    BasicBlock *BB = I++;
+    BasicBlock *BB = &*I++;
     // If the destination block has a single pred, then this is a trivial
     // edge, just collapse it.
     BasicBlock *SinglePred = BB->getSinglePredecessor();
@@ -336,7 +336,7 @@ bool CodeGenPrepare::eliminateFallThrough(Function &F) {
         BB->moveBefore(&BB->getParent()->getEntryBlock());
 
       // We have erased a block. Update the iterator.
-      I = BB;
+      I = BB->getIterator();
     }
   }
   return Changed;
@@ -350,7 +350,7 @@ bool CodeGenPrepare::eliminateMostlyEmptyBlocks(Function &F) {
   bool MadeChange = false;
   // Note that this intentionally skips the entry block.
   for (Function::iterator I = std::next(F.begin()), E = F.end(); I != E;) {
-    BasicBlock *BB = I++;
+    BasicBlock *BB = &*I++;
 
     // If this block doesn't end with an uncond branch, ignore it.
     BranchInst *BI = dyn_cast<BranchInst>(BB->getTerminator());
@@ -359,7 +359,7 @@ bool CodeGenPrepare::eliminateMostlyEmptyBlocks(Function &F) {
 
     // If the instruction before the branch (skipping debug info) isn't a phi
     // node, then other stuff is happening here.
-    BasicBlock::iterator BBI = BI;
+    BasicBlock::iterator BBI = BI->getIterator();
     if (BBI != BB->begin()) {
       --BBI;
       while (isa<DbgInfoIntrinsic>(BBI)) {
@@ -724,9 +724,9 @@ static bool SinkCast(CastInst *CI) {
 
     if (!InsertedCast) {
       BasicBlock::iterator InsertPt = UserBB->getFirstInsertionPt();
-      InsertedCast =
-        CastInst::Create(CI->getOpcode(), CI->getOperand(0), CI->getType(), "",
-                         InsertPt);
+      assert(InsertPt != UserBB->end());
+      InsertedCast = CastInst::Create(CI->getOpcode(), CI->getOperand(0),
+                                      CI->getType(), "", &*InsertPt);
     }
 
     // Replace a use of the cast with a use of the new cast.
@@ -864,10 +864,10 @@ static bool SinkCmpExpression(CmpInst *CI) {
 
     if (!InsertedCmp) {
       BasicBlock::iterator InsertPt = UserBB->getFirstInsertionPt();
+      assert(InsertPt != UserBB->end());
       InsertedCmp =
-        CmpInst::Create(CI->getOpcode(),
-                        CI->getPredicate(),  CI->getOperand(0),
-                        CI->getOperand(1), "", InsertPt);
+          CmpInst::Create(CI->getOpcode(), CI->getPredicate(),
+                          CI->getOperand(0), CI->getOperand(1), "", &*InsertPt);
     }
 
     // Replace a use of the cmp with a use of the new cmp.
@@ -961,20 +961,22 @@ SinkShiftAndTruncate(BinaryOperator *ShiftI, Instruction *User, ConstantInt *CI,
 
     if (!InsertedShift && !InsertedTrunc) {
       BasicBlock::iterator InsertPt = TruncUserBB->getFirstInsertionPt();
+      assert(InsertPt != TruncUserBB->end());
       // Sink the shift
       if (ShiftI->getOpcode() == Instruction::AShr)
-        InsertedShift =
-            BinaryOperator::CreateAShr(ShiftI->getOperand(0), CI, "", InsertPt);
+        InsertedShift = BinaryOperator::CreateAShr(ShiftI->getOperand(0), CI,
+                                                   "", &*InsertPt);
       else
-        InsertedShift =
-            BinaryOperator::CreateLShr(ShiftI->getOperand(0), CI, "", InsertPt);
+        InsertedShift = BinaryOperator::CreateLShr(ShiftI->getOperand(0), CI,
+                                                   "", &*InsertPt);
 
       // Sink the trunc
       BasicBlock::iterator TruncInsertPt = TruncUserBB->getFirstInsertionPt();
       TruncInsertPt++;
+      assert(TruncInsertPt != TruncUserBB->end());
 
       InsertedTrunc = CastInst::Create(TruncI->getOpcode(), InsertedShift,
-                                       TruncI->getType(), "", TruncInsertPt);
+                                       TruncI->getType(), "", &*TruncInsertPt);
 
       MadeChange = true;
 
@@ -1058,13 +1060,14 @@ static bool OptimizeExtractBits(BinaryOperator *ShiftI, ConstantInt *CI,
 
     if (!InsertedShift) {
       BasicBlock::iterator InsertPt = UserBB->getFirstInsertionPt();
+      assert(InsertPt != UserBB->end());
 
       if (ShiftI->getOpcode() == Instruction::AShr)
-        InsertedShift =
-            BinaryOperator::CreateAShr(ShiftI->getOperand(0), CI, "", InsertPt);
+        InsertedShift = BinaryOperator::CreateAShr(ShiftI->getOperand(0), CI,
+                                                   "", &*InsertPt);
       else
-        InsertedShift =
-            BinaryOperator::CreateLShr(ShiftI->getOperand(0), CI, "", InsertPt);
+        InsertedShift = BinaryOperator::CreateLShr(ShiftI->getOperand(0), CI,
+                                                   "", &*InsertPt);
 
       MadeChange = true;
     }
@@ -1173,7 +1176,7 @@ static void ScalarizeMaskedLoad(CallInst *CI) {
     //  %Elt = load i32* %EltAddr
     //  VResult = insertelement <16 x i32> VResult, i32 %Elt, i32 Idx
     //
-    CondBlock = IfBlock->splitBasicBlock(InsertPt, "cond.load");
+    CondBlock = IfBlock->splitBasicBlock(InsertPt->getIterator(), "cond.load");
     Builder.SetInsertPoint(InsertPt);
 
     Value *Gep =
@@ -1182,7 +1185,8 @@ static void ScalarizeMaskedLoad(CallInst *CI) {
     VResult = Builder.CreateInsertElement(VResult, Load, Builder.getInt32(Idx));
 
     // Create "else" block, fill it in the next iteration
-    BasicBlock *NewIfBlock = CondBlock->splitBasicBlock(InsertPt, "else");
+    BasicBlock *NewIfBlock =
+        CondBlock->splitBasicBlock(InsertPt->getIterator(), "else");
     Builder.SetInsertPoint(InsertPt);
     Instruction *OldBr = IfBlock->getTerminator();
     BranchInst::Create(CondBlock, NewIfBlock, Cmp, OldBr);
@@ -1267,16 +1271,18 @@ static void ScalarizeMaskedStore(CallInst *CI) {
     //  %EltAddr = getelementptr i32* %1, i32 0
     //  %store i32 %OneElt, i32* %EltAddr
     //
-    BasicBlock *CondBlock = IfBlock->splitBasicBlock(InsertPt, "cond.store");
+    BasicBlock *CondBlock =
+        IfBlock->splitBasicBlock(InsertPt->getIterator(), "cond.store");
     Builder.SetInsertPoint(InsertPt);
-    
+
     Value *OneElt = Builder.CreateExtractElement(Src, Builder.getInt32(Idx));
     Value *Gep =
         Builder.CreateInBoundsGEP(EltTy, FirstEltPtr, Builder.getInt32(Idx));
     Builder.CreateStore(OneElt, Gep);
 
     // Create "else" block, fill it in the next iteration
-    BasicBlock *NewIfBlock = CondBlock->splitBasicBlock(InsertPt, "else");
+    BasicBlock *NewIfBlock =
+        CondBlock->splitBasicBlock(InsertPt->getIterator(), "else");
     Builder.SetInsertPoint(InsertPt);
     Instruction *OldBr = IfBlock->getTerminator();
     BranchInst::Create(CondBlock, NewIfBlock, Cmp, OldBr);
@@ -1363,14 +1369,14 @@ bool CodeGenPrepare::optimizeCallInst(CallInst *CI, bool& ModifiedDT) {
       // Substituting this can cause recursive simplifications, which can
       // invalidate our iterator.  Use a WeakVH to hold onto it in case this
       // happens.
-      WeakVH IterHandle(CurInstIterator);
+      WeakVH IterHandle(&*CurInstIterator);
 
       replaceAndRecursivelySimplify(CI, RetVal,
                                     TLInfo, nullptr);
 
       // If the iterator instruction was recursively deleted, start over at the
       // start of the block.
-      if (IterHandle != CurInstIterator) {
+      if (IterHandle != CurInstIterator.getNodePtrUnchecked()) {
         CurInstIterator = BB->begin();
         SunkAddrs.clear();
       }
@@ -1703,10 +1709,10 @@ class TypePromotionTransaction {
   public:
     /// \brief Record the position of \p Inst.
     InsertionHandler(Instruction *Inst) {
-      BasicBlock::iterator It = Inst;
+      BasicBlock::iterator It = Inst->getIterator();
       HasPrevInstruction = (It != (Inst->getParent()->begin()));
       if (HasPrevInstruction)
-        Point.PrevInst = --It;
+        Point.PrevInst = &*--It;
       else
         Point.BB = Inst->getParent();
     }
@@ -1718,7 +1724,7 @@ class TypePromotionTransaction {
           Inst->removeFromParent();
         Inst->insertAfter(Point.PrevInst);
       } else {
-        Instruction *Position = Point.BB->getFirstInsertionPt();
+        Instruction *Position = &*Point.BB->getFirstInsertionPt();
         if (Inst->getParent())
           Inst->moveBefore(Position);
         else
@@ -1791,7 +1797,7 @@ class TypePromotionTransaction {
         Value *Val = Inst->getOperand(It);
         OriginalValues.push_back(Val);
         // Set a dummy one.
-        // We could use OperandSetter here, but that would implied an overhead
+        // We could use OperandSetter here, but that would imply an overhead
         // that we are not willing to pay.
         Inst->setOperand(It, UndefValue::get(Val->getType()));
       }
@@ -2406,8 +2412,7 @@ bool TypePromotionHelper::canGetThrough(const Instruction *Inst,
 
   Value *OpndVal = Inst->getOperand(0);
   // Check if we can use this operand in the extension.
-  // If the type is larger than the result type of the extension,
-  // we cannot.
+  // If the type is larger than the result type of the extension, we cannot.
   if (!OpndVal->getType()->isIntegerTy() ||
       OpndVal->getType()->getIntegerBitWidth() >
           ConsideredExtType->getIntegerBitWidth())
@@ -2433,7 +2438,7 @@ bool TypePromotionHelper::canGetThrough(const Instruction *Inst,
   else
     return false;
 
-  // #2 check that the truncate just drop extended bits.
+  // #2 check that the truncate just drops extended bits.
   if (Inst->getType()->getIntegerBitWidth() >= OpndType->getIntegerBitWidth())
     return true;
 
@@ -2546,7 +2551,7 @@ Value *TypePromotionHelper::promoteOperandForOther(
     }
 
     TPT.replaceAllUsesWith(ExtOpnd, Trunc);
-    // Restore the operand of Ext (which has been replace by the previous call
+    // Restore the operand of Ext (which has been replaced by the previous call
     // to replaceAllUsesWith) to avoid creating a cycle trunc <-> sext.
     TPT.setOperand(Ext, 0, ExtOpnd);
   }
@@ -2649,7 +2654,7 @@ bool AddressingModeMatcher::isPromotionProfitable(
 }
 
 /// Given an instruction or constant expr, see if we can fold the operation
-/// into the addressing mode. If so, update the addressing  mode and return
+/// into the addressing mode. If so, update the addressing mode and return
 /// true, otherwise return false without modifying AddrMode.
 /// If \p MovedAway is not NULL, it contains the information of whether or
 /// not AddrInst has to be folded into the addressing mode on success.
@@ -2872,9 +2877,9 @@ bool AddressingModeMatcher::matchOperationAddr(User *AddrInst, unsigned Opcode,
     unsigned OldSize = AddrModeInsts.size();
 
     if (!matchAddr(PromotedOperand, Depth) ||
-        // The total of the new cost is equals to the cost of the created
+        // The total of the new cost is equal to the cost of the created
         // instructions.
-        // The total of the old cost is equals to the cost of the extension plus
+        // The total of the old cost is equal to the cost of the extension plus
         // what we have saved in the addressing mode.
         !isPromotionProfitable(CreatedInstsCost,
                                ExtCost + (AddrModeInsts.size() - OldSize),
@@ -2922,7 +2927,7 @@ bool AddressingModeMatcher::matchAddr(Value *Addr, unsigned Depth) {
     // Check to see if it is possible to fold this operation.
     bool MovedAway = false;
     if (matchOperationAddr(I, I->getOpcode(), Depth, &MovedAway)) {
-      // This instruction may have been move away. If so, there is nothing
+      // This instruction may have been moved away. If so, there is nothing
       // to check here.
       if (MovedAway)
         return true;
@@ -3050,10 +3055,10 @@ static bool FindAllMemoryUses(
   return false;
 }
 
-/// ValueAlreadyLiveAtInst - Retrn true if Val is already known to be live at
-/// the use site that we're folding it into.  If so, there is no cost to
-/// include it in the addressing mode.  KnownLive1 and KnownLive2 are two values
-/// that we know are live at the instruction already.
+/// Return true if Val is already known to be live at the use site that we're
+/// folding it into. If so, there is no cost to include it in the addressing
+/// mode. KnownLive1 and KnownLive2 are two values that we know are live at the
+/// instruction already.
 bool AddressingModeMatcher::valueAlreadyLiveAtInst(Value *Val,Value *KnownLive1,
                                                    Value *KnownLive2) {
   // If Val is either of the known-live values, we know it is live!
@@ -3520,12 +3525,12 @@ bool CodeGenPrepare::optimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
   if (Repl->use_empty()) {
     // This can cause recursive deletion, which can invalidate our iterator.
     // Use a WeakVH to hold onto it in case this happens.
-    WeakVH IterHandle(CurInstIterator);
+    WeakVH IterHandle(&*CurInstIterator);
     BasicBlock *BB = CurInstIterator->getParent();
 
     RecursivelyDeleteTriviallyDeadInstructions(Repl, TLInfo);
 
-    if (IterHandle != CurInstIterator) {
+    if (IterHandle != CurInstIterator.getNodePtrUnchecked()) {
       // If the iterator instruction was recursively deleted, start over at the
       // start of the block.
       CurInstIterator = BB->begin();
@@ -3827,7 +3832,8 @@ bool CodeGenPrepare::optimizeExtUses(Instruction *I) {
 
     if (!InsertedTrunc) {
       BasicBlock::iterator InsertPt = UserBB->getFirstInsertionPt();
-      InsertedTrunc = new TruncInst(I, Src->getType(), "", InsertPt);
+      assert(InsertPt != UserBB->end());
+      InsertedTrunc = new TruncInst(I, Src->getType(), "", &*InsertPt);
       InsertedInsts.insert(InsertedTrunc);
     }
 
@@ -3913,7 +3919,7 @@ bool CodeGenPrepare::optimizeSelectInst(SelectInst *SI) {
   BranchInst::Create(NextBlock, SmallBlock, SI->getCondition(), SI);
 
   // The select itself is replaced with a PHI Node.
-  PHINode *PN = PHINode::Create(SI->getType(), 2, "", NextBlock->begin());
+  PHINode *PN = PHINode::Create(SI->getType(), 2, "", &NextBlock->front());
   PN->takeName(SI);
   PN->addIncoming(SI->getTrueValue(), StartBlock);
   PN->addIncoming(SI->getFalseValue(), SmallBlock);
@@ -3974,9 +3980,10 @@ bool CodeGenPrepare::optimizeShuffleVectorInst(ShuffleVectorInst *SVI) {
 
     if (!InsertedShuffle) {
       BasicBlock::iterator InsertPt = UserBB->getFirstInsertionPt();
-      InsertedShuffle = new ShuffleVectorInst(SVI->getOperand(0),
-                                              SVI->getOperand(1),
-                                              SVI->getOperand(2), "", InsertPt);
+      assert(InsertPt != UserBB->end());
+      InsertedShuffle =
+          new ShuffleVectorInst(SVI->getOperand(0), SVI->getOperand(1),
+                                SVI->getOperand(2), "", &*InsertPt);
     }
 
     UI->replaceUsesOfWith(SVI, InsertedShuffle);
@@ -4479,7 +4486,7 @@ bool CodeGenPrepare::optimizeBlock(BasicBlock &BB, bool& ModifiedDT) {
 
   CurInstIterator = BB.begin();
   while (CurInstIterator != BB.end()) {
-    MadeChange |= optimizeInst(CurInstIterator++, ModifiedDT);
+    MadeChange |= optimizeInst(&*CurInstIterator++, ModifiedDT);
     if (ModifiedDT)
       return true;
   }
@@ -4496,7 +4503,7 @@ bool CodeGenPrepare::placeDbgValues(Function &F) {
   for (BasicBlock &BB : F) {
     Instruction *PrevNonDbgInst = nullptr;
     for (BasicBlock::iterator BI = BB.begin(), BE = BB.end(); BI != BE;) {
-      Instruction *Insn = BI++;
+      Instruction *Insn = &*BI++;
       DbgValueInst *DVI = dyn_cast<DbgValueInst>(Insn);
       // Leave dbg.values that refer to an alloca alone. These
       // instrinsics describe the address of a variable (= the alloca)
@@ -4513,7 +4520,7 @@ bool CodeGenPrepare::placeDbgValues(Function &F) {
         DEBUG(dbgs() << "Moving Debug Value before :\n" << *DVI << ' ' << *VI);
         DVI->removeFromParent();
         if (isa<PHINode>(VI))
-          DVI->insertBefore(VI->getParent()->getFirstInsertionPt());
+          DVI->insertBefore(&*VI->getParent()->getFirstInsertionPt());
         else
           DVI->insertAfter(VI);
         MadeChange = true;
@@ -4537,7 +4544,7 @@ bool CodeGenPrepare::sinkAndCmp(Function &F) {
     return false;
   bool MadeChange = false;
   for (Function::iterator I = F.begin(), E = F.end(); I != E; ) {
-    BasicBlock *BB = I++;
+    BasicBlock *BB = &*I++;
 
     // Does this BB end with the following?
     //   %andVal = and %val, #single-bit-set

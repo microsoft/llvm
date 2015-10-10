@@ -510,11 +510,17 @@ public:
     return remove(MutIt);
   }
 
+  NodeTy *remove(NodeTy *IT) { return remove(iterator(IT)); }
+  NodeTy *remove(NodeTy &IT) { return remove(iterator(IT)); }
+
   // erase - remove a node from the controlled sequence... and delete it.
   iterator erase(iterator where) {
     this->deleteNode(remove(where));
     return where;
   }
+
+  iterator erase(NodeTy *IT) { return erase(iterator(IT)); }
+  iterator erase(NodeTy &IT) { return erase(iterator(IT)); }
 
   /// Remove all nodes from the list like clear(), but do not call
   /// removeNodeFromList() or deleteNode().
@@ -627,6 +633,12 @@ public:
   }
   void splice(iterator where, iplist &L2, iterator first, iterator last) {
     if (first != last) transfer(where, L2, first, last);
+  }
+  void splice(iterator where, iplist &L2, NodeTy &N) {
+    splice(where, L2, iterator(N));
+  }
+  void splice(iterator where, iplist &L2, NodeTy *N) {
+    splice(where, L2, iterator(N));
   }
 
   template <class Compare>

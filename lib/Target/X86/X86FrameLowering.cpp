@@ -1314,6 +1314,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   bool NeedsWinCFI =
       IsWin64Prologue && MF.getFunction()->needsUnwindTableEntry();
   bool IsFunclet = isFuncletReturnInstr(MBBI);
+  MachineBasicBlock *RestoreMBB = nullptr;
 
   // Get the number of bytes to allocate from the FrameInfo.
   uint64_t StackSize = MFI->getStackSize();
@@ -1338,7 +1339,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     }
 
     // For 32-bit, create a new block for the restore code.
-    MachineBasicBlock *RestoreMBB = TargetMBB;
+    RestoreMBB = TargetMBB;
     if (STI.is32Bit()) {
       RestoreMBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
       MF.insert(TargetMBB, RestoreMBB);
@@ -1346,23 +1347,6 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
       MBB.addSuccessor(RestoreMBB);
       RestoreMBB->addSuccessor(TargetMBB);
       MBBI->getOperand(0).setMBB(RestoreMBB);
-    }
-
-    // Fill EAX/RAX with the address of the target block.
-    unsigned ReturnReg = STI.is64Bit() ? X86::RAX : X86::EAX;
-    if (STI.is64Bit()) {
-      // LEA64r RestoreMBB(%rip), %rax
-      BuildMI(MBB, MBBI, DL, TII.get(X86::LEA64r), ReturnReg)
-          .addReg(X86::RIP)
-          .addImm(0)
-          .addReg(0)
-          .addMBB(RestoreMBB)
-          .addReg(0);
-    } else {
-      // MOV32ri $RestoreMBB, %eax
-      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri))
-          .addReg(ReturnReg)
-          .addMBB(RestoreMBB);
     }
 
     // Pop EBP.
@@ -1416,6 +1400,25 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     --MBBI;
   }
   MachineBasicBlock::iterator FirstCSPop = MBBI;
+
+  if (RestoreMBB) {
+    // Fill EAX/RAX with the address of the target block.
+    unsigned ReturnReg = STI.is64Bit() ? X86::RAX : X86::EAX;
+    if (STI.is64Bit()) {
+      // LEA64r RestoreMBB(%rip), %rax
+      BuildMI(MBB, FirstCSPop, DL, TII.get(X86::LEA64r), ReturnReg)
+          .addReg(X86::RIP)
+          .addImm(0)
+          .addReg(0)
+          .addMBB(RestoreMBB)
+          .addReg(0);
+    } else {
+      // MOV32ri $RestoreMBB, %eax
+      BuildMI(MBB, FirstCSPop, DL, TII.get(X86::MOV32ri))
+          .addReg(ReturnReg)
+          .addMBB(RestoreMBB);
+    }
+  }
 
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();

@@ -681,11 +681,8 @@ bool AsmParser::Run(bool NoInitialTextSection, bool NoFinalize) {
   // so conservatively exclude them. Only do this if we're finalizing, though,
   // as otherwise we won't necessarilly have seen everything yet.
   if (!NoFinalize && MAI.hasSubsectionsViaSymbols()) {
-    const MCContext::SymbolTable &Symbols = getContext().getSymbols();
-    for (MCContext::SymbolTable::const_iterator i = Symbols.begin(),
-                                                e = Symbols.end();
-         i != e; ++i) {
-      MCSymbol *Sym = i->getValue();
+    for (const auto &TableEntry : getContext().getSymbols()) {
+      MCSymbol *Sym = TableEntry.getValue();
       // Variable symbols may not be marked as defined, so check those
       // explicitly. If we know it's a variable, we have a definition for
       // the purposes of this check.
@@ -1337,8 +1334,8 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
             SI->LookupInlineAsmLabel(IDVal, getSourceManager(), IDLoc, true);
         assert(RewrittenLabel.size() &&
                "We should have an internal name here.");
-        Info.AsmRewrites->push_back(AsmRewrite(AOK_Label, IDLoc,
-                                               IDVal.size(), RewrittenLabel));
+        Info.AsmRewrites->emplace_back(AOK_Label, IDLoc, IDVal.size(),
+                                       RewrittenLabel);
         IDVal = RewrittenLabel;
       }
       Sym = getContext().getOrCreateSymbol(IDVal);
@@ -1861,10 +1858,8 @@ bool AsmParser::expandMacro(raw_svector_ostream &OS, StringRef Body,
           break;
 
         // Otherwise substitute with the token values, with spaces eliminated.
-        for (MCAsmMacroArgument::const_iterator it = A[Index].begin(),
-                                                ie = A[Index].end();
-             it != ie; ++it)
-          OS << it->getString();
+        for (const AsmToken &Token : A[Index])
+          OS << Token.getString();
         break;
       }
       }
@@ -1900,15 +1895,13 @@ bool AsmParser::expandMacro(raw_svector_ostream &OS, StringRef Body,
           }
         } else {
           bool VarargParameter = HasVararg && Index == (NParameters - 1);
-          for (MCAsmMacroArgument::const_iterator it = A[Index].begin(),
-                                                  ie = A[Index].end();
-               it != ie; ++it)
+          for (const AsmToken &Token : A[Index])
             // We expect no quotes around the string's contents when
             // parsing for varargs.
-            if (it->getKind() != AsmToken::String || VarargParameter)
-              OS << it->getString();
+            if (Token.getKind() != AsmToken::String || VarargParameter)
+              OS << Token.getString();
             else
-              OS << it->getStringContents();
+              OS << Token.getStringContents();
 
           Pos += 1 + Argument.size();
         }
@@ -4412,10 +4405,10 @@ bool AsmParser::parseDirectiveIrp(SMLoc DirectiveLoc) {
   SmallString<256> Buf;
   raw_svector_ostream OS(Buf);
 
-  for (MCAsmMacroArguments::iterator i = A.begin(), e = A.end(); i != e; ++i) {
+  for (const MCAsmMacroArgument &Arg : A) {
     // Note that the AtPseudoVariable is enabled for instantiations of .irp.
     // This is undocumented, but GAS seems to support it.
-    if (expandMacro(OS, M->Body, Parameter, *i, true, getTok().getLoc()))
+    if (expandMacro(OS, M->Body, Parameter, Arg, true, getTok().getLoc()))
       return true;
   }
 
@@ -4498,7 +4491,7 @@ bool AsmParser::parseDirectiveMSEmit(SMLoc IDLoc, ParseStatementInfo &Info,
   if (!isUIntN(8, IntValue) && !isIntN(8, IntValue))
     return Error(ExprLoc, "literal value out of range for directive");
 
-  Info.AsmRewrites->push_back(AsmRewrite(AOK_Emit, IDLoc, Len));
+  Info.AsmRewrites->emplace_back(AOK_Emit, IDLoc, Len);
   return false;
 }
 
@@ -4514,8 +4507,7 @@ bool AsmParser::parseDirectiveMSAlign(SMLoc IDLoc, ParseStatementInfo &Info) {
   if (!isPowerOf2_64(IntValue))
     return Error(ExprLoc, "literal value not a power of two greater then zero");
 
-  Info.AsmRewrites->push_back(
-      AsmRewrite(AOK_Align, IDLoc, 5, Log2_64(IntValue)));
+  Info.AsmRewrites->emplace_back(AOK_Align, IDLoc, 5, Log2_64(IntValue));
   return false;
 }
 
@@ -4611,12 +4603,12 @@ bool AsmParser::parseMSInlineAsm(
         OutputDecls.push_back(OpDecl);
         OutputDeclsAddressOf.push_back(Operand.needAddressOf());
         OutputConstraints.push_back(("=" + Operand.getConstraint()).str());
-        AsmStrRewrites.push_back(AsmRewrite(AOK_Output, Start, SymName.size()));
+        AsmStrRewrites.emplace_back(AOK_Output, Start, SymName.size());
       } else {
         InputDecls.push_back(OpDecl);
         InputDeclsAddressOf.push_back(Operand.needAddressOf());
         InputConstraints.push_back(Operand.getConstraint().str());
-        AsmStrRewrites.push_back(AsmRewrite(AOK_Input, Start, SymName.size()));
+        AsmStrRewrites.emplace_back(AOK_Input, Start, SymName.size());
       }
     }
 
