@@ -718,7 +718,6 @@ private:
   bool ParseDirectiveWord(unsigned Size, SMLoc L);
   bool ParseDirectiveCode(StringRef IDVal, SMLoc L);
 
-  bool validateInstruction(MCInst &Inst, const OperandVector &Ops);
   bool processInstruction(MCInst &Inst, const OperandVector &Ops);
 
   /// Wrapper around MCStreamer::EmitInstruction(). Possibly adds
@@ -2362,88 +2361,10 @@ bool X86AsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
   return false;
 }
 
-static bool convertToSExti8(MCInst &Inst, unsigned Opcode, unsigned Reg,
-                            bool isCmp) {
-  MCInst TmpInst;
-  TmpInst.setOpcode(Opcode);
-  if (!isCmp)
-    TmpInst.addOperand(MCOperand::createReg(Reg));
-  TmpInst.addOperand(MCOperand::createReg(Reg));
-  TmpInst.addOperand(Inst.getOperand(0));
-  Inst = TmpInst;
-  return true;
-}
-
-static bool convert16i16to16ri8(MCInst &Inst, unsigned Opcode,
-                                bool isCmp = false) {
-  if (!Inst.getOperand(0).isImm() ||
-      !isImmSExti16i8Value(Inst.getOperand(0).getImm()))
-    return false;
-
-  return convertToSExti8(Inst, Opcode, X86::AX, isCmp);
-}
-
-static bool convert32i32to32ri8(MCInst &Inst, unsigned Opcode,
-                                bool isCmp = false) {
-  if (!Inst.getOperand(0).isImm() ||
-      !isImmSExti32i8Value(Inst.getOperand(0).getImm()))
-    return false;
-
-  return convertToSExti8(Inst, Opcode, X86::EAX, isCmp);
-}
-
-static bool convert64i32to64ri8(MCInst &Inst, unsigned Opcode,
-                                bool isCmp = false) {
-  if (!Inst.getOperand(0).isImm() ||
-      !isImmSExti64i8Value(Inst.getOperand(0).getImm()))
-    return false;
-
-  return convertToSExti8(Inst, Opcode, X86::RAX, isCmp);
-}
-
-bool X86AsmParser::validateInstruction(MCInst &Inst, const OperandVector &Ops) {
-  switch (Inst.getOpcode()) {
-  default: return true;
-  case X86::INT:
-    X86Operand &Op = static_cast<X86Operand &>(*Ops[1]);
-    assert(Op.isImm() && "expected immediate");
-    int64_t Res;
-    if (!Op.getImm()->evaluateAsAbsolute(Res) || Res > 255) {
-      Error(Op.getStartLoc(), "interrupt vector must be in range [0-255]");
-      return false;
-    }
-    return true;
-  }
-  llvm_unreachable("handle the instruction appropriately");
-}
-
 bool X86AsmParser::processInstruction(MCInst &Inst, const OperandVector &Ops) {
   switch (Inst.getOpcode()) {
   default: return false;
-  case X86::AND16i16: return convert16i16to16ri8(Inst, X86::AND16ri8);
-  case X86::AND32i32: return convert32i32to32ri8(Inst, X86::AND32ri8);
-  case X86::AND64i32: return convert64i32to64ri8(Inst, X86::AND64ri8);
-  case X86::XOR16i16: return convert16i16to16ri8(Inst, X86::XOR16ri8);
-  case X86::XOR32i32: return convert32i32to32ri8(Inst, X86::XOR32ri8);
-  case X86::XOR64i32: return convert64i32to64ri8(Inst, X86::XOR64ri8);
-  case X86::OR16i16:  return convert16i16to16ri8(Inst, X86::OR16ri8);
-  case X86::OR32i32:  return convert32i32to32ri8(Inst, X86::OR32ri8);
-  case X86::OR64i32:  return convert64i32to64ri8(Inst, X86::OR64ri8);
-  case X86::CMP16i16: return convert16i16to16ri8(Inst, X86::CMP16ri8, true);
-  case X86::CMP32i32: return convert32i32to32ri8(Inst, X86::CMP32ri8, true);
-  case X86::CMP64i32: return convert64i32to64ri8(Inst, X86::CMP64ri8, true);
-  case X86::ADD16i16: return convert16i16to16ri8(Inst, X86::ADD16ri8);
-  case X86::ADD32i32: return convert32i32to32ri8(Inst, X86::ADD32ri8);
-  case X86::ADD64i32: return convert64i32to64ri8(Inst, X86::ADD64ri8);
-  case X86::SUB16i16: return convert16i16to16ri8(Inst, X86::SUB16ri8);
-  case X86::SUB32i32: return convert32i32to32ri8(Inst, X86::SUB32ri8);
-  case X86::SUB64i32: return convert64i32to64ri8(Inst, X86::SUB64ri8);
-  case X86::ADC16i16: return convert16i16to16ri8(Inst, X86::ADC16ri8);
-  case X86::ADC32i32: return convert32i32to32ri8(Inst, X86::ADC32ri8);
-  case X86::ADC64i32: return convert64i32to64ri8(Inst, X86::ADC64ri8);
-  case X86::SBB16i16: return convert16i16to16ri8(Inst, X86::SBB16ri8);
-  case X86::SBB32i32: return convert32i32to32ri8(Inst, X86::SBB32ri8);
-  case X86::SBB64i32: return convert64i32to64ri8(Inst, X86::SBB64ri8);
+  case X86::VMOVZPQILo2PQIrr:
   case X86::VMOVAPDrr:
   case X86::VMOVAPDYrr:
   case X86::VMOVAPSrr:
@@ -2463,18 +2384,19 @@ bool X86AsmParser::processInstruction(MCInst &Inst, const OperandVector &Ops) {
     unsigned NewOpc;
     switch (Inst.getOpcode()) {
     default: llvm_unreachable("Invalid opcode");
-    case X86::VMOVAPDrr:  NewOpc = X86::VMOVAPDrr_REV;  break;
-    case X86::VMOVAPDYrr: NewOpc = X86::VMOVAPDYrr_REV; break;
-    case X86::VMOVAPSrr:  NewOpc = X86::VMOVAPSrr_REV;  break;
-    case X86::VMOVAPSYrr: NewOpc = X86::VMOVAPSYrr_REV; break;
-    case X86::VMOVDQArr:  NewOpc = X86::VMOVDQArr_REV;  break;
-    case X86::VMOVDQAYrr: NewOpc = X86::VMOVDQAYrr_REV; break;
-    case X86::VMOVDQUrr:  NewOpc = X86::VMOVDQUrr_REV;  break;
-    case X86::VMOVDQUYrr: NewOpc = X86::VMOVDQUYrr_REV; break;
-    case X86::VMOVUPDrr:  NewOpc = X86::VMOVUPDrr_REV;  break;
-    case X86::VMOVUPDYrr: NewOpc = X86::VMOVUPDYrr_REV; break;
-    case X86::VMOVUPSrr:  NewOpc = X86::VMOVUPSrr_REV;  break;
-    case X86::VMOVUPSYrr: NewOpc = X86::VMOVUPSYrr_REV; break;
+    case X86::VMOVZPQILo2PQIrr: NewOpc = X86::VMOVPQI2QIrr;   break;
+    case X86::VMOVAPDrr:        NewOpc = X86::VMOVAPDrr_REV;  break;
+    case X86::VMOVAPDYrr:       NewOpc = X86::VMOVAPDYrr_REV; break;
+    case X86::VMOVAPSrr:        NewOpc = X86::VMOVAPSrr_REV;  break;
+    case X86::VMOVAPSYrr:       NewOpc = X86::VMOVAPSYrr_REV; break;
+    case X86::VMOVDQArr:        NewOpc = X86::VMOVDQArr_REV;  break;
+    case X86::VMOVDQAYrr:       NewOpc = X86::VMOVDQAYrr_REV; break;
+    case X86::VMOVDQUrr:        NewOpc = X86::VMOVDQUrr_REV;  break;
+    case X86::VMOVDQUYrr:       NewOpc = X86::VMOVDQUYrr_REV; break;
+    case X86::VMOVUPDrr:        NewOpc = X86::VMOVUPDrr_REV;  break;
+    case X86::VMOVUPDYrr:       NewOpc = X86::VMOVUPDYrr_REV; break;
+    case X86::VMOVUPSrr:        NewOpc = X86::VMOVUPSrr_REV;  break;
+    case X86::VMOVUPSYrr:       NewOpc = X86::VMOVUPSYrr_REV; break;
     }
     Inst.setOpcode(NewOpc);
     return true;
@@ -2579,9 +2501,6 @@ bool X86AsmParser::MatchAndEmitATTInstruction(SMLoc IDLoc, unsigned &Opcode,
                                isParsingIntelSyntax())) {
   default: llvm_unreachable("Unexpected match result!");
   case Match_Success:
-    if (!validateInstruction(Inst, Operands))
-      return true;
-
     // Some instructions need post-processing to, for example, tweak which
     // encoding is selected. Loop on it while changes happen so the
     // individual transformations can chain off each other.
@@ -2825,9 +2744,6 @@ bool X86AsmParser::MatchAndEmitIntelInstruction(SMLoc IDLoc, unsigned &Opcode,
   unsigned NumSuccessfulMatches =
       std::count(std::begin(Match), std::end(Match), Match_Success);
   if (NumSuccessfulMatches == 1) {
-    if (!validateInstruction(Inst, Operands))
-      return true;
-
     // Some instructions need post-processing to, for example, tweak which
     // encoding is selected. Loop on it while changes happen so the individual
     // transformations can chain off each other.

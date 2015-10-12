@@ -867,9 +867,9 @@ def X86_COND_E_OR_NE : ImmLeaf<i8, [{
 }]>;
 
 
-def i16immSExt8  : ImmLeaf<i16, [{ return Imm == (int8_t)Imm; }]>;
-def i32immSExt8  : ImmLeaf<i32, [{ return Imm == (int8_t)Imm; }]>;
-def i64immSExt8  : ImmLeaf<i64, [{ return Imm == (int8_t)Imm; }]>;
+def i16immSExt8  : ImmLeaf<i16, [{ return isInt<8>(Imm); }]>;
+def i32immSExt8  : ImmLeaf<i32, [{ return isInt<8>(Imm); }]>;
+def i64immSExt8  : ImmLeaf<i64, [{ return isInt<8>(Imm); }]>;
 
 // If we have multiple users of an immediate, it's much smaller to reuse
 // the register, rather than encode the immediate in every instruction.
@@ -906,15 +906,15 @@ def i32immSExt8_su : PatLeaf<(i32immSExt8), [{
 }]>;
 
 
-def i64immSExt32 : ImmLeaf<i64, [{ return Imm == (int32_t)Imm; }]>;
+def i64immSExt32 : ImmLeaf<i64, [{ return isInt<32>(Imm); }]>;
 
 
 // i64immZExt32 predicate - True if the 64-bit immediate fits in a 32-bit
 // unsigned field.
-def i64immZExt32 : ImmLeaf<i64, [{ return (uint64_t)Imm == (uint32_t)Imm; }]>;
+def i64immZExt32 : ImmLeaf<i64, [{ return isUInt<32>(Imm); }]>;
 
 def i64immZExt32SExt8 : ImmLeaf<i64, [{
-  return (uint64_t)Imm == (uint32_t)Imm && (int32_t)Imm == (int8_t)Imm;
+  return isUInt<32>(Imm) && isInt<8>(static_cast<int32_t>(Imm));
 }]>;
 
 // Helper fragments for loads.
@@ -2850,9 +2850,9 @@ def : InstAlias<"imul{q} {$imm, $r|$r, $imm}", (IMUL64rri8 GR64:$r, GR64:$r, i64
 def : InstAlias<"inb\t{%dx|dx}", (IN8rr), 0>;
 def : InstAlias<"inw\t{%dx|dx}", (IN16rr), 0>;
 def : InstAlias<"inl\t{%dx|dx}", (IN32rr), 0>;
-def : InstAlias<"inb\t$port", (IN8ri i8imm:$port), 0>;
-def : InstAlias<"inw\t$port", (IN16ri i8imm:$port), 0>;
-def : InstAlias<"inl\t$port", (IN32ri i8imm:$port), 0>;
+def : InstAlias<"inb\t$port", (IN8ri u8imm:$port), 0>;
+def : InstAlias<"inw\t$port", (IN16ri u8imm:$port), 0>;
+def : InstAlias<"inl\t$port", (IN32ri u8imm:$port), 0>;
 
 
 // jmp and call aliases for lcall and ljmp.  jmp $42,$5 -> ljmp
@@ -2902,9 +2902,9 @@ def : InstAlias<"movzx {$src, $dst|$dst, $src}", (MOVZX64rr16_Q GR64:$dst, GR16:
 def : InstAlias<"outb\t{%dx|dx}", (OUT8rr), 0>;
 def : InstAlias<"outw\t{%dx|dx}", (OUT16rr), 0>;
 def : InstAlias<"outl\t{%dx|dx}", (OUT32rr), 0>;
-def : InstAlias<"outb\t$port", (OUT8ir i8imm:$port), 0>;
-def : InstAlias<"outw\t$port", (OUT16ir i8imm:$port), 0>;
-def : InstAlias<"outl\t$port", (OUT32ir i8imm:$port), 0>;
+def : InstAlias<"outb\t$port", (OUT8ir u8imm:$port), 0>;
+def : InstAlias<"outw\t$port", (OUT16ir u8imm:$port), 0>;
+def : InstAlias<"outl\t$port", (OUT32ir u8imm:$port), 0>;
 
 // 'sldt <mem>' can be encoded with either sldtw or sldtq with the same
 // effect (both store to a 16-bit mem).  Force to sldtw to avoid ambiguity
@@ -2981,3 +2981,34 @@ def : InstAlias<"xchg{l}\t{%eax, $src|$src, eax}",
 def : InstAlias<"xchg{l}\t{%eax, $src|$src, eax}",
                 (XCHG32ar64 GR32_NOAX:$src), 0>, Requires<[In64BitMode]>;
 def : InstAlias<"xchg{q}\t{%rax, $src|$src, rax}", (XCHG64ar GR64:$src), 0>;
+
+// These aliases exist to get the parser to prioritize matching 8-bit
+// immediate encodings over matching the implicit ax/eax/rax encodings. By
+// explicitly mentioning the A register here, these entries will be ordered
+// first due to the more explicit immediate type.
+def : InstAlias<"adc{w}\t{$imm, %ax|ax, $imm}", (ADC16ri8 AX, i16i8imm:$imm), 0>;
+def : InstAlias<"add{w}\t{$imm, %ax|ax, $imm}", (ADD16ri8 AX, i16i8imm:$imm), 0>;
+def : InstAlias<"and{w}\t{$imm, %ax|ax, $imm}", (AND16ri8 AX, i16i8imm:$imm), 0>;
+def : InstAlias<"cmp{w}\t{$imm, %ax|ax, $imm}", (CMP16ri8 AX, i16i8imm:$imm), 0>;
+def : InstAlias<"or{w}\t{$imm, %ax|ax, $imm}",  (OR16ri8 AX,  i16i8imm:$imm), 0>;
+def : InstAlias<"sbb{w}\t{$imm, %ax|ax, $imm}", (SBB16ri8 AX, i16i8imm:$imm), 0>;
+def : InstAlias<"sub{w}\t{$imm, %ax|ax, $imm}", (SUB16ri8 AX, i16i8imm:$imm), 0>;
+def : InstAlias<"xor{w}\t{$imm, %ax|ax, $imm}", (XOR16ri8 AX, i16i8imm:$imm), 0>;
+
+def : InstAlias<"adc{l}\t{$imm, %eax|eax, $imm}", (ADC32ri8 EAX, i32i8imm:$imm), 0>;
+def : InstAlias<"add{l}\t{$imm, %eax|eax, $imm}", (ADD32ri8 EAX, i32i8imm:$imm), 0>;
+def : InstAlias<"and{l}\t{$imm, %eax|eax, $imm}", (AND32ri8 EAX, i32i8imm:$imm), 0>;
+def : InstAlias<"cmp{l}\t{$imm, %eax|eax, $imm}", (CMP32ri8 EAX, i32i8imm:$imm), 0>;
+def : InstAlias<"or{l}\t{$imm, %eax|eax, $imm}",  (OR32ri8 EAX,  i32i8imm:$imm), 0>;
+def : InstAlias<"sbb{l}\t{$imm, %eax|eax, $imm}", (SBB32ri8 EAX, i32i8imm:$imm), 0>;
+def : InstAlias<"sub{l}\t{$imm, %eax|eax, $imm}", (SUB32ri8 EAX, i32i8imm:$imm), 0>;
+def : InstAlias<"xor{l}\t{$imm, %eax|eax, $imm}", (XOR32ri8 EAX, i32i8imm:$imm), 0>;
+
+def : InstAlias<"adc{q}\t{$imm, %rax|rax, $imm}", (ADC64ri8 RAX, i64i8imm:$imm), 0>;
+def : InstAlias<"add{q}\t{$imm, %rax|rax, $imm}", (ADD64ri8 RAX, i64i8imm:$imm), 0>;
+def : InstAlias<"and{q}\t{$imm, %rax|rax, $imm}", (AND64ri8 RAX, i64i8imm:$imm), 0>;
+def : InstAlias<"cmp{q}\t{$imm, %rax|rax, $imm}", (CMP64ri8 RAX, i64i8imm:$imm), 0>;
+def : InstAlias<"or{q}\t{$imm, %rax|rax, $imm}",  (OR64ri8 RAX,  i64i8imm:$imm), 0>;
+def : InstAlias<"sbb{q}\t{$imm, %rax|rax, $imm}", (SBB64ri8 RAX, i64i8imm:$imm), 0>;
+def : InstAlias<"sub{q}\t{$imm, %rax|rax, $imm}", (SUB64ri8 RAX, i64i8imm:$imm), 0>;
+def : InstAlias<"xor{q}\t{$imm, %rax|rax, $imm}", (XOR64ri8 RAX, i64i8imm:$imm), 0>;
