@@ -7509,21 +7509,24 @@ bool ScalarEvolution::isImpliedCond(ICmpInst::Predicate Pred, const SCEV *LHS,
   return false;
 }
 
-// Return true if More == (Less + C), where C is a constant.
-static bool IsConstDiff(ScalarEvolution &SE, const SCEV *Less, const SCEV *More,
-                        APInt &C) {
+bool ScalarEvolution::splitBinaryAdd(const SCEV *Expr,
+                                     const SCEV *&L, const SCEV *&R,
+                                     SCEV::NoWrapFlags &Flags) {
+  const auto *AE = dyn_cast<SCEVAddExpr>(Expr);
+  if (!AE || AE->getNumOperands() != 2)
+    return false;
+
+  L = AE->getOperand(0);
+  R = AE->getOperand(1);
+  Flags = AE->getNoWrapFlags();
+  return true;
+}
+
+bool ScalarEvolution::computeConstantDifference(const SCEV *Less,
+                                                const SCEV *More,
+                                                APInt &C) {
   // We avoid subtracting expressions here because this function is usually
   // fairly deep in the call stack (i.e. is called many times).
-
-  auto SplitBinaryAdd = [](const SCEV *Expr, const SCEV *&L, const SCEV *&R) {
-    const auto *AE = dyn_cast<SCEVAddExpr>(Expr);
-    if (!AE || AE->getNumOperands() != 2)
-      return false;
-
-    L = AE->getOperand(0);
-    R = AE->getOperand(1);
-    return true;
-  };
 
   if (isa<SCEVAddRecExpr>(Less) && isa<SCEVAddRecExpr>(More)) {
     const auto *LAR = cast<SCEVAddRecExpr>(Less);
@@ -7537,7 +7540,7 @@ static bool IsConstDiff(ScalarEvolution &SE, const SCEV *Less, const SCEV *More,
     if (!LAR->isAffine() || !MAR->isAffine())
       return false;
 
-    if (LAR->getStepRecurrence(SE) != MAR->getStepRecurrence(SE))
+    if (LAR->getStepRecurrence(*this) != MAR->getStepRecurrence(*this))
       return false;
 
     Less = LAR->getStart();
@@ -7554,14 +7557,15 @@ static bool IsConstDiff(ScalarEvolution &SE, const SCEV *Less, const SCEV *More,
   }
 
   const SCEV *L, *R;
-  if (SplitBinaryAdd(Less, L, R))
+  SCEV::NoWrapFlags Flags;
+  if (splitBinaryAdd(Less, L, R, Flags))
     if (const auto *LC = dyn_cast<SCEVConstant>(L))
       if (R == More) {
         C = -(LC->getValue()->getValue());
         return true;
       }
 
-  if (SplitBinaryAdd(More, L, R))
+  if (splitBinaryAdd(More, L, R, Flags))
     if (const auto *LC = dyn_cast<SCEVConstant>(L))
       if (R == Less) {
         C = LC->getValue()->getValue();
@@ -7626,8 +7630,8 @@ bool ScalarEvolution::isImpliedCondOperandsViaNoOverflow(
   // C)".
 
   APInt LDiff, RDiff;
-  if (!IsConstDiff(*this, FoundLHS, LHS, LDiff) ||
-      !IsConstDiff(*this, FoundRHS, RHS, RDiff) ||
+  if (!computeConstantDifference(FoundLHS, LHS, LDiff) ||
+      !computeConstantDifference(FoundRHS, RHS, RDiff) ||
       LDiff != RDiff)
     return false;
 
@@ -8307,9 +8311,84 @@ struct SCEVCollectTerms {
   }
   bool isDone() const { return false; }
 };
+
+// Check if a SCEV contains an AddRecExpr.
+struct SCEVHasAddRec {
+  bool &ContainsAddRec;
+
+  SCEVHasAddRec(bool &ContainsAddRec) : ContainsAddRec(ContainsAddRec) {
+   ContainsAddRec = false;
+  }
+
+  bool follow(const SCEV *S) {
+    if (isa<SCEVAddRecExpr>(S)) {
+      ContainsAddRec = true;
+
+      // Stop recursion: once we collected a term, do not walk its operands.
+      return false;
+    }
+
+    // Keep looking.
+    return true;
+  }
+  bool isDone() const { return false; }
+};
+
+// Find factors that are multiplied with an expression that (possibly as a
+// subexpression) contains an AddRecExpr. In the expression:
+//
+//  8 * (100 +  %p * %q * (%a + {0, +, 1}_loop))
+//
+// "%p * %q" are factors multiplied by the expression "(%a + {0, +, 1}_loop)"
+// that contains the AddRec {0, +, 1}_loop. %p * %q are likely to be array size
+// parameters as they form a product with an induction variable.
+//
+// This collector expects all array size parameters to be in the same MulExpr.
+// It might be necessary to later add support for collecting parameters that are
+// spread over different nested MulExpr.
+struct SCEVCollectAddRecMultiplies {
+  SmallVectorImpl<const SCEV *> &Terms;
+  ScalarEvolution &SE;
+
+  SCEVCollectAddRecMultiplies(SmallVectorImpl<const SCEV *> &T, ScalarEvolution &SE)
+      : Terms(T), SE(SE) {}
+
+  bool follow(const SCEV *S) {
+    if (auto *Mul = dyn_cast<SCEVMulExpr>(S)) {
+      bool HasAddRec = false;
+      SmallVector<const SCEV *, 0> Operands;
+      for (auto Op : Mul->operands()) {
+        if (isa<SCEVUnknown>(Op)) {
+          Operands.push_back(Op);
+        } else {
+          bool ContainsAddRec;
+          SCEVHasAddRec ContiansAddRec(ContainsAddRec);
+          visitAll(Op, ContiansAddRec);
+          HasAddRec |= ContainsAddRec;
+        }
+      }
+      if (Operands.size() == 0)
+        return true;
+
+      if (!HasAddRec)
+        return false;
+
+      Terms.push_back(SE.getMulExpr(Operands));
+      // Stop recursion: once we collected a term, do not walk its operands.
+      return false;
+    }
+
+    // Keep looking.
+    return true;
+  }
+  bool isDone() const { return false; }
+};
 }
 
-/// Find parametric terms in this SCEVAddRecExpr.
+/// Find parametric terms in this SCEVAddRecExpr. We first for parameters in
+/// two places:
+///   1) The strides of AddRec expressions.
+///   2) Unknowns that are multiplied with AddRec expressions.
 void ScalarEvolution::collectParametricTerms(const SCEV *Expr,
     SmallVectorImpl<const SCEV *> &Terms) {
   SmallVector<const SCEV *, 4> Strides;
@@ -8332,6 +8411,9 @@ void ScalarEvolution::collectParametricTerms(const SCEV *Expr,
       for (const SCEV *T : Terms)
         dbgs() << *T << "\n";
     });
+
+  SCEVCollectAddRecMultiplies MulCollector(Terms, *this);
+  visitAll(Expr, MulCollector);
 }
 
 static bool findArrayDimensionsRec(ScalarEvolution &SE,
@@ -8492,11 +8574,13 @@ void ScalarEvolution::findArrayDimensions(SmallVectorImpl<const SCEV *> &Terms,
 
   ScalarEvolution &SE = *const_cast<ScalarEvolution *>(this);
 
-  // Divide all terms by the element size.
+  // Try to divide all terms by the element size. If term is not divisible by
+  // element size, proceed with the original term.
   for (const SCEV *&Term : Terms) {
     const SCEV *Q, *R;
     SCEVDivision::divide(SE, Term, ElementSize, &Q, &R);
-    Term = Q;
+    if (!Q->isZero())
+      Term = Q;
   }
 
   SmallVector<const SCEV *, 4> NewTerms;
