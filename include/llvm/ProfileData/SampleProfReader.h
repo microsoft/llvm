@@ -154,6 +154,9 @@ protected:
   /// \returns the read value.
   ErrorOr<StringRef> readString();
 
+  /// Read a string indirectly via the name table.
+  ErrorOr<StringRef> readStringFromTable();
+
   /// \brief Return true if we've reached the end of file.
   bool at_eof() const { return Data >= End; }
 
@@ -165,31 +168,9 @@ protected:
 
   /// \brief Points to the end of the buffer.
   const uint8_t *End;
-};
 
-// Represents the source position in GCC sample profiles.
-struct SourceInfo {
-  SourceInfo()
-      : FuncName(), DirName(), FileName(), StartLine(0), Line(0),
-        Discriminator(0) {}
-
-  SourceInfo(StringRef FuncName, StringRef DirName, StringRef FileName,
-             uint32_t StartLine, uint32_t Line, uint32_t Discriminator)
-      : FuncName(FuncName), DirName(DirName), FileName(FileName),
-        StartLine(StartLine), Line(Line), Discriminator(Discriminator) {}
-
-  bool operator<(const SourceInfo &p) const;
-
-  uint32_t Offset() const { return ((Line - StartLine) << 16) | Discriminator; }
-
-  bool Malformed() const { return Line < StartLine; }
-
-  StringRef FuncName;
-  StringRef DirName;
-  StringRef FileName;
-  uint32_t StartLine;
-  uint32_t Line;
-  uint32_t Discriminator;
+  /// Function name table.
+  std::vector<StringRef> NameTable;
 };
 
 typedef SmallVector<FunctionSamples *, 10> InlineCallStack;
