@@ -144,7 +144,7 @@ bool InstrProfiling::runOnModule(Module &M) {
 void InstrProfiling::lowerIncrement(InstrProfIncrementInst *Inc) {
   GlobalVariable *Counters = getOrCreateRegionCounters(Inc);
 
-  IRBuilder<> Builder(Inc->getParent(), *Inc);
+  IRBuilder<> Builder(Inc);
   uint64_t Index = Inc->getIndex()->getZExtValue();
   Value *Addr = Builder.CreateConstInBoundsGEP2_64(Counters, 0, Index);
   Value *Count = Builder.CreateLoad(Addr, "pgocount");
@@ -256,6 +256,9 @@ void InstrProfiling::emitRegistration() {
   // Don't do this for Darwin.  compiler-rt uses linker magic.
   if (Triple(M->getTargetTriple()).isOSDarwin())
     return;
+
+  // Use linker script magic to get data/cnts/name start/end.
+  if (Triple(M->getTargetTriple()).isOSLinux()) return;
 
   // Construct the function.
   auto *VoidTy = Type::getVoidTy(M->getContext());
