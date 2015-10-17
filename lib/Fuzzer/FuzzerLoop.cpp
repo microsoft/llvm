@@ -13,8 +13,12 @@
 #include <sanitizer/coverage_interface.h>
 #include <algorithm>
 
+extern "C" {
+__attribute__((weak)) void __sanitizer_print_stack_trace();
+}
+
 namespace fuzzer {
-static const size_t kMaxUnitSizeToPrint = 4096;
+static const size_t kMaxUnitSizeToPrint = 256;
 
 // Only one Fuzzer per process.
 static Fuzzer *F;
@@ -76,6 +80,11 @@ void Fuzzer::AlarmCallback() {
       PrintUnitInASCIIOrTokens(CurrentUnit, "\n");
     }
     WriteUnitToFileWithPrefix(CurrentUnit, "timeout-");
+    Printf("==%d== ERROR: libFuzzer: timeout after %d seconds\n", GetPid(),
+           Seconds);
+    if (__sanitizer_print_stack_trace)
+      __sanitizer_print_stack_trace();
+    Printf("SUMMARY: libFuzzer: timeout\n");
     exit(1);
   }
 }
@@ -128,11 +137,13 @@ void Fuzzer::ShuffleAndMinimize() {
     Printf("PreferSmall: %d\n", PreferSmall);
   PrintStats("READ  ", 0);
   std::vector<Unit> NewCorpus;
-  std::random_shuffle(Corpus.begin(), Corpus.end(), USF.GetRand());
-  if (PreferSmall)
-    std::stable_sort(
-        Corpus.begin(), Corpus.end(),
-        [](const Unit &A, const Unit &B) { return A.size() < B.size(); });
+  if (Options.ShuffleAtStartUp) {
+    std::random_shuffle(Corpus.begin(), Corpus.end(), USF.GetRand());
+    if (PreferSmall)
+      std::stable_sort(
+          Corpus.begin(), Corpus.end(),
+          [](const Unit &A, const Unit &B) { return A.size() < B.size(); });
+  }
   Unit &U = CurrentUnit;
   for (const auto &C : Corpus) {
     for (size_t First = 0; First < 1; First++) {
@@ -237,6 +248,8 @@ void Fuzzer::WriteToOutputCorpus(const Unit &U) {
 }
 
 void Fuzzer::WriteUnitToFileWithPrefix(const Unit &U, const char *Prefix) {
+  if (!Options.SaveArtifacts)
+    return;
   std::string Path = Options.ArtifactPrefix + Prefix + Hash(U);
   WriteToFile(U, Path);
   Printf("artifact_prefix='%s'; Test unit written to %s\n",

@@ -105,12 +105,13 @@ protected:
   std::error_code
   writeHeader(const StringMap<FunctionSamples> &ProfileMap) override;
   std::error_code writeNameIdx(StringRef FName);
+  std::error_code writeBody(StringRef FName, const FunctionSamples &S);
 
 private:
   void addName(StringRef FName);
   void addNames(const FunctionSamples &S);
 
-  MapVector<StringRef, unsigned> NameTable;
+  MapVector<StringRef, uint32_t> NameTable;
 };
 
 } // End namespace sampleprof

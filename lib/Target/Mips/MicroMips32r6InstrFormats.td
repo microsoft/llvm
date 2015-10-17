@@ -133,6 +133,48 @@ class POOL32C_ST_EVA_FM_MMR6<bits<6> op, bits<3> funct> : MipsR6Inst {
   let Inst{8-0}  = offset;
 }
 
+class LB32_FM_MMR6 : MipsR6Inst {
+  bits<21> addr;
+  bits<5> rt;
+  bits<5> base = addr{20-16};
+  bits<16> offset = addr{15-0};
+
+  bits<32> Inst;
+
+  let Inst{31-26} = 0b000111;
+  let Inst{25-21} = rt;
+  let Inst{20-16} = base;
+  let Inst{15-0}  = offset;
+}
+
+class LBU32_FM_MMR6 : MipsR6Inst {
+  bits<21> addr;
+  bits<5> rt;
+  bits<5> base = addr{20-16};
+  bits<16> offset = addr{15-0};
+
+  bits<32> Inst;
+
+  let Inst{31-26} = 0b000101;
+  let Inst{25-21} = rt;
+  let Inst{20-16} = base;
+  let Inst{15-0}  = offset;
+}
+
+class POOL32C_LB_LBU_FM_MMR6<bits<3> funct> : MipsR6Inst {
+  bits<21> addr;
+  bits<5> rt;
+
+  bits<32> Inst;
+
+  let Inst{31-26} = 0b011000;
+  let Inst{25-21} = rt;
+  let Inst{20-16} = addr{20-16};
+  let Inst{15-12} = 0b0110;
+  let Inst{11-9} = funct;
+  let Inst{8-0}  = addr{8-0};
+}
+
 class SIGN_EXTEND_FM_MMR6<string instr_asm, bits<10> funct>
     : MMR6Arch<instr_asm> {
   bits<5> rd;
@@ -632,7 +674,7 @@ class POOL16C_NOT16_FM_MMR6 : MicroMipsR6Inst16 {
   let Inst{3-0}   = 0b0000;
 }
 
-class POOL16C_OR16_FM_MMR6 : MicroMipsR6Inst16 {
+class POOL16C_OR16_XOR16_FM_MMR6<bits<4> op> {
   bits<3> rt;
   bits<3> rs;
 
@@ -641,7 +683,30 @@ class POOL16C_OR16_FM_MMR6 : MicroMipsR6Inst16 {
   let Inst{15-10} = 0b010001;
   let Inst{9-7}   = rt;
   let Inst{6-4}   = rs;
-  let Inst{3-0}   = 0b1001;
+  let Inst{3-0}   = op;
+}
+
+class POOL16C_BREAKPOINT_FM_MMR6<bits<6> op> {
+  bits<4> code_;
+  bits<16> Inst;
+
+  let Inst{15-10} = 0b010001;
+  let Inst{9-6}   = code_;
+  let Inst{5-0}   = op;
+}
+
+class POOL16A_SUBU16_FM_MMR6 {
+  bits<3> rs;
+  bits<3> rt;
+  bits<3> rd;
+
+  bits<16> Inst;
+
+  let Inst{15-10} = 0b000001;
+  let Inst{9-7}   = rs;
+  let Inst{6-4}   = rt;
+  let Inst{3-1}   = rd;
+  let Inst{0}     = 0b1;
 }
 
 class POOL32A_WRPGPR_WSBH_FM_MMR6<bits<10> funct> : MipsR6Inst {

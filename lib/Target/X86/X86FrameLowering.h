@@ -107,6 +107,8 @@ public:
                                  MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MI) const override;
 
+  unsigned getWinEHParentFrameOffset(const MachineFunction &MF) const override;
+
   /// Check the instruction before/after the passed instruction. If
   /// it is an ADD/SUB/LEA instruction it is deleted argument and the
   /// stack adjustment is returned as a positive value for ADD/LEA and
@@ -147,15 +149,6 @@ private:
                                          MachineBasicBlock::iterator MBBI,
                                          DebugLoc DL, bool InProlog) const;
 
-  /// convertArgMovsToPushes - This method tries to convert a call sequence
-  /// that uses sub and mov instructions to put the argument onto the stack
-  /// into a series of pushes.
-  /// Returns true if the transformation succeeded, false if not.
-  bool convertArgMovsToPushes(MachineFunction &MF, 
-                              MachineBasicBlock &MBB,
-                              MachineBasicBlock::iterator I, 
-                              uint64_t Amount) const;
-
   uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
 
   /// Wraps up getting a CFI index and building a MachineInstr for it.
@@ -184,6 +177,8 @@ private:
   restoreWin32EHStackPointers(MachineBasicBlock &MBB,
                               MachineBasicBlock::iterator MBBI, DebugLoc DL,
                               bool RestoreSP = false) const;
+
+  unsigned getWinEHFuncletFrameSize(const MachineFunction &MF) const;
 };
 
 } // End llvm namespace

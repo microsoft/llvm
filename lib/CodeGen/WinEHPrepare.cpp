@@ -17,36 +17,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/Passes.h"
-#include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallSet.h"
-#include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/Triple.h"
-#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/LibCallSemantics.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
-#include "llvm/IR/Dominators.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/PatternMatch.h"
-#include "llvm/MC/MCSymbol.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
-#include <memory>
 
 using namespace llvm;
-using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "winehprepare"
 
@@ -66,11 +48,7 @@ namespace {
 class WinEHPrepare : public FunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid.
-  WinEHPrepare(const TargetMachine *TM = nullptr)
-      : FunctionPass(ID) {
-    if (TM)
-      TheTriple = TM->getTargetTriple();
-  }
+  WinEHPrepare(const TargetMachine *TM = nullptr) : FunctionPass(ID) {}
 
   bool runOnFunction(Function &Fn) override;
 
@@ -104,8 +82,6 @@ private:
   void removeImplausibleTerminators(Function &F);
   void cleanupPreparedFunclets(Function &F);
   void verifyPreparedFunclets(Function &F);
-
-  Triple TheTriple;
 
   // All fields are reset by runOnFunction.
   EHPersonality Personality = EHPersonality::Unknown;
@@ -163,10 +139,7 @@ bool WinEHPrepare::runOnFunction(Function &Fn) {
 
 bool WinEHPrepare::doFinalization(Module &M) { return false; }
 
-void WinEHPrepare::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<DominatorTreeWrapperPass>();
-  AU.addRequired<TargetLibraryInfoWrapperPass>();
-}
+void WinEHPrepare::getAnalysisUsage(AnalysisUsage &AU) const {}
 
 static int addUnwindMapEntry(WinEHFuncInfo &FuncInfo, int ToState,
                              const BasicBlock *BB) {
@@ -306,6 +279,7 @@ static void calculateExplicitCXXStateNumbers(WinEHFuncInfo &FuncInfo,
     BasicBlock *CleanupBlock = CEPI->getCleanupPad()->getParent();
     calculateExplicitCXXStateNumbers(FuncInfo, *CleanupBlock, ParentState);
     // Anything unwinding through CleanupEndPadInst is in ParentState.
+    FuncInfo.EHPadStateMap[FirstNonPHI] = ParentState;
     for (const BasicBlock *PredBlock : predecessors(&BB))
       if ((PredBlock = getEHPadFromPredecessor(PredBlock)))
         calculateExplicitCXXStateNumbers(FuncInfo, *PredBlock, ParentState);
@@ -614,12 +588,20 @@ colorFunclets(Function &F, SmallVectorImpl<BasicBlock *> &EntryBlocks,
         !isa<CleanupEndPadInst>(VisitingHead)) {
       // Mark this as a funclet head as a member of itself.
       FuncletBlocks[Visiting].insert(Visiting);
-      // Queue exits with the parent color.
+      // Queue exits (i.e. successors of rets/endpads) with the parent color.
+      // Skip any exits that are catchendpads, since the parent color must then
+      // represent one of the catches chained to that catchendpad, but the
+      // catchendpad should get the color of the common parent of all its
+      // chained catches (i.e. the grandparent color of the current pad).
+      // We don't need to worry abou catchendpads going unvisited, since the
+      // catches chained to them must have unwind edges to them by which we will
+      // visit them.
       for (User *U : VisitingHead->users()) {
         if (auto *Exit = dyn_cast<TerminatorInst>(U)) {
           for (BasicBlock *Succ : successors(Exit->getParent()))
-            if (BlockColors[Succ].insert(Color).second)
-              Worklist.push_back({Succ, Color});
+            if (!isa<CatchEndPadInst>(*Succ->getFirstNonPHI()))
+              if (BlockColors[Succ].insert(Color).second)
+                Worklist.push_back({Succ, Color});
         }
       }
       // Handle CatchPad specially since its successors need different colors.
@@ -721,8 +703,6 @@ void llvm::calculateCatchReturnSuccessorColors(const Function *Fn,
       std::set<BasicBlock *> &SuccessorColors = BlockColors[CatchRetSuccessor];
       assert(SuccessorColors.size() == 1 && "Expected BB to be monochrome!");
       BasicBlock *Color = *SuccessorColors.begin();
-      if (auto *CPI = dyn_cast<CatchPadInst>(Color->getFirstNonPHI()))
-        Color = CPI->getNormalDest();
       // Record the catchret successor's funclet membership.
       FuncInfo.CatchRetSuccessorColorMap[CatchReturn] = Color;
     }

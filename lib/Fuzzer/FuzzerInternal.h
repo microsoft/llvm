@@ -56,6 +56,7 @@ bool ToASCII(Unit &U);
 bool IsASCII(const Unit &U);
 
 int NumberOfCpuCores();
+int GetPid();
 
 // Dictionary.
 
@@ -81,6 +82,7 @@ class Fuzzer {
     bool UseTraces = false;
     bool UseFullCoverageSet  = false;
     bool Reload = true;
+    bool ShuffleAtStartUp = true;
     int PreferSmallDuringInitialShuffle = -1;
     size_t MaxNumberOfRuns = ULONG_MAX;
     int SyncTimeout = 600;
@@ -93,6 +95,7 @@ class Fuzzer {
     std::string ArtifactPrefix = "./";
     std::vector<std::string> Tokens;
     std::vector<Unit> Dictionary;
+    bool SaveArtifacts = true;
   };
   Fuzzer(UserSuppliedFuzzer &USF, FuzzingOptions Options);
   void AddToCorpus(const Unit &U) { Corpus.push_back(U); }

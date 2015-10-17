@@ -136,13 +136,16 @@
 //        A NUL-separated list of SIZE strings.
 //
 // FUNCTION BODY (one for each uninlined function body present in the profile)
+//    HEAD_SAMPLES (uint64_t) [only for top-level functions]
+//        Total number of samples collected at the head (prologue) of the
+//        function.
+//        NOTE: This field should only be present for top-level functions
+//              (i.e., not inlined into any caller). Inlined function calls
+//              have no prologue, so they don't need this.
 //    NAME_IDX (uint32_t)
 //        Index into the name table indicating the function name.
-//    SAMPLES (uint32_t)
+//    SAMPLES (uint64_t)
 //        Total number of samples collected in this function.
-//        FIXME(dnovillo) this should be a uint64_t value.
-//    HEAD_SAMPLES (uint32_t)
-//        Total number of samples collected at the head of the function.
 //    NRECS (uint32_t)
 //        Total number of sampling records this function's profile.
 //    BODY RECORDS
