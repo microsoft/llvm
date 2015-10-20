@@ -1434,6 +1434,10 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
           .addReg(ReturnReg)
           .addMBB(RestoreMBB);
     }
+    RestoreMBB->setHasAddressTaken();
+    // This line is needed to set the hasAddressTaken flag on the BasicBlock
+    // object.
+    BlockAddress::get(const_cast<BasicBlock *>(RestoreMBB->getBasicBlock()));
   }
 
   if (MBBI != MBB.end())
