@@ -510,7 +510,20 @@ static bool shouldRewriteFunction(Function &F) {
 
 // TODO: These should become properties of the GCStrategy, possibly with
 // command line overrides.
-static bool enableEntrySafepoints(Function &F) { return !NoEntry; }
+static bool enableEntrySafepoints(Function &F) {
+  // CoreCLR does not need Function-entry safepoints at all functions, 
+  // because of return-address hijacking.
+  // TODO: We need to insert safepoint-polls at tail calls
+  // https://github.com/dotnet/llilc/issues/425 
+  //
+  // Disabling the entry safepoints now, to work around a problem 
+  // in LLILC, where a safepoint is introduced before GC-aggregates
+  // are initialized by a memset call() in the prolog.
+  // https://github.com/dotnet/llilc/issues/892 
+
+  const StringRef CoreCLRName("coreclr");
+  return (CoreCLRName != F.getGC());
+}
 static bool enableBackedgeSafepoints(Function &F) { return !NoBackedge; }
 static bool enableCallSafepoints(Function &F) { return !NoCall; }
 
