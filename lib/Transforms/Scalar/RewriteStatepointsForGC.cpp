@@ -1600,25 +1600,28 @@ makeStatepointExplicitImpl(const CallSite CS, /* to replace */
 
     Token = Invoke;
 
-    // Generate gc relocates in exceptional path
-    BasicBlock *UnwindBlock = ToReplace->getUnwindDest();
-    assert(!isa<PHINode>(UnwindBlock->begin()) &&
-           UnwindBlock->getUniquePredecessor() &&
-           "can't safely insert in this block!");
+    // FIXME: Inserting relocates on WinEH invokes needs to work too.
+    if (Invoke->getUnwindDest()->isLandingPad()) {
+      // Generate gc relocates in exceptional path
+      BasicBlock *UnwindBlock = ToReplace->getUnwindDest();
+      assert(!isa<PHINode>(UnwindBlock->begin()) &&
+             UnwindBlock->getUniquePredecessor() &&
+             "can't safely insert in this block!");
 
-    Builder.SetInsertPoint(&*UnwindBlock->getFirstInsertionPt());
-    Builder.SetCurrentDebugLocation(ToReplace->getDebugLoc());
+      Builder.SetInsertPoint(&*UnwindBlock->getFirstInsertionPt());
+      Builder.SetCurrentDebugLocation(ToReplace->getDebugLoc());
 
-    // Extract second element from landingpad return value. We will attach
-    // exceptional gc relocates to it.
-    Instruction *ExceptionalToken =
-        cast<Instruction>(Builder.CreateExtractValue(
-            UnwindBlock->getLandingPadInst(), 1, "relocate_token"));
-    Result.UnwindToken = ExceptionalToken;
+      // Extract second element from landingpad return value. We will attach
+      // exceptional gc relocates to it.
+      Instruction *ExceptionalToken =
+          cast<Instruction>(Builder.CreateExtractValue(
+              UnwindBlock->getLandingPadInst(), 1, "relocate_token"));
+      Result.UnwindToken = ExceptionalToken;
 
-    const unsigned LiveStartIdx = Statepoint(Token).gcArgsStartIdx();
-    CreateGCRelocates(LiveVariables, LiveStartIdx, BasePtrs, ExceptionalToken,
-                      Builder);
+      const unsigned LiveStartIdx = Statepoint(Token).gcArgsStartIdx();
+      CreateGCRelocates(LiveVariables, LiveStartIdx, BasePtrs, ExceptionalToken,
+                        Builder);
+    }
 
     // Generate gc relocates and returns for normal block
     BasicBlock *NormalDest = ToReplace->getNormalDest();
@@ -1876,7 +1879,9 @@ static void relocationViaAlloca(
 
     // In case if it was invoke statepoint
     // we will insert stores for exceptional path gc relocates.
-    if (isa<InvokeInst>(Statepoint)) {
+    // FIXME: This needs to work for WinEH invokes too.
+    if (isa<InvokeInst>(Statepoint) &&
+        cast<InvokeInst>(Statepoint)->getUnwindDest()->isLandingPad()) {
       insertRelocationStores(Info.UnwindToken->users(), AllocaMap,
                              VisitedLiveValues);
     }
@@ -1917,7 +1922,9 @@ static void relocationViaAlloca(
       // gc.results and gc.relocates, but that's fine.
       if (auto II = dyn_cast<InvokeInst>(Statepoint)) {
         InsertClobbersAt(&*II->getNormalDest()->getFirstInsertionPt());
-        InsertClobbersAt(&*II->getUnwindDest()->getFirstInsertionPt());
+        // FIXME: Need to be able to clobber WinEH invokes too.
+        if (II->getUnwindDest()->isLandingPad())
+          InsertClobbersAt(&*II->getUnwindDest()->getFirstInsertionPt());
       } else {
         InsertClobbersAt(cast<Instruction>(Statepoint)->getNextNode());
       }
@@ -2036,8 +2043,10 @@ static void insertUseHolderAfter(CallSite &CS, const ArrayRef<Value *> Values,
   auto *II = cast<InvokeInst>(CS.getInstruction());
   Holders.push_back(CallInst::Create(
       Func, Values, "", &*II->getNormalDest()->getFirstInsertionPt()));
-  Holders.push_back(CallInst::Create(
-      Func, Values, "", &*II->getUnwindDest()->getFirstInsertionPt()));
+  // FIXME: Statepoint rewriting on WinEH invokes needs to work too.
+  if (II->getUnwindDest()->isLandingPad())
+    Holders.push_back(CallInst::Create(
+        Func, Values, "", &*II->getUnwindDest()->getFirstInsertionPt()));
 }
 
 static void findLiveReferences(
@@ -2111,13 +2120,17 @@ static void splitVectorValues(Instruction *StatepointInst,
       // blocks
       BasicBlock *NormalDest = Invoke->getNormalDest();
       assert(!isa<PHINode>(NormalDest->begin()));
-      BasicBlock *UnwindDest = Invoke->getUnwindDest();
-      assert(!isa<PHINode>(UnwindDest->begin()));
       // Insert insert element sequences in both successors
       Instruction *IP = &*(NormalDest->getFirstInsertionPt());
-      Replacements[V].first = InsertVectorReform(IP);
-      IP = &*(UnwindDest->getFirstInsertionPt());
-      Replacements[V].second = InsertVectorReform(IP);
+
+      BasicBlock *UnwindDest = Invoke->getUnwindDest();
+      // FIXME: need to be able to insert replacements for WinEH invokes too.
+      if (UnwindDest->isLandingPad()) {
+        assert(!isa<PHINode>(UnwindDest->begin()));
+        Replacements[V].first = InsertVectorReform(IP);
+        IP = &*(UnwindDest->getFirstInsertionPt());
+        Replacements[V].second = InsertVectorReform(IP);
+      }
     }
   }
 
@@ -2361,16 +2374,18 @@ static void rematerializeLiveValues(CallSite CS,
 
       Instruction *NormalInsertBefore =
           &*Invoke->getNormalDest()->getFirstInsertionPt();
-      Instruction *UnwindInsertBefore =
-          &*Invoke->getUnwindDest()->getFirstInsertionPt();
-
       Instruction *NormalRematerializedValue =
           rematerializeChain(NormalInsertBefore);
-      Instruction *UnwindRematerializedValue =
-          rematerializeChain(UnwindInsertBefore);
-
       Info.RematerializedValues[NormalRematerializedValue] = LiveValue;
-      Info.RematerializedValues[UnwindRematerializedValue] = LiveValue;
+
+      // FIXME: rematerialization needs to work for WinEH invokes too.
+      if (Invoke->getUnwindDest()->isLandingPad()) {
+        Instruction *UnwindInsertBefore =
+            &*Invoke->getUnwindDest()->getFirstInsertionPt();
+        Instruction *UnwindRematerializedValue =
+            rematerializeChain(UnwindInsertBefore);
+        Info.RematerializedValues[UnwindRematerializedValue] = LiveValue;
+      }
     }
   }
 
@@ -2404,7 +2419,9 @@ static bool insertParsePoints(Function &F, DominatorTree &DT, Pass *P,
       continue;
     auto *II = cast<InvokeInst>(CS.getInstruction());
     normalizeForInvokeSafepoint(II->getNormalDest(), II->getParent(), DT);
-    normalizeForInvokeSafepoint(II->getUnwindDest(), II->getParent(), DT);
+    // FIXME: Inserting statepoints on WinEH invokes needs to work too.
+    if (II->getUnwindDest()->isLandingPad())
+      normalizeForInvokeSafepoint(II->getUnwindDest(), II->getParent(), DT);
   }
 
   // A list of dummy calls added to the IR to keep various values obviously
