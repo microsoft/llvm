@@ -2480,8 +2480,11 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock &MBB) const {
     if (isVerbose())
       OutStreamer->AddComment("Block address taken");
 
-    for (MCSymbol *Sym : MMI->getAddrLabelSymbolToEmit(BB))
-      OutStreamer->EmitLabel(Sym);
+    // MBBs can have their address taken as part of CodeGen without having
+    // their corresponding BB's address taken in IR
+    if (BB->hasAddressTaken())
+      for (MCSymbol *Sym : MMI->getAddrLabelSymbolToEmit(BB))
+        OutStreamer->EmitLabel(Sym);
   }
 
   // Print some verbose block comments.
@@ -2493,8 +2496,9 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock &MBB) const {
   }
 
   // Print the main label for the block.
-  if (MBB.pred_empty() ||
-      (isBlockOnlyReachableByFallthrough(&MBB) && !MBB.isEHFuncletEntry())) {
+  if (!MBB.hasAddressTaken() &&
+      (MBB.pred_empty() ||
+       (isBlockOnlyReachableByFallthrough(&MBB) && !MBB.isEHFuncletEntry()))) {
     if (isVerbose()) {
       // NOTE: Want this comment at start of line, don't emit with AddComment.
       OutStreamer->emitRawComment(" BB#" + Twine(MBB.getNumber()) + ":", false);

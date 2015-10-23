@@ -415,9 +415,6 @@ X86MCInstLower::LowerMachineOperand(const MachineInstr *MI,
   case MachineOperand::MO_Immediate:
     return MCOperand::createImm(MO.getImm());
   case MachineOperand::MO_MachineBasicBlock:
-    if (MO.getMBB()->hasAddressTaken())
-      return LowerSymbolOperand(MO, AsmPrinter.GetBlockAddressSymbol(
-	      MO.getMBB()->getBasicBlock()));
     return LowerSymbolOperand(MO, GetSymbolFromOperand(MO));
     break;
   case MachineOperand::MO_GlobalAddress:

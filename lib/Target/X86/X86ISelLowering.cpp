@@ -20519,9 +20519,6 @@ X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
   SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
 
   SinkMBB->setHasAddressTaken();
-  // This line is needed to set the hasAddressTaken flag on the BasicBlock
-  // object.
-  BlockAddress::get(const_cast<BasicBlock *>(SinkMBB->getBasicBlock()));
 
   // ThisMBB:
   unsigned PtrStoreOpc = 0;
@@ -21635,7 +21632,7 @@ X86TargetLowering::emitEHSjLjSetJmp(MachineInstr *MI,
   // For v = setjmp(buf), we generate
   //
   // thisMBB:
-  //  buf[LabelOffset] = restoreMBB
+  //  buf[LabelOffset] = restoreMBB <-- takes address of restoreMBB
   //  SjLjSetup restoreMBB
   //
   // mainMBB:
@@ -21655,6 +21652,7 @@ X86TargetLowering::emitEHSjLjSetJmp(MachineInstr *MI,
   MF->insert(I, mainMBB);
   MF->insert(I, sinkMBB);
   MF->push_back(restoreMBB);
+  restoreMBB->setHasAddressTaken();
 
   MachineInstrBuilder MIB;
 
