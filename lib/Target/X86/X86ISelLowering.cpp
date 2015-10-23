@@ -20519,9 +20519,6 @@ X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
   SinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
 
   SinkMBB->setHasAddressTaken();
-  // This line is needed to set the hasAddressTaken flag on the BasicBlock
-  // object.
-  BlockAddress::get(const_cast<BasicBlock *>(SinkMBB->getBasicBlock()));
 
   // ThisMBB:
   unsigned PtrStoreOpc = 0;

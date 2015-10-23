@@ -2496,8 +2496,9 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock &MBB) const {
   }
 
   // Print the main label for the block.
-  if (MBB.pred_empty() ||
-      (isBlockOnlyReachableByFallthrough(&MBB) && !MBB.isEHFuncletEntry())) {
+  if (!MBB.hasAddressTaken() &&
+      (MBB.pred_empty() ||
+       (isBlockOnlyReachableByFallthrough(&MBB) && !MBB.isEHFuncletEntry()))) {
     if (isVerbose()) {
       // NOTE: Want this comment at start of line, don't emit with AddComment.
       OutStreamer->emitRawComment(" BB#" + Twine(MBB.getNumber()) + ":", false);
