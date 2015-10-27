@@ -68,8 +68,8 @@ public:
                     uint64_t Size = 0, unsigned ByteAlignment = 0) override;
   void EmitTBSSSymbol(MCSection *Section, MCSymbol *Symbol, uint64_t Size,
                       unsigned ByteAlignment = 0) override;
-  void EmitValueImpl(const MCExpr *Value, unsigned Size,
-                     SMLoc Loc = SMLoc()) override;
+  void EmitValueImpl(const MCExpr *Value, unsigned Size, SMLoc Loc = SMLoc(),
+                     bool IsPCRelative = false) override;
 
   void EmitFileDirective(StringRef Filename) override;
 

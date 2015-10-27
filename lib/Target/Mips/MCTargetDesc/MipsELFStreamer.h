@@ -60,7 +60,8 @@ public:
 
   /// Overriding this function allows us to dismiss all labels that are
   /// candidates for marking as microMIPS when .word directive is emitted.
-  void EmitValueImpl(const MCExpr *Value, unsigned Size, SMLoc Loc) override;
+  void EmitValueImpl(const MCExpr *Value, unsigned Size, SMLoc Loc,
+                     bool IsPCRelative = false) override;
 
   /// Emits all the option records stored up until the point it's called.
   void EmitMipsOptionRecords();
