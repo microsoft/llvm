@@ -476,8 +476,8 @@ void X86FrameLowering::inlineStackProbe(MachineFunction &MF,
 }
 
 MachineInstr *X86FrameLowering::emitStackProbeInline(
-    MachineFunction &MF, MachineBasicBlock &MBB,
-    MachineBasicBlock::iterator MBBI, DebugLoc DL, bool InProlog) const {
+  MachineFunction &MF, MachineBasicBlock &MBB,
+  MachineBasicBlock::iterator MBBI, DebugLoc DL, bool InProlog) const {
   const X86Subtarget &STI = MF.getSubtarget<X86Subtarget>();
   assert(STI.is64Bit() && "different expansion needed for 32 bit");
   assert(STI.isTargetWindowsCoreCLR() && "custom expansion expects CoreCLR");
@@ -532,7 +532,6 @@ MachineInstr *X86FrameLowering::emitStackProbeInline(
   const int64_t ThreadEnvironmentStackLimit = 0x10;
   const int64_t PageSize = 0x1000;
   const int64_t PageMask = ~(PageSize - 1);
-  const int64_t SpAdjust = 16;
 
   // Registers we need. For the normal case we use virtual
   // registers. For the prolog expansion we use RAX, RCX and RDX.
@@ -549,54 +548,71 @@ MachineInstr *X86FrameLowering::emitStackProbeInline(
       JoinReg = InProlog ? X86::RCX : MRI.createVirtualRegister(RegClass),
       ProbeReg = InProlog ? X86::RCX : MRI.createVirtualRegister(RegClass);
 
-  // If in the prolog, push RCX and RDX. If not, copy RAX to a virtual reg.
+  // SP-relative offsets where we can save RCX and RDX.
+  int64_t RCXShadowSlot = 0;
+  int64_t RDXShadowSlot = 0;
+
+  // If inlining in the prolog, save RCX and RDX.     
+  // Future optimization: don't save or restore if not live in.
   if (InProlog) {
-    BuildMI(&MBB, DL, TII.get(X86::PUSH64r)).addReg(X86::RCX);
-    BuildMI(&MBB, DL, TII.get(X86::PUSH64r)).addReg(X86::RDX);
+    // Compute the offsets. We need to account for things already
+    // pushed onto the stack at this point: return address, frame
+    // pointer (if used), and callee saves.
+    X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+    const int64_t CalleeSaveSize = X86FI->getCalleeSavedFrameSize();
+    const bool HasFP = hasFP(MF);
+    RCXShadowSlot = 8 + CalleeSaveSize + (HasFP ? 8 : 0);
+    RDXShadowSlot = RCXShadowSlot + 8;
+    // Emit the saves.
+    BuildMI(&MBB, DL, TII.get(X86::MOV64mr))
+      .addReg(X86::RSP)
+      .addImm(1)
+      .addReg(0)
+      .addImm(RCXShadowSlot)
+      .addReg(0)
+      .addReg(X86::RCX);
+    BuildMI(&MBB, DL, TII.get(X86::MOV64mr))
+      .addReg(X86::RSP)
+      .addImm(1)
+      .addReg(0)
+      .addImm(RDXShadowSlot)
+      .addReg(0)
+      .addReg(X86::RDX);
   } else {
+    // Not in the prolog. Copy RAX to a virtual reg.
     BuildMI(&MBB, DL, TII.get(X86::MOV64rr), SizeReg).addReg(X86::RAX);
   }
 
   // Add code to MBB to check for overflow and set the new target stack pointer
   // to zero if so.
   BuildMI(&MBB, DL, TII.get(X86::XOR64rr), ZeroReg)
-    .addReg(ZeroReg, RegState::Undef)
-    .addReg(ZeroReg, RegState::Undef);
-  if (InProlog) {
-    // Adjust stack for 16 bytes already pushed
-    BuildMI(&MBB, DL, TII.get(X86::LEA64r), CopyReg)
-        .addReg(X86::RSP)
-        .addImm(1)
-        .addReg(0)
-        .addImm(SpAdjust)
-        .addReg(0);
-  } else {
-    BuildMI(&MBB, DL, TII.get(X86::MOV64rr), CopyReg).addReg(X86::RSP);
-  }
+      .addReg(ZeroReg, RegState::Undef)
+      .addReg(ZeroReg, RegState::Undef);
+  BuildMI(&MBB, DL, TII.get(X86::MOV64rr), CopyReg).addReg(X86::RSP);
   BuildMI(&MBB, DL, TII.get(X86::SUB64rr), TestReg)
-    .addReg(CopyReg)
-    .addReg(SizeReg);
+      .addReg(CopyReg)
+      .addReg(SizeReg);
   BuildMI(&MBB, DL, TII.get(X86::CMOVB64rr), FinalReg)
-    .addReg(TestReg)
-    .addReg(ZeroReg);
+      .addReg(TestReg)
+      .addReg(ZeroReg);
 
   // FinalReg now holds final stack pointer value, or zero if allocation would
   // overflow. Compare against the current stack limit from the thread
   // environment block.
   BuildMI(&MBB, DL, TII.get(X86::MOV64rm), LimitReg)
-    .addReg(0)
-    .addImm(1)
-    .addReg(0)
-    .addImm(ThreadEnvironmentStackLimit)
-    .addReg(X86::GS);
+      .addReg(0)
+      .addImm(1)
+      .addReg(0)
+      .addImm(ThreadEnvironmentStackLimit)
+      .addReg(X86::GS);
   BuildMI(&MBB, DL, TII.get(X86::CMP64rr)).addReg(FinalReg).addReg(LimitReg);
   // Jump if the desired stack pointer is at or above the stack limit.
   BuildMI(&MBB, DL, TII.get(X86::JAE_1)).addMBB(ContinueMBB);
 
   // Add code to roundMBB to round the final stack pointer to a page boundary.
   BuildMI(RoundMBB, DL, TII.get(X86::AND64ri32), RoundedReg)
-    .addReg(FinalReg)
-    .addImm(PageMask);
+      .addReg(FinalReg)
+      .addImm(PageMask);
   BuildMI(RoundMBB, DL, TII.get(X86::JMP_1)).addMBB(LoopMBB);
 
   // LimitReg now holds the current stack limit, RoundedReg page-rounded
@@ -611,30 +627,40 @@ MachineInstr *X86FrameLowering::emitStackProbeInline(
   }
 
   BuildMI(LoopMBB, DL, TII.get(X86::LEA64r), ProbeReg)
-    .addReg(JoinReg)
-    .addImm(1)
-    .addReg(0)
-    .addImm(-PageSize)
-    .addReg(0);
+      .addReg(JoinReg)
+      .addImm(1)
+      .addReg(0)
+      .addImm(-PageSize)
+      .addReg(0);
   // Probe by storing a byte onto the stack.
   BuildMI(LoopMBB, DL, TII.get(X86::MOV8mi))
-    .addReg(ProbeReg)
-    .addImm(1)
-    .addReg(0)
-    .addImm(0)
-    .addReg(0)
-    .addImm(0);
+      .addReg(ProbeReg)
+      .addImm(1)
+      .addReg(0)
+      .addImm(0)
+      .addReg(0)
+      .addImm(0);
   BuildMI(LoopMBB, DL, TII.get(X86::CMP64rr))
-    .addReg(RoundedReg)
-    .addReg(ProbeReg);
+      .addReg(RoundedReg)
+      .addReg(ProbeReg);
   BuildMI(LoopMBB, DL, TII.get(X86::JNE_1)).addMBB(LoopMBB);
 
   MachineBasicBlock::iterator ContinueMBBI = ContinueMBB->getFirstNonPHI();
 
   // If in prolog, restore RDX and RCX.
   if (InProlog) {
-    BuildMI(*ContinueMBB, ContinueMBBI, DL, TII.get(X86::POP64r), X86::RDX);
-    BuildMI(*ContinueMBB, ContinueMBBI, DL, TII.get(X86::POP64r), X86::RCX);
+    BuildMI(*ContinueMBB, ContinueMBBI, DL, TII.get(X86::MOV64rm), X86::RCX)
+      .addReg(X86::RSP)
+      .addImm(1)
+      .addReg(0)
+      .addImm(RCXShadowSlot)
+      .addReg(0);
+    BuildMI(*ContinueMBB, ContinueMBBI, DL, TII.get(X86::MOV64rm), X86::RDX)
+      .addReg(X86::RSP)
+      .addImm(1)
+      .addReg(0)
+      .addImm(RDXShadowSlot)
+      .addReg(0);
   }
 
   // Now that the probing is done, add code to continueMBB to update
@@ -1140,8 +1166,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       // Allocate NumBytes-4 bytes on stack in case of isEAXAlive.
       // We'll also use 4 already allocated bytes for EAX.
       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
-        .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
-        .setMIFlag(MachineInstr::FrameSetup);
+          .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
+          .setMIFlag(MachineInstr::FrameSetup);
     }
 
     // Call __chkstk, __chkstk_ms, or __alloca.
@@ -1149,9 +1175,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
     if (isEAXAlive) {
       // Restore EAX
-      MachineInstr *MI = addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm),
-                                              X86::EAX),
-                                      StackPtr, false, NumBytes - 4);
+      MachineInstr *MI =
+          addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm), X86::EAX),
+                       StackPtr, false, NumBytes - 4);
       MI->setFlag(MachineInstr::FrameSetup);
       MBB.insert(MBBI, MI);
     }
