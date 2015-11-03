@@ -16,6 +16,7 @@
 #define LLVM_ANALYSIS_VALUETRACKING_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/Support/DataTypes.h"
 
@@ -89,6 +90,13 @@ namespace llvm {
                           AssumptionCache *AC = nullptr,
                           const Instruction *CxtI = nullptr,
                           const DominatorTree *DT = nullptr);
+
+  /// isKnownNonEqual - Return true if the given values are known to be
+  /// non-equal when defined. Supports scalar integer types only.
+  bool isKnownNonEqual(Value *V1, Value *V2, const DataLayout &DL,
+                      AssumptionCache *AC = nullptr,
+                      const Instruction *CxtI = nullptr,
+                      const DominatorTree *DT = nullptr);
 
   /// MaskedValueIsZero - Return true if 'V & Mask' is known to be zero.  We use
   /// this predicate to simplify operations downstream.  Mask is known to be
@@ -421,6 +429,11 @@ namespace llvm {
   ///
   SelectPatternResult matchSelectPattern(Value *V, Value *&LHS, Value *&RHS,
                                          Instruction::CastOps *CastOp = nullptr);
+
+  /// Parse out a conservative ConstantRange from !range metadata.
+  ///
+  /// E.g. if RangeMD is !{i32 0, i32 10, i32 15, i32 20} then return [0, 20).
+  ConstantRange getConstantRangeFromMetadata(MDNode &RangeMD);
 
 } // end namespace llvm
 

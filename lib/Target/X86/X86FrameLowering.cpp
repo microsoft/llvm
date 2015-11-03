@@ -1384,7 +1384,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     RestoreMBB = TargetMBB;
     if (STI.is32Bit()) {
       RestoreMBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
-      MF.insert(TargetMBB, RestoreMBB);
+      MF.insert(TargetMBB->getIterator(), RestoreMBB);
       MBB.removeSuccessor(TargetMBB);
       MBB.addSuccessor(RestoreMBB);
       RestoreMBB->addSuccessor(TargetMBB);

@@ -236,6 +236,7 @@ namespace {
     SDValue visitADDE(SDNode *N);
     SDValue visitSUBE(SDNode *N);
     SDValue visitMUL(SDNode *N);
+    SDValue useDivRem(SDNode *N);
     SDValue visitSDIV(SDNode *N);
     SDValue visitUDIV(SDNode *N);
     SDValue visitREM(SDNode *N);
@@ -245,8 +246,6 @@ namespace {
     SDValue visitUMUL_LOHI(SDNode *N);
     SDValue visitSMULO(SDNode *N);
     SDValue visitUMULO(SDNode *N);
-    SDValue visitSDIVREM(SDNode *N);
-    SDValue visitUDIVREM(SDNode *N);
     SDValue visitIMINMAX(SDNode *N);
     SDValue visitAND(SDNode *N);
     SDValue visitANDLike(SDValue N0, SDValue N1, SDNode *LocReference);
@@ -403,6 +402,14 @@ namespace {
       // Lowest mem operand in the DAG starts at zero.
       unsigned SequenceNum;
     };
+
+    /// This is a helper function for visitMUL to check the profitability
+    /// of folding (mul (add x, c1), c2) -> (add (mul x, c2), c1*c2).
+    /// MulNode is the original multiply, AddNode is (add x, c1),
+    /// and ConstNode is c2.
+    bool isMulAddWithConstProfitable(SDNode *MulNode,
+                                     SDValue &AddNode,
+                                     SDValue &ConstNode);
 
     /// This is a helper function for MergeStoresOfConstantsOrVecElts. Returns a
     /// constant build_vector of the stored constant values in Stores.
@@ -1358,8 +1365,6 @@ SDValue DAGCombiner::visit(SDNode *N) {
   case ISD::UMUL_LOHI:          return visitUMUL_LOHI(N);
   case ISD::SMULO:              return visitSMULO(N);
   case ISD::UMULO:              return visitUMULO(N);
-  case ISD::SDIVREM:            return visitSDIVREM(N);
-  case ISD::UDIVREM:            return visitUDIVREM(N);
   case ISD::SMIN:
   case ISD::SMAX:
   case ISD::UMIN:
@@ -2142,20 +2147,103 @@ SDValue DAGCombiner::visitMUL(SDNode *N) {
   }
 
   // fold (mul (add x, c1), c2) -> (add (mul x, c2), c1*c2)
-  if (N1IsConst && N0.getOpcode() == ISD::ADD && N0.getNode()->hasOneUse() &&
-      (isConstantSplatVector(N0.getOperand(1).getNode(), Val) ||
-                     isa<ConstantSDNode>(N0.getOperand(1))))
-    return DAG.getNode(ISD::ADD, SDLoc(N), VT,
-                       DAG.getNode(ISD::MUL, SDLoc(N0), VT,
-                                   N0.getOperand(0), N1),
-                       DAG.getNode(ISD::MUL, SDLoc(N1), VT,
-                                   N0.getOperand(1), N1));
+  if (isConstantIntBuildVectorOrConstantInt(N1) &&
+      N0.getOpcode() == ISD::ADD &&
+      isConstantIntBuildVectorOrConstantInt(N0.getOperand(1)) &&
+      isMulAddWithConstProfitable(N, N0, N1))
+      return DAG.getNode(ISD::ADD, SDLoc(N), VT,
+                         DAG.getNode(ISD::MUL, SDLoc(N0), VT,
+                                     N0.getOperand(0), N1),
+                         DAG.getNode(ISD::MUL, SDLoc(N1), VT,
+                                     N0.getOperand(1), N1));
 
   // reassociate mul
   if (SDValue RMUL = ReassociateOps(ISD::MUL, SDLoc(N), N0, N1))
     return RMUL;
 
   return SDValue();
+}
+
+/// Return true if divmod libcall is available.
+static bool isDivRemLibcallAvailable(SDNode *Node, bool isSigned,
+                                     const TargetLowering &TLI) {
+  RTLIB::Libcall LC;
+  switch (Node->getSimpleValueType(0).SimpleTy) {
+  default: return false; // No libcall for vector types.
+  case MVT::i8:   LC= isSigned ? RTLIB::SDIVREM_I8  : RTLIB::UDIVREM_I8;  break;
+  case MVT::i16:  LC= isSigned ? RTLIB::SDIVREM_I16 : RTLIB::UDIVREM_I16; break;
+  case MVT::i32:  LC= isSigned ? RTLIB::SDIVREM_I32 : RTLIB::UDIVREM_I32; break;
+  case MVT::i64:  LC= isSigned ? RTLIB::SDIVREM_I64 : RTLIB::UDIVREM_I64; break;
+  case MVT::i128: LC= isSigned ? RTLIB::SDIVREM_I128:RTLIB::UDIVREM_I128; break;
+  }
+
+  return TLI.getLibcallName(LC) != nullptr;
+}
+
+/// Issue divrem if both quotient and remainder are needed.
+SDValue DAGCombiner::useDivRem(SDNode *Node) {
+  if (Node->use_empty())
+    return SDValue(); // This is a dead node, leave it alone.
+
+  EVT VT = Node->getValueType(0);
+  if (!TLI.isTypeLegal(VT))
+    return SDValue();
+
+  unsigned Opcode = Node->getOpcode();
+  bool isSigned = (Opcode == ISD::SDIV) || (Opcode == ISD::SREM);
+
+  unsigned DivRemOpc = isSigned ? ISD::SDIVREM : ISD::UDIVREM;
+  // If DIVREM is going to get expanded into a libcall,
+  // but there is no libcall available, then don't combine.
+  if (!TLI.isOperationLegalOrCustom(DivRemOpc, VT) &&
+      !isDivRemLibcallAvailable(Node, isSigned, TLI))
+    return SDValue();
+
+  // If div is legal, it's better to do the normal expansion
+  unsigned OtherOpcode = 0;
+  if ((Opcode == ISD::SDIV) || (Opcode == ISD::UDIV)) {
+    OtherOpcode = isSigned ? ISD::SREM : ISD::UREM;
+    if (TLI.isOperationLegalOrCustom(Opcode, VT))
+      return SDValue();
+  } else {
+    OtherOpcode = isSigned ? ISD::SDIV : ISD::UDIV;
+    if (TLI.isOperationLegalOrCustom(OtherOpcode, VT))
+      return SDValue();
+  }
+
+  SDValue Op0 = Node->getOperand(0);
+  SDValue Op1 = Node->getOperand(1);
+  SDValue combined;
+  for (SDNode::use_iterator UI = Op0.getNode()->use_begin(),
+         UE = Op0.getNode()->use_end(); UI != UE; ++UI) {
+    SDNode *User = *UI;
+    if (User == Node || User->use_empty())
+      continue;
+    // Convert the other matching node(s), too;
+    // otherwise, the DIVREM may get target-legalized into something
+    // target-specific that we won't be able to recognize.
+    unsigned UserOpc = User->getOpcode();
+    if ((UserOpc == Opcode || UserOpc == OtherOpcode || UserOpc == DivRemOpc) &&
+        User->getOperand(0) == Op0 &&
+        User->getOperand(1) == Op1) {
+      if (!combined) {
+        if (UserOpc == OtherOpcode) {
+          SDVTList VTs = DAG.getVTList(VT, VT);
+          combined = DAG.getNode(DivRemOpc, SDLoc(Node), VTs, Op0, Op1);
+        } else if (UserOpc == DivRemOpc) {
+          combined = SDValue(User, 0);
+        } else {
+          assert(UserOpc == Opcode);
+          continue;
+        }
+      }
+      if (UserOpc == ISD::SDIV || UserOpc == ISD::UDIV)
+        CombineTo(User, combined);
+      else if (UserOpc == ISD::SREM || UserOpc == ISD::UREM)
+        CombineTo(User, combined.getValue(1));
+    }
+  }
+  return combined;
 }
 
 SDValue DAGCombiner::visitSDIV(SDNode *N) {
@@ -2240,6 +2328,10 @@ SDValue DAGCombiner::visitSDIV(SDNode *N) {
     if (SDValue Op = BuildSDIV(N))
       return Op;
 
+  // sdiv, srem -> sdivrem
+  if (SDValue DivRem = useDivRem(N))
+    return DivRem;
+
   // undef / X -> 0
   if (N0.getOpcode() == ISD::UNDEF)
     return DAG.getConstant(0, DL, VT);
@@ -2296,6 +2388,10 @@ SDValue DAGCombiner::visitUDIV(SDNode *N) {
   if (N1C && !TLI.isIntDivCheap(N->getValueType(0), Attr))
     if (SDValue Op = BuildUDIV(N))
       return Op;
+
+  // sdiv, srem -> sdivrem
+  if (SDValue DivRem = useDivRem(N))
+    return DivRem;
 
   // undef / X -> 0
   if (N0.getOpcode() == ISD::UNDEF)
@@ -2366,6 +2462,10 @@ SDValue DAGCombiner::visitREM(SDNode *N) {
       return Sub;
     }
   }
+
+  // sdiv, srem -> sdivrem
+  if (SDValue DivRem = useDivRem(N))
+    return DivRem.getValue(1);
 
   // undef % X -> 0
   if (N0.getOpcode() == ISD::UNDEF)
@@ -2583,20 +2683,6 @@ SDValue DAGCombiner::visitUMULO(SDNode *N) {
     if (C2->getAPIntValue() == 2)
       return DAG.getNode(ISD::UADDO, SDLoc(N), N->getVTList(),
                          N->getOperand(0), N->getOperand(0));
-
-  return SDValue();
-}
-
-SDValue DAGCombiner::visitSDIVREM(SDNode *N) {
-  if (SDValue Res = SimplifyNodeWithTwoResults(N, ISD::SDIV, ISD::SREM))
-    return Res;
-
-  return SDValue();
-}
-
-SDValue DAGCombiner::visitUDIVREM(SDNode *N) {
-  if (SDValue Res = SimplifyNodeWithTwoResults(N, ISD::UDIV, ISD::UREM))
-    return Res;
 
   return SDValue();
 }
@@ -3710,7 +3796,7 @@ SDValue DAGCombiner::visitOR(SDNode *N) {
 /// Match "(X shl/srl V1) & V2" where V2 may not be present.
 static bool MatchRotateHalf(SDValue Op, SDValue &Shift, SDValue &Mask) {
   if (Op.getOpcode() == ISD::AND) {
-    if (isa<ConstantSDNode>(Op.getOperand(1))) {
+    if (isConstantIntBuildVectorOrConstantInt(Op.getOperand(1))) {
       Mask = Op.getOperand(1);
       Op = Op.getOperand(0);
     } else {
@@ -3727,105 +3813,106 @@ static bool MatchRotateHalf(SDValue Op, SDValue &Shift, SDValue &Mask) {
 }
 
 // Return true if we can prove that, whenever Neg and Pos are both in the
-// range [0, OpSize), Neg == (Pos == 0 ? 0 : OpSize - Pos).  This means that
+// range [0, EltSize), Neg == (Pos == 0 ? 0 : EltSize - Pos).  This means that
 // for two opposing shifts shift1 and shift2 and a value X with OpBits bits:
 //
 //     (or (shift1 X, Neg), (shift2 X, Pos))
 //
 // reduces to a rotate in direction shift2 by Pos or (equivalently) a rotate
-// in direction shift1 by Neg.  The range [0, OpSize) means that we only need
+// in direction shift1 by Neg.  The range [0, EltSize) means that we only need
 // to consider shift amounts with defined behavior.
-static bool matchRotateSub(SDValue Pos, SDValue Neg, unsigned OpSize) {
-  // If OpSize is a power of 2 then:
+static bool matchRotateSub(SDValue Pos, SDValue Neg, unsigned EltSize) {
+  // If EltSize is a power of 2 then:
   //
-  //  (a) (Pos == 0 ? 0 : OpSize - Pos) == (OpSize - Pos) & (OpSize - 1)
-  //  (b) Neg == Neg & (OpSize - 1) whenever Neg is in [0, OpSize).
+  //  (a) (Pos == 0 ? 0 : EltSize - Pos) == (EltSize - Pos) & (EltSize - 1)
+  //  (b) Neg == Neg & (EltSize - 1) whenever Neg is in [0, EltSize).
   //
-  // So if OpSize is a power of 2 and Neg is (and Neg', OpSize-1), we check
+  // So if EltSize is a power of 2 and Neg is (and Neg', EltSize-1), we check
   // for the stronger condition:
   //
-  //     Neg & (OpSize - 1) == (OpSize - Pos) & (OpSize - 1)    [A]
+  //     Neg & (EltSize - 1) == (EltSize - Pos) & (EltSize - 1)    [A]
   //
-  // for all Neg and Pos.  Since Neg & (OpSize - 1) == Neg' & (OpSize - 1)
+  // for all Neg and Pos.  Since Neg & (EltSize - 1) == Neg' & (EltSize - 1)
   // we can just replace Neg with Neg' for the rest of the function.
   //
   // In other cases we check for the even stronger condition:
   //
-  //     Neg == OpSize - Pos                                    [B]
+  //     Neg == EltSize - Pos                                    [B]
   //
   // for all Neg and Pos.  Note that the (or ...) then invokes undefined
-  // behavior if Pos == 0 (and consequently Neg == OpSize).
+  // behavior if Pos == 0 (and consequently Neg == EltSize).
   //
-  // We could actually use [A] whenever OpSize is a power of 2, but the
+  // We could actually use [A] whenever EltSize is a power of 2, but the
   // only extra cases that it would match are those uninteresting ones
   // where Neg and Pos are never in range at the same time.  E.g. for
-  // OpSize == 32, using [A] would allow a Neg of the form (sub 64, Pos)
+  // EltSize == 32, using [A] would allow a Neg of the form (sub 64, Pos)
   // as well as (sub 32, Pos), but:
   //
   //     (or (shift1 X, (sub 64, Pos)), (shift2 X, Pos))
   //
   // always invokes undefined behavior for 32-bit X.
   //
-  // Below, Mask == OpSize - 1 when using [A] and is all-ones otherwise.
+  // Below, Mask == EltSize - 1 when using [A] and is all-ones otherwise.
   unsigned MaskLoBits = 0;
-  if (Neg.getOpcode() == ISD::AND &&
-      isPowerOf2_64(OpSize) &&
-      Neg.getOperand(1).getOpcode() == ISD::Constant &&
-      cast<ConstantSDNode>(Neg.getOperand(1))->getAPIntValue() == OpSize - 1) {
-    Neg = Neg.getOperand(0);
-    MaskLoBits = Log2_64(OpSize);
+  if (Neg.getOpcode() == ISD::AND && isPowerOf2_64(EltSize)) {
+    if (ConstantSDNode *NegC = isConstOrConstSplat(Neg.getOperand(1))) {
+      if (NegC->getAPIntValue() == EltSize - 1) {
+        Neg = Neg.getOperand(0);
+        MaskLoBits = Log2_64(EltSize);
+      }
+    }
   }
 
   // Check whether Neg has the form (sub NegC, NegOp1) for some NegC and NegOp1.
   if (Neg.getOpcode() != ISD::SUB)
     return 0;
-  ConstantSDNode *NegC = dyn_cast<ConstantSDNode>(Neg.getOperand(0));
+  ConstantSDNode *NegC = isConstOrConstSplat(Neg.getOperand(0));
   if (!NegC)
     return 0;
   SDValue NegOp1 = Neg.getOperand(1);
 
-  // On the RHS of [A], if Pos is Pos' & (OpSize - 1), just replace Pos with
+  // On the RHS of [A], if Pos is Pos' & (EltSize - 1), just replace Pos with
   // Pos'.  The truncation is redundant for the purpose of the equality.
-  if (MaskLoBits &&
-      Pos.getOpcode() == ISD::AND &&
-      Pos.getOperand(1).getOpcode() == ISD::Constant &&
-      cast<ConstantSDNode>(Pos.getOperand(1))->getAPIntValue() == OpSize - 1)
-    Pos = Pos.getOperand(0);
+  if (MaskLoBits && Pos.getOpcode() == ISD::AND)
+    if (ConstantSDNode *PosC = isConstOrConstSplat(Pos.getOperand(1)))
+      if (PosC->getAPIntValue() == EltSize - 1)
+        Pos = Pos.getOperand(0);
 
   // The condition we need is now:
   //
-  //     (NegC - NegOp1) & Mask == (OpSize - Pos) & Mask
+  //     (NegC - NegOp1) & Mask == (EltSize - Pos) & Mask
   //
   // If NegOp1 == Pos then we need:
   //
-  //              OpSize & Mask == NegC & Mask
+  //              EltSize & Mask == NegC & Mask
   //
   // (because "x & Mask" is a truncation and distributes through subtraction).
   APInt Width;
   if (Pos == NegOp1)
     Width = NegC->getAPIntValue();
+
   // Check for cases where Pos has the form (add NegOp1, PosC) for some PosC.
   // Then the condition we want to prove becomes:
   //
-  //     (NegC - NegOp1) & Mask == (OpSize - (NegOp1 + PosC)) & Mask
+  //     (NegC - NegOp1) & Mask == (EltSize - (NegOp1 + PosC)) & Mask
   //
   // which, again because "x & Mask" is a truncation, becomes:
   //
-  //                NegC & Mask == (OpSize - PosC) & Mask
-  //              OpSize & Mask == (NegC + PosC) & Mask
-  else if (Pos.getOpcode() == ISD::ADD &&
-           Pos.getOperand(0) == NegOp1 &&
-           Pos.getOperand(1).getOpcode() == ISD::Constant)
-    Width = (cast<ConstantSDNode>(Pos.getOperand(1))->getAPIntValue() +
-             NegC->getAPIntValue());
-  else
+  //                NegC & Mask == (EltSize - PosC) & Mask
+  //             EltSize & Mask == (NegC + PosC) & Mask
+  else if (Pos.getOpcode() == ISD::ADD && Pos.getOperand(0) == NegOp1) {
+    if (ConstantSDNode *PosC = isConstOrConstSplat(Pos.getOperand(1)))
+      Width = PosC->getAPIntValue() + NegC->getAPIntValue();
+    else
+      return false;
+  } else
     return false;
 
-  // Now we just need to check that OpSize & Mask == Width & Mask.
+  // Now we just need to check that EltSize & Mask == Width & Mask.
   if (MaskLoBits)
-    // Opsize & Mask is 0 since Mask is Opsize - 1.
+    // EltSize & Mask is 0 since Mask is EltSize - 1.
     return Width.getLoBits(MaskLoBits) == 0;
-  return Width == OpSize;
+  return Width == EltSize;
 }
 
 // A subroutine of MatchRotate used once we have found an OR of two opposite
@@ -3845,7 +3932,7 @@ SDNode *DAGCombiner::MatchRotatePosNeg(SDValue Shifted, SDValue Pos,
   //          (srl x, (*ext y))) ->
   //   (rotr x, y) or (rotl x, (sub 32, y))
   EVT VT = Shifted.getValueType();
-  if (matchRotateSub(InnerPos, InnerNeg, VT.getSizeInBits())) {
+  if (matchRotateSub(InnerPos, InnerNeg, VT.getScalarSizeInBits())) {
     bool HasPos = TLI.isOperationLegalOrCustom(PosOpcode, VT);
     return DAG.getNode(HasPos ? PosOpcode : NegOpcode, DL, VT, Shifted,
                        HasPos ? Pos : Neg).getNode();
@@ -3888,10 +3975,10 @@ SDNode *DAGCombiner::MatchRotate(SDValue LHS, SDValue RHS, SDLoc DL) {
   if (RHSShift.getOpcode() == ISD::SHL) {
     std::swap(LHS, RHS);
     std::swap(LHSShift, RHSShift);
-    std::swap(LHSMask , RHSMask );
+    std::swap(LHSMask, RHSMask);
   }
 
-  unsigned OpSizeInBits = VT.getSizeInBits();
+  unsigned EltSizeInBits = VT.getScalarSizeInBits();
   SDValue LHSShiftArg = LHSShift.getOperand(0);
   SDValue LHSShiftAmt = LHSShift.getOperand(1);
   SDValue RHSShiftArg = RHSShift.getOperand(0);
@@ -3899,11 +3986,10 @@ SDNode *DAGCombiner::MatchRotate(SDValue LHS, SDValue RHS, SDLoc DL) {
 
   // fold (or (shl x, C1), (srl x, C2)) -> (rotl x, C1)
   // fold (or (shl x, C1), (srl x, C2)) -> (rotr x, C2)
-  if (LHSShiftAmt.getOpcode() == ISD::Constant &&
-      RHSShiftAmt.getOpcode() == ISD::Constant) {
-    uint64_t LShVal = cast<ConstantSDNode>(LHSShiftAmt)->getZExtValue();
-    uint64_t RShVal = cast<ConstantSDNode>(RHSShiftAmt)->getZExtValue();
-    if ((LShVal + RShVal) != OpSizeInBits)
+  if (isConstOrConstSplat(LHSShiftAmt) && isConstOrConstSplat(RHSShiftAmt)) {
+    uint64_t LShVal = isConstOrConstSplat(LHSShiftAmt)->getZExtValue();
+    uint64_t RShVal = isConstOrConstSplat(RHSShiftAmt)->getZExtValue();
+    if ((LShVal + RShVal) != EltSizeInBits)
       return nullptr;
 
     SDValue Rot = DAG.getNode(HasROTL ? ISD::ROTL : ISD::ROTR, DL, VT,
@@ -3911,18 +3997,23 @@ SDNode *DAGCombiner::MatchRotate(SDValue LHS, SDValue RHS, SDLoc DL) {
 
     // If there is an AND of either shifted operand, apply it to the result.
     if (LHSMask.getNode() || RHSMask.getNode()) {
-      APInt Mask = APInt::getAllOnesValue(OpSizeInBits);
+      APInt AllBits = APInt::getAllOnesValue(EltSizeInBits);
+      SDValue Mask = DAG.getConstant(AllBits, DL, VT);
 
       if (LHSMask.getNode()) {
-        APInt RHSBits = APInt::getLowBitsSet(OpSizeInBits, LShVal);
-        Mask &= cast<ConstantSDNode>(LHSMask)->getAPIntValue() | RHSBits;
+        APInt RHSBits = APInt::getLowBitsSet(EltSizeInBits, LShVal);
+        Mask = DAG.getNode(ISD::AND, DL, VT, Mask,
+                           DAG.getNode(ISD::OR, DL, VT, LHSMask,
+                                       DAG.getConstant(RHSBits, DL, VT)));
       }
       if (RHSMask.getNode()) {
-        APInt LHSBits = APInt::getHighBitsSet(OpSizeInBits, RShVal);
-        Mask &= cast<ConstantSDNode>(RHSMask)->getAPIntValue() | LHSBits;
+        APInt LHSBits = APInt::getHighBitsSet(EltSizeInBits, RShVal);
+        Mask = DAG.getNode(ISD::AND, DL, VT, Mask,
+                           DAG.getNode(ISD::OR, DL, VT, RHSMask,
+                                       DAG.getConstant(LHSBits, DL, VT)));
       }
 
-      Rot = DAG.getNode(ISD::AND, DL, VT, Rot, DAG.getConstant(Mask, DL, VT));
+      Rot = DAG.getNode(ISD::AND, DL, VT, Rot, Mask);
     }
 
     return Rot.getNode();
@@ -10761,6 +10852,81 @@ struct BaseIndexOffset {
   }
 };
 } // namespace
+
+// This is a helper function for visitMUL to check the profitability
+// of folding (mul (add x, c1), c2) -> (add (mul x, c2), c1*c2).
+// MulNode is the original multiply, AddNode is (add x, c1),
+// and ConstNode is c2.
+//
+// If the (add x, c1) has multiple uses, we could increase
+// the number of adds if we make this transformation.
+// It would only be worth doing this if we can remove a
+// multiply in the process. Check for that here.
+// To illustrate:
+//     (A + c1) * c3
+//     (A + c2) * c3
+// We're checking for cases where we have common "c3 * A" expressions.
+bool DAGCombiner::isMulAddWithConstProfitable(SDNode *MulNode,
+                                              SDValue &AddNode,
+                                              SDValue &ConstNode) {
+  APInt Val;
+
+  // If the add only has one use, this would be OK to do.
+  if (AddNode.getNode()->hasOneUse())
+    return true;
+
+  // Walk all the users of the constant with which we're multiplying.
+  for (SDNode *Use : ConstNode->uses()) {
+
+    if (Use == MulNode) // This use is the one we're on right now. Skip it.
+      continue;
+
+    if (Use->getOpcode() == ISD::MUL) { // We have another multiply use.
+      SDNode *OtherOp;
+      SDNode *MulVar = AddNode.getOperand(0).getNode();
+
+      // OtherOp is what we're multiplying against the constant.
+      if (Use->getOperand(0) == ConstNode)
+        OtherOp = Use->getOperand(1).getNode();
+      else
+        OtherOp = Use->getOperand(0).getNode();
+
+      // Check to see if multiply is with the same operand of our "add".
+      //
+      //     ConstNode  = CONST
+      //     Use = ConstNode * A  <-- visiting Use. OtherOp is A.
+      //     ...
+      //     AddNode  = (A + c1)  <-- MulVar is A.
+      //         = AddNode * ConstNode   <-- current visiting instruction.
+      //
+      // If we make this transformation, we will have a common
+      // multiply (ConstNode * A) that we can save.
+      if (OtherOp == MulVar)
+        return true;
+
+      // Now check to see if a future expansion will give us a common
+      // multiply.
+      //
+      //     ConstNode  = CONST
+      //     AddNode    = (A + c1)
+      //     ...   = AddNode * ConstNode <-- current visiting instruction.
+      //     ...
+      //     OtherOp = (A + c2)
+      //     Use     = OtherOp * ConstNode <-- visiting Use.
+      //
+      // If we make this transformation, we will have a common
+      // multiply (CONST * A) after we also do the same transformation
+      // to the "t2" instruction.
+      if (OtherOp->getOpcode() == ISD::ADD &&
+          isConstantIntBuildVectorOrConstantInt(OtherOp->getOperand(1)) &&
+          OtherOp->getOperand(0).getNode() == MulVar)
+        return true;
+    }
+  }
+
+  // Didn't find a case where this would be profitable.
+  return false;
+}
 
 SDValue DAGCombiner::getMergedConstantVectorStore(SelectionDAG &DAG,
                                                   SDLoc SL,

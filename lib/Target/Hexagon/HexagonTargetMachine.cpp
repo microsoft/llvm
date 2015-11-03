@@ -62,6 +62,12 @@ static cl::opt<bool> EnableGenPred("hexagon-gen-pred", cl::init(true),
 static cl::opt<bool> DisableHSDR("disable-hsdr", cl::init(false), cl::Hidden,
   cl::desc("Disable splitting double registers"));
 
+static cl::opt<bool> EnableBitSimplify("hexagon-bit", cl::init(true),
+  cl::Hidden, cl::desc("Bit simplification"));
+
+static cl::opt<bool> EnableLoopResched("hexagon-loop-resched", cl::init(true),
+  cl::Hidden, cl::desc("Loop rescheduling"));
+
 /// HexagonTargetMachineModule - Note that this is used on hosts that
 /// cannot link in a library unless there are references into the
 /// library.  In particular, it seems that it is not possible to get
@@ -84,6 +90,8 @@ SchedCustomRegistry("hexagon", "Run Hexagon's custom scheduler",
                     createVLIWMachineSched);
 
 namespace llvm {
+  FunctionPass *createHexagonBitSimplify();
+  FunctionPass *createHexagonCallFrameInformation();
   FunctionPass *createHexagonCFGOptimizer();
   FunctionPass *createHexagonCommonGEP();
   FunctionPass *createHexagonCopyToCombine();
@@ -98,7 +106,9 @@ namespace llvm {
   FunctionPass *createHexagonHardwareLoops();
   FunctionPass *createHexagonISelDag(HexagonTargetMachine &TM,
                                      CodeGenOpt::Level OptLevel);
+  FunctionPass *createHexagonLoopRescheduling();
   FunctionPass *createHexagonNewValueJump();
+  FunctionPass *createHexagonOptimizeSZextends();
   FunctionPass *createHexagonPacketizer();
   FunctionPass *createHexagonPeephole();
   FunctionPass *createHexagonSplitConst32AndConst64();
@@ -212,15 +222,24 @@ bool HexagonPassConfig::addInstSelector() {
   HexagonTargetMachine &TM = getHexagonTargetMachine();
   bool NoOpt = (getOptLevel() == CodeGenOpt::None);
 
+  if (!NoOpt)
+    addPass(createHexagonOptimizeSZextends());
+
   addPass(createHexagonISelDag(TM, getOptLevel()));
 
   if (!NoOpt) {
     // Create logical operations on predicate registers.
     if (EnableGenPred)
       addPass(createHexagonGenPredicate(), false);
+    // Rotate loops to expose bit-simplification opportunities.
+    if (EnableLoopResched)
+      addPass(createHexagonLoopRescheduling(), false);
     // Split double registers.
     if (!DisableHSDR)
       addPass(createHexagonSplitDoubleRegs());
+    // Bit simplification.
+    if (EnableBitSimplify)
+      addPass(createHexagonBitSimplify(), false);
     addPass(createHexagonPeephole());
     printAndVerify("After hexagon peephole pass");
     if (EnableGenInsert)
@@ -273,4 +292,7 @@ void HexagonPassConfig::addPreEmitPass() {
 
     addPass(createHexagonPacketizer(), false);
   }
+
+  // Add CFI instructions if necessary.
+  addPass(createHexagonCallFrameInformation(), false);
 }
