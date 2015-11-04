@@ -36,7 +36,10 @@ FUZZER_FLAG_INT(
     save_minimized_corpus, 0,
     "If 1, the minimized corpus is saved into the first input directory. "
     "Example: ./fuzzer -save_minimized_corpus=1 NEW_EMPTY_DIR OLD_CORPUS")
+FUZZER_FLAG_INT(merge, 0, "If 1, the 2-nd, 3-rd, etc corpora will be "
+  "merged into the 1-st corpus. Only interesting units will be taken.")
 FUZZER_FLAG_INT(use_counters, 1, "Use coverage counters")
+FUZZER_FLAG_INT(use_indir_calls, 1, "Use indirect caller-callee counters")
 FUZZER_FLAG_INT(use_traces, 0, "Experimental: use instruction traces")
 FUZZER_FLAG_INT(jobs, 0, "Number of jobs to run. If jobs >= 1 we spawn"
                           " this number of jobs in separate worker processes"
@@ -47,11 +50,6 @@ FUZZER_FLAG_INT(workers, 0,
 FUZZER_FLAG_INT(reload, 1,
                 "Reload the main corpus periodically to get new units"
                 " discovered by other processes.")
-FUZZER_FLAG_STRING(deprecated_tokens,
-                   "Use the file with tokens (one token per line) to"
-                   " fuzz a token based input language.")
-FUZZER_FLAG_STRING(apply_tokens, "Read the given input file, substitute bytes "
-                                 " with tokens and write the result to stdout.")
 FUZZER_FLAG_STRING(sync_command, "Execute an external command "
                                  "\"<sync_command> <test_corpus>\" "
                                  "to synchronize the test corpus.")

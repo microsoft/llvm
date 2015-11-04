@@ -258,7 +258,7 @@ public:
   void print(raw_ostream &OS) const override {
     switch (Kind) {
     case Register:
-      OS << "<register " << getReg() << '>';
+      OS << "<register " << getReg() << " mods: " << Reg.Modifiers << '>';
       break;
     case Immediate:
       OS << getImm();
@@ -987,13 +987,11 @@ AMDGPUAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
       int64_t IntVal;
       if (getParser().parseAbsoluteExpression(IntVal))
         return MatchOperand_ParseFail;
-      APInt IntVal32(32, IntVal);
-      if (IntVal32.getSExtValue() != IntVal) {
+      if (!isInt<32>(IntVal) && !isUInt<32>(IntVal)) {
         Error(S, "invalid immediate: only 32-bit values are legal");
         return MatchOperand_ParseFail;
       }
 
-      IntVal = IntVal32.getSExtValue();
       if (Negate)
         IntVal *= -1;
       Operands.push_back(AMDGPUOperand::CreateImm(IntVal, S));

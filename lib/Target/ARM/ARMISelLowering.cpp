@@ -742,8 +742,8 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
   if (!(Subtarget->hasDivide() && Subtarget->isThumb2()) &&
       !(Subtarget->hasDivideInARMMode() && !Subtarget->isThumb())) {
     // These are expanded into libcalls if the cpu doesn't have HW divider.
-    setOperationAction(ISD::SDIV,  MVT::i32, Expand);
-    setOperationAction(ISD::UDIV,  MVT::i32, Expand);
+    setOperationAction(ISD::SDIV,  MVT::i32, LibCall);
+    setOperationAction(ISD::UDIV,  MVT::i32, LibCall);
   }
 
   if (Subtarget->isTargetWindows() && !Subtarget->hasDivide()) {
@@ -3222,9 +3222,9 @@ ARMTargetLowering::LowerFormalArguments(SDValue Chain,
                    "Byval arguments cannot be implicit");
             unsigned CurByValIndex = CCInfo.getInRegsParamsProcessed();
 
-            int FrameIndex = StoreByValRegs(CCInfo, DAG, dl, Chain, CurOrigArg,
-                                            CurByValIndex, VA.getLocMemOffset(),
-                                            Flags.getByValSize());
+            int FrameIndex = StoreByValRegs(
+                CCInfo, DAG, dl, Chain, &*CurOrigArg, CurByValIndex,
+                VA.getLocMemOffset(), Flags.getByValSize());
             InVals.push_back(DAG.getFrameIndex(FrameIndex, PtrVT));
             CCInfo.nextInRegsParam();
           } else {
@@ -3915,7 +3915,7 @@ SDValue ARMTargetLowering::LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG) const {
     else
       LC = RTLIB::getFPTOUINT(Op.getOperand(0).getValueType(),
                               Op.getValueType());
-    return makeLibCall(DAG, LC, Op.getValueType(), &Op.getOperand(0), 1,
+    return makeLibCall(DAG, LC, Op.getValueType(), Op.getOperand(0),
                        /*isSigned*/ false, SDLoc(Op)).first;
   }
 
@@ -3967,7 +3967,7 @@ SDValue ARMTargetLowering::LowerINT_TO_FP(SDValue Op, SelectionDAG &DAG) const {
     else
       LC = RTLIB::getUINTTOFP(Op.getOperand(0).getValueType(),
                               Op.getValueType());
-    return makeLibCall(DAG, LC, Op.getValueType(), &Op.getOperand(0), 1,
+    return makeLibCall(DAG, LC, Op.getValueType(), Op.getOperand(0),
                        /*isSigned*/ false, SDLoc(Op)).first;
   }
 
@@ -7033,7 +7033,7 @@ void ARMTargetLowering::EmitSjLjDispatchBlock(MachineInstr *MI,
       for (SmallVectorImpl<unsigned>::iterator
              CSI = CallSiteIdxs.begin(), CSE = CallSiteIdxs.end();
            CSI != CSE; ++CSI) {
-        CallSiteNumToLPad[*CSI].push_back(BB);
+        CallSiteNumToLPad[*CSI].push_back(&*BB);
         MaxCSNum = std::max(MaxCSNum, *CSI);
       }
       break;
@@ -7503,8 +7503,7 @@ ARMTargetLowering::EmitStructByval(MachineInstr *MI,
   // Otherwise, we will generate unrolled scalar copies.
   const TargetInstrInfo *TII = Subtarget->getInstrInfo();
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
-  MachineFunction::iterator It = BB;
-  ++It;
+  MachineFunction::iterator It = ++BB->getIterator();
 
   unsigned dest = MI->getOperand(0).getReg();
   unsigned src = MI->getOperand(1).getReg();
@@ -7892,8 +7891,7 @@ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     // destination vreg to set, the condition code register to branch on, the
     // true/false values to select between, and a branch opcode to use.
     const BasicBlock *LLVM_BB = BB->getBasicBlock();
-    MachineFunction::iterator It = BB;
-    ++It;
+    MachineFunction::iterator It = ++BB->getIterator();
 
     //  thisMBB:
     //  ...
@@ -8011,8 +8009,7 @@ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     //     RSBBB: V3 = RSBri V2, 0  (compute ABS if V2 < 0)
     //     SinkBB: V1 = PHI(V2, V3)
     const BasicBlock *LLVM_BB = BB->getBasicBlock();
-    MachineFunction::iterator BBI = BB;
-    ++BBI;
+    MachineFunction::iterator BBI = ++BB->getIterator();
     MachineFunction *Fn = BB->getParent();
     MachineBasicBlock *RSBBB = Fn->CreateMachineBasicBlock(LLVM_BB);
     MachineBasicBlock *SinkBB  = Fn->CreateMachineBasicBlock(LLVM_BB);
@@ -11386,8 +11383,8 @@ SDValue ARMTargetLowering::LowerFP_EXTEND(SDValue Op, SelectionDAG &DAG) const {
   LC = RTLIB::getFPEXT(Op.getOperand(0).getValueType(), Op.getValueType());
 
   SDValue SrcVal = Op.getOperand(0);
-  return makeLibCall(DAG, LC, Op.getValueType(), &SrcVal, 1,
-                     /*isSigned*/ false, SDLoc(Op)).first;
+  return makeLibCall(DAG, LC, Op.getValueType(), SrcVal, /*isSigned*/ false,
+                     SDLoc(Op)).first;
 }
 
 SDValue ARMTargetLowering::LowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
@@ -11399,8 +11396,8 @@ SDValue ARMTargetLowering::LowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const {
   LC = RTLIB::getFPROUND(Op.getOperand(0).getValueType(), Op.getValueType());
 
   SDValue SrcVal = Op.getOperand(0);
-  return makeLibCall(DAG, LC, Op.getValueType(), &SrcVal, 1,
-                     /*isSigned*/ false, SDLoc(Op)).first;
+  return makeLibCall(DAG, LC, Op.getValueType(), SrcVal, /*isSigned*/ false,
+                     SDLoc(Op)).first;
 }
 
 bool

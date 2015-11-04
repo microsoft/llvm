@@ -968,12 +968,16 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
   DebugLoc DL;
   bool isTailCall = false;
   bool isInterrupt = false;
+  bool isTrap = false;
   if (MBB.end() != MI) {
     DL = MI->getDebugLoc();
     unsigned RetOpcode = MI->getOpcode();
     isTailCall = (RetOpcode == ARM::TCRETURNdi || RetOpcode == ARM::TCRETURNri);
     isInterrupt =
         RetOpcode == ARM::SUBS_PC_LR || RetOpcode == ARM::t2SUBS_PC_LR;
+    isTrap =
+        RetOpcode == ARM::TRAP || RetOpcode == ARM::TRAPNaCl ||
+        RetOpcode == ARM::tTRAP;
   }
 
   SmallVector<unsigned, 4> Regs;
@@ -990,7 +994,7 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
         continue;
 
       if (Reg == ARM::LR && !isTailCall && !isVarArg && !isInterrupt &&
-          STI.hasV5TOps()) {
+          !isTrap && STI.hasV5TOps()) {
         if (MBB.succ_empty()) {
           Reg = ARM::PC;
           DeleteRet = true;
@@ -1895,7 +1899,7 @@ void ARMFrameLowering::adjustForSegmentedStacks(
   // we do not have to do the following updates for them.
   for (int Idx = 0; Idx < NbAddedBlocks; ++Idx) {
     BeforePrologueRegion.erase(AddedBlocks[Idx]);
-    MF.insert(&PrologueMBB, AddedBlocks[Idx]);
+    MF.insert(PrologueMBB.getIterator(), AddedBlocks[Idx]);
   }
 
   for (MachineBasicBlock *MBB : BeforePrologueRegion) {

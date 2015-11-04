@@ -77,8 +77,8 @@ private:
   void EmitJumpTableInfo() override;
   void EmitConstantPool() override;
   void EmitFunctionBodyStart() override;
-
   void EmitInstruction(const MachineInstr *MI) override;
+  void EmitEndOfAsmFile(Module &M) override;
 
   std::string getRegTypeName(unsigned RegNo) const;
   static std::string toString(const APFloat &APF);
@@ -105,7 +105,12 @@ static std::string OpcodeName(const WebAssemblyInstrInfo *TII,
   bool HasType = std::string::npos != Under;
   std::string::size_type NameEnd = HasType ? Under : Len;
   std::string Name(&N[0], &N[NameEnd]);
-  return HasType ? (std::string(&N[NameEnd + 1], &N[Len]) + '.' + Name) : Name;
+  if (!HasType)
+    return Name;
+  for (const char *typelessOpcode : { "return", "call", "br_if" })
+    if (Name == typelessOpcode)
+      return Name;
+  return std::string(&N[NameEnd + 1], &N[Len]) + '.' + Name;
 }
 
 static std::string toSymbol(StringRef S) { return ("$" + S).str(); }
@@ -323,6 +328,28 @@ void WebAssemblyAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     OS << "\tset_local " << regToString(Operand) << ", pop";
     OutStreamer->EmitRawText(OS.str());
   }
+}
+
+void WebAssemblyAsmPrinter::EmitEndOfAsmFile(Module &M) {
+    SmallString<128> Str;
+    raw_svector_ostream OS(Str);
+  for (const Function &F : M)
+    if (F.isDeclarationForLinker()) {
+      assert(F.hasName() && "imported functions must have a name");
+      if (F.getName().startswith("llvm."))
+	continue;
+      if (Str.empty())
+	OS << "\t.imports\n";
+      Type *Rt = F.getReturnType();
+      OS << "\t.import " <<  toSymbol(F.getName()) << " \"\" \"" << F.getName()
+	 << "\"";
+      for (const Argument &A : F.args())
+	OS << " (param " << toString(A.getType()) << ')';
+      if (!Rt->isVoidTy())
+	OS << " (result " << toString(Rt) << ')';
+      OS << '\n';
+  }
+  OutStreamer->EmitRawText(OS.str());
 }
 
 // Force static initialization.

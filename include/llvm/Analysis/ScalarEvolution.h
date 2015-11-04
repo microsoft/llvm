@@ -128,11 +128,9 @@ namespace llvm {
     /// stream.  This should really only be used for debugging purposes.
     void print(raw_ostream &OS) const;
 
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
     /// This method is used for debugging.
     ///
     void dump() const;
-#endif
   };
 
   // Specialize FoldingSetTrait for SCEV to avoid needing to compute
@@ -575,6 +573,14 @@ namespace llvm {
     ///
     bool isKnownPredicateWithRanges(ICmpInst::Predicate Pred,
                                     const SCEV *LHS, const SCEV *RHS);
+
+    /// Try to prove the condition described by "LHS Pred RHS" by ruling out
+    /// integer overflow.
+    ///
+    /// For instance, this will return true for "A s< (A + C)<nsw>" if C is
+    /// positive.
+    bool isKnownPredicateViaNoOverflow(ICmpInst::Predicate Pred,
+                                       const SCEV *LHS, const SCEV *RHS);
 
     /// Try to split Pred LHS RHS into logical conjunctions (and's) and try to
     /// prove them individually.
