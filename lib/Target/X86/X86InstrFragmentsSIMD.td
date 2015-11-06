@@ -382,6 +382,10 @@ def X86Vfpclasss   : SDNode<"X86ISD::VFPCLASS", SDTypeProfile<1, 2, [SDTCisInt<0
 def X86SubVBroadcast : SDNode<"X86ISD::SUBV_BROADCAST",
                     SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>,
                                          SDTCisSubVecOfVec<1, 0>]>, []>;
+// SDTCisSubVecOfVec restriction cannot be applied for 128 bit version of VBROADCASTI32x2.
+def X86SubV32x2Broadcast : SDNode<"X86ISD::SUBV_BROADCAST",
+                    SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVec<1>]>, []>;
+
 def X86VBroadcast : SDNode<"X86ISD::VBROADCAST", SDTVBroadcast>;
 def X86Vinsert   : SDNode<"X86ISD::VINSERT",  SDTypeProfile<1, 3,
                               [SDTCisSameAs<0, 1>, SDTCisPtrTy<3>]>, []>;
@@ -513,6 +517,11 @@ def X86cvtph2ps     : SDNode<"ISD::FP16_TO_FP",
                                                    SDTCVecEltisVT<1, i16>,
                                                    SDTCisFP<0>, SDTCisInt<2>]> >;
 
+def X86cvtps2ph   : SDNode<"ISD::FP_TO_FP16",
+                        SDTypeProfile<1, 3, [SDTCisVec<0>, SDTCisVec<1>,
+                                             SDTCVecEltisVT<0, i16>,
+                                             SDTCVecEltisVT<1, f32>,
+                                             SDTCisFP<1>, SDTCisInt<2>, SDTCisInt<3>]> >;
 def X86vfpextRnd  : SDNode<"X86ISD::VFPEXT",
                         SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisVec<1>,
                                              SDTCisFP<0>, SDTCisFP<1>,

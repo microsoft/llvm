@@ -188,6 +188,15 @@ std::string ARM_MC::ParseARMTriple(const Triple &TT, StringRef CPU) {
       // Use CPU to figure out the exact features.
       ARMArchFeature = "+v7";
     break;
+  case Triple::ARMSubArch_v7k:
+    if (NoCPU)
+      // v7k: FeatureNEON, FeatureDB, FeatureDSP, FeatureHasRAS
+      //      A7
+      ARMArchFeature = "+v7,+a7,+neon,+db,+dsp,+ras";
+    else
+      // Use CPU to figure out the exact features.
+      ARMArchFeature = "+v7";
+    break;
   case Triple::ARMSubArch_v7:
     // v7 CPUs have lots of different feature sets. If no CPU is specified,
     // then assume v7a (e.g. cortex-a8) feature set. Otherwise, return

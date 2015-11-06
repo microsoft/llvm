@@ -616,15 +616,18 @@ ModRefInfo BasicAAResult::getArgModRefInfo(ImmutableCallSite CS,
   }
   // FIXME: Handle memset_pattern4 and memset_pattern8 also.
 
+  if (CS.paramHasAttr(ArgIdx + 1, Attribute::ReadOnly))
+    return MRI_Ref;
+
+  if (CS.paramHasAttr(ArgIdx + 1, Attribute::ReadNone))
+    return MRI_NoModRef;
+
   return AAResultBase::getArgModRefInfo(CS, ArgIdx);
 }
 
 static bool isAssumeIntrinsic(ImmutableCallSite CS) {
   const IntrinsicInst *II = dyn_cast<IntrinsicInst>(CS.getInstruction());
-  if (II && II->getIntrinsicID() == Intrinsic::assume)
-    return true;
-
-  return false;
+  return II && II->getIntrinsicID() == Intrinsic::assume;
 }
 
 #ifndef NDEBUG
@@ -1565,6 +1568,10 @@ BasicAAResult BasicAA::run(Function &F, AnalysisManager<Function> *AM) {
                        AM->getResult<AssumptionAnalysis>(F),
                        AM->getCachedResult<DominatorTreeAnalysis>(F),
                        AM->getCachedResult<LoopAnalysis>(F));
+}
+
+BasicAAWrapperPass::BasicAAWrapperPass() : FunctionPass(ID) {
+    initializeBasicAAWrapperPassPass(*PassRegistry::getPassRegistry());
 }
 
 char BasicAAWrapperPass::ID = 0;

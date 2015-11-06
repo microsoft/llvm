@@ -86,6 +86,36 @@ Value *SCEVExpander::ReuseOrCreateCast(Value *V, Type *Ty,
   return Ret;
 }
 
+static BasicBlock::iterator findInsertPointAfter(Instruction *I,
+                                                 BasicBlock *MustDominate) {
+  BasicBlock::iterator IP = ++I->getIterator();
+  if (auto *II = dyn_cast<InvokeInst>(I))
+    IP = II->getNormalDest()->begin();
+  if (auto *CPI = dyn_cast<CatchPadInst>(I))
+    IP = CPI->getNormalDest()->begin();
+
+  while (isa<PHINode>(IP))
+    ++IP;
+
+  while (IP->isEHPad()) {
+    if (isa<LandingPadInst>(IP) || isa<CleanupPadInst>(IP)) {
+      ++IP;
+    } else if (auto *TPI = dyn_cast<TerminatePadInst>(IP)) {
+      IP = TPI->getUnwindDest()->getFirstNonPHI();
+    } else if (auto *CEPI = dyn_cast<CatchEndPadInst>(IP)) {
+      IP = CEPI->getUnwindDest()->getFirstNonPHI();
+    } else if (auto *CEPI = dyn_cast<CleanupEndPadInst>(IP)) {
+      IP = CEPI->getUnwindDest()->getFirstNonPHI();
+    } else if (isa<CatchPadInst>(IP)) {
+      IP = MustDominate->getFirstInsertionPt();
+    } else {
+      llvm_unreachable("unexpected eh pad!");
+    }
+  }
+
+  return IP;
+}
+
 /// InsertNoopCastOfTo - Insert a cast of V to the specified type,
 /// which must be possible with a noop cast, doing what we can to share
 /// the casts.
@@ -135,21 +165,14 @@ Value *SCEVExpander::InsertNoopCastOfTo(Value *V, Type *Ty) {
     while ((isa<BitCastInst>(IP) &&
             isa<Argument>(cast<BitCastInst>(IP)->getOperand(0)) &&
             cast<BitCastInst>(IP)->getOperand(0) != A) ||
-           isa<DbgInfoIntrinsic>(IP) ||
-           isa<LandingPadInst>(IP))
+           isa<DbgInfoIntrinsic>(IP))
       ++IP;
     return ReuseOrCreateCast(A, Ty, Op, IP);
   }
 
   // Cast the instruction immediately after the instruction.
   Instruction *I = cast<Instruction>(V);
-  BasicBlock::iterator IP = ++I->getIterator();
-  if (InvokeInst *II = dyn_cast<InvokeInst>(I))
-    IP = II->getNormalDest()->begin();
-  if (CatchPadInst *CPI = dyn_cast<CatchPadInst>(I))
-    IP = CPI->getNormalDest()->begin();
-  while (isa<PHINode>(IP) || isa<LandingPadInst>(IP))
-    ++IP;
+  BasicBlock::iterator IP = findInsertPointAfter(I, Builder.GetInsertBlock());
   return ReuseOrCreateCast(I, Ty, Op, IP);
 }
 
@@ -1395,11 +1418,7 @@ Value *SCEVExpander::visitAddRecExpr(const SCEVAddRecExpr *S) {
     Value *V = expand(SE.getAddRecExpr(NewOps, S->getLoop(),
                                        S->getNoWrapFlags(SCEV::FlagNW)));
     BasicBlock::iterator NewInsertPt =
-      std::next(BasicBlock::iterator(cast<Instruction>(V)));
-    BuilderType::InsertPointGuard Guard(Builder);
-    while (isa<PHINode>(NewInsertPt) || isa<DbgInfoIntrinsic>(NewInsertPt) ||
-           isa<LandingPadInst>(NewInsertPt))
-      ++NewInsertPt;
+        findInsertPointAfter(cast<Instruction>(V), Builder.GetInsertBlock());
     V = expandCodeFor(SE.getTruncateExpr(SE.getUnknown(V), Ty), nullptr,
                       &*NewInsertPt);
     return V;
@@ -1716,9 +1735,22 @@ unsigned SCEVExpander::replaceCongruentIVs(Loop *L, const DominatorTree *DT,
          PEnd = Phis.end(); PIter != PEnd; ++PIter) {
     PHINode *Phi = *PIter;
 
+    auto SimplifyPHINode = [&](PHINode *PN) -> Value * {
+      if (Value *V = SimplifyInstruction(PN, DL, &SE.TLI, &SE.DT, &SE.AC))
+        return V;
+      if (!SE.isSCEVable(PN->getType()))
+        return nullptr;
+      auto *Const = dyn_cast<SCEVConstant>(SE.getSCEV(PN));
+      if (!Const)
+        return nullptr;
+      return Const->getValue();
+    };
+
     // Fold constant phis. They may be congruent to other constant phis and
     // would confuse the logic below that expects proper IVs.
-    if (Value *V = SimplifyInstruction(Phi, DL, &SE.TLI, &SE.DT, &SE.AC)) {
+    if (Value *V = SimplifyPHINode(Phi)) {
+      if (V->getType() != Phi->getType())
+        continue;
       Phi->replaceAllUsesWith(V);
       DeadInsts.emplace_back(Phi);
       ++NumElim;
@@ -1923,6 +1955,43 @@ bool SCEVExpander::isHighCostExpansionHelper(
   // If we haven't recognized an expensive SCEV pattern, assume it's an
   // expression produced by program code.
   return false;
+}
+
+Value *SCEVExpander::expandCodeForPredicate(const SCEVPredicate *Pred,
+                                            Instruction *IP) {
+  assert(IP);
+  switch (Pred->getKind()) {
+  case SCEVPredicate::P_Union:
+    return expandUnionPredicate(cast<SCEVUnionPredicate>(Pred), IP);
+  case SCEVPredicate::P_Equal:
+    return expandEqualPredicate(cast<SCEVEqualPredicate>(Pred), IP);
+  }
+  llvm_unreachable("Unknown SCEV predicate type");
+}
+
+Value *SCEVExpander::expandEqualPredicate(const SCEVEqualPredicate *Pred,
+                                          Instruction *IP) {
+  Value *Expr0 = expandCodeFor(Pred->getLHS(), Pred->getLHS()->getType(), IP);
+  Value *Expr1 = expandCodeFor(Pred->getRHS(), Pred->getRHS()->getType(), IP);
+
+  Builder.SetInsertPoint(IP);
+  auto *I = Builder.CreateICmpNE(Expr0, Expr1, "ident.check");
+  return I;
+}
+
+Value *SCEVExpander::expandUnionPredicate(const SCEVUnionPredicate *Union,
+                                          Instruction *IP) {
+  auto *BoolType = IntegerType::get(IP->getContext(), 1);
+  Value *Check = ConstantInt::getNullValue(BoolType);
+
+  // Loop over all checks in this set.
+  for (auto Pred : Union->getPredicates()) {
+    auto *NextCheck = expandCodeForPredicate(Pred, IP);
+    Builder.SetInsertPoint(IP);
+    Check = Builder.CreateOr(Check, NextCheck);
+  }
+
+  return Check;
 }
 
 namespace {

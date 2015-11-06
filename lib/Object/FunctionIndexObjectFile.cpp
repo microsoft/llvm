@@ -1,4 +1,4 @@
-//===- FunctionIndexObjectFile.cpp - Function index file implementation ----===//
+//===- FunctionIndexObjectFile.cpp - Function index file implementation ---===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -32,14 +32,16 @@ std::unique_ptr<FunctionInfoIndex> FunctionIndexObjectFile::takeIndex() {
   return std::move(Index);
 }
 
-ErrorOr<MemoryBufferRef> FunctionIndexObjectFile::findBitcodeInObject(
-    const ObjectFile &Obj) {
+ErrorOr<MemoryBufferRef>
+FunctionIndexObjectFile::findBitcodeInObject(const ObjectFile &Obj) {
   for (const SectionRef &Sec : Obj.sections()) {
     StringRef SecName;
-    if (std::error_code EC = Sec.getName(SecName)) return EC;
+    if (std::error_code EC = Sec.getName(SecName))
+      return EC;
     if (SecName == ".llvmbc") {
       StringRef SecContents;
-      if (std::error_code EC = Sec.getContents(SecContents)) return EC;
+      if (std::error_code EC = Sec.getContents(SecContents))
+        return EC;
       return MemoryBufferRef(SecContents, Obj.getFileName());
     }
   }
@@ -47,22 +49,23 @@ ErrorOr<MemoryBufferRef> FunctionIndexObjectFile::findBitcodeInObject(
   return object_error::bitcode_section_not_found;
 }
 
-ErrorOr<MemoryBufferRef> FunctionIndexObjectFile::findBitcodeInMemBuffer(
-    MemoryBufferRef Object) {
+ErrorOr<MemoryBufferRef>
+FunctionIndexObjectFile::findBitcodeInMemBuffer(MemoryBufferRef Object) {
   sys::fs::file_magic Type = sys::fs::identify_magic(Object.getBuffer());
   switch (Type) {
-    case sys::fs::file_magic::bitcode:
-      return Object;
-    case sys::fs::file_magic::elf_relocatable:
-    case sys::fs::file_magic::macho_object:
-    case sys::fs::file_magic::coff_object: {
-      ErrorOr<std::unique_ptr<ObjectFile>> ObjFile =
-          ObjectFile::createObjectFile(Object, Type);
-      if (!ObjFile) return ObjFile.getError();
-      return findBitcodeInObject(*ObjFile->get());
-    }
-    default:
-      return object_error::invalid_file_type;
+  case sys::fs::file_magic::bitcode:
+    return Object;
+  case sys::fs::file_magic::elf_relocatable:
+  case sys::fs::file_magic::macho_object:
+  case sys::fs::file_magic::coff_object: {
+    ErrorOr<std::unique_ptr<ObjectFile>> ObjFile =
+        ObjectFile::createObjectFile(Object, Type);
+    if (!ObjFile)
+      return ObjFile.getError();
+    return findBitcodeInObject(*ObjFile->get());
+  }
+  default:
+    return object_error::invalid_file_type;
   }
 }
 
@@ -71,7 +74,8 @@ ErrorOr<MemoryBufferRef> FunctionIndexObjectFile::findBitcodeInMemBuffer(
 bool FunctionIndexObjectFile::hasFunctionSummaryInMemBuffer(
     MemoryBufferRef Object, LLVMContext &Context) {
   ErrorOr<MemoryBufferRef> BCOrErr = findBitcodeInMemBuffer(Object);
-  if (!BCOrErr) return false;
+  if (!BCOrErr)
+    return false;
 
   return hasFunctionSummary(BCOrErr.get(), Context, nullptr);
 }
@@ -81,16 +85,18 @@ bool FunctionIndexObjectFile::hasFunctionSummaryInMemBuffer(
 // function summary/index.
 ErrorOr<std::unique_ptr<FunctionIndexObjectFile>>
 FunctionIndexObjectFile::create(MemoryBufferRef Object, LLVMContext &Context,
-                                bool IsLazy) {
+                                const Module *ExportingModule, bool IsLazy) {
   std::unique_ptr<FunctionInfoIndex> Index;
 
   ErrorOr<MemoryBufferRef> BCOrErr = findBitcodeInMemBuffer(Object);
-  if (!BCOrErr) return BCOrErr.getError();
+  if (!BCOrErr)
+    return BCOrErr.getError();
 
-  ErrorOr<std::unique_ptr<FunctionInfoIndex>> IOrErr =
-      getFunctionInfoIndex(BCOrErr.get(), Context, nullptr, IsLazy);
+  ErrorOr<std::unique_ptr<FunctionInfoIndex>> IOrErr = getFunctionInfoIndex(
+      BCOrErr.get(), Context, nullptr, ExportingModule, IsLazy);
 
-  if (std::error_code EC = IOrErr.getError()) return EC;
+  if (std::error_code EC = IOrErr.getError())
+    return EC;
 
   Index = std::move(IOrErr.get());
 
@@ -104,11 +110,11 @@ std::error_code FunctionIndexObjectFile::findFunctionSummaryInMemBuffer(
     MemoryBufferRef Object, LLVMContext &Context, StringRef FunctionName) {
   sys::fs::file_magic Type = sys::fs::identify_magic(Object.getBuffer());
   switch (Type) {
-    case sys::fs::file_magic::bitcode: {
-      return readFunctionSummary(Object, Context, nullptr, FunctionName,
-                                 std::move(Index));
-    }
-    default:
-      return object_error::invalid_file_type;
+  case sys::fs::file_magic::bitcode: {
+    return readFunctionSummary(Object, Context, nullptr, FunctionName,
+                               std::move(Index));
+  }
+  default:
+    return object_error::invalid_file_type;
   }
 }

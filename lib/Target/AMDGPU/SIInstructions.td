@@ -2010,8 +2010,7 @@ multiclass SI_SPILL_SGPR <RegisterClass sgpr_class> {
   let UseNamedOperandTable = 1, Uses = [EXEC] in {
     def _SAVE : InstSI <
       (outs),
-      (ins sgpr_class:$src, i32imm:$frame_idx, SReg_128:$scratch_rsrc,
-           SReg_32:$scratch_offset),
+      (ins sgpr_class:$src, i32imm:$frame_idx),
       "", []
     > {
       let mayStore = 1;
@@ -2020,7 +2019,7 @@ multiclass SI_SPILL_SGPR <RegisterClass sgpr_class> {
 
     def _RESTORE : InstSI <
       (outs sgpr_class:$dst),
-      (ins i32imm:$frame_idx, SReg_128:$scratch_rsrc, SReg_32:$scratch_offset),
+      (ins i32imm:$frame_idx),
       "", []
     > {
       let mayStore = 0;
@@ -2617,10 +2616,9 @@ def : Pat <
 
 // Prevent expanding both fneg and fabs.
 
-// FIXME: Should use S_OR_B32
 def : Pat <
   (fneg (fabs f32:$src)),
-  (V_OR_B32_e32 $src, (V_MOV_B32_e32 0x80000000)) /* Set sign bit */
+  (S_OR_B32 $src, 0x80000000) /* Set sign bit */
 >;
 
 // FIXME: Should use S_OR_B32
@@ -3183,12 +3181,12 @@ def : Pat <
 
 def : Pat <
   (i1 (trunc i32:$a)),
-  (V_CMP_EQ_I32_e64 (V_AND_B32_e64 (i32 1), $a), 1)
+  (V_CMP_EQ_I32_e64 (S_AND_B32 (i32 1), $a), 1)
 >;
 
 def : Pat <
   (i1 (trunc i64:$a)),
-  (V_CMP_EQ_I32_e64 (V_AND_B32_e64 (i32 1),
+  (V_CMP_EQ_I32_e64 (S_AND_B32 (i32 1),
                     (EXTRACT_SUBREG $a, sub0)), 1)
 >;
 

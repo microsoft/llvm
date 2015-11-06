@@ -96,7 +96,8 @@ private:
 // Operand type (if any), followed by the lower-case version of the opcode's
 // name matching the names WebAssembly opcodes are expected to have. The
 // tablegen names are uppercase and suffixed with their type (after an
-// underscore).
+// underscore). Conversions are additionally prefixed with their input type
+// (before a double underscore).
 static std::string OpcodeName(const WebAssemblyInstrInfo *TII,
                               const MachineInstr *MI) {
   std::string N(StringRef(TII->getName(MI->getOpcode())).lower());
@@ -110,7 +111,14 @@ static std::string OpcodeName(const WebAssemblyInstrInfo *TII,
   for (const char *typelessOpcode : { "return", "call", "br_if" })
     if (Name == typelessOpcode)
       return Name;
-  return std::string(&N[NameEnd + 1], &N[Len]) + '.' + Name;
+  std::string Type(&N[NameEnd + 1], &N[Len]);
+  std::string::size_type DoubleUnder = Name.find("__");
+  bool IsConv = std::string::npos != DoubleUnder;
+  if (!IsConv)
+    return Type + '.' + Name;
+  std::string InType(&Name[0], &Name[DoubleUnder]);
+  return Type + '.' + std::string(&Name[DoubleUnder + 2], &Name[NameEnd]) +
+      '/' + InType;
 }
 
 static std::string toSymbol(StringRef S) { return ("$" + S).str(); }
@@ -261,33 +269,39 @@ void WebAssemblyAsmPrinter::EmitInstruction(const MachineInstr *MI) {
 
   switch (MI->getOpcode()) {
   case TargetOpcode::COPY:
-    OS << "get_local " << regToString(MI->getOperand(1));
+    OS << "get_local push, " << regToString(MI->getOperand(1));
     break;
   case WebAssembly::GLOBAL:
     // TODO: wasm64
-    OS << "i32.const " << toSymbol(MI->getOperand(1).getGlobal()->getName());
+    OS << "i32.const push, " << toSymbol(MI->getOperand(1).getGlobal()->getName());
     break;
   case WebAssembly::ARGUMENT_I32:
   case WebAssembly::ARGUMENT_I64:
   case WebAssembly::ARGUMENT_F32:
   case WebAssembly::ARGUMENT_F64:
-    OS << "get_local " << argToString(MI->getOperand(1));
+    OS << "get_local push, " << argToString(MI->getOperand(1));
     break;
-  case WebAssembly::Immediate_I32:
-    OS << "i32.const " << MI->getOperand(1).getImm();
+  case WebAssembly::Const_I32:
+    OS << "i32.const push, " << MI->getOperand(1).getImm();
     break;
-  case WebAssembly::Immediate_I64:
-    OS << "i64.const " << MI->getOperand(1).getImm();
+  case WebAssembly::Const_I64:
+    OS << "i64.const push, " << MI->getOperand(1).getImm();
     break;
-  case WebAssembly::Immediate_F32:
-    OS << "f32.const " << toString(MI->getOperand(1).getFPImm()->getValueAPF());
+  case WebAssembly::Const_F32:
+    OS << "f32.const push, " << toString(MI->getOperand(1).getFPImm()->getValueAPF());
     break;
-  case WebAssembly::Immediate_F64:
-    OS << "f64.const " << toString(MI->getOperand(1).getFPImm()->getValueAPF());
+  case WebAssembly::Const_F64:
+    OS << "f64.const push, " << toString(MI->getOperand(1).getFPImm()->getValueAPF());
     break;
   default: {
     OS << OpcodeName(TII, MI);
     bool NeedComma = false;
+    bool DefsPushed = false;
+    if (NumDefs != 0 && !MI->isCall()) {
+      OS << " push";
+      NeedComma = true;
+      DefsPushed = true;
+    }
     for (const MachineOperand &MO : MI->uses()) {
       if (MO.isReg() && MO.isImplicit())
         continue;
@@ -314,6 +328,12 @@ void WebAssemblyAsmPrinter::EmitInstruction(const MachineInstr *MI) {
         OS << toSymbol(MO.getMBB()->getSymbol()->getName());
         break;
       }
+      if (NumDefs != 0 && !DefsPushed) {
+        // Special-case for calls; print the push after the callee.
+        assert(MI->isCall());
+        OS << ", push";
+        DefsPushed = true;
+      }
     }
     break;
   }
@@ -331,24 +351,25 @@ void WebAssemblyAsmPrinter::EmitInstruction(const MachineInstr *MI) {
 }
 
 void WebAssemblyAsmPrinter::EmitEndOfAsmFile(Module &M) {
-    SmallString<128> Str;
-    raw_svector_ostream OS(Str);
+  SmallString<128> Str;
+  raw_svector_ostream OS(Str);
   for (const Function &F : M)
     if (F.isDeclarationForLinker()) {
       assert(F.hasName() && "imported functions must have a name");
       if (F.getName().startswith("llvm."))
-	continue;
+        continue;
       if (Str.empty())
-	OS << "\t.imports\n";
+        OS << "\t.imports\n";
       Type *Rt = F.getReturnType();
-      OS << "\t.import " <<  toSymbol(F.getName()) << " \"\" \"" << F.getName()
-	 << "\"";
+      OS << "\t.import " << toSymbol(F.getName()) << " \"\" \"" << F.getName()
+         << "\" (param";
       for (const Argument &A : F.args())
-	OS << " (param " << toString(A.getType()) << ')';
+        OS << ' ' << toString(A.getType());
+      OS << ')';
       if (!Rt->isVoidTy())
-	OS << " (result " << toString(Rt) << ')';
+        OS << " (result " << toString(Rt) << ')';
       OS << '\n';
-  }
+    }
   OutStreamer->EmitRawText(OS.str());
 }
 

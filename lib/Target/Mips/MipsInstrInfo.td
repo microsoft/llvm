@@ -77,6 +77,9 @@ def MipsThreadPointer: SDNode<"MipsISD::ThreadPointer", SDT_MipsThreadPointer>;
 def MipsRet : SDNode<"MipsISD::Ret", SDTNone,
                      [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
+def MipsERet : SDNode<"MipsISD::ERet", SDTNone,
+                      [SDNPHasChain, SDNPOptInGlue, SDNPSideEffect]>;
+
 // These are target-independent nodes, but have target-specific formats.
 def callseq_start : SDNode<"ISD::CALLSEQ_START", SDT_MipsCallSeqStart,
                            [SDNPHasChain, SDNPSideEffect, SDNPOutGlue]>;
@@ -378,6 +381,33 @@ include "MipsInstrFormats.td"
 // Mips Operand, Complex Patterns and Transformations Definitions.
 //===----------------------------------------------------------------------===//
 
+class ConstantUImmAsmOperandClass<int Bits, list<AsmOperandClass> Supers = [],
+                                  int Offset = 0> : AsmOperandClass {
+  let Name = "ConstantUImm" # Bits # "_" # Offset;
+  let RenderMethod = "addConstantUImmOperands<" # Bits # ", " # Offset # ">";
+  let PredicateMethod = "isConstantUImm<" # Bits # ", " # Offset # ">";
+  let SuperClasses = Supers;
+  let DiagnosticType = "UImm" # Bits # "_" # Offset;
+}
+
+def ConstantUImm4AsmOperandClass
+    : ConstantUImmAsmOperandClass<4, []>;
+def ConstantUImm3AsmOperandClass
+    : ConstantUImmAsmOperandClass<3, [ConstantUImm4AsmOperandClass]>;
+def ConstantUImm2Plus1AsmOperandClass
+    : ConstantUImmAsmOperandClass<2, [ConstantUImm3AsmOperandClass], 1>;
+def ConstantUImm2AsmOperandClass
+    : ConstantUImmAsmOperandClass<2, [ConstantUImm3AsmOperandClass]>;
+def ConstantUImm1AsmOperandClass
+    : ConstantUImmAsmOperandClass<1, [ConstantUImm2AsmOperandClass]>;
+def ConstantImmzAsmOperandClass : AsmOperandClass {
+  let Name = "ConstantImmz";
+  let RenderMethod = "addConstantUImmOperands<1>";
+  let PredicateMethod = "isConstantImmz";
+  let SuperClasses = [ConstantUImm1AsmOperandClass];
+  let DiagnosticType = "Immz";
+}
+
 def MipsJumpTargetAsmOperand : AsmOperandClass {
   let Name = "JumpTarget";
   let ParserMethod = "parseJumpTarget";
@@ -447,15 +477,22 @@ def simm16_64   : Operand<i64> {
 // Zero
 def uimmz       : Operand<i32> {
   let PrintMethod = "printUnsignedImm";
+  let ParserMatchClass = ConstantImmzAsmOperandClass;
 }
 
-// Unsigned Operand
-def uimm2 : Operand<i32> {
-  let PrintMethod = "printUnsignedImm";
-}
+// Unsigned Operands
+foreach I = {1, 2, 3, 4} in
+  def uimm # I : Operand<i32> {
+    let PrintMethod = "printUnsignedImm";
+    let ParserMatchClass =
+        !cast<AsmOperandClass>("ConstantUImm" # I # "AsmOperandClass");
+  }
 
-def uimm3 : Operand<i32> {
+def uimm2_plus1 : Operand<i32> {
   let PrintMethod = "printUnsignedImm";
+  let EncoderMethod = "getUImmWithOffsetEncoding<2, 1>";
+  let DecoderMethod = "DecodeUImmWithOffset<2, 1>";
+  let ParserMatchClass = ConstantUImm2Plus1AsmOperandClass;
 }
 
 def uimm5       : Operand<i32> {
@@ -1146,6 +1183,9 @@ class TrapBase<Instruction RealInst>
 let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1, hasCtrlDep=1 in
 def RetRA : PseudoSE<(outs), (ins), [(MipsRet)]>;
 
+let isReturn=1, isTerminator=1, isBarrier=1, hasCtrlDep=1, hasSideEffects=1 in
+def ERet : PseudoSE<(outs), (ins), [(MipsERet)]>;
+
 let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 def ADJCALLSTACKDOWN : MipsPseudo<(outs), (ins i32imm:$amt),
                                   [(callseq_start timm:$amt)]>;
@@ -1332,8 +1372,8 @@ let DecoderNamespace = "COP3_" in {
 }
 }
 
-def SYNC : MMRel, SYNC_FT<"sync">, SYNC_FM, ISA_MIPS32;
-def SYNCI : MMRel, SYNCI_FT<"synci">, SYNCI_FM, ISA_MIPS32R2;
+def SYNC : MMRel, StdMMR6Rel, SYNC_FT<"sync">, SYNC_FM, ISA_MIPS32;
+def SYNCI : MMRel, StdMMR6Rel, SYNCI_FT<"synci">, SYNCI_FM, ISA_MIPS32R2;
 
 let AdditionalPredicates = [NotInMicroMips] in {
   def TEQ : MMRel, TEQ_FT<"teq", GPR32Opnd>, TEQ_FM<0x34>, ISA_MIPS2;
@@ -1565,9 +1605,9 @@ def PseudoSDIV : MultDivPseudo<SDIV, ACC64, GPR32Opnd, MipsDivRem, II_DIV,
                                0, 1, 1>, ISA_MIPS1_NOT_32R6_64R6;
 def PseudoUDIV : MultDivPseudo<UDIV, ACC64, GPR32Opnd, MipsDivRemU, II_DIVU,
                                0, 1, 1>, ISA_MIPS1_NOT_32R6_64R6;
-
+let AdditionalPredicates = [NotInMicroMips] in {
 def RDHWR : MMRel, ReadHardware<GPR32Opnd, HWRegsOpnd>, RDHWR_FM;
-
+}
 def EXT : MMRel, ExtBase<"ext", GPR32Opnd, uimm5, MipsExt>, EXT_FM<0>;
 def INS : MMRel, InsBase<"ins", GPR32Opnd, uimm5, MipsIns>, EXT_FM<4>;
 
@@ -1579,9 +1619,9 @@ def MTC2 : MTC3OP<"mtc2", COP2Opnd, GPR32Opnd>, MFC3OP_FM<0x12, 4>;
 
 class Barrier<string asmstr> : InstSE<(outs), (ins), asmstr, [], NoItinerary,
                                       FrmOther, asmstr>;
-def SSNOP : MMRel, Barrier<"ssnop">, BARRIER_FM<1>;
+def SSNOP : MMRel, StdMMR6Rel, Barrier<"ssnop">, BARRIER_FM<1>;
 def EHB : MMRel, Barrier<"ehb">, BARRIER_FM<3>;
-def PAUSE : MMRel, Barrier<"pause">, BARRIER_FM<5>, ISA_MIPS32R2;
+def PAUSE : MMRel, StdMMR6Rel, Barrier<"pause">, BARRIER_FM<5>, ISA_MIPS32R2;
 
 // JR_HB and JALR_HB are defined here using the new style naming
 // scheme because some of this code is shared with Mips32r6InstrInfo.td
@@ -2076,6 +2116,16 @@ let AddedComplexity = 40 in {
   def : LoadRegImmPat<LW, i32, load>;
   }
 }
+
+// Atomic load patterns.
+def : MipsPat<(atomic_load_8 addr:$a), (LB addr:$a)>;
+def : MipsPat<(atomic_load_16 addr:$a), (LH addr:$a)>;
+def : MipsPat<(atomic_load_32 addr:$a), (LW addr:$a)>;
+
+// Atomic store patterns.
+def : MipsPat<(atomic_store_8 addr:$a, GPR32:$v), (SB GPR32:$v, addr:$a)>;
+def : MipsPat<(atomic_store_16 addr:$a, GPR32:$v), (SH GPR32:$v, addr:$a)>;
+def : MipsPat<(atomic_store_32 addr:$a, GPR32:$v), (SW GPR32:$v, addr:$a)>;
 
 //===----------------------------------------------------------------------===//
 // Floating Point Support

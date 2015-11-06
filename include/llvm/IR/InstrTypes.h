@@ -1120,6 +1120,16 @@ struct OperandBundleUse {
   OperandBundleUse() {}
   explicit OperandBundleUse(StringRef Tag, ArrayRef<Use> Inputs)
       : Tag(Tag), Inputs(Inputs) {}
+
+  /// \brief Return true if all the operands in this operand bundle have the
+  /// attribute A.
+  ///
+  /// Currently there is no way to have attributes on operand bundles differ on
+  /// a per operand granularity.
+  bool operandsHaveAttr(Attribute::AttrKind A) const {
+    // Conservative answer:  no operands have any attributes.
+    return false;
+  };
 };
 
 /// \brief A container for an operand bundle being viewed as a set of values
@@ -1196,27 +1206,35 @@ public:
   /// \brief Return true if this User has any operand bundles.
   bool hasOperandBundles() const { return getNumOperandBundles() != 0; }
 
+  /// \brief Return the index of the first bundle operand in the Use array.
+  unsigned getBundleOperandsStartIndex() const {
+    assert(hasOperandBundles() && "Don't call otherwise!");
+    return bundle_op_info_begin()->Begin;
+  }
+
+  /// \brief Return the index of the last bundle operand in the Use array.
+  unsigned getBundleOperandsEndIndex() const {
+    assert(hasOperandBundles() && "Don't call otherwise!");
+    return bundle_op_info_end()[-1].End;
+  }
+
   /// \brief Return the total number operands (not operand bundles) used by
   /// every operand bundle in this OperandBundleUser.
   unsigned getNumTotalBundleOperands() const {
     if (!hasOperandBundles())
       return 0;
 
-    auto *Begin = bundle_op_info_begin();
-    auto *Back = bundle_op_info_end() - 1;
+    unsigned Begin = getBundleOperandsStartIndex();
+    unsigned End = getBundleOperandsEndIndex();
 
-    assert(Begin <= Back && "hasOperandBundles() returned true!");
-
-    return Back->End - Begin->Begin;
+    assert(Begin <= End && "Should be!");
+    return End - Begin;
   }
 
   /// \brief Return the operand bundle at a specific index.
   OperandBundleUse getOperandBundle(unsigned Index) const {
     assert(Index < getNumOperandBundles() && "Index out of bounds!");
-    auto *BOI = bundle_op_info_begin() + Index;
-    auto op_begin = static_cast<const InstrTy *>(this)->op_begin();
-    ArrayRef<Use> Inputs(op_begin + BOI->Begin, op_begin + BOI->End);
-    return OperandBundleUse(BOI->Tag->getKey(), Inputs);
+    return operandBundleFromBundleOpInfo(*(bundle_op_info_begin() + Index));
   }
 
   /// \brief Return the number of operand bundles with the tag Name attached to
@@ -1244,6 +1262,18 @@ public:
     }
 
     return None;
+  }
+
+  /// \brief Return the operand bundle for the operand at index OpIdx.
+  ///
+  /// It is an error to call this with an OpIdx that does not correspond to an
+  /// bundle operand.
+  OperandBundleUse getOperandBundleForOperand(unsigned OpIdx) const {
+    for (auto &BOI : bundle_op_infos())
+      if (BOI.Begin <= OpIdx && OpIdx < BOI.End)
+        return operandBundleFromBundleOpInfo(BOI);
+
+    llvm_unreachable("Did not find operand bundle for operand!");
   }
 
   /// \brief Return true if this operand bundle user has operand bundles that
@@ -1308,6 +1338,15 @@ protected:
     /// bundle ends.
     uint32_t End;
   };
+
+  /// \brief Simple helper function to map a BundleOpInfo to an
+  /// OperandBundleUse.
+  OperandBundleUse
+  operandBundleFromBundleOpInfo(const BundleOpInfo &BOI) const {
+    auto op_begin = static_cast<const InstrTy *>(this)->op_begin();
+    ArrayRef<Use> Inputs(op_begin + BOI.Begin, op_begin + BOI.End);
+    return OperandBundleUse(BOI.Tag->getKey(), Inputs);
+  }
 
   typedef BundleOpInfo *bundle_op_iterator;
   typedef const BundleOpInfo *const_bundle_op_iterator;

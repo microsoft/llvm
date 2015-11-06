@@ -2391,7 +2391,7 @@ multiclass MUBUF_Atomic <mubuf op, string name, RegisterClass rc,
 
       defm _ADDR64 : MUBUFAtomicAddr64_m <
         op, name#"_addr64", (outs),
-        (ins rc:$vdata, SReg_128:$srsrc, VReg_64:$vaddr,
+        (ins rc:$vdata, VReg_64:$vaddr, SReg_128:$srsrc,
              SCSrc_32:$soffset, mbuf_offset:$offset, slc:$slc),
         name#" $vdata, $vaddr, $srsrc, $soffset addr64"#"$offset"#"$slc", [], 0
       >;
@@ -2410,7 +2410,7 @@ multiclass MUBUF_Atomic <mubuf op, string name, RegisterClass rc,
 
       defm _RTN_ADDR64 : MUBUFAtomicAddr64_m <
         op, name#"_rtn_addr64", (outs rc:$vdata),
-        (ins rc:$vdata_in, SReg_128:$srsrc, VReg_64:$vaddr,
+        (ins rc:$vdata_in, VReg_64:$vaddr, SReg_128:$srsrc,
              SCSrc_32:$soffset, mbuf_offset:$offset, slc:$slc),
         name#" $vdata, $vaddr, $srsrc, $soffset addr64"#"$offset"#" glc"#"$slc",
         [(set vt:$vdata,
@@ -2433,6 +2433,8 @@ multiclass MUBUF_Atomic <mubuf op, string name, RegisterClass rc,
   } // mayStore = 1, mayLoad = 1, hasPostISelHook = 1
 }
 
+// FIXME: tfe can't be an operand because it requires a separate
+// opcode because it needs an N+1 register class dest register.
 multiclass MUBUF_Load_Helper <mubuf op, string name, RegisterClass regClass,
                               ValueType load_vt = i32,
                               SDPatternOperator ld = null_frag> {

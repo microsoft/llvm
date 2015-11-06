@@ -355,3 +355,4 @@ define i64 @ldp_sext_int_post(i32* %p) nounwind {
   %add = add nsw i64 %sexttmp1, %sexttmp
   ret i64 %add
 }
+

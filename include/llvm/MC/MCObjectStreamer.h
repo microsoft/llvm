@@ -112,7 +112,7 @@ public:
                             unsigned MaxBytesToEmit = 0) override;
   void EmitCodeAlignment(unsigned ByteAlignment,
                          unsigned MaxBytesToEmit = 0) override;
-  bool EmitValueToOffset(const MCExpr *Offset, unsigned char Value) override;
+  void emitValueToOffset(const MCExpr *Offset, unsigned char Value) override;
   void EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
                              unsigned Column, unsigned Flags,
                              unsigned Isa, unsigned Discriminator,
@@ -125,7 +125,6 @@ public:
   void EmitGPRel32Value(const MCExpr *Value) override;
   void EmitGPRel64Value(const MCExpr *Value) override;
   void EmitFill(uint64_t NumBytes, uint8_t FillValue) override;
-  void EmitZeros(uint64_t NumBytes) override;
   void FinishImpl() override;
 
   /// Emit the absolute difference between two symbols if possible.

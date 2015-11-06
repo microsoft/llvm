@@ -61,10 +61,12 @@ private:
   /*
    * Value::SubclassData
    *
-   * bit 0  : HasLazyArguments
-   * bit 1  : HasPrefixData
-   * bit 2  : HasPrologueData
-   * bit 3-6: CallingConvention
+   * bit 0      : HasLazyArguments
+   * bit 1      : HasPrefixData
+   * bit 2      : HasPrologueData
+   * bit 3      : [reserved]
+   * bits 4-13  : CallingConvention
+   * bits 14-15 : [reserved]
    */
 
   /// Bits from GlobalObject::GlobalObjectSubclassData.
@@ -158,11 +160,13 @@ public:
   /// calling convention of this function.  The enum values for the known
   /// calling conventions are defined in CallingConv.h.
   CallingConv::ID getCallingConv() const {
-    return static_cast<CallingConv::ID>(getSubclassDataFromValue() >> 3);
+    return static_cast<CallingConv::ID>((getSubclassDataFromValue() >> 4) &
+                                        CallingConv::MaxID);
   }
   void setCallingConv(CallingConv::ID CC) {
-    setValueSubclassData((getSubclassDataFromValue() & 7) |
-                         (static_cast<unsigned>(CC) << 3));
+    auto ID = static_cast<unsigned>(CC);
+    assert(!(ID & ~CallingConv::MaxID) && "Unsupported calling convention");
+    setValueSubclassData((getSubclassDataFromValue() & 0xc00f) | (ID << 4));
   }
 
   /// @brief Return the attribute list for this Function.
@@ -325,6 +329,15 @@ public:
     addFnAttr(Attribute::Convergent);
   }
 
+  /// Determine if the function is known not to recurse, directly or
+  /// indirectly.
+  bool doesNotRecurse() const {
+    return AttributeSets.hasAttribute(AttributeSet::FunctionIndex,
+                                      Attribute::NoRecurse);
+  }
+  void setDoesNotRecurse() {
+    addFnAttr(Attribute::NoRecurse);
+  }  
 
   /// @brief True if the ABI mandates (or the user requested) that this
   /// function be in a unwind table.
@@ -348,7 +361,8 @@ public:
            AttributeSets.hasAttribute(2, Attribute::StructRet);
   }
 
-  /// @brief Determine if the parameter does not alias other parameters.
+  /// @brief Determine if the parameter or return value is marked with NoAlias
+  /// attribute.
   /// @param n The parameter to check. 1 is the first parameter, 0 is the return
   bool doesNotAlias(unsigned n) const {
     return AttributeSets.hasAttribute(n, Attribute::NoAlias);

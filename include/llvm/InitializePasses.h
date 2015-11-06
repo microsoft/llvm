@@ -61,7 +61,7 @@ void initializeTarget(PassRegistry&);
 
 void initializeAAEvalPass(PassRegistry&);
 void initializeAddDiscriminatorsPass(PassRegistry&);
-void initializeADCEPass(PassRegistry&);
+void initializeADCELegacyPassPass(PassRegistry&);
 void initializeBDCEPass(PassRegistry&);
 void initializeAliasSetPrinterPass(PassRegistry&);
 void initializeAlwaysInlinerPass(PassRegistry&);
@@ -247,7 +247,7 @@ void initializeSCEVAAWrapperPassPass(PassRegistry&);
 void initializeScalarEvolutionWrapperPassPass(PassRegistry&);
 void initializeShrinkWrapPass(PassRegistry &);
 void initializeSimpleInlinerPass(PassRegistry&);
-void initializeShadowStackGCLoweringPass(PassRegistry&);  
+void initializeShadowStackGCLoweringPass(PassRegistry&);
 void initializeRegisterCoalescerPass(PassRegistry&);
 void initializeSingleLoopExtractorPass(PassRegistry&);
 void initializeSinkingPass(PassRegistry&);
@@ -260,7 +260,7 @@ void initializeStackColoringPass(PassRegistry&);
 void initializeStackSlotColoringPass(PassRegistry&);
 void initializeStraightLineStrengthReducePass(PassRegistry &);
 void initializeStripDeadDebugInfoPass(PassRegistry&);
-void initializeStripDeadPrototypesPassPass(PassRegistry&);
+void initializeStripDeadPrototypesLegacyPassPass(PassRegistry&);
 void initializeStripDebugDeclarePass(PassRegistry&);
 void initializeStripNonDebugSymbolsPass(PassRegistry&);
 void initializeStripSymbolsPass(PassRegistry&);
@@ -301,6 +301,7 @@ void initializeLoopDistributePass(PassRegistry&);
 void initializeSjLjEHPreparePass(PassRegistry&);
 void initializeDemandedBitsPass(PassRegistry&);
 void initializeFuncletLayoutPass(PassRegistry &);
+void initializeLoopLoadEliminationPass(PassRegistry&);
 }
 
 #endif

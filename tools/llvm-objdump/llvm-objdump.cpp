@@ -477,6 +477,7 @@ static std::error_code getRelocationValueString(const ELFObjectFile<ELFT> *Obj,
     break;
   }
   case ELF::EM_386:
+  case ELF::EM_IAMCU:
   case ELF::EM_ARM:
   case ELF::EM_HEXAGON:
   case ELF::EM_MIPS:
@@ -1536,7 +1537,10 @@ static void DumpObject(const ObjectFile *o) {
 
 /// @brief Dump each object file in \a a;
 static void DumpArchive(const Archive *a) {
-  for (const Archive::Child &C : a->children()) {
+  for (auto &ErrorOrChild : a->children()) {
+    if (std::error_code EC = ErrorOrChild.getError())
+      report_error(a->getFileName(), EC);
+    const Archive::Child &C = *ErrorOrChild;
     ErrorOr<std::unique_ptr<Binary>> ChildOrErr = C.getAsBinary();
     if (std::error_code EC = ChildOrErr.getError())
       if (EC != object_error::invalid_file_type)
