@@ -517,8 +517,7 @@ MachineInstr *X86FrameLowering::emitStackProbeInline(
   MachineBasicBlock *LoopMBB = MF.CreateMachineBasicBlock(LLVM_BB);
   MachineBasicBlock *ContinueMBB = MF.CreateMachineBasicBlock(LLVM_BB);
 
-  MachineFunction::iterator MBBIter = MBB;
-  ++MBBIter;
+  MachineFunction::iterator MBBIter = std::next(MBB.getIterator());
 
   MF.insert(MBBIter, RoundMBB);
   MF.insert(MBBIter, LoopMBB);

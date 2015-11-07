@@ -20497,8 +20497,7 @@ X86TargetLowering::EmitGCTransitionRA(MachineInstr *MI,
          "Invalid Pointer Size!");
 
   const BasicBlock *BB = MBB->getBasicBlock();
-  MachineFunction::iterator It = MBB;
-  ++It;
+  MachineFunction::iterator It = std::next(MBB->getIterator());
 
   // Operands to this pseudo-instruction:
   //
@@ -20609,8 +20608,7 @@ X86TargetLowering::EmitGCTransitionPause(MachineInstr *MI,
          "Invalid Pointer Size!");
 
   const BasicBlock *BB = MBB->getBasicBlock();
-  MachineFunction::iterator It = MBB;
-  ++It;
+  MachineFunction::iterator It = std::next(MBB->getIterator());
 
   // Operands to this pseudo-instruction:
   //
