@@ -131,6 +131,15 @@ public:
   /// \p MBB will be correctly handled by the target.
   bool canUseAsEpilogue(const MachineBasicBlock &MBB) const override;
 
+  /// convertArgMovsToPushes - This method tries to convert a call sequence
+  /// that uses sub and mov instructions to put the argument onto the stack
+  /// into a series of pushes.
+  /// Returns true if the transformation succeeded, false if not.
+  bool convertArgMovsToPushes(MachineFunction &MF, 
+                              MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator I, 
+                              uint64_t Amount) const;
+
   /// Wraps up getting a CFI index and building a MachineInstr for it.
   void BuildCFI(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
                 DebugLoc DL, MCCFIInstruction CFIInst) const;
@@ -143,6 +152,8 @@ public:
                               bool RestoreSP = false) const;
 
 private:
+  uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
+
   /// Emit target stack probe as a call to a helper function
   MachineInstr *emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
                                    MachineBasicBlock::iterator MBBI,
@@ -159,8 +170,6 @@ private:
                                          MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator MBBI,
                                          DebugLoc DL, bool InProlog) const;
-
-  uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
 
   /// Aligns the stack pointer by ANDing it with -MaxAlign.
   void BuildStackAlignAND(MachineBasicBlock &MBB,

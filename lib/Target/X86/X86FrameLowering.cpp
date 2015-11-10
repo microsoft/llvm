@@ -462,8 +462,7 @@ void X86FrameLowering::inlineStackProbe(MachineFunction &MF,
   }
 
   if (ChkStkStub != nullptr) {
-    MachineBasicBlock::iterator MBBI = ChkStkStub->getIterator();
-    ++MBBI;
+    MachineBasicBlock::iterator MBBI = std::next(ChkStkStub->getIterator());
     assert(std::prev(MBBI).operator==(ChkStkStub) &&
       "MBBI expected after __chkstk_stub.");
     DebugLoc DL = PrologMBB.findDebugLoc(MBBI);
@@ -750,8 +749,8 @@ MachineInstr *X86FrameLowering::emitStackProbeInlineStub(
 
   assert(InProlog && "ChkStkStub called outside prolog!");
 
-  MachineInstrBuilder CI = BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
-                               .addExternalSymbol("__chkstk_stub");
+  BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
+      .addExternalSymbol("__chkstk_stub");
 
   return MBBI;
 }
@@ -991,6 +990,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(MOVmr)), StackPtr, true, 16)
         .addReg(Establisher)
         .setMIFlag(MachineInstr::FrameSetup);
+    MBB.addLiveIn(Establisher);
   }
 
   if (HasFP) {
@@ -1056,9 +1056,12 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       }
     }
 
-    // Mark the FramePtr as live-in in every block.
-    for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I)
-      I->addLiveIn(MachineFramePtr);
+    // Mark the FramePtr as live-in in every block. Don't do this again for
+    // funclet prologues.
+    if (!IsFunclet) {
+      for (MachineBasicBlock &EveryMBB : MF)
+        EveryMBB.addLiveIn(MachineFramePtr);
+    }
   } else {
     assert(!IsFunclet && "funclets without FPs not yet implemented");
     NumBytes = StackSize - X86FI->getCalleeSavedFrameSize();
@@ -1426,8 +1429,7 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
           .addReg(0);
     } else {
       // MOV32ri $TargetMBB, %eax
-      BuildMI(MBB, FirstCSPop, DL, TII.get(X86::MOV32ri))
-          .addReg(ReturnReg)
+      BuildMI(MBB, FirstCSPop, DL, TII.get(X86::MOV32ri), ReturnReg)
           .addMBB(TargetMBB);
     }
     // Record that we've taken the address of TargetMBB and no longer just
