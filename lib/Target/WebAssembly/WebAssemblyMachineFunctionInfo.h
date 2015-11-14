@@ -27,15 +27,32 @@ namespace llvm {
 class WebAssemblyFunctionInfo final : public MachineFunctionInfo {
   MachineFunction &MF;
 
-  unsigned NumArguments;
+  std::vector<MVT> Params;
+  std::vector<MVT> Results;
+
+  /// A mapping from CodeGen vreg index to WebAssembly register number.
+  std::vector<unsigned> WARegs;
 
 public:
-  explicit WebAssemblyFunctionInfo(MachineFunction &MF)
-      : MF(MF), NumArguments(0) {}
+  explicit WebAssemblyFunctionInfo(MachineFunction &MF) : MF(MF) {}
   ~WebAssemblyFunctionInfo() override;
 
-  void setNumArguments(unsigned N) { NumArguments = N; }
-  unsigned getNumArguments() const { return NumArguments; }
+  void addParam(MVT VT) { Params.push_back(VT); }
+  const std::vector<MVT> &getParams() const { return Params; }
+
+  void addResult(MVT VT) { Results.push_back(VT); }
+  const std::vector<MVT> &getResults() const { return Results; }
+
+  static const unsigned UnusedReg = -1u;
+
+  void initWARegs();
+  void setWAReg(unsigned VReg, unsigned WAReg) {
+    assert(WAReg != UnusedReg);
+    WARegs[TargetRegisterInfo::virtReg2Index(VReg)] = WAReg;
+  }
+  unsigned getWAReg(unsigned VReg) const {
+    return WARegs[TargetRegisterInfo::virtReg2Index(VReg)];
+  }
 };
 
 } // end namespace llvm

@@ -32,20 +32,22 @@ class InstrProfErrorCategoryType : public std::error_category {
       return "Success";
     case instrprof_error::eof:
       return "End of File";
+    case instrprof_error::unrecognized_format:
+      return "Unrecognized instrumentation profile encoding format";
     case instrprof_error::bad_magic:
-      return "Invalid profile data (bad magic)";
+      return "Invalid instrumentation profile data (bad magic)";
     case instrprof_error::bad_header:
-      return "Invalid profile data (file header is corrupt)";
+      return "Invalid instrumentation profile data (file header is corrupt)";
     case instrprof_error::unsupported_version:
-      return "Unsupported profiling format version";
+      return "Unsupported instrumentation profile format version";
     case instrprof_error::unsupported_hash_type:
-      return "Unsupported profiling hash";
+      return "Unsupported instrumentation profile hash type";
     case instrprof_error::too_large:
       return "Too much profile data";
     case instrprof_error::truncated:
       return "Truncated profile data";
     case instrprof_error::malformed:
-      return "Malformed profile data";
+      return "Malformed instrumentation profile data";
     case instrprof_error::unknown_function:
       return "No profile data available for function";
     case instrprof_error::hash_mismatch:
@@ -244,11 +246,16 @@ void ValueProfData::deserializeTo(InstrProfRecord &Record,
   }
 }
 
+static std::unique_ptr<ValueProfData> AllocValueProfData(uint32_t TotalSize) {
+  return std::unique_ptr<ValueProfData>(new (::operator new(TotalSize))
+                                            ValueProfData());
+}
+
 std::unique_ptr<ValueProfData>
 ValueProfData::serializeFrom(const InstrProfRecord &Record) {
   uint32_t TotalSize = getSize(Record);
-  std::unique_ptr<ValueProfData> VPD(
-      reinterpret_cast<ValueProfData *>(new char[TotalSize]));
+
+  std::unique_ptr<ValueProfData> VPD = AllocValueProfData(TotalSize);
 
   VPD->TotalSize = TotalSize;
   VPD->NumValueKinds = Record.getNumValueKinds();
@@ -284,8 +291,8 @@ ValueProfData::getValueProfData(const unsigned char *D,
   if (TotalSize % sizeof(uint64_t))
     return instrprof_error::malformed;
 
-  std::unique_ptr<ValueProfData> VPD(
-      reinterpret_cast<ValueProfData *>(new char[TotalSize]));
+  std::unique_ptr<ValueProfData> VPD = AllocValueProfData(TotalSize);
+
   memcpy(VPD.get(), D, TotalSize);
   // Byte swap.
   VPD->swapBytesToHost(Endianness);
@@ -296,7 +303,7 @@ ValueProfData::getValueProfData(const unsigned char *D,
     if (VR->Kind > IPVK_Last)
       return instrprof_error::malformed;
     VR = VR->getNext();
-    if ((char *)VR - (char *)VPD.get() > TotalSize)
+    if ((char *)VR - (char *)VPD.get() > (ptrdiff_t)TotalSize)
       return instrprof_error::malformed;
   }
 

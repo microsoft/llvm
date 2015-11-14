@@ -100,6 +100,10 @@ public:
   const uint32_t *getCallPreservedMaskWithReturns(const uint32_t *Mask) const;
   const uint32_t *getNoPreservedMask() const override;
 
+  // Calls involved in thread-local variable lookup save more registers than
+  // normal calls, so they need a different mask to represent this.
+  const uint32_t *getDarwinTLSCallPreservedMask() const;
+
   /// getReservedRegs - Returns a bitset indexed by physical register number
   /// indicating if a register is a special register that has particular uses and
   /// should be considered unavailable at all times, e.g. SP, RA. This is used by

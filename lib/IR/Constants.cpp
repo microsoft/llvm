@@ -81,8 +81,10 @@ bool Constant::isNullValue() const {
   if (const ConstantFP *CFP = dyn_cast<ConstantFP>(this))
     return CFP->isZero() && !CFP->isNegative();
 
-  // constant zero is zero for aggregates and cpnull is null for pointers.
-  return isa<ConstantAggregateZero>(this) || isa<ConstantPointerNull>(this);
+  // constant zero is zero for aggregates, cpnull is null for pointers, none for
+  // tokens.
+  return isa<ConstantAggregateZero>(this) || isa<ConstantPointerNull>(this) ||
+         isa<ConstantTokenNone>(this);
 }
 
 bool Constant::isAllOnesValue() const {
@@ -204,6 +206,8 @@ Constant *Constant::getNullValue(Type *Ty) {
   case Type::ArrayTyID:
   case Type::VectorTyID:
     return ConstantAggregateZero::get(Ty);
+  case Type::TokenTyID:
+    return ConstantTokenNone::get(Ty->getContext());
   default:
     // Function, Label, or Opaque type?
     llvm_unreachable("Cannot create a null constant of that type!");
@@ -410,22 +414,6 @@ bool Constant::isConstantUsed() const {
   return false;
 }
 
-
-
-/// getRelocationInfo - This method classifies the entry according to
-/// whether or not it may generate a relocation entry.  This must be
-/// conservative, so if it might codegen to a relocatable entry, it should say
-/// so.  The return values are:
-/// 
-///  NoRelocation: This constant pool entry is guaranteed to never have a
-///     relocation applied to it (because it holds a simple constant like
-///     '4').
-///  LocalRelocation: This entry has relocations, but the entries are
-///     guaranteed to be resolvable by the static linker, so the dynamic
-///     linker will never see them.
-///  GlobalRelocations: This entry may have arbitrary relocations.
-///
-/// FIXME: This really should not be in IR.
 Constant::PossibleRelocationsTy Constant::getRelocationInfo() const {
   if (const GlobalValue *GV = dyn_cast<GlobalValue>(this)) {
     if (GV->hasLocalLinkage() || GV->hasHiddenVisibility())
@@ -1170,6 +1158,17 @@ Constant *ConstantVector::getSplat(unsigned NumElts, Constant *V) {
   return get(Elts);
 }
 
+ConstantTokenNone *ConstantTokenNone::get(LLVMContext &Context) {
+  LLVMContextImpl *pImpl = Context.pImpl;
+  if (!pImpl->TheNoneToken)
+    pImpl->TheNoneToken = new ConstantTokenNone(Context);
+  return pImpl->TheNoneToken;
+}
+
+/// Remove the constant from the constant table.
+void ConstantTokenNone::destroyConstantImpl() {
+  llvm_unreachable("You can't ConstantTokenNone->destroyConstantImpl()!");
+}
 
 // Utility function for determining if a ConstantExpr is a CastOp or not. This
 // can't be inline because we don't want to #include Instruction.h into
@@ -2872,6 +2871,11 @@ Value *ConstantInt::handleOperandChangeImpl(Value *From, Value *To, Use *U) {
 }
 
 Value *ConstantFP::handleOperandChangeImpl(Value *From, Value *To, Use *U) {
+  llvm_unreachable("Unsupported class for handleOperandChange()!");
+}
+
+Value *ConstantTokenNone::handleOperandChangeImpl(Value *From, Value *To,
+                                                  Use *U) {
   llvm_unreachable("Unsupported class for handleOperandChange()!");
 }
 

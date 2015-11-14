@@ -63,8 +63,6 @@ namespace llvm {
 
       BCC_i64,
 
-      RBIT,         // ARM bitreverse instruction
-
       SRL_FLAG,     // V,Flag = srl_flag X -> srl X, 1 + save carry out.
       SRA_FLAG,     // V,Flag = sra_flag X -> sra X, 1 + save carry out.
       RRX,          // V = RRX X, Flag     -> srl X, 1 + shift in carry flag.
@@ -260,6 +258,7 @@ namespace llvm {
                                        SDNode *Node) const override;
 
     SDValue PerformCMOVCombine(SDNode *N, SelectionDAG &DAG) const;
+    SDValue PerformCMOVToBFICombine(SDNode *N, SelectionDAG &DAG) const;
     SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
 
     bool isDesirableToTransformToIntegerOp(unsigned Opc, EVT VT) const override;
@@ -465,6 +464,9 @@ namespace llvm {
 
     bool canCombineStoreAndExtract(Type *VectorTy, Value *Idx,
                                    unsigned &Cost) const override;
+
+    bool isCheapToSpeculateCttz() const override;
+    bool isCheapToSpeculateCtlz() const override;
 
   protected:
     std::pair<const TargetRegisterClass *, uint8_t>

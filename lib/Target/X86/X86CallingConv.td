@@ -850,6 +850,12 @@ def CSR_Win64 : CalleeSavedRegs<(add RBX, RBP, RDI, RSI, R12, R13, R14, R15,
 def CSR_Win64_NoGPRs : CalleeSavedRegs<(add RBP, (sequence "XMM%u", 6, 15))>;
 def CSR_Win64_WithRet : CalleeSavedRegs<(add CSR_Win64, RAX, XMM0)>;
 
+// The function used by Darwin to obtain the address of a thread-local variable
+// uses rdi to pass a single parameter and rax for the return value. All other
+// GPRs are preserved.
+def CSR_64_TLS_Darwin : CalleeSavedRegs<(add CSR_64, RCX, RDX, RSI,
+                                             R8, R9, R10, R11)>;
+
 // All GPRs - except r11
 def CSR_64_RT_MostRegs : CalleeSavedRegs<(add CSR_64, RAX, RCX, RDX, RSI, RDI,
                                               R8, R9, R10, RSP)>;

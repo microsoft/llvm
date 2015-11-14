@@ -531,16 +531,24 @@ MachineInstr *X86FrameLowering::emitStackProbeInline(
   // registers. For the prolog expansion we use RAX, RCX and RDX.
   MachineRegisterInfo &MRI = MF.getRegInfo();
   const TargetRegisterClass *RegClass = &X86::GR64RegClass;
-  const unsigned
-      SizeReg = InProlog ? X86::RAX : MRI.createVirtualRegister(RegClass),
-      ZeroReg = InProlog ? X86::RCX : MRI.createVirtualRegister(RegClass),
-      CopyReg = InProlog ? X86::RDX : MRI.createVirtualRegister(RegClass),
-      TestReg = InProlog ? X86::RDX : MRI.createVirtualRegister(RegClass),
-      FinalReg = InProlog ? X86::RDX : MRI.createVirtualRegister(RegClass),
-      RoundedReg = InProlog ? X86::RDX : MRI.createVirtualRegister(RegClass),
-      LimitReg = InProlog ? X86::RCX : MRI.createVirtualRegister(RegClass),
-      JoinReg = InProlog ? X86::RCX : MRI.createVirtualRegister(RegClass),
-      ProbeReg = InProlog ? X86::RCX : MRI.createVirtualRegister(RegClass);
+  const unsigned SizeReg = InProlog ? (unsigned)X86::RAX
+                                    : MRI.createVirtualRegister(RegClass),
+                 ZeroReg = InProlog ? (unsigned)X86::RCX
+                                    : MRI.createVirtualRegister(RegClass),
+                 CopyReg = InProlog ? (unsigned)X86::RDX
+                                    : MRI.createVirtualRegister(RegClass),
+                 TestReg = InProlog ? (unsigned)X86::RDX
+                                    : MRI.createVirtualRegister(RegClass),
+                 FinalReg = InProlog ? (unsigned)X86::RDX
+                                     : MRI.createVirtualRegister(RegClass),
+                 RoundedReg = InProlog ? (unsigned)X86::RDX
+                                       : MRI.createVirtualRegister(RegClass),
+                 LimitReg = InProlog ? (unsigned)X86::RCX
+                                     : MRI.createVirtualRegister(RegClass),
+                 JoinReg = InProlog ? (unsigned)X86::RCX
+                                    : MRI.createVirtualRegister(RegClass),
+                 ProbeReg = InProlog ? (unsigned)X86::RCX
+                                     : MRI.createVirtualRegister(RegClass);
 
   // SP-relative offsets where we can save RCX and RDX.
   int64_t RCXShadowSlot = 0;
@@ -892,9 +900,10 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   uint64_t MaxAlign = calculateMaxStackAlign(MF); // Desired stack alignment.
   uint64_t StackSize = MFI->getStackSize();    // Number of bytes to allocate.
   bool IsFunclet = MBB.isEHFuncletEntry();
-  bool IsClrFunclet =
-      IsFunclet &&
+  bool FnHasClrFunclet =
+      MMI.hasEHFunclets() &&
       classifyEHPersonality(Fn->getPersonalityFn()) == EHPersonality::CoreCLR;
+  bool IsClrFunclet = IsFunclet && FnHasClrFunclet;
   bool HasFP = hasFP(MF);
   bool IsWin64CC = STI.isCallingConvWin64(Fn->getCallingConv());
   bool IsWin64Prologue = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
@@ -1186,7 +1195,36 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
         .setMIFlag(MachineInstr::FrameSetup);
 
   int SEHFrameOffset = 0;
-  unsigned SPOrEstablisher = IsFunclet ? Establisher : StackPtr;
+  unsigned SPOrEstablisher;
+  if (IsFunclet) {
+    if (IsClrFunclet) {
+      // The establisher parameter passed to a CLR funclet is actually a pointer
+      // to the (mostly empty) frame of its nearest enclosing funclet; we have
+      // to find the root function establisher frame by loading the PSPSym from
+      // the intermediate frame.
+      unsigned PSPSlotOffset = getPSPSlotOffsetFromSP(MF);
+      MachinePointerInfo NoInfo;
+      MBB.addLiveIn(Establisher);
+      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), Establisher),
+                   Establisher, false, PSPSlotOffset)
+          .addMemOperand(MF.getMachineMemOperand(
+              NoInfo, MachineMemOperand::MOLoad, SlotSize, SlotSize));
+      ;
+      // Save the root establisher back into the current funclet's (mostly
+      // empty) frame, in case a sub-funclet or the GC needs it.
+      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr)), StackPtr,
+                   false, PSPSlotOffset)
+          .addReg(Establisher)
+          .addMemOperand(
+              MF.getMachineMemOperand(NoInfo, MachineMemOperand::MOStore |
+                                                  MachineMemOperand::MOVolatile,
+                                      SlotSize, SlotSize));
+    }
+    SPOrEstablisher = Establisher;
+  } else {
+    SPOrEstablisher = StackPtr;
+  }
+
   if (IsWin64Prologue && HasFP) {
     // Set RBP to a small fixed offset from RSP. In the funclet case, we base
     // this calculation on the incoming establisher, which holds the value of
@@ -1208,6 +1246,19 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   } else if (IsFunclet && STI.is32Bit()) {
     // Reset EBP / ESI to something good for funclets.
     MBBI = restoreWin32EHStackPointers(MBB, MBBI, DL);
+    // If we're a catch funclet, we can be returned to via catchret. Save ESP
+    // into the registration node so that the runtime will restore it for us.
+    if (!MBB.isCleanupFuncletEntry()) {
+      assert(classifyEHPersonality(Fn->getPersonalityFn()) ==
+             EHPersonality::MSVC_CXX);
+      unsigned FrameReg;
+      int FI = MMI.getWinEHFuncInfo(Fn).EHRegNodeFrameIndex;
+      int64_t EHRegOffset = getFrameIndexReference(MF, FI, FrameReg);
+      // ESP is the first field, so no extra displacement is needed.
+      addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32mr)), FrameReg,
+                   false, EHRegOffset)
+          .addReg(X86::ESP);
+    }
   }
 
   while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup)) {
@@ -1234,6 +1285,21 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   if (NeedsWinCFI)
     BuildMI(MBB, MBBI, DL, TII.get(X86::SEH_EndPrologue))
         .setMIFlag(MachineInstr::FrameSetup);
+
+  if (FnHasClrFunclet && !IsFunclet) {
+    // Save the so-called Initial-SP (i.e. the value of the stack pointer
+    // immediately after the prolog)  into the PSPSlot so that funclets
+    // and the GC can recover it.
+    unsigned PSPSlotOffset = getPSPSlotOffsetFromSP(MF);
+    auto PSPInfo = MachinePointerInfo::getFixedStack(
+        MF, MF.getMMI().getWinEHFuncInfo(Fn).PSPSymFrameIdx);
+    addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr)), StackPtr, false,
+                 PSPSlotOffset)
+        .addReg(StackPtr)
+        .addMemOperand(MF.getMachineMemOperand(
+            PSPInfo, MachineMemOperand::MOStore | MachineMemOperand::MOVolatile,
+            SlotSize, SlotSize));
+  }
 
   // Realign stack after we spilled callee-saved registers (so that we'll be
   // able to calculate their offsets from the frame pointer).
@@ -1320,17 +1386,54 @@ static bool isFuncletReturnInstr(MachineInstr *MI) {
   llvm_unreachable("impossible");
 }
 
-unsigned X86FrameLowering::getWinEHFuncletFrameSize(const MachineFunction &MF) const {
+// CLR funclets use a special "Previous Stack Pointer Symbol" slot on the
+// stack. It holds a pointer to the bottom of the root function frame.  The
+// establisher frame pointer passed to a nested funclet may point to the
+// (mostly empty) frame of its parent funclet, but it will need to find
+// the frame of the root function to access locals.  To facilitate this,
+// every funclet copies the pointer to the bottom of the root function
+// frame into a PSPSym slot in its own (mostly empty) stack frame. Using the
+// same offset for the PSPSym in the root function frame that's used in the
+// funclets' frames allows each funclet to dynamically accept any ancestor
+// frame as its establisher argument (the runtime doesn't guarantee the
+// immediate parent for some reason lost to history), and also allows the GC,
+// which uses the PSPSym for some bookkeeping, to find it in any funclet's
+// frame with only a single offset reported for the entire method.
+unsigned
+X86FrameLowering::getPSPSlotOffsetFromSP(const MachineFunction &MF) const {
+  MachineModuleInfo &MMI = MF.getMMI();
+  WinEHFuncInfo &Info = MMI.getWinEHFuncInfo(MF.getFunction());
+  // getFrameIndexReferenceFromSP has an out ref parameter for the stack
+  // pointer register; pass a dummy that we ignore
+  unsigned SPReg;
+  int Offset = getFrameIndexReferenceFromSP(MF, Info.PSPSymFrameIdx, SPReg);
+  assert(Offset >= 0);
+  return static_cast<unsigned>(Offset);
+}
+
+unsigned
+X86FrameLowering::getWinEHFuncletFrameSize(const MachineFunction &MF) const {
   // This is the size of the pushed CSRs.
   unsigned CSSize =
       MF.getInfo<X86MachineFunctionInfo>()->getCalleeSavedFrameSize();
   // This is the amount of stack a funclet needs to allocate.
-  unsigned MaxCallSize = MF.getFrameInfo()->getMaxCallFrameSize();
+  unsigned UsedSize;
+  EHPersonality Personality =
+      classifyEHPersonality(MF.getFunction()->getPersonalityFn());
+  if (Personality == EHPersonality::CoreCLR) {
+    // CLR funclets need to hold enough space to include the PSPSym, at the
+    // same offset from the stack pointer (immediately after the prolog) as it
+    // resides at in the main function.
+    UsedSize = getPSPSlotOffsetFromSP(MF) + SlotSize;
+  } else {
+    // Other funclets just need enough stack for outgoing call arguments.
+    UsedSize = MF.getFrameInfo()->getMaxCallFrameSize();
+  }
   // RBP is not included in the callee saved register block. After pushing RBP,
   // everything is 16 byte aligned. Everything we allocate before an outgoing
   // call must also be 16 byte aligned.
   unsigned FrameSizeMinusRBP =
-      RoundUpToAlignment(CSSize + MaxCallSize, getStackAlignment());
+      RoundUpToAlignment(CSSize + UsedSize, getStackAlignment());
   // Subtract out the size of the callee saved registers. This is how much stack
   // each funclet will allocate.
   return FrameSizeMinusRBP - CSSize;
@@ -1606,10 +1709,11 @@ int X86FrameLowering::getFrameIndexReferenceFromSP(const MachineFunction &MF,
     //   RETADDR
     //   PUSH RBP   <-- RBP points here
     //   PUSH CSRs
-    //   ~~~~~~~    <-- optional stack realignment dynamic adjustment
+    //   ~~~~~~~    <-- possible stack realignment (non-win64)
     //   ...
     //   STACK OBJECTS
     //   ...        <-- RSP after prologue points here
+    //   ~~~~~~~    <-- possible stack realignment (win64)
     //
     // if (hasVarSizedObjects()):
     //   ...        <-- "base pointer" (ESI/RBX) points here
@@ -1631,7 +1735,8 @@ int X86FrameLowering::getFrameIndexReferenceFromSP(const MachineFunction &MF,
     // answer we give is relative to the SP after the prologue, and not the
     // SP in the middle of the function.
 
-    assert((!TRI->needsStackRealignment(MF) || !MFI->isFixedObjectIndex(FI)) &&
+    assert((!MFI->isFixedObjectIndex(FI) || !TRI->needsStackRealignment(MF) ||
+            STI.isTargetWin64()) &&
            "offset from fixed object to SP is not static");
 
     // We don't handle tail calls, and shouldn't be seeing them either.
@@ -2551,4 +2656,41 @@ unsigned X86FrameLowering::getWinEHParentFrameOffset(const MachineFunction &MF) 
   // Every funclet allocates enough stack space for the largest outgoing call.
   Offset += getWinEHFuncletFrameSize(MF);
   return Offset;
+}
+
+void X86FrameLowering::processFunctionBeforeFrameFinalized(
+    MachineFunction &MF, RegScavenger *RS) const {
+  // If this function isn't doing Win64-style C++ EH, we don't need to do
+  // anything.
+  const Function *Fn = MF.getFunction();
+  if (!STI.is64Bit() || !Fn->hasPersonalityFn() ||
+      classifyEHPersonality(MF.getFunction()->getPersonalityFn()) !=
+          EHPersonality::MSVC_CXX)
+    return;
+
+  // Win64 C++ EH needs to allocate the UnwindHelp object at some fixed offset
+  // relative to RSP after the prologue.  Find the offset of the last fixed
+  // object, so that we can allocate a slot immediately following it. Fixed
+  // objects have negative frame indices.
+  MachineFrameInfo *MFI = MF.getFrameInfo();
+  int64_t MinFixedObjOffset = 0;
+  for (int I = MFI->getObjectIndexBegin(); I < 0; ++I)
+    MinFixedObjOffset = std::min(MinFixedObjOffset, MFI->getObjectOffset(I));
+
+  int64_t UnwindHelpOffset = MinFixedObjOffset - SlotSize;
+  int UnwindHelpFI =
+      MFI->CreateFixedObject(SlotSize, UnwindHelpOffset, /*Immutable=*/false);
+  MF.getMMI().getWinEHFuncInfo(Fn).UnwindHelpFrameIdx = UnwindHelpFI;
+
+  // Store -2 into UnwindHelp on function entry. We have to scan forwards past
+  // other frame setup instructions.
+  MachineBasicBlock &MBB = MF.front();
+  auto MBBI = MBB.begin();
+  while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
+    ++MBBI;
+
+  DebugLoc DL = MBB.findDebugLoc(MBBI);
+  addFrameReference(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mi32)),
+                    UnwindHelpFI)
+      .addImm(-2);
 }

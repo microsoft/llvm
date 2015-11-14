@@ -14,6 +14,7 @@
 
 #include "InstPrinter/WebAssemblyInstPrinter.h"
 #include "WebAssembly.h"
+#include "WebAssemblyMachineFunctionInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -36,42 +37,74 @@ WebAssemblyInstPrinter::WebAssemblyInstPrinter(const MCAsmInfo &MAI,
 
 void WebAssemblyInstPrinter::printRegName(raw_ostream &OS,
                                           unsigned RegNo) const {
-  if (TargetRegisterInfo::isPhysicalRegister(RegNo))
-    OS << getRegisterName(RegNo);
-  else
-    OS << TargetRegisterInfo::virtReg2Index(RegNo);
+  assert(RegNo != WebAssemblyFunctionInfo::UnusedReg);
+  // FIXME: Revisit whether we actually print the get_local explicitly.
+  OS << "(get_local " << RegNo << ")";
 }
 
 void WebAssemblyInstPrinter::printInst(const MCInst *MI, raw_ostream &OS,
                                        StringRef Annot,
                                        const MCSubtargetInfo &STI) {
   printInstruction(MI, OS);
+
+  const MCInstrDesc &Desc = MII.get(MI->getOpcode());
+  if (Desc.isVariadic())
+    for (unsigned i = Desc.getNumOperands(), e = MI->getNumOperands(); i < e;
+         ++i) {
+      OS << ", ";
+      printOperand(MI, i, OS);
+    }
+
   printAnnotation(OS, Annot);
 
   unsigned NumDefs = MII.get(MI->getOpcode()).getNumDefs();
   assert(NumDefs <= 1 &&
          "Instructions with multiple result values not implemented");
 
+  // FIXME: Revisit whether we actually print the set_local explicitly.
   if (NumDefs != 0) {
-    OS << "\n"
-          "\t" "set_local ";
-    printRegName(OS, MI->getOperand(0).getReg());
-    OS << ", pop";
+    unsigned WAReg = MI->getOperand(0).getReg();
+    // Only print the set_local if the register is used.
+    // TODO: Revisit this once the spec explains what should happen here.
+    if (WAReg != WebAssemblyFunctionInfo::UnusedReg)
+      OS << "\n"
+            "\t" "set_local " << WAReg << ", $pop";
   }
+}
+
+static std::string toString(const APFloat &FP) {
+  static const size_t BufBytes = 128;
+  char buf[BufBytes];
+  if (FP.isNaN())
+    assert((FP.bitwiseIsEqual(APFloat::getQNaN(FP.getSemantics())) ||
+            FP.bitwiseIsEqual(
+                APFloat::getQNaN(FP.getSemantics(), /*Negative=*/true))) &&
+           "convertToHexString handles neither SNaN nor NaN payloads");
+  // Use C99's hexadecimal floating-point representation.
+  auto Written = FP.convertToHexString(
+      buf, /*hexDigits=*/0, /*upperCase=*/false, APFloat::rmNearestTiesToEven);
+  (void)Written;
+  assert(Written != 0);
+  assert(Written < BufBytes);
+  return buf;
 }
 
 void WebAssemblyInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
                                           raw_ostream &O) {
   const MCOperand &Op = MI->getOperand(OpNo);
   if (Op.isReg()) {
-    if (OpNo < MII.get(MI->getOpcode()).getNumDefs())
-      O << "push";
-    else
+    if (OpNo >= MII.get(MI->getOpcode()).getNumDefs())
       printRegName(O, Op.getReg());
+    else {
+      if (Op.getReg() != WebAssemblyFunctionInfo::UnusedReg)
+        O << "$push";
+      else
+        O << "$discard";
+    }
   } else if (Op.isImm())
-    O << '#' << Op.getImm();
+    O << Op.getImm();
   else if (Op.isFPImm())
-    O << '#' << Op.getFPImm();
+    O << toString(APFloat(Op.getFPImm()));
   else {
     assert(Op.isExpr() && "unknown operand kind in printOperand");
     Op.getExpr()->print(O, &MAI);

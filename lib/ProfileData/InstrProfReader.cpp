@@ -54,8 +54,10 @@ InstrProfReader::create(std::unique_ptr<MemoryBuffer> Buffer) {
     Result.reset(new RawInstrProfReader64(std::move(Buffer)));
   else if (RawInstrProfReader32::hasFormat(*Buffer))
     Result.reset(new RawInstrProfReader32(std::move(Buffer)));
-  else
+  else if (TextInstrProfReader::hasFormat(*Buffer))
     Result.reset(new TextInstrProfReader(std::move(Buffer)));
+  else
+    return instrprof_error::unrecognized_format;
 
   // Initialize the reader and return the result.
   if (std::error_code EC = initializeReader(*Result))
@@ -95,6 +97,15 @@ IndexedInstrProfReader::create(std::unique_ptr<MemoryBuffer> Buffer) {
 void InstrProfIterator::Increment() {
   if (Reader->readNextRecord(Record))
     *this = InstrProfIterator();
+}
+
+bool TextInstrProfReader::hasFormat(const MemoryBuffer &Buffer) {
+  // Verify that this really looks like plain ASCII text by checking a
+  // 'reasonable' number of characters (up to profile magic size).
+  size_t count = std::min(Buffer.getBufferSize(), sizeof(uint64_t));
+  StringRef buffer = Buffer.getBufferStart();
+  return count == 0 || std::all_of(buffer.begin(), buffer.begin() + count,
+    [](char c) { return ::isprint(c) || ::isspace(c); });
 }
 
 std::error_code TextInstrProfReader::readNextRecord(InstrProfRecord &Record) {
@@ -264,19 +275,23 @@ std::error_code RawInstrProfReader<IntPtrT>::readRawCounts(
 }
 
 template <class IntPtrT>
-std::error_code RawInstrProfReader<IntPtrT>::readNextRecord(
-    InstrProfRecord &Record) {
+std::error_code
+RawInstrProfReader<IntPtrT>::readNextRecord(InstrProfRecord &Record) {
   if (atEnd())
-    if (std::error_code EC = readNextHeader(ProfileEnd)) return EC;
+    if (std::error_code EC = readNextHeader(ProfileEnd))
+      return EC;
 
   // Read name ad set it in Record.
-  if (std::error_code EC = readName(Record)) return EC;
+  if (std::error_code EC = readName(Record))
+    return EC;
 
   // Read FuncHash and set it in Record.
-  if (std::error_code EC = readFuncHash(Record)) return EC;
+  if (std::error_code EC = readFuncHash(Record))
+    return EC;
 
   // Read raw counts and set Record.
-  if (std::error_code EC = readRawCounts(Record)) return EC;
+  if (std::error_code EC = readRawCounts(Record))
+    return EC;
 
   // Iterate.
   advanceData();
@@ -356,13 +371,16 @@ data_type InstrProfLookupTrait::ReadData(StringRef K, const unsigned char *D,
   return DataBuffer;
 }
 
-std::error_code InstrProfReaderIndex::getRecords(
-    StringRef FuncName, ArrayRef<InstrProfRecord> &Data) {
+std::error_code
+InstrProfReaderIndex::getRecords(StringRef FuncName,
+                                 ArrayRef<InstrProfRecord> &Data) {
   auto Iter = Index->find(FuncName);
-  if (Iter == Index->end()) return instrprof_error::unknown_function;
+  if (Iter == Index->end())
+    return instrprof_error::unknown_function;
 
   Data = (*Iter);
-  if (Data.empty()) return instrprof_error::malformed;
+  if (Data.empty())
+    return instrprof_error::malformed;
 
   return instrprof_error::success;
 }
@@ -400,7 +418,8 @@ void InstrProfReaderIndex::Init(const unsigned char *Buckets,
 }
 
 bool IndexedInstrProfReader::hasFormat(const MemoryBuffer &DataBuffer) {
-  if (DataBuffer.getBufferSize() < 8) return false;
+  if (DataBuffer.getBufferSize() < 8)
+    return false;
   using namespace support;
   uint64_t Magic =
       endian::read<uint64_t, little, aligned>(DataBuffer.getBufferStart());
@@ -453,7 +472,8 @@ IndexedInstrProfReader::getInstrProfRecord(StringRef FuncName,
                                            uint64_t FuncHash) {
   ArrayRef<InstrProfRecord> Data;
   std::error_code EC = Index.getRecords(FuncName, Data);
-  if (EC != instrprof_error::success) return EC;
+  if (EC != instrprof_error::success)
+    return EC;
   // Found it. Look for counters with the right hash.
   for (unsigned I = 0, E = Data.size(); I < E; ++I) {
     // Check for a match and fill the vector if there is one.
@@ -482,7 +502,8 @@ std::error_code IndexedInstrProfReader::readNextRecord(
   ArrayRef<InstrProfRecord> Data;
 
   std::error_code EC = Index.getRecords(Data);
-  if (EC != instrprof_error::success) return error(EC);
+  if (EC != instrprof_error::success)
+    return error(EC);
 
   Record = Data[RecordIndex++];
   if (RecordIndex >= Data.size()) {

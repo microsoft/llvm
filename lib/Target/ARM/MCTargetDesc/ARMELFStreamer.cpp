@@ -702,7 +702,6 @@ void ARMTargetELFStreamer::emitArchDefaultAttributes() {
   case ARM::AK_ARMV3:
   case ARM::AK_ARMV3M:
   case ARM::AK_ARMV4:
-  case ARM::AK_ARMV5:
     setAttributeItem(ARM_ISA_use, Allowed, false);
     break;
 
@@ -730,10 +729,6 @@ void ARMTargetELFStreamer::emitArchDefaultAttributes() {
 
   case ARM::AK_ARMV6M:
     setAttributeItem(THUMB_ISA_use, Allowed, false);
-    break;
-
-  case ARM::AK_ARMV7:
-    setAttributeItem(THUMB_ISA_use, AllowThumb32, false);
     break;
 
   case ARM::AK_ARMV7A:

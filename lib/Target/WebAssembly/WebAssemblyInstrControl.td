@@ -12,23 +12,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-/*
- * TODO(jfb): Add the following.
- *
- * block: a fixed-length sequence of statements
- * if: if statement
- * do_while: do while statement, basically a loop with a conditional branch
- * forever: infinite loop statement (like while (1)), basically an unconditional
- *          branch (back to the top of the loop)
- * continue: continue to start of nested loop
- * break: break to end from nested loop or block
- * switch: switch statement with fallthrough
- */
-
 let isBranch = 1, isTerminator = 1, hasCtrlDep = 1 in {
-def BR_IF_ : I<(outs), (ins bb_op:$dst, I32:$a),
-               [(brcond I32:$a, bb:$dst)],
-               "br_if $dst, $a">;
+def BR_IF : I<(outs), (ins bb_op:$dst, I32:$a),
+              [(brcond I32:$a, bb:$dst)],
+              "br_if $dst, $a">;
 let isBarrier = 1 in {
 def BR   : I<(outs), (ins bb_op:$dst),
              [(br bb:$dst)],
@@ -41,9 +28,11 @@ def BR   : I<(outs), (ins bb_op:$dst),
 // currently.
 let isTerminator = 1, hasCtrlDep = 1, isBarrier = 1 in {
 def SWITCH_I32 : I<(outs), (ins I32:$index, variable_ops),
-                   [(WebAssemblyswitch I32:$index)]>;
+                   [(WebAssemblyswitch I32:$index)],
+                   "switch $index">;
 def SWITCH_I64 : I<(outs), (ins I64:$index, variable_ops),
-                   [(WebAssemblyswitch I64:$index)]>;
+                   [(WebAssemblyswitch I64:$index)],
+                   "switch $index">;
 } // isTerminator = 1, hasCtrlDep = 1, isBarrier = 1
 
 // Placemarkers to indicate the start of a block or loop scope.

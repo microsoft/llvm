@@ -1488,6 +1488,27 @@ operand bundle to not miscompile programs containing it.
   of the called function.  Inter-procedural optimizations work as
   usual as long as they take into account the first two properties.
 
+More specific types of operand bundles are described below.
+
+Deoptimization Operand Bundles
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Deoptimization operand bundles are characterized by the ``"deopt``
+operand bundle tag.  These operand bundles represent an alternate
+"safe" continuation for the call site they're attached to, and can be
+used by a suitable runtime to deoptimize the compiled frame at the
+specified call site.  Exact details of deoptimization is out of scope
+for the language reference, but it usually involves rewriting a
+compiled frame into a set of interpreted frames.
+
+From the compiler's perspective, deoptimization operand bundles make
+the call sites they're attached to at least ``readonly``.  They read
+through all of their pointer typed operands (even if they're not
+otherwise escaped) and the entire visible heap.  Deoptimization
+operand bundles do not capture their operands except during
+deoptimization, in which case control will not be returned to the
+compiled frame.
+
 .. _moduleasm:
 
 Module-Level Inline Assembly
@@ -2413,6 +2434,9 @@ Simple Constants
 **Null pointer constants**
     The identifier '``null``' is recognized as a null pointer constant
     and must be of :ref:`pointer type <t_pointer>`.
+**Token constants**
+    The identifier '``none``' is recognized as an empty token constant
+    and must be of :ref:`token type <t_token>`.
 
 The one non-intuitive notation for constants is the hexadecimal form of
 floating point constants. For example, the form
@@ -10392,6 +10416,34 @@ Bit Manipulation Intrinsics
 
 LLVM provides intrinsics for a few important bit manipulation
 operations. These allow efficient code generation for some algorithms.
+
+'``llvm.bitreverse.*``' Intrinsics
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+This is an overloaded intrinsic function. You can use bitreverse on any
+integer type.
+
+::
+
+      declare i16 @llvm.bitreverse.i16(i16 <id>)
+      declare i32 @llvm.bitreverse.i32(i32 <id>)
+      declare i64 @llvm.bitreverse.i64(i64 <id>)
+
+Overview:
+"""""""""
+
+The '``llvm.bitreverse``' family of intrinsics is used to reverse the
+bitpattern of an integer value; for example ``0b1234567`` becomes
+``0b7654321``.
+
+Semantics:
+""""""""""
+
+The ``llvm.bitreverse.iN`` intrinsic returns an i16 value that has bit
+``M`` in the input moved to bit ``N-M`` in the output.
 
 '``llvm.bswap.*``' Intrinsics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

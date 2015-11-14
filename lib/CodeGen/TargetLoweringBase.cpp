@@ -774,6 +774,7 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm) : TM(tm) {
   MinFunctionAlignment = 0;
   PrefFunctionAlignment = 0;
   PrefLoopAlignment = 0;
+  GatherAllAliasesMaxDepth = 6;
   MinStackArgumentAlignment = 1;
   InsertFencesForAtomic = false;
   MinimumJumpTableEntries = 4;
@@ -827,7 +828,8 @@ void TargetLoweringBase::initActions() {
     setOperationAction(ISD::UMULO, VT, Expand);
     setOperationAction(ISD::UABSDIFF, VT, Expand);
     setOperationAction(ISD::SABSDIFF, VT, Expand);
-
+    setOperationAction(ISD::BITREVERSE, VT, Expand);
+    
     // These library functions default to expand.
     setOperationAction(ISD::FROUND, VT, Expand);
 
