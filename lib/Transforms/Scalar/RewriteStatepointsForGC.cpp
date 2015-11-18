@@ -800,7 +800,6 @@ private:
 /// which is the base pointer.  (This is reliable and can be used for
 /// relocation.)  On failure, returns nullptr.
 static Value *findBasePointer(Value *I, Pass *P, DefiningValueMapTy &cache) {
-  RewriteStatepointsForGC *RewritePass = (RewriteStatepointsForGC *)P;
 
   // If the runtime does not require base-pointers to be tracked
   // explicitly, simply return the pointer as its own base.
