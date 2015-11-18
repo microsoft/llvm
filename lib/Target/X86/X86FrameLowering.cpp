@@ -1252,7 +1252,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       assert(classifyEHPersonality(Fn->getPersonalityFn()) ==
              EHPersonality::MSVC_CXX);
       unsigned FrameReg;
-      int FI = MMI.getWinEHFuncInfo(Fn).EHRegNodeFrameIndex;
+      int FI = MF.getWinEHFuncInfo()->EHRegNodeFrameIndex;
       int64_t EHRegOffset = getFrameIndexReference(MF, FI, FrameReg);
       // ESP is the first field, so no extra displacement is needed.
       addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32mr)), FrameReg,
@@ -1292,7 +1292,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     // and the GC can recover it.
     unsigned PSPSlotOffset = getPSPSlotOffsetFromSP(MF);
     auto PSPInfo = MachinePointerInfo::getFixedStack(
-        MF, MF.getMMI().getWinEHFuncInfo(Fn).PSPSymFrameIdx);
+        MF, MF.getWinEHFuncInfo()->PSPSymFrameIdx);
     addRegOffset(BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr)), StackPtr, false,
                  PSPSlotOffset)
         .addReg(StackPtr)
@@ -1401,8 +1401,7 @@ static bool isFuncletReturnInstr(MachineInstr *MI) {
 // frame with only a single offset reported for the entire method.
 unsigned
 X86FrameLowering::getPSPSlotOffsetFromSP(const MachineFunction &MF) const {
-  MachineModuleInfo &MMI = MF.getMMI();
-  WinEHFuncInfo &Info = MMI.getWinEHFuncInfo(MF.getFunction());
+  const WinEHFuncInfo &Info = *MF.getWinEHFuncInfo();
   // getFrameIndexReferenceFromSP has an out ref parameter for the stack
   // pointer register; pass a dummy that we ignore
   unsigned SPReg;
@@ -2568,8 +2567,7 @@ bool X86FrameLowering::canUseAsEpilogue(const MachineBasicBlock &MBB) const {
   // not taking a chance at messing with them.
   // I.e., unless this block is already an exit block, we can't use
   // it as an epilogue.
-  if (MBB.getParent()->getSubtarget<X86Subtarget>().isTargetWin64() &&
-      !MBB.succ_empty() && !MBB.isReturnBlock())
+  if (STI.isTargetWin64() && !MBB.succ_empty() && !MBB.isReturnBlock())
     return false;
 
   if (canUseLEAForSPInEpilogue(*MBB.getParent()))
@@ -2593,9 +2591,7 @@ MachineBasicBlock::iterator X86FrameLowering::restoreWin32EHStackPointers(
   MachineFunction &MF = *MBB.getParent();
   unsigned FramePtr = TRI->getFrameRegister(MF);
   unsigned BasePtr = TRI->getBaseRegister();
-  MachineModuleInfo &MMI = MF.getMMI();
-  const Function *Fn = MF.getFunction();
-  WinEHFuncInfo &FuncInfo = MMI.getWinEHFuncInfo(Fn);
+  WinEHFuncInfo &FuncInfo = *MF.getWinEHFuncInfo();
   X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
   MachineFrameInfo *MFI = MF.getFrameInfo();
 
@@ -2663,24 +2659,24 @@ void X86FrameLowering::processFunctionBeforeFrameFinalized(
   // If this function isn't doing Win64-style C++ EH, we don't need to do
   // anything.
   const Function *Fn = MF.getFunction();
-  if (!STI.is64Bit() || !Fn->hasPersonalityFn() ||
-      classifyEHPersonality(MF.getFunction()->getPersonalityFn()) !=
-          EHPersonality::MSVC_CXX)
+  if (!STI.is64Bit() || !MF.getMMI().hasEHFunclets() ||
+      classifyEHPersonality(Fn->getPersonalityFn()) != EHPersonality::MSVC_CXX)
     return;
 
   // Win64 C++ EH needs to allocate the UnwindHelp object at some fixed offset
   // relative to RSP after the prologue.  Find the offset of the last fixed
-  // object, so that we can allocate a slot immediately following it. Fixed
-  // objects have negative frame indices.
+  // object, so that we can allocate a slot immediately following it. If there
+  // were no fixed objects, use offset -SlotSize, which is immediately after the
+  // return address. Fixed objects have negative frame indices.
   MachineFrameInfo *MFI = MF.getFrameInfo();
-  int64_t MinFixedObjOffset = 0;
+  int64_t MinFixedObjOffset = -SlotSize;
   for (int I = MFI->getObjectIndexBegin(); I < 0; ++I)
     MinFixedObjOffset = std::min(MinFixedObjOffset, MFI->getObjectOffset(I));
 
   int64_t UnwindHelpOffset = MinFixedObjOffset - SlotSize;
   int UnwindHelpFI =
       MFI->CreateFixedObject(SlotSize, UnwindHelpOffset, /*Immutable=*/false);
-  MF.getMMI().getWinEHFuncInfo(Fn).UnwindHelpFrameIdx = UnwindHelpFI;
+  MF.getWinEHFuncInfo()->UnwindHelpFrameIdx = UnwindHelpFI;
 
   // Store -2 into UnwindHelp on function entry. We have to scan forwards past
   // other frame setup instructions.

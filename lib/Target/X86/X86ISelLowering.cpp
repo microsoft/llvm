@@ -2718,8 +2718,6 @@ SDValue X86TargetLowering::LowerFormalArguments(
         MFI->CreateFixedObject(1, StackSize, true));
   }
 
-  MachineModuleInfo &MMI = MF.getMMI();
-
   // Figure out if XMM registers are in use.
   assert(!(Subtarget->useSoftFloat() &&
            Fn->hasFnAttribute(Attribute::NoImplicitFloat)) &&
@@ -2875,7 +2873,7 @@ SDValue X86TargetLowering::LowerFormalArguments(
 
   FuncInfo->setArgumentStackSize(StackSize);
 
-  if (MMI.hasWinEHFuncInfo(Fn)) {
+  if (WinEHFuncInfo *EHInfo = MF.getWinEHFuncInfo()) {
     EHPersonality Personality = classifyEHPersonality(Fn->getPersonalityFn());
     if (Personality == EHPersonality::CoreCLR) {
       assert(Is64Bit);
@@ -2888,7 +2886,7 @@ SDValue X86TargetLowering::LowerFormalArguments(
       // how far this slot is from the bottom (since they allocate just enough
       // space to accomodate holding this slot at the correct offset).
       int PSPSymFI = MFI->CreateStackObject(8, 8, /*isSS=*/false);
-      MMI.getWinEHFuncInfo(MF.getFunction()).PSPSymFrameIdx = PSPSymFI;
+      EHInfo->PSPSymFrameIdx = PSPSymFI;
     }
   }
 
@@ -11179,7 +11177,7 @@ static bool BUILD_VECTORtoBlendMask(BuildVectorSDNode *BuildVector,
                                     unsigned &MaskValue) {
   MaskValue = 0;
   unsigned NumElems = BuildVector->getNumOperands();
-  
+
   // There are 2 lanes if (NumElems > 8), and 1 lane otherwise.
   // We don't handle the >2 lanes case right now.
   unsigned NumLanes = (NumElems - 1) / 8 + 1;
@@ -14521,8 +14519,7 @@ SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
       Op1.getOpcode() == ISD::Constant &&
       cast<ConstantSDNode>(Op1)->isNullValue() &&
       (CC == ISD::SETEQ || CC == ISD::SETNE)) {
-    SDValue NewSetCC = LowerToBT(Op0, CC, dl, DAG);
-    if (NewSetCC.getNode()) {
+    if (SDValue NewSetCC = LowerToBT(Op0, CC, dl, DAG)) {
       if (VT == MVT::i1)
         return DAG.getNode(ISD::TRUNCATE, dl, MVT::i1, NewSetCC);
       return NewSetCC;
@@ -14843,8 +14840,7 @@ SDValue X86TargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
     // We know the result of AND is compared against zero. Try to match
     // it to BT.
     if (Cond.getOpcode() == ISD::AND && Cond.hasOneUse()) {
-      SDValue NewSetCC = LowerToBT(Cond, ISD::SETNE, DL, DAG);
-      if (NewSetCC.getNode()) {
+      if (SDValue NewSetCC = LowerToBT(Cond, ISD::SETNE, DL, DAG)) {
         CC = NewSetCC.getOperand(0);
         Cond = NewSetCC.getOperand(1);
         addTest = false;
@@ -15527,8 +15523,7 @@ SDValue X86TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
     // We know the result of AND is compared against zero. Try to match
     // it to BT.
     if (Cond.getOpcode() == ISD::AND && Cond.hasOneUse()) {
-      SDValue NewSetCC = LowerToBT(Cond, ISD::SETNE, dl, DAG);
-      if (NewSetCC.getNode()) {
+      if (SDValue NewSetCC = LowerToBT(Cond, ISD::SETNE, dl, DAG)) {
         CC = NewSetCC.getOperand(0);
         Cond = NewSetCC.getOperand(1);
         addTest = false;
@@ -16940,6 +16935,24 @@ static SDValue LowerSEHRESTOREFRAME(SDValue Op, const X86Subtarget *Subtarget,
   return Chain;
 }
 
+static SDValue MarkEHRegistrationNode(SDValue Op, SelectionDAG &DAG) {
+  MachineFunction &MF = DAG.getMachineFunction();
+  SDValue Chain = Op.getOperand(0);
+  SDValue RegNode = Op.getOperand(2);
+  WinEHFuncInfo *EHInfo = MF.getWinEHFuncInfo();
+  if (!EHInfo)
+    report_fatal_error("EH registrations only live in functions using WinEH");
+
+  // Cast the operand to an alloca, and remember the frame index.
+  auto *FINode = dyn_cast<FrameIndexSDNode>(RegNode);
+  if (!FINode)
+    report_fatal_error("llvm.x86.seh.ehregnode expects a static alloca");
+  EHInfo->EHRegNodeFrameIndex = FINode->getIndex();
+
+  // Return the chain operand without making any DAG nodes.
+  return Chain;
+}
+
 /// \brief Lower intrinsics for TRUNCATE_TO_MEM case
 /// return truncate Store/MaskedStore Node
 static SDValue LowerINTRINSIC_TRUNCATE_TO_MEM(const SDValue & Op,
@@ -16985,6 +16998,8 @@ static SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, const X86Subtarget *Subtarget,
   if (!IntrData) {
     if (IntNo == llvm::Intrinsic::x86_seh_restoreframe)
       return LowerSEHRESTOREFRAME(Op, Subtarget, DAG);
+    else if (IntNo == llvm::Intrinsic::x86_seh_ehregnode)
+      return MarkEHRegistrationNode(Op, DAG);
     return SDValue();
   }
 
@@ -26679,7 +26694,7 @@ static SDValue PerformSINT_TO_FPCombine(SDNode *N, SelectionDAG &DAG,
   }
 
   // Transform (SINT_TO_FP (i64 ...)) into an x87 operation if we have
-  // a 32-bit target where SSE doesn't support i64->FP operations.  
+  // a 32-bit target where SSE doesn't support i64->FP operations.
   if (!Subtarget->useSoftFloat() && Op0.getOpcode() == ISD::LOAD) {
     LoadSDNode *Ld = cast<LoadSDNode>(Op0.getNode());
     EVT LdVT = Ld->getValueType(0);

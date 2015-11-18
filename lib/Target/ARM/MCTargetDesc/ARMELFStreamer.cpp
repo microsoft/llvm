@@ -510,8 +510,10 @@ public:
   void EmitValueImpl(const MCExpr *Value, unsigned Size, SMLoc Loc = SMLoc(),
                      bool IsPCRelative = false) override {
     if (const MCSymbolRefExpr *SRE = dyn_cast_or_null<MCSymbolRefExpr>(Value))
-      if (SRE->getKind() == MCSymbolRefExpr::VK_ARM_SBREL && !(Size == 4))
-        getContext().reportFatalError(Loc, "relocated expression must be 32-bit");
+      if (SRE->getKind() == MCSymbolRefExpr::VK_ARM_SBREL && !(Size == 4)) {
+        getContext().reportError(Loc, "relocated expression must be 32-bit");
+        return;
+      }
 
     EmitDataMappingSymbol();
     MCELFStreamer::EmitValueImpl(Value, Size, Loc, IsPCRelative);
@@ -720,8 +722,7 @@ void ARMTargetELFStreamer::emitArchDefaultAttributes() {
     break;
 
   case ARM::AK_ARMV6K:
-  case ARM::AK_ARMV6Z:
-  case ARM::AK_ARMV6ZK:
+  case ARM::AK_ARMV6KZ:
     setAttributeItem(ARM_ISA_use, Allowed, false);
     setAttributeItem(THUMB_ISA_use, Allowed, false);
     setAttributeItem(Virtualization_use, AllowTZ, false);
@@ -1079,19 +1080,14 @@ inline void ARMELFStreamer::SwitchToEHSection(const char *Prefix,
 }
 
 inline void ARMELFStreamer::SwitchToExTabSection(const MCSymbol &FnStart) {
-  SwitchToEHSection(".ARM.extab",
-                    ELF::SHT_PROGBITS,
-                    ELF::SHF_ALLOC,
-                    SectionKind::getDataRel(),
-                    FnStart);
+  SwitchToEHSection(".ARM.extab", ELF::SHT_PROGBITS, ELF::SHF_ALLOC,
+                    SectionKind::getData(), FnStart);
 }
 
 inline void ARMELFStreamer::SwitchToExIdxSection(const MCSymbol &FnStart) {
-  SwitchToEHSection(".ARM.exidx",
-                    ELF::SHT_ARM_EXIDX,
+  SwitchToEHSection(".ARM.exidx", ELF::SHT_ARM_EXIDX,
                     ELF::SHF_ALLOC | ELF::SHF_LINK_ORDER,
-                    SectionKind::getDataRel(),
-                    FnStart);
+                    SectionKind::getData(), FnStart);
 }
 void ARMELFStreamer::EmitFixup(const MCExpr *Expr, MCFixupKind Kind) {
   MCDataFragment *Frag = getOrCreateDataFragment();
