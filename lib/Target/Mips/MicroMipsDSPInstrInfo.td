@@ -67,6 +67,49 @@ class SHRL_PH_MMR2_ENC : POOL32A_2RSA4OP6_FMT<"shrl.ph", 0b001111>;
 class SHRL_QB_MM_ENC : POOL32A_2RSA3_FMT<"shrl.qb", 0b1100001>;
 class SHRLV_PH_MMR2_ENC : POOL32A_3RB0_FMT<"shrlv.ph", 0b1100010101>;
 class SHRLV_QB_MM_ENC : POOL32A_3RB0_FMT<"shrlv.qb", 0b1101010101>;
+class PRECEQ_W_PHL_MM_ENC : POOL32A_2R_FMT<"preceq.w.phl", 0b0101000100>;
+class PRECEQ_W_PHR_MM_ENC : POOL32A_2R_FMT<"preceq.w.phr", 0b0110000100>;
+class PRECEQU_PH_QBL_MM_ENC : POOL32A_2R_FMT<"precequ.ph.qbl", 0b0111000100>;
+class PRECEQU_PH_QBLA_MM_ENC : POOL32A_2R_FMT<"precequ.ph.qbla", 0b0111001100>;
+class PRECEQU_PH_QBR_MM_ENC : POOL32A_2R_FMT<"precequ.ph.qbr", 0b1001000100>;
+class PRECEQU_PH_QBRA_MM_ENC : POOL32A_2R_FMT<"precequ.ph.qbra", 0b1001001100>;
+class PRECEU_PH_QBL_MM_ENC : POOL32A_2R_FMT<"preceu.ph.qbl", 0b1011000100>;
+class PRECEU_PH_QBLA_MM_ENC : POOL32A_2R_FMT<"preceu.ph.qbla", 0b1011001100>;
+class PRECEU_PH_QBR_MM_ENC : POOL32A_2R_FMT<"preceu.ph.qbr", 0b1101000100>;
+class PRECEU_PH_QBRA_MM_ENC : POOL32A_2R_FMT<"preceu.ph.qbra", 0b1101001100>;
+class SUBQ_PH_MM_ENC : POOL32A_3R_FMT<"subq.ph", 0b01000001101>;
+class SUBQ_S_PH_MM_ENC : POOL32A_3R_FMT<"subq_s.ph", 0b11000001101>;
+class SUBQ_S_W_MM_ENC : POOL32A_3RB0_FMT<"subq_s.w", 0b1101000101>;
+class SUBQH_PH_MMR2_ENC : POOL32A_3R_FMT<"subqh.ph", 0b01001001101>;
+class SUBQH_R_PH_MMR2_ENC : POOL32A_3R_FMT<"subqh_r.ph", 0b11001001101>;
+class SUBQH_W_MMR2_ENC : POOL32A_3R_FMT<"subqh.w", 0b01010001101>;
+class SUBQH_R_W_MMR2_ENC : POOL32A_3R_FMT<"subqh_r.w", 0b11010001101>;
+class SUBU_PH_MMR2_ENC : POOL32A_3R_FMT<"subu.ph", 0b01100001101>;
+class SUBU_S_PH_MMR2_ENC : POOL32A_3R_FMT<"subu_s.ph", 0b11100001101>;
+class SUBU_QB_MM_ENC : POOL32A_3R_FMT<"subu.qb", 0b01011001101>;
+class SUBU_S_QB_MM_ENC : POOL32A_3R_FMT<"subu_s.qb", 0b11011001101>;
+class SUBUH_QB_MMR2_ENC : POOL32A_3R_FMT<"subuh.qb", 0b01101001101>;
+class SUBUH_R_QB_MMR2_ENC : POOL32A_3R_FMT<"subuh_r.qb", 0b11101001101>;
+class EXTP_MM_ENC : POOL32A_1RIMM5AC_FMT<"extp", 0b10011001>;
+class EXTPDP_MM_ENC : POOL32A_1RIMM5AC_FMT<"extpdp", 0b11011001>;
+class EXTPDPV_MM_ENC : POOL32A_2RAC_FMT<"extpdpv", 0b11100010>;
+class EXTPV_MM_ENC : POOL32A_2RAC_FMT<"extpv", 0b10100010>;
+class EXTR_W_MM_ENC : POOL32A_1RIMM5AC_FMT<"extr.w", 0b00111001>;
+class EXTR_R_W_MM_ENC : POOL32A_1RIMM5AC_FMT<"extr_r.w", 0b01111001>;
+class EXTR_RS_W_MM_ENC : POOL32A_1RIMM5AC_FMT<"extr_rs.w", 0b10111001>;
+class EXTR_S_H_MM_ENC : POOL32A_1RIMM5AC_FMT<"extr_s.h", 0b11111001>;
+class EXTRV_W_MM_ENC : POOL32A_2RAC_FMT<"extrv.w", 0b00111010>;
+class EXTRV_R_W_MM_ENC : POOL32A_2RAC_FMT<"extrv_r.w", 0b01111010>;
+class EXTRV_RS_W_MM_ENC : POOL32A_2RAC_FMT<"extrv_rs.w", 0b10111010>;
+class EXTRV_S_H_MM_ENC : POOL32A_2RAC_FMT<"extrv_s.h", 0b11111010>;
+class DPS_W_PH_MMR2_ENC : POOL32A_2RAC_FMT<"dps.w.ph", 0b00010010>;
+class DPSQ_S_W_PH_MM_ENC : POOL32A_2RAC_FMT<"dpsq_s.w.ph", 0b00011010>;
+class DPSQ_SA_L_W_MM_ENC : POOL32A_2RAC_FMT<"dpsq_sa.l.w", 0b01011010>;
+class DPSQX_S_W_PH_MMR2_ENC : POOL32A_2RAC_FMT<"dpsqx_s.w.ph", 0b10011010>;
+class DPSQX_SA_W_PH_MMR2_ENC : POOL32A_2RAC_FMT<"dpsqx_sa.w.ph", 0b11011010>;
+class DPSU_H_QBL_MM_ENC : POOL32A_2RAC_FMT<"dpsu.h.qbl", 0b10010010>;
+class DPSU_H_QBR_MM_ENC : POOL32A_2RAC_FMT<"dpsu.h.qbr", 0b11010010>;
+class DPSX_W_PH_MMR2_ENC : POOL32A_2RAC_FMT<"dpsx.w.ph", 0b01010010>;
 
 // Instruction desc.
 class ABSQ_S_PH_MM_R2_DESC_BASE<string opstr, SDPatternOperator OpNode,
@@ -84,6 +127,26 @@ class ABSQ_S_W_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
   "absq_s.w", int_mips_absq_s_w, NoItinerary, GPR32Opnd>, Defs<[DSPOutFlag20]>;
 class ABSQ_S_QB_MMR2_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
   "absq_s.qb", int_mips_absq_s_qb, NoItinerary, DSPROpnd>, Defs<[DSPOutFlag20]>;
+class PRECEQ_W_PHL_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "preceq.w.phl", int_mips_preceq_w_phl, NoItinerary, GPR32Opnd, DSPROpnd>;
+class PRECEQ_W_PHR_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "preceq.w.phr", int_mips_preceq_w_phr, NoItinerary, GPR32Opnd, DSPROpnd>;
+class PRECEQU_PH_QBL_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "precequ.ph.qbl", int_mips_precequ_ph_qbl, NoItinerary, DSPROpnd>;
+class PRECEQU_PH_QBLA_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "precequ.ph.qbla", int_mips_precequ_ph_qbla, NoItinerary, DSPROpnd>;
+class PRECEQU_PH_QBR_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "precequ.ph.qbr", int_mips_precequ_ph_qbr, NoItinerary, DSPROpnd>;
+class PRECEQU_PH_QBRA_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "precequ.ph.qbra", int_mips_precequ_ph_qbra, NoItinerary, DSPROpnd>;
+class PRECEU_PH_QBL_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "preceu.ph.qbl", int_mips_preceu_ph_qbl, NoItinerary, DSPROpnd>;
+class PRECEU_PH_QBLA_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "preceu.ph.qbla", int_mips_preceu_ph_qbla, NoItinerary, DSPROpnd>;
+class PRECEU_PH_QBR_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "preceu.ph.qbr", int_mips_preceu_ph_qbr, NoItinerary, DSPROpnd>;
+class PRECEU_PH_QBRA_MM_DESC : ABSQ_S_PH_MM_R2_DESC_BASE<
+  "preceu.ph.qbra", int_mips_preceu_ph_qbra, NoItinerary, DSPROpnd>;
 
 class SHLL_R2_MM_DESC_BASE<string instr_asm, SDPatternOperator OpNode,
                            SDPatternOperator ImmPat, InstrItinClass itin,
@@ -154,6 +217,57 @@ class SHRLV_PH_MMR2_DESC : SHLLV_R3_MM_DESC_BASE<
 class SHRLV_QB_MM_DESC : SHLLV_R3_MM_DESC_BASE<
   "shrlv.qb", int_mips_shrl_qb, NoItinerary, DSPROpnd>;
 
+class EXT_MM_2R_DESC_BASE<string instr_asm, SDPatternOperator OpNode,
+                          InstrItinClass itin> {
+  dag OutOperandList = (outs GPR32Opnd:$rt);
+  dag InOperandList = (ins ACC64DSPOpnd:$ac, GPR32Opnd:$rs);
+  string AsmString = !strconcat(instr_asm, "\t$rt, $ac, $rs");
+  InstrItinClass Itinerary = itin;
+}
+class EXT_MM_1R_DESC_BASE<string instr_asm, SDPatternOperator OpNode,
+                          InstrItinClass itin> {
+  dag OutOperandList = (outs GPR32Opnd:$rt);
+  dag InOperandList = (ins ACC64DSPOpnd:$ac, uimm5:$imm);
+  string AsmString = !strconcat(instr_asm, "\t$rt, $ac, $imm");
+  InstrItinClass Itinerary = itin;
+}
+class EXTP_MM_DESC
+    : EXT_MM_1R_DESC_BASE<"extp", MipsEXTP, NoItinerary>,
+      Uses<[DSPPos]>, Defs<[DSPEFI]>;
+class EXTPDP_MM_DESC
+    : EXT_MM_1R_DESC_BASE<"extpdp", MipsEXTPDP, NoItinerary>,
+      Uses<[DSPPos]>, Defs<[DSPPos, DSPEFI]>;
+class EXTPDPV_MM_DESC
+    : EXT_MM_2R_DESC_BASE<"extpdpv", MipsEXTPDP, NoItinerary>,
+      Uses<[DSPPos]>, Defs<[DSPPos, DSPEFI]>;
+class EXTPV_MM_DESC
+    : EXT_MM_2R_DESC_BASE<"extpv", MipsEXTP, NoItinerary>,
+      Uses<[DSPPos]>, Defs<[DSPEFI]>;
+class EXTR_W_MM_DESC
+    : EXT_MM_1R_DESC_BASE<"extr.w", MipsEXTR_W, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+class EXTR_R_W_MM_DESC
+    : EXT_MM_1R_DESC_BASE<"extr_r.w", MipsEXTR_R_W, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+class EXTR_RS_W_MM_DESC
+    : EXT_MM_1R_DESC_BASE<"extr_rs.w", MipsEXTR_RS_W, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+class EXTR_S_H_MM_DESC
+    : EXT_MM_1R_DESC_BASE<"extr_s.h", MipsEXTR_S_H, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+class EXTRV_W_MM_DESC
+    : EXT_MM_2R_DESC_BASE<"extrv.w", MipsEXTR_W, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+class EXTRV_R_W_MM_DESC
+    : EXT_MM_2R_DESC_BASE<"extrv_r.w", MipsEXTR_R_W, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+class EXTRV_RS_W_MM_DESC
+    : EXT_MM_2R_DESC_BASE<"extrv_rs.w", MipsEXTR_RS_W, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+class EXTRV_S_H_MM_DESC
+    : EXT_MM_2R_DESC_BASE<"extrv_s.h", MipsEXTR_S_H, NoItinerary>,
+      Defs<[DSPOutFlag23]>;
+
 // Instruction defs.
 // microMIPS DSP Rev 1
 def ADDQ_PH_MM : DspMMRel, ADDQ_PH_MM_ENC, ADDQ_PH_DESC;
@@ -192,6 +306,39 @@ def SHRAV_R_W_MM : DspMMRel, SHRAV_R_W_MM_ENC, SHRAV_R_W_MM_DESC;
 def SHRA_R_W_MM : DspMMRel, SHRA_R_W_MM_ENC, SHRA_R_W_MM_DESC;
 def SHRL_QB_MM : DspMMRel, SHRL_QB_MM_ENC, SHRL_QB_MM_DESC;
 def SHRLV_QB_MM : DspMMRel, SHRLV_QB_MM_ENC, SHRLV_QB_MM_DESC;
+def PRECEQ_W_PHL_MM : DspMMRel, PRECEQ_W_PHL_MM_ENC, PRECEQ_W_PHL_MM_DESC;
+def PRECEQ_W_PHR_MM : DspMMRel, PRECEQ_W_PHR_MM_ENC, PRECEQ_W_PHR_MM_DESC;
+def PRECEQU_PH_QBL_MM : DspMMRel, PRECEQU_PH_QBL_MM_ENC, PRECEQU_PH_QBL_MM_DESC;
+def PRECEQU_PH_QBLA_MM : DspMMRel, PRECEQU_PH_QBLA_MM_ENC,
+                         PRECEQU_PH_QBLA_MM_DESC;
+def PRECEQU_PH_QBR_MM : DspMMRel, PRECEQU_PH_QBR_MM_ENC, PRECEQU_PH_QBR_MM_DESC;
+def PRECEQU_PH_QBRA_MM : DspMMRel, PRECEQU_PH_QBRA_MM_ENC,
+                         PRECEQU_PH_QBRA_MM_DESC;
+def PRECEU_PH_QBL_MM : DspMMRel, PRECEU_PH_QBL_MM_ENC, PRECEU_PH_QBL_MM_DESC;
+def PRECEU_PH_QBLA_MM : DspMMRel, PRECEU_PH_QBLA_MM_ENC, PRECEU_PH_QBLA_MM_DESC;
+def PRECEU_PH_QBR_MM : DspMMRel, PRECEU_PH_QBR_MM_ENC, PRECEU_PH_QBR_MM_DESC;
+def PRECEU_PH_QBRA_MM : DspMMRel, PRECEU_PH_QBRA_MM_ENC, PRECEU_PH_QBRA_MM_DESC;
+def SUBQ_PH_MM : DspMMRel, SUBQ_PH_MM_ENC, SUBQ_PH_DESC;
+def SUBQ_S_PH_MM : DspMMRel, SUBQ_S_PH_MM_ENC, SUBQ_S_PH_DESC;
+def SUBQ_S_W_MM : DspMMRel, SUBQ_S_W_MM_ENC, SUBQ_S_W_DESC;
+def SUBU_QB_MM : DspMMRel, SUBU_QB_MM_ENC, SUBU_QB_DESC;
+def SUBU_S_QB_MM : DspMMRel, SUBU_S_QB_MM_ENC, SUBU_S_QB_DESC;
+def EXTP_MM : DspMMRel, EXTP_MM_ENC, EXTP_MM_DESC;
+def EXTPDP_MM : DspMMRel, EXTPDP_MM_ENC, EXTPDP_MM_DESC;
+def EXTPDPV_MM : DspMMRel, EXTPDPV_MM_ENC, EXTPDPV_MM_DESC;
+def EXTPV_MM : DspMMRel, EXTPV_MM_ENC, EXTPV_MM_DESC;
+def EXTR_W_MM : DspMMRel, EXTR_W_MM_ENC, EXTR_W_MM_DESC;
+def EXTR_R_W_MM : DspMMRel, EXTR_R_W_MM_ENC, EXTR_R_W_MM_DESC;
+def EXTR_RS_W_MM : DspMMRel, EXTR_RS_W_MM_ENC, EXTR_RS_W_MM_DESC;
+def EXTR_S_H_MM : DspMMRel, EXTR_S_H_MM_ENC, EXTR_S_H_MM_DESC;
+def EXTRV_W_MM : DspMMRel, EXTRV_W_MM_ENC, EXTRV_W_MM_DESC;
+def EXTRV_R_W_MM : DspMMRel, EXTRV_R_W_MM_ENC, EXTRV_R_W_MM_DESC;
+def EXTRV_RS_W_MM : DspMMRel, EXTRV_RS_W_MM_ENC, EXTRV_RS_W_MM_DESC;
+def EXTRV_S_H_MM : DspMMRel, EXTRV_S_H_MM_ENC, EXTRV_S_H_MM_DESC;
+def DPSQ_S_W_PH_MM : DspMMRel, DPSQ_S_W_PH_MM_ENC, DPSQ_S_W_PH_DESC;
+def DPSQ_SA_L_W_MM : DspMMRel, DPSQ_SA_L_W_MM_ENC, DPSQ_SA_L_W_DESC;
+def DPSU_H_QBL_MM : DspMMRel, DPSU_H_QBL_MM_ENC, DPSU_H_QBL_DESC;
+def DPSU_H_QBR_MM : DspMMRel, DPSU_H_QBR_MM_ENC, DPSU_H_QBR_DESC;
 // microMIPS DSP Rev 2
 def ABSQ_S_QB_MMR2 : DspMMRel, ABSQ_S_QB_MMR2_ENC, ABSQ_S_QB_MMR2_DESC,
                      ISA_DSPR2;
@@ -217,3 +364,17 @@ def SHRAV_R_QB_MMR2 : DspMMRel, SHRAV_R_QB_MMR2_ENC, SHRAV_R_QB_MMR2_DESC,
                       ISA_DSPR2;
 def SHRL_PH_MMR2 : DspMMRel, SHRL_PH_MMR2_ENC, SHRL_PH_MMR2_DESC, ISA_DSPR2;
 def SHRLV_PH_MMR2 : DspMMRel, SHRLV_PH_MMR2_ENC, SHRLV_PH_MMR2_DESC, ISA_DSPR2;
+def SUBQH_PH_MMR2 : DspMMRel, SUBQH_PH_MMR2_ENC, SUBQH_PH_DESC, ISA_DSPR2;
+def SUBQH_R_PH_MMR2 : DspMMRel, SUBQH_R_PH_MMR2_ENC, SUBQH_R_PH_DESC, ISA_DSPR2;
+def SUBQH_W_MMR2 : DspMMRel, SUBQH_W_MMR2_ENC, SUBQH_W_DESC, ISA_DSPR2;
+def SUBQH_R_W_MMR2 : DspMMRel, SUBQH_R_W_MMR2_ENC, SUBQH_R_W_DESC, ISA_DSPR2;
+def SUBU_PH_MMR2 : DspMMRel, SUBU_PH_MMR2_ENC, SUBU_PH_DESC, ISA_DSPR2;
+def SUBU_S_PH_MMR2 : DspMMRel, SUBU_S_PH_MMR2_ENC, SUBU_S_PH_DESC, ISA_DSPR2;
+def SUBUH_QB_MMR2 : DspMMRel, SUBUH_QB_MMR2_ENC, SUBUH_QB_DESC, ISA_DSPR2;
+def SUBUH_R_QB_MMR2 : DspMMRel, SUBUH_R_QB_MMR2_ENC, SUBUH_R_QB_DESC, ISA_DSPR2;
+def DPS_W_PH_MMR2 : DspMMRel, DPS_W_PH_MMR2_ENC, DPS_W_PH_DESC, ISA_DSPR2;
+def DPSQX_S_W_PH_MMR2 : DspMMRel, DPSQX_S_W_PH_MMR2_ENC, DPSQX_S_W_PH_DESC,
+                        ISA_DSPR2;
+def DPSQX_SA_W_PH_MMR2 : DspMMRel, DPSQX_SA_W_PH_MMR2_ENC, DPSQX_SA_W_PH_DESC,
+                         ISA_DSPR2;
+def DPSX_W_PH_MMR2 : DspMMRel, DPSX_W_PH_MMR2_ENC, DPSX_W_PH_DESC, ISA_DSPR2;

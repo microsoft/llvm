@@ -51,13 +51,13 @@ class InstrProfErrorCategoryType : public std::error_category {
     case instrprof_error::unknown_function:
       return "No profile data available for function";
     case instrprof_error::hash_mismatch:
-      return "Function hash mismatch";
+      return "Function control flow change detected (hash mismatch)";
     case instrprof_error::count_mismatch:
-      return "Function count mismatch";
+      return "Function basic block count change detected (counter mismatch)";
     case instrprof_error::counter_overflow:
       return "Counter overflow";
     case instrprof_error::value_site_count_mismatch:
-      return "Function's value site counts mismatch";
+      return "Function value site count change detected (counter mismatch)";
     }
     llvm_unreachable("A value of instrprof_error has no message.");
   }
@@ -131,8 +131,6 @@ GlobalVariable *createPGOFuncNameVar(Function &F, StringRef FuncName) {
   return createPGOFuncNameVar(*F.getParent(), F.getLinkage(), FuncName);
 }
 
-namespace IndexedInstrProf {
-
 uint32_t ValueProfRecord::getHeaderSize(uint32_t NumValueSites) {
   uint32_t Size = offsetof(ValueProfRecord, SiteCountArray) +
                   sizeof(uint8_t) * NumValueSites;
@@ -174,7 +172,8 @@ void ValueProfRecord::serializeFrom(const InstrProfRecord &Record,
       DstVD[I] = SrcVD[I];
       switch (ValueKind) {
       case IPVK_IndirectCallTarget:
-        DstVD[I].Value = ComputeHash(HashType, (const char *)DstVD[I].Value);
+        DstVD[I].Value = IndexedInstrProf::ComputeHash(
+            IndexedInstrProf::HashType, (const char *)DstVD[I].Value);
         break;
       default:
         llvm_unreachable("value kind not handled !");
@@ -184,11 +183,13 @@ void ValueProfRecord::serializeFrom(const InstrProfRecord &Record,
   }
 }
 
-template <class T> static T swapToHostOrder(T v, support::endianness Orig) {
-  if (Orig == getHostEndianness())
-    return v;
-  sys::swapByteOrder<T>(v);
-  return v;
+template <class T>
+static T swapToHostOrder(const unsigned char *&D, support::endianness Orig) {
+  using namespace support;
+  if (Orig == little)
+    return endian::readNext<T, little, unaligned>(D);
+  else
+    return endian::readNext<T, big, unaligned>(D);
 }
 
 // For writing/serializing,  Old is the host endianness, and  New is
@@ -278,10 +279,9 @@ ValueProfData::getValueProfData(const unsigned char *D,
   if (D + sizeof(ValueProfData) > BufferEnd)
     return instrprof_error::truncated;
 
-  uint32_t TotalSize = swapToHostOrder<uint32_t>(
-      reinterpret_cast<const uint32_t *>(D)[0], Endianness);
-  uint32_t NumValueKinds = swapToHostOrder<uint32_t>(
-      reinterpret_cast<const uint32_t *>(D)[1], Endianness);
+  const unsigned char *Header = D;
+  uint32_t TotalSize = swapToHostOrder<uint32_t>(Header, Endianness);
+  uint32_t NumValueKinds = swapToHostOrder<uint32_t>(Header, Endianness);
 
   if (D + TotalSize > BufferEnd)
     return instrprof_error::too_large;
@@ -307,7 +307,6 @@ ValueProfData::getValueProfData(const unsigned char *D,
       return instrprof_error::malformed;
   }
 
-  D += TotalSize;
   return std::move(VPD);
 }
 
@@ -361,6 +360,4 @@ InstrProfValueData *ValueProfRecord::getValueData() {
   return reinterpret_cast<InstrProfValueData *>((char *)this +
                                                 getHeaderSize(NumValueSites));
 }
-
-} // End of IndexedInstrProf namespace.
 }

@@ -664,7 +664,7 @@ bool ModuleLinker::doImportAsDefinition(const GlobalValue *SGV) {
   // global variables with external linkage are transformed to
   // available_externally definitions, which are ultimately turned into
   // declarations after the EliminateAvailableExternally pass).
-  if (dyn_cast<GlobalVariable>(SGV) && !SGV->isDeclaration() &&
+  if (isa<GlobalVariable>(SGV) && !SGV->isDeclaration() &&
       !SGV->hasWeakAnyLinkage())
     return true;
   // Only import the function requested for importing.
@@ -1628,8 +1628,9 @@ void ModuleLinker::linkNamedMDNodes() {
     NamedMDNode *DestNMD = DstM->getOrInsertNamedMetadata(NMD.getName());
     // Add Src elements into Dest node.
     for (const MDNode *op : NMD.operands())
-      DestNMD->addOperand(MapMetadata(op, ValueMap, RF_MoveDistinctMDs,
-                                      &TypeMap, &ValMaterializer));
+      DestNMD->addOperand(MapMetadata(
+          op, ValueMap, RF_MoveDistinctMDs | RF_NullMapMissingGlobalValues,
+          &TypeMap, &ValMaterializer));
   }
 }
 
