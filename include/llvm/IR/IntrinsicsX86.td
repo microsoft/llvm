@@ -1618,6 +1618,24 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
           Intrinsic<[llvm_v16f32_ty],
           [llvm_v16f32_ty, llvm_v16f32_ty, llvm_i16_ty],
           [IntrNoMem]>;
+
+  def int_x86_avx512_mask_movddup_128 :
+         GCCBuiltin<"__builtin_ia32_movddup128_mask">,
+          Intrinsic<[llvm_v2f64_ty],
+          [llvm_v2f64_ty, llvm_v2f64_ty, llvm_i8_ty],
+          [IntrNoMem]>;
+
+  def int_x86_avx512_mask_movddup_256 :
+         GCCBuiltin<"__builtin_ia32_movddup256_mask">,
+          Intrinsic<[llvm_v4f64_ty],
+          [llvm_v4f64_ty, llvm_v4f64_ty, llvm_i8_ty],
+          [IntrNoMem]>;
+
+  def int_x86_avx512_mask_movddup_512 :
+         GCCBuiltin<"__builtin_ia32_movddup512_mask">,
+          Intrinsic<[llvm_v8f64_ty],
+          [llvm_v8f64_ty, llvm_v8f64_ty, llvm_i8_ty],
+          [IntrNoMem]>;
 }
 
 // Vector blend
@@ -4955,6 +4973,24 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
 
   def int_x86_avx512_pbroadcastq_i64_512 :
          Intrinsic<[llvm_v8i64_ty], [llvm_i64_ty], [IntrNoMem]>;
+   def int_x86_avx512_broadcastmw_512 :
+          GCCBuiltin<"__builtin_ia32_broadcastmw512">,
+          Intrinsic<[llvm_v16i32_ty], [llvm_i16_ty], [IntrNoMem]>;
+   def int_x86_avx512_broadcastmw_256 :
+          GCCBuiltin<"__builtin_ia32_broadcastmw256">,
+          Intrinsic<[llvm_v8i32_ty], [llvm_i16_ty], [IntrNoMem]>;
+   def int_x86_avx512_broadcastmw_128 :
+          GCCBuiltin<"__builtin_ia32_broadcastmw128">,
+          Intrinsic<[llvm_v4i32_ty], [llvm_i16_ty], [IntrNoMem]>;
+   def int_x86_avx512_broadcastmb_512 :
+          GCCBuiltin<"__builtin_ia32_broadcastmb512">,
+          Intrinsic<[llvm_v8i64_ty], [llvm_i8_ty], [IntrNoMem]>;
+   def int_x86_avx512_broadcastmb_256 :
+          GCCBuiltin<"__builtin_ia32_broadcastmb256">,
+          Intrinsic<[llvm_v4i64_ty], [llvm_i8_ty], [IntrNoMem]>;
+   def int_x86_avx512_broadcastmb_128 :
+          GCCBuiltin<"__builtin_ia32_broadcastmb128">,
+          Intrinsic<[llvm_v2i64_ty], [llvm_i8_ty], [IntrNoMem]>;
 }
 
 // Vector sign and zero extend
