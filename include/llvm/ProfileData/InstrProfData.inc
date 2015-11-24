@@ -183,7 +183,6 @@ COVMAP_FUNC_RECORD(const uint64_t, llvm::Type::getInt64Ty(Ctx), FuncHash, \
 #define INSTR_PROF_SIMPLE_CONCAT(x,y) x ## y
 #define INSTR_PROF_CONCAT(x,y) INSTR_PROF_SIMPLE_CONCAT(x,y)
 
-
 /* Magic number to detect file format and endianness.
  * Use 255 at one end, since no UTF-8 file can use that character.  Avoid 0,             
  * so that utilities, like strings, don't grab it as a string.  129 is also              
@@ -230,13 +229,16 @@ COVMAP_FUNC_RECORD(const uint64_t, llvm::Type::getInt64Ty(Ctx), FuncHash, \
 #define INSTR_PROF_VALUE_PROF_FUNC_STR \
         INSTR_PROF_QUOTE(INSTR_PROF_VALUE_PROF_FUNC)
 
+/* InstrProfile per-function control data alignment.  */
+#define INSTR_PROF_DATA_ALIGNMENT 8
+
 /* The data structure that represents a tracked value by the
  * value profiler.
  */
 typedef struct InstrProfValueData {
-  // Profiled value.
+  /* Profiled value. */
   uint64_t Value;
-  // Number of times the value appears in the training run.
+  /* Number of times the value appears in the training run. */
   uint64_t Count;
 } InstrProfValueData;
 
