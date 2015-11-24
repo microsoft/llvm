@@ -521,10 +521,12 @@ public:
   /// \param Size - The size of the integer (in bytes) to emit. This must
   /// match a native machine width.
   /// \param Loc - The location of the expression for error reporting.
+  /// \param IsPCRelative - It tells whether the value is PC relative or not.
   virtual void EmitValueImpl(const MCExpr *Value, unsigned Size,
-                             SMLoc Loc = SMLoc());
+                             SMLoc Loc = SMLoc(), bool IsPCRelative = false);
 
-  void EmitValue(const MCExpr *Value, unsigned Size, SMLoc Loc = SMLoc());
+  void EmitValue(const MCExpr *Value, unsigned Size, SMLoc Loc = SMLoc(),
+                 bool IsPCRelative = false);
 
   /// \brief Special case of EmitValue that avoids the client having
   /// to pass in a MCExpr for constant integers.

@@ -57,9 +57,9 @@ protected:
       return RTDyld->getSymbol(Name);
     }
 
-    bool NeedsFinalization() const { return (State == Raw); }
+    bool needsFinalization() const { return (State == Raw); }
 
-    virtual void Finalize() = 0;
+    virtual void finalize() = 0;
 
     void mapSectionAddress(const void *LocalAddress, TargetAddress TargetAddr) {
       assert((State != Finalized) &&
@@ -106,7 +106,7 @@ private:
       : LinkedObjectSet(*MemMgr, *Resolver, ProcessAllSections),
         MemMgr(std::move(MemMgr)), Resolver(std::move(Resolver)) { }
 
-    void Finalize() override {
+    void finalize() override {
       State = Finalizing;
       RTDyld->resolveRelocations();
       RTDyld->registerEHFrames();
@@ -230,7 +230,7 @@ public:
       if (Sym.isExported() || !ExportedSymbolsOnly) {
         auto Addr = Sym.getAddress();
         auto Flags = Sym.getFlags();
-        if (!(*H)->NeedsFinalization()) {
+        if (!(*H)->needsFinalization()) {
           // If this instance has already been finalized then we can just return
           // the address.
           return JITSymbol(Addr, Flags);
@@ -241,8 +241,8 @@ public:
           // functor is called.
           auto GetAddress =
             [this, Addr, H]() {
-              if ((*H)->NeedsFinalization()) {
-                (*H)->Finalize();
+              if ((*H)->needsFinalization()) {
+                (*H)->finalize();
                 if (NotifyFinalized)
                   NotifyFinalized(H);
               }
@@ -265,7 +265,7 @@ public:
   ///        given handle.
   /// @param H Handle for object set to emit/finalize.
   void emitAndFinalize(ObjSetHandleT H) {
-    (*H)->Finalize();
+    (*H)->finalize();
     if (NotifyFinalized)
       NotifyFinalized(H);
   }

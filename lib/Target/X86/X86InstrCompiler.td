@@ -75,6 +75,35 @@ def : Pat<(X86callseq_start timm:$amt1),
           (ADJCALLSTACKDOWN64 i32imm:$amt1, 0)>, Requires<[IsLP64]>;
 
 
+// CoreCLR-specific GC transition prolog. This pseudo must precede a
+// STATEPOINT node, and lowers to code that looks like this:
+//
+//   lea $label, %vreg
+//   mov %vreg, %dst
+//   ...
+//   STATEPOINT
+// label:
+//   ...
+let usesCustomInserter = 1, Defs = [EFLAGS] in {
+def GC_TRANSITION_RA : I<0, Pseudo, (outs), (ins i8mem:$dst),
+                         "#GC_TRANSITION_RA",
+                         []>;
+}
+
+// CoreCLR-specific GC transition epilog. This expands to code that looks like
+// this:
+//
+//   je label
+//   call $pause
+// label:
+//   ...
+let usesCustomInserter = 1, Defs = [EFLAGS], Uses = [EFLAGS] in {
+def GC_TRANSITION_PAUSE : I<0, Pseudo, (outs), (ins i32imm:$fp, variable_ops),
+                            "#GC_TRANSITION_PAUSE",
+                            []>;
+}
+
+
 // x86-64 va_start lowering magic.
 let usesCustomInserter = 1, Defs = [EFLAGS] in {
 def VASTART_SAVE_XMM_REGS : I<0, Pseudo,

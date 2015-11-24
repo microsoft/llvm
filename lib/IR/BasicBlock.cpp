@@ -386,12 +386,14 @@ BasicBlock *BasicBlock::splitBasicBlock(iterator I, const Twine &BBName) {
     // incoming values...
     BasicBlock *Successor = *I;
     PHINode *PN;
-    for (BasicBlock::iterator II = Successor->begin();
-         (PN = dyn_cast<PHINode>(II)); ++II) {
-      int IDX = PN->getBasicBlockIndex(this);
-      while (IDX != -1) {
-        PN->setIncomingBlock((unsigned)IDX, New);
-        IDX = PN->getBasicBlockIndex(this);
+    if (!Successor->InstList.empty()) {
+      for (BasicBlock::iterator II = Successor->begin();
+        (PN = dyn_cast<PHINode>(II)); ++II) {
+        int IDX = PN->getBasicBlockIndex(this);
+        while (IDX != -1) {
+          PN->setIncomingBlock((unsigned)IDX, New);
+          IDX = PN->getBasicBlockIndex(this);
+        }
       }
     }
   }

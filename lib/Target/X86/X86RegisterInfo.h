@@ -101,6 +101,8 @@ public:
   getCalleeSavedRegs(const MachineFunction* MF) const override;
   const uint32_t *getCallPreservedMask(const MachineFunction &MF,
                                        CallingConv::ID) const override;
+  const uint32_t *getCallPreservedMaskWithoutGPRs(const uint32_t *Mask) const;
+  const uint32_t *getCallPreservedMaskWithReturns(const uint32_t *Mask) const;
   const uint32_t *getNoPreservedMask() const override;
 
   // Calls involved in thread-local variable lookup save more registers than
