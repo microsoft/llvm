@@ -500,7 +500,6 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::MOVSX64rr8,      X86::MOVSX64rm8,          0 },
     { X86::MOVUPDrr,        X86::MOVUPDrm,            TB_ALIGN_16 },
     { X86::MOVUPSrr,        X86::MOVUPSrm,            0 },
-    { X86::MOVZQI2PQIrr,    X86::MOVZQI2PQIrm,        0 },
     { X86::MOVZPQILo2PQIrr, X86::MOVZPQILo2PQIrm,     TB_ALIGN_16 },
     { X86::MOVZX16rr8,      X86::MOVZX16rm8,          0 },
     { X86::MOVZX32rr16,     X86::MOVZX32rm16,         0 },
@@ -610,7 +609,6 @@ X86InstrInfo::X86InstrInfo(X86Subtarget &STI)
     { X86::VMOVSHDUPrr,     X86::VMOVSHDUPrm,         0 },
     { X86::VMOVUPDrr,       X86::VMOVUPDrm,           0 },
     { X86::VMOVUPSrr,       X86::VMOVUPSrm,           0 },
-    { X86::VMOVZQI2PQIrr,   X86::VMOVZQI2PQIrm,       0 },
     { X86::VMOVZPQILo2PQIrr,X86::VMOVZPQILo2PQIrm,    TB_ALIGN_16 },
     { X86::VPABSBrr128,     X86::VPABSBrm128,         0 },
     { X86::VPABSDrr128,     X86::VPABSDrm128,         0 },
@@ -5869,6 +5867,12 @@ static bool isNonFoldablePartialRegisterLoad(const MachineInstr &LoadMI,
     case X86::DIVSSrr_Int: case X86::VDIVSSrr_Int:
     case X86::MULSSrr_Int: case X86::VMULSSrr_Int:
     case X86::SUBSSrr_Int: case X86::VSUBSSrr_Int:
+    case X86::VFMADDSSr132r_Int: case X86::VFNMADDSSr132r_Int:
+    case X86::VFMADDSSr213r_Int: case X86::VFNMADDSSr213r_Int:
+    case X86::VFMADDSSr231r_Int: case X86::VFNMADDSSr231r_Int:
+    case X86::VFMSUBSSr132r_Int: case X86::VFNMSUBSSr132r_Int:
+    case X86::VFMSUBSSr213r_Int: case X86::VFNMSUBSSr213r_Int:
+    case X86::VFMSUBSSr231r_Int: case X86::VFNMSUBSSr231r_Int:
       return false;
     default:
       return true;
@@ -5884,6 +5888,12 @@ static bool isNonFoldablePartialRegisterLoad(const MachineInstr &LoadMI,
     case X86::DIVSDrr_Int: case X86::VDIVSDrr_Int:
     case X86::MULSDrr_Int: case X86::VMULSDrr_Int:
     case X86::SUBSDrr_Int: case X86::VSUBSDrr_Int:
+    case X86::VFMADDSDr132r_Int: case X86::VFNMADDSDr132r_Int:
+    case X86::VFMADDSDr213r_Int: case X86::VFNMADDSDr213r_Int:
+    case X86::VFMADDSDr231r_Int: case X86::VFNMADDSDr231r_Int:
+    case X86::VFMSUBSDr132r_Int: case X86::VFNMSUBSDr132r_Int:
+    case X86::VFMSUBSDr213r_Int: case X86::VFNMSUBSDr213r_Int:
+    case X86::VFMSUBSDr231r_Int: case X86::VFNMSUBSDr231r_Int:
       return false;
     default:
       return true;
