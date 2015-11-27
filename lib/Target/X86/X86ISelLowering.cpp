@@ -16028,6 +16028,7 @@ static SDValue getVectorMaskingNode(SDValue Op, SDValue Mask,
     case X86ISD::CMPMU:
       return DAG.getNode(ISD::AND, dl, VT, Op, VMask);
     case X86ISD::VFPCLASS:
+    case X86ISD::VFPCLASSS:
       return DAG.getNode(ISD::OR, dl, VT, Op, VMask);
     case X86ISD::VTRUNC:
     case X86ISD::VTRUNCS:
@@ -16064,7 +16065,8 @@ static SDValue getScalarMaskingNode(SDValue Op, SDValue Mask,
 
   if (Op.getOpcode() == X86ISD::FSETCC)
     return DAG.getNode(ISD::AND, dl, VT, Op, IMask);
-  if (Op.getOpcode() == X86ISD::VFPCLASS)
+  if (Op.getOpcode() == X86ISD::VFPCLASS ||
+      Op.getOpcode() == X86ISD::VFPCLASSS)
     return DAG.getNode(ISD::OR, dl, VT, Op, IMask);
 
   if (PreservedSrc.getOpcode() == ISD::UNDEF)
@@ -20260,6 +20262,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::FP_TO_SINT_RND:     return "X86ISD::FP_TO_SINT_RND";
   case X86ISD::FP_TO_UINT_RND:     return "X86ISD::FP_TO_UINT_RND";
   case X86ISD::VFPCLASS:           return "X86ISD::VFPCLASS";
+  case X86ISD::VFPCLASSS:          return "X86ISD::VFPCLASSS";
   }
   return nullptr;
 }
