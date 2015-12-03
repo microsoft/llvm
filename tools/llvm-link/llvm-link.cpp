@@ -198,7 +198,10 @@ static bool importFunctions(const char *argv0, LLVMContext &Context,
     }
 
     // Link in the specified function.
-    if (L.linkInModule(M.get(), Linker::Flags::None, Index.get(), F))
+    DenseSet<const GlobalValue *> FunctionsToImport;
+    FunctionsToImport.insert(F);
+    if (L.linkInModule(*M, Linker::Flags::None, Index.get(),
+                       &FunctionsToImport))
       return false;
   }
   return true;
@@ -226,7 +229,7 @@ static bool linkFiles(const char *argv0, LLVMContext &Context, Linker &L,
     std::unique_ptr<FunctionInfoIndex> Index;
     if (!FunctionIndex.empty()) {
       ErrorOr<std::unique_ptr<FunctionInfoIndex>> IndexOrErr =
-          llvm::getFunctionIndexForFile(FunctionIndex, diagnosticHandler, &*M);
+          llvm::getFunctionIndexForFile(FunctionIndex, diagnosticHandler);
       std::error_code EC = IndexOrErr.getError();
       if (EC) {
         errs() << EC.message() << '\n';
@@ -238,7 +241,7 @@ static bool linkFiles(const char *argv0, LLVMContext &Context, Linker &L,
     if (Verbose)
       errs() << "Linking in '" << File << "'\n";
 
-    if (L.linkInModule(M.get(), ApplicableFlags, Index.get()))
+    if (L.linkInModule(*M, ApplicableFlags, Index.get()))
       return false;
     // All linker flags apply to linking of subsequent files.
     ApplicableFlags = Flags;
@@ -266,7 +269,7 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv, "llvm linker\n");
 
   auto Composite = make_unique<Module>("llvm-link", Context);
-  Linker L(Composite.get(), diagnosticHandler);
+  Linker L(*Composite, diagnosticHandler);
 
   unsigned Flags = Linker::Flags::None;
   if (Internalize)

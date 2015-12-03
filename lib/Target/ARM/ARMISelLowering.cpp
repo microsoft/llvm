@@ -7346,7 +7346,7 @@ void ARMTargetLowering::EmitSjLjDispatchBlock(MachineInstr *MI,
       }
     }
 
-    BB->addSuccessor(DispatchBB);
+    BB->addSuccessor(DispatchBB, BranchProbability::getZero());
 
     // Find the invoke call and mark all of the callee-saved registers as
     // 'implicit defined' so that they're spilled. This prevents code from
@@ -11891,7 +11891,7 @@ bool ARMTargetLowering::shouldExpandAtomicStoreInIR(StoreInst *SI) const {
 TargetLowering::AtomicExpansionKind
 ARMTargetLowering::shouldExpandAtomicLoadInIR(LoadInst *LI) const {
   unsigned Size = LI->getType()->getPrimitiveSizeInBits();
-  return ((Size == 64) && !Subtarget->isMClass()) ? AtomicExpansionKind::LLSC
+  return ((Size == 64) && !Subtarget->isMClass()) ? AtomicExpansionKind::LLOnly
                                                   : AtomicExpansionKind::None;
 }
 

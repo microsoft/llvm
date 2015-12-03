@@ -406,11 +406,15 @@ bool Thumb1FrameLowering::needPopSpecialFixUp(const MachineFunction &MF) const {
   if (AFI->getArgRegsSaveSize())
     return true;
 
-  bool IsV4PopReturn = false;
+  // FIXME: this doesn't make sense, and the following patch will remove it.
+  if (!STI.hasV4TOps()) return false;
+
+  // LR cannot be encoded with Thumb1, i.e., it requires a special fix-up.
   for (const CalleeSavedInfo &CSI : MF.getFrameInfo()->getCalleeSavedInfo())
     if (CSI.getReg() == ARM::LR)
-      IsV4PopReturn = true;
-  return IsV4PopReturn && STI.hasV4TOps() && !STI.hasV5TOps();
+      return true;
+
+  return false;
 }
 
 bool Thumb1FrameLowering::emitPopSpecialFixUp(MachineBasicBlock &MBB,
@@ -422,22 +426,42 @@ bool Thumb1FrameLowering::emitPopSpecialFixUp(MachineBasicBlock &MBB,
   const ThumbRegisterInfo *RegInfo =
       static_cast<const ThumbRegisterInfo *>(STI.getRegisterInfo());
 
-  // If MBBI is a return instruction, we may be able to directly restore
+  // If MBBI is a return instruction, or is a tPOP followed by a return
+  // instruction in the successor BB, we may be able to directly restore
   // LR in the PC.
-  // This is possible if we do not need to emit any SP update.
+  // This is only possible with v5T ops (v4T can't change the Thumb bit via
+  // a POP PC instruction), and only if we do not need to emit any SP update.
   // Otherwise, we need a temporary register to pop the value
   // and copy that value into LR.
   auto MBBI = MBB.getFirstTerminator();
-  if (!ArgRegsSaveSize && MBBI != MBB.end() &&
-      MBBI->getOpcode() == ARM::tBX_RET) {
-    if (!DoIt)
+  bool CanRestoreDirectly = STI.hasV5TOps() && !ArgRegsSaveSize;
+  if (CanRestoreDirectly) {
+    if (MBBI != MBB.end())
+      CanRestoreDirectly = (MBBI->getOpcode() == ARM::tBX_RET ||
+                            MBBI->getOpcode() == ARM::tPOP_RET);
+    else {
+      assert(MBB.back().getOpcode() == ARM::tPOP);
+      assert(MBB.succ_size() == 1);
+      if ((*MBB.succ_begin())->begin()->getOpcode() == ARM::tBX_RET)
+        MBBI--; // Replace the final tPOP with a tPOP_RET.
+      else
+        CanRestoreDirectly = false;
+    }
+  }
+
+  if (CanRestoreDirectly) {
+    if (!DoIt || MBBI->getOpcode() == ARM::tPOP_RET)
       return true;
     MachineInstrBuilder MIB =
         AddDefaultPred(
-            BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII.get(ARM::tPOP_RET)))
-            .addReg(ARM::PC, RegState::Define);
-    MIB.copyImplicitOps(&*MBBI);
-    // erase the old tBX_RET instruction
+            BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII.get(ARM::tPOP_RET)));
+    // Copy implicit ops and popped registers, if any.
+    for (auto MO: MBBI->operands())
+      if (MO.isReg() && (MO.isImplicit() || MO.isDef()) &&
+          MO.getReg() != ARM::LR)
+        MIB.addOperand(MO);
+    MIB.addReg(ARM::PC, RegState::Define);
+    // Erase the old instruction (tBX_RET or tPOP).
     MBB.erase(MBBI);
     return true;
   }
@@ -459,10 +483,10 @@ bool Thumb1FrameLowering::emitPopSpecialFixUp(MachineBasicBlock &MBB,
   if (MBBI != MBB.end()) {
     dl = MBBI->getDebugLoc();
     auto InstUpToMBBI = MBB.end();
-    // The post-decrement is on purpose here.
-    // We want to have the liveness right before MBBI.
-    while (InstUpToMBBI-- != MBBI)
-      UsedRegs.stepBackward(*InstUpToMBBI);
+    while (InstUpToMBBI != MBBI)
+      // The pre-decrement is on purpose here.
+      // We want to have the liveness right before MBBI.
+      UsedRegs.stepBackward(*--InstUpToMBBI);
   }
 
   // Look for a register that can be directly use in the POP.
@@ -506,6 +530,12 @@ bool Thumb1FrameLowering::emitPopSpecialFixUp(MachineBasicBlock &MBB,
     AddDefaultPred(BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVr))
                        .addReg(TemporaryReg, RegState::Define)
                        .addReg(PopReg, RegState::Kill));
+  }
+
+  if (MBBI == MBB.end()) {
+    MachineInstr& Pop = MBB.back();
+    assert(Pop.getOpcode() == ARM::tPOP);
+    Pop.RemoveOperand(Pop.findRegisterDefOperandIdx(ARM::LR));
   }
 
   assert(PopReg && "Do not know how to get LR");

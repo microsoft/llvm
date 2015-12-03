@@ -20,8 +20,8 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/InstructionSimplify.h"
-#include "llvm/Analysis/LibCallSemantics.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
@@ -1136,9 +1136,10 @@ DbgDeclareInst *llvm::FindAllocaDbgDeclare(Value *V) {
   return nullptr;
 }
 
-bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
-                                      DIBuilder &Builder, bool Deref, int Offset) {
-  DbgDeclareInst *DDI = FindAllocaDbgDeclare(AI);
+bool llvm::replaceDbgDeclare(Value *Address, Value *NewAddress,
+                             Instruction *InsertBefore, DIBuilder &Builder,
+                             bool Deref, int Offset) {
+  DbgDeclareInst *DDI = FindAllocaDbgDeclare(Address);
   if (!DDI)
     return false;
   DebugLoc Loc = DDI->getDebugLoc();
@@ -1168,10 +1169,15 @@ bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
 
   // Insert llvm.dbg.declare immediately after the original alloca, and remove
   // old llvm.dbg.declare.
-  Builder.insertDeclare(NewAllocaAddress, DIVar, DIExpr, Loc,
-                        AI->getNextNode());
+  Builder.insertDeclare(NewAddress, DIVar, DIExpr, Loc, InsertBefore);
   DDI->eraseFromParent();
   return true;
+}
+
+bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+                                      DIBuilder &Builder, bool Deref, int Offset) {
+  return replaceDbgDeclare(AI, NewAllocaAddress, AI->getNextNode(), Builder,
+                           Deref, Offset);
 }
 
 /// changeToUnreachable - Insert an unreachable instruction before the specified

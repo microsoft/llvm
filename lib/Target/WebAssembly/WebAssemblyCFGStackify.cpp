@@ -162,9 +162,9 @@ static void SortBlocks(MachineFunction &MF, const MachineLoopInfo &MLI) {
   SmallPtrSet<MachineBasicBlock *, 16> Visited;
   SmallVector<POStackEntry, 16> Stack;
 
-  MachineBasicBlock *Entry = &*MF.begin();
-  Visited.insert(Entry);
-  Stack.push_back(POStackEntry(Entry, MF, MLI));
+  MachineBasicBlock *EntryBlock = &*MF.begin();
+  Visited.insert(EntryBlock);
+  Stack.push_back(POStackEntry(EntryBlock, MF, MLI));
 
   for (;;) {
     POStackEntry &Entry = Stack.back();
@@ -220,7 +220,7 @@ static void SortBlocks(MachineFunction &MF, const MachineLoopInfo &MLI) {
 #endif
 }
 
-static int GetLoopDepth(const MachineLoop *Loop) {
+static unsigned GetLoopDepth(const MachineLoop *Loop) {
   return Loop ? Loop->getLoopDepth() : 0;
 }
 
@@ -249,12 +249,12 @@ static void PlaceBlockMarkers(MachineBasicBlock &MBB,
 
   MachineBasicBlock::iterator InsertPos;
   MachineLoop *HeaderLoop = MLI.getLoopFor(Header);
-  int MBBLoopDepth = GetLoopDepth(MLI.getLoopFor(&MBB));
-  int HeaderLoopDepth = GetLoopDepth(HeaderLoop);
+  unsigned MBBLoopDepth = GetLoopDepth(MLI.getLoopFor(&MBB));
+  unsigned HeaderLoopDepth = GetLoopDepth(HeaderLoop);
   if (HeaderLoopDepth > MBBLoopDepth) {
     // The nearest common dominating point is more deeply nested. Insert the
     // BLOCK just above the LOOP.
-    for (int i = 0; i < HeaderLoopDepth - 1 - MBBLoopDepth; ++i)
+    for (unsigned i = 0; i < HeaderLoopDepth - 1 - MBBLoopDepth; ++i)
       HeaderLoop = HeaderLoop->getParentLoop();
     Header = HeaderLoop->getHeader();
     InsertPos = Header->begin();
@@ -341,7 +341,7 @@ bool WebAssemblyCFGStackify::runOnMachineFunction(MachineFunction &MF) {
   PlaceMarkers(MF, MLI, TII, MDT);
 
 #ifndef NDEBUG
-  // Verify that block and loop beginnings and endings are in FIFO order, and
+  // Verify that block and loop beginnings and endings are in LIFO order, and
   // that all references to blocks are to blocks on the stack at the point of
   // the reference.
   SmallVector<std::pair<MachineBasicBlock *, bool>, 0> Stack;
