@@ -1543,18 +1543,32 @@ public:
     setOperand(i, v);
   }
 
-  /// arg_operands - iteration adapter for range-for loops.
+  /// \brief Return the iterator pointing to the beginning of the argument list.
+  op_iterator arg_begin() { return op_begin(); }
+
+  /// \brief Return the iterator pointing to the end of the argument list.
+  op_iterator arg_end() {
+    // [ call args ], [ operand bundles ], callee
+    return op_end() - getNumTotalBundleOperands() - 1;
+  };
+
+  /// \brief Iteration adapter for range-for loops.
   iterator_range<op_iterator> arg_operands() {
-    // The last operand in the op list is the callee - it's not one of the args
-    // so we don't want to iterate over it.
-    return iterator_range<op_iterator>(
-        op_begin(), op_end() - getNumTotalBundleOperands() - 1);
+    return make_range(arg_begin(), arg_end());
   }
 
-  /// arg_operands - iteration adapter for range-for loops.
+  /// \brief Return the iterator pointing to the beginning of the argument list.
+  const_op_iterator arg_begin() const { return op_begin(); }
+
+  /// \brief Return the iterator pointing to the end of the argument list.
+  const_op_iterator arg_end() const {
+    // [ call args ], [ operand bundles ], callee
+    return op_end() - getNumTotalBundleOperands() - 1;
+  };
+
+  /// \brief Iteration adapter for range-for loops.
   iterator_range<const_op_iterator> arg_operands() const {
-    return iterator_range<const_op_iterator>(
-        op_begin(), op_end() - getNumTotalBundleOperands() - 1);
+    return make_range(arg_begin(), arg_end());
   }
 
   /// \brief Wrappers for getting the \c Use of a call argument.
@@ -2213,7 +2227,7 @@ public:
   inline idx_iterator idx_begin() const { return Indices.begin(); }
   inline idx_iterator idx_end()   const { return Indices.end(); }
   inline iterator_range<idx_iterator> indices() const {
-    return iterator_range<idx_iterator>(idx_begin(), idx_end());
+    return make_range(idx_begin(), idx_end());
   }
 
   Value *getAggregateOperand() {
@@ -2330,7 +2344,7 @@ public:
   inline idx_iterator idx_begin() const { return Indices.begin(); }
   inline idx_iterator idx_end()   const { return Indices.end(); }
   inline iterator_range<idx_iterator> indices() const {
-    return iterator_range<idx_iterator>(idx_begin(), idx_end());
+    return make_range(idx_begin(), idx_end());
   }
 
   Value *getAggregateOperand() {
@@ -3105,12 +3119,12 @@ public:
 
   /// cases - iteration adapter for range-for loops.
   iterator_range<CaseIt> cases() {
-    return iterator_range<CaseIt>(case_begin(), case_end());
+    return make_range(case_begin(), case_end());
   }
 
   /// cases - iteration adapter for range-for loops.
   iterator_range<ConstCaseIt> cases() const {
-    return iterator_range<ConstCaseIt>(case_begin(), case_end());
+    return make_range(case_begin(), case_end());
   }
 
   /// Returns an iterator that points to the default case.
@@ -3452,16 +3466,32 @@ public:
     setOperand(i, v);
   }
 
-  /// arg_operands - iteration adapter for range-for loops.
+  /// \brief Return the iterator pointing to the beginning of the argument list.
+  op_iterator arg_begin() { return op_begin(); }
+
+  /// \brief Return the iterator pointing to the end of the argument list.
+  op_iterator arg_end() {
+    // [ invoke args ], [ operand bundles ], normal dest, unwind dest, callee
+    return op_end() - getNumTotalBundleOperands() - 3;
+  };
+
+  /// \brief Iteration adapter for range-for loops.
   iterator_range<op_iterator> arg_operands() {
-    return iterator_range<op_iterator>(
-        op_begin(), op_end() - getNumTotalBundleOperands() - 3);
+    return make_range(arg_begin(), arg_end());
   }
 
-  /// arg_operands - iteration adapter for range-for loops.
+  /// \brief Return the iterator pointing to the beginning of the argument list.
+  const_op_iterator arg_begin() const { return op_begin(); }
+
+  /// \brief Return the iterator pointing to the end of the argument list.
+  const_op_iterator arg_end() const {
+    // [ invoke args ], [ operand bundles ], normal dest, unwind dest, callee
+    return op_end() - getNumTotalBundleOperands() - 3;
+  };
+
+  /// \brief Iteration adapter for range-for loops.
   iterator_range<const_op_iterator> arg_operands() const {
-    return iterator_range<const_op_iterator>(
-        op_begin(), op_end() - getNumTotalBundleOperands() - 3);
+    return make_range(arg_begin(), arg_end());
   }
 
   /// \brief Wrappers for getting the \c Use of a invoke argument.
@@ -3915,12 +3945,12 @@ public:
 
   /// arg_operands - iteration adapter for range-for loops.
   iterator_range<op_iterator> arg_operands() {
-    return iterator_range<op_iterator>(op_begin(), op_end() - 2);
+    return make_range(op_begin(), op_end() - 2);
   }
 
   /// arg_operands - iteration adapter for range-for loops.
   iterator_range<const_op_iterator> arg_operands() const {
-    return iterator_range<const_op_iterator>(op_begin(), op_end() - 2);
+    return make_range(op_begin(), op_end() - 2);
   }
 
   /// \brief Wrappers for getting the \c Use of a catchpad argument.
@@ -4039,12 +4069,12 @@ public:
 
   /// arg_operands - iteration adapter for range-for loops.
   iterator_range<op_iterator> arg_operands() {
-    return iterator_range<op_iterator>(op_begin(), arg_end());
+    return make_range(op_begin(), arg_end());
   }
 
   /// arg_operands - iteration adapter for range-for loops.
   iterator_range<const_op_iterator> arg_operands() const {
-    return iterator_range<const_op_iterator>(op_begin(), arg_end());
+    return make_range(op_begin(), arg_end());
   }
 
   /// \brief Wrappers for getting the \c Use of a terminatepad argument.

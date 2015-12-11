@@ -162,10 +162,19 @@ public:
 private:
   std::error_code readNextHeader(const char *CurrentPos);
   std::error_code readHeader(const RawInstrProf::Header &Header);
-  template <class IntT>
-  IntT swap(IntT Int) const {
+  template <class IntT> IntT swap(IntT Int) const {
     return ShouldSwapBytes ? sys::getSwappedBytes(Int) : Int;
   }
+  support::endianness getDataEndianness() const {
+    support::endianness HostEndian = getHostEndianness();
+    if (!ShouldSwapBytes)
+      return HostEndian;
+    if (HostEndian == support::little)
+      return support::big;
+    else
+      return support::little;
+  }
+
   inline uint8_t getNumPaddingBytes(uint64_t SizeInBytes) {
     return 7 & (sizeof(uint64_t) - SizeInBytes % sizeof(uint64_t));
   }
@@ -270,6 +279,7 @@ struct InstrProfReaderIndexBase {
   virtual bool atEnd() const = 0;
   virtual void setValueProfDataEndianness(support::endianness Endianness) = 0;
   virtual ~InstrProfReaderIndexBase() {}
+  virtual uint64_t getVersion() const = 0;
 };
 
 typedef OnDiskIterableChainedHashTable<InstrProfLookupTrait>
@@ -303,6 +313,7 @@ public:
     HashTable->getInfoObj().setValueProfDataEndianness(Endianness);
   }
   ~InstrProfReaderIndex() override {}
+  uint64_t getVersion() const override { return FormatVersion; }
 };
 
 /// Reader for the indexed binary instrprof format.
@@ -319,6 +330,7 @@ private:
   IndexedInstrProfReader &operator=(const IndexedInstrProfReader &) = delete;
 
 public:
+  uint64_t getVersion() const { return Index->getVersion(); }
   IndexedInstrProfReader(std::unique_ptr<MemoryBuffer> DataBuffer)
       : DataBuffer(std::move(DataBuffer)), Index(nullptr) {}
 
