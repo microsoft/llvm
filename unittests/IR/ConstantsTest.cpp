@@ -382,5 +382,56 @@ TEST(ConstantsTest, AliasCAPI) {
   ASSERT_EQ(unwrap<GlobalAlias>(AliasRef)->getAliasee(), Aliasee);
 }
 
+static std::string getNameOfType(Type *T) {
+  std::string S;
+  raw_string_ostream RSOS(S);
+  T->print(RSOS);
+  return S;
+}
+
+TEST(ConstantsTest, BuildConstantDataArrays) {
+  LLVMContext Context;
+  std::unique_ptr<Module> M(new Module("MyModule", Context));
+
+  for (Type *T : {Type::getInt8Ty(Context), Type::getInt16Ty(Context),
+                  Type::getInt32Ty(Context), Type::getInt64Ty(Context)}) {
+    ArrayType *ArrayTy = ArrayType::get(T, 2);
+    Constant *Vals[] = {ConstantInt::get(T, 0), ConstantInt::get(T, 1)};
+    Constant *CDV = ConstantArray::get(ArrayTy, Vals);
+    ASSERT_TRUE(dyn_cast<ConstantDataArray>(CDV) != nullptr)
+        << " T = " << getNameOfType(T);
+  }
+
+  for (Type *T : {Type::getHalfTy(Context), Type::getFloatTy(Context),
+                  Type::getDoubleTy(Context)}) {
+    ArrayType *ArrayTy = ArrayType::get(T, 2);
+    Constant *Vals[] = {ConstantFP::get(T, 0), ConstantFP::get(T, 1)};
+    Constant *CDV = ConstantArray::get(ArrayTy, Vals);
+    ASSERT_TRUE(dyn_cast<ConstantDataArray>(CDV) != nullptr)
+        << " T = " << getNameOfType(T);
+  }
+}
+
+TEST(ConstantsTest, BuildConstantDataVectors) {
+  LLVMContext Context;
+  std::unique_ptr<Module> M(new Module("MyModule", Context));
+
+  for (Type *T : {Type::getInt8Ty(Context), Type::getInt16Ty(Context),
+                  Type::getInt32Ty(Context), Type::getInt64Ty(Context)}) {
+    Constant *Vals[] = {ConstantInt::get(T, 0), ConstantInt::get(T, 1)};
+    Constant *CDV = ConstantVector::get(Vals);
+    ASSERT_TRUE(dyn_cast<ConstantDataVector>(CDV) != nullptr)
+        << " T = " << getNameOfType(T);
+  }
+
+  for (Type *T : {Type::getHalfTy(Context), Type::getFloatTy(Context),
+                  Type::getDoubleTy(Context)}) {
+    Constant *Vals[] = {ConstantFP::get(T, 0), ConstantFP::get(T, 1)};
+    Constant *CDV = ConstantVector::get(Vals);
+    ASSERT_TRUE(dyn_cast<ConstantDataVector>(CDV) != nullptr)
+        << " T = " << getNameOfType(T);
+  }
+}
+
 }  // end anonymous namespace
 }  // end namespace llvm

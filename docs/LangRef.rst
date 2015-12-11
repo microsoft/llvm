@@ -406,6 +406,26 @@ added in the future:
     This calling convention, like the `PreserveMost` calling convention, will be
     used by a future version of the ObjectiveC runtime and should be considered
     experimental at this time.
+"``cxx_fast_tlscc``" - The `CXX_FAST_TLS` calling convention for access functions
+    Clang generates an access function to access C++-style TLS. The access
+    function generally has an entry block, an exit block and an initialization
+    block that is run at the first time. The entry and exit blocks can access
+    a few TLS IR variables, each access will be lowered to a platform-specific
+    sequence.
+
+    This calling convention aims to minimize overhead in the caller by
+    preserving as many registers as possible (all the registers that are
+    perserved on the fast path, composed of the entry and exit blocks).
+
+    This calling convention behaves identical to the `C` calling convention on
+    how arguments and return values are passed, but it uses a different set of
+    caller/callee-saved registers.
+
+    Given that each platform has its own lowering sequence, hence its own set
+    of preserved registers, we can't use the existing `PreserveMost`.
+
+    - On X86-64 the callee preserves all general purpose registers, except for
+      RDI and RAX.
 "``cc <n>``" - Numbered convention
     Any calling convention may be specified by number, allowing
     target-specific calling conventions to be used. Target specific

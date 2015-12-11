@@ -206,11 +206,10 @@ HandleCallsInBlockInlinedThroughInvoke(BasicBlock *BB, BasicBlock *UnwindEdge) {
     BB->getInstList().pop_back();
 
     // Create the new invoke instruction.
-    ImmutableCallSite CS(CI);
-    SmallVector<Value*, 8> InvokeArgs(CS.arg_begin(), CS.arg_end());
+    SmallVector<Value*, 8> InvokeArgs(CI->arg_begin(), CI->arg_end());
     SmallVector<OperandBundleDef, 1> OpBundles;
 
-    CS.getOperandBundlesAsDefs(OpBundles);
+    CI->getOperandBundlesAsDefs(OpBundles);
 
     // Note: we're round tripping operand bundles through memory here, and that
     // can potentially be avoided with a cleverer API design that we do not have
@@ -1162,7 +1161,9 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
       SmallVector<OperandBundleDef, 2> OpDefs;
 
       for (auto &VH : InlinedFunctionInfo.OperandBundleCallSites) {
-        Instruction *I = VH;
+        if (!VH) continue;  // instruction was DCE'd after being cloned
+
+        Instruction *I = cast<Instruction>(VH);
 
         OpDefs.clear();
 
@@ -1191,7 +1192,7 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
           MergedDeoptArgs.insert(MergedDeoptArgs.end(), ChildOB.Inputs.begin(),
                                  ChildOB.Inputs.end());
 
-          OpDefs.emplace_back(StringRef("deopt"), std::move(MergedDeoptArgs));
+          OpDefs.emplace_back("deopt", std::move(MergedDeoptArgs));
         }
 
         Instruction *NewI = nullptr;

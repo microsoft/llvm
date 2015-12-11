@@ -554,13 +554,13 @@ public:
   void adds4_6ImmOperands(MCInst &Inst, unsigned N) const {
     assert(N == 1 && "Invalid number of operands!");
     const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
-    Inst.addOperand(MCOperand::createImm(CE->getValue() << 6));
+    Inst.addOperand(MCOperand::createImm(CE->getValue() * 64));
   }
 
   void adds3_6ImmOperands(MCInst &Inst, unsigned N) const {
     assert(N == 1 && "Invalid number of operands!");
     const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
-    Inst.addOperand(MCOperand::createImm(CE->getValue() << 6));
+    Inst.addOperand(MCOperand::createImm(CE->getValue() * 64));
   }
 
   StringRef getToken() const {
@@ -1592,7 +1592,7 @@ int HexagonAsmParser::processInstruction(MCInst &Inst,
     //   not use the other opcode as it is a legacy artifact of TD files.
     int64_t Value;
     if (MO.getExpr()->evaluateAsAbsolute(Value)) {
-      // if the the operand can fit within a 7:2 field
+      // if the operand can fit within a 7:2 field
       if (Value < (1 << 8) && Value >= -(1 << 8)) {
         SMLoc myLoc = Operands[2]->getStartLoc();
         // # is left in startLoc in the case of ##
