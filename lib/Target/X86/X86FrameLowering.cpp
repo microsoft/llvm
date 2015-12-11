@@ -1003,7 +1003,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   else if (IsFunclet)
     Establisher = Uses64BitFramePtr ? X86::RDX : X86::EDX;
 
-  if (IsWin64Prologue && IsFunclet & !IsClrFunclet) {
+  if (IsWin64Prologue && IsFunclet && !IsClrFunclet) {
     // Immediately spill establisher into the home slot.
     // The runtime cares about this.
     // MOV64mr %rdx, 16(%rsp)
@@ -2524,10 +2524,10 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
     // (Pushes of argument for frame setup, callee pops for frame destroy)
     Amount -= InternalAmt;
 
-    // If this is a callee-pop calling convention, and we're emitting precise
-    // SP-based CFI, emit a CFA adjust for the amount the callee popped.
-    if (isDestroy && InternalAmt && DwarfCFI && !hasFP(MF) && 
-        MMI.usePreciseUnwindInfo())
+    // TODO: This is needed only if we require precise CFA.
+    // If this is a callee-pop calling convention, emit a CFA adjust for
+    // the amount the callee popped.
+    if (isDestroy && InternalAmt && DwarfCFI && !hasFP(MF))
       BuildCFI(MBB, I, DL, 
                MCCFIInstruction::createAdjustCfaOffset(nullptr, -InternalAmt));
 
@@ -2548,11 +2548,14 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
       // offset to be correct at each call site, while for debugging we want
       // it to be more precise.
       int CFAOffset = Amount;
-      if (!MMI.usePreciseUnwindInfo())
-        CFAOffset += InternalAmt;
-      CFAOffset = isDestroy ? -CFAOffset : CFAOffset;
-      BuildCFI(MBB, I, DL, 
-               MCCFIInstruction::createAdjustCfaOffset(nullptr, CFAOffset));
+      // TODO: When not using precise CFA, we also need to adjust for the
+      // InternalAmt here.
+
+      if (CFAOffset) {
+        CFAOffset = isDestroy ? -CFAOffset : CFAOffset;
+        BuildCFI(MBB, I, DL, 
+                 MCCFIInstruction::createAdjustCfaOffset(nullptr, CFAOffset));
+      }
     }
 
     return;
@@ -2590,6 +2593,12 @@ bool X86FrameLowering::canUseAsEpilogue(const MachineBasicBlock &MBB) const {
   // otherwise, conservatively assume this is not
   // safe to insert the epilogue here.
   return !flagsNeedToBePreservedBeforeTheTerminators(MBB);
+}
+
+bool X86FrameLowering::enableShrinkWrapping(const MachineFunction &MF) const {
+  // If we may need to emit frameless compact unwind information, give
+  // up as this is currently broken: PR25614.
+  return MF.getFunction()->hasFnAttribute(Attribute::NoUnwind) || hasFP(MF);
 }
 
 MachineBasicBlock::iterator X86FrameLowering::restoreWin32EHStackPointers(

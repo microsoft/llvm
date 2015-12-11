@@ -57,10 +57,6 @@ private:
   // MachineFunctionPass Implementation.
   //===------------------------------------------------------------------===//
 
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AsmPrinter::getAnalysisUsage(AU);
-  }
-
   bool runOnMachineFunction(MachineFunction &MF) override {
     MRI = &MF.getRegInfo();
     MFI = MF.getInfo<WebAssemblyFunctionInfo>();
@@ -115,21 +111,7 @@ std::string WebAssemblyAsmPrinter::regToString(const MachineOperand &MO) {
 }
 
 const char *WebAssemblyAsmPrinter::toString(MVT VT) const {
-  switch (VT.SimpleTy) {
-  default:
-    break;
-  case MVT::f32:
-    return "f32";
-  case MVT::f64:
-    return "f64";
-  case MVT::i32:
-    return "i32";
-  case MVT::i64:
-    return "i64";
-  }
-  DEBUG(dbgs() << "Invalid type " << EVT(VT).getEVTString() << '\n');
-  llvm_unreachable("invalid type");
-  return "<invalid>";
+  return WebAssembly::TypeToString(VT);
 }
 
 //===----------------------------------------------------------------------===//

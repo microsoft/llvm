@@ -99,6 +99,7 @@ namespace lltok {
     kw_preserve_mostcc, kw_preserve_allcc,
     kw_ghccc,
     kw_hhvmcc, kw_hhvm_ccc,
+    kw_cxx_fast_tlscc,
 
     // Attributes:
     kw_attributes,
@@ -214,6 +215,7 @@ namespace lltok {
     DwarfLang,         // DW_LANG_foo
     DwarfOp,           // DW_OP_foo
     DIFlag,            // DIFlagFoo
+    DwarfMacinfo,      // DW_MACINFO_foo
 
     // Type valued tokens (TyVal).
     Type,

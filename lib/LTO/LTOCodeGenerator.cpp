@@ -64,17 +64,11 @@ const char* LTOCodeGenerator::getVersionString() {
 #endif
 }
 
-LTOCodeGenerator::LTOCodeGenerator()
-    : Context(getGlobalContext()),
-      MergedModule(new Module("ld-temp.o", Context)),
-      IRLinker(new Linker(*MergedModule)) {
-  initializeLTOPasses();
-}
-
-LTOCodeGenerator::LTOCodeGenerator(std::unique_ptr<LLVMContext> Context)
-    : OwnedContext(std::move(Context)), Context(*OwnedContext),
-      MergedModule(new Module("ld-temp.o", *OwnedContext)),
-      IRLinker(new Linker(*MergedModule)) {
+LTOCodeGenerator::LTOCodeGenerator(LLVMContext &Context)
+    : Context(Context), MergedModule(new Module("ld-temp.o", Context)),
+      IRLinker(new Linker(*MergedModule, [this](const DiagnosticInfo &DI) {
+        MergedModule->getContext().diagnose(DI);
+      })) {
   initializeLTOPasses();
 }
 
@@ -130,7 +124,8 @@ void LTOCodeGenerator::setModule(std::unique_ptr<LTOModule> Mod) {
   AsmUndefinedRefs.clear();
 
   MergedModule = Mod->takeModule();
-  IRLinker = make_unique<Linker>(*MergedModule);
+  IRLinker = llvm::make_unique<Linker>(*MergedModule,
+                                       IRLinker->getDiagnosticHandler());
 
   const std::vector<const char*> &Undefs = Mod->getAsmUndefinedRefs();
   for (int I = 0, E = Undefs.size(); I != E; ++I)

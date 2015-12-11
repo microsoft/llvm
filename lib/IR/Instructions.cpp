@@ -299,14 +299,14 @@ CallInst::CallInst(const CallInst &CI)
 
 CallInst *CallInst::Create(CallInst *CI, ArrayRef<OperandBundleDef> OpB,
                            Instruction *InsertPt) {
-  CallSite CS(CI);
-  std::vector<Value *> Args(CS.arg_begin(), CS.arg_end());
+  std::vector<Value *> Args(CI->arg_begin(), CI->arg_end());
 
   auto *NewCI = CallInst::Create(CI->getCalledValue(), Args, OpB, CI->getName(),
                                  InsertPt);
   NewCI->setTailCallKind(CI->getTailCallKind());
   NewCI->setCallingConv(CI->getCallingConv());
   NewCI->SubclassOptionalData = CI->SubclassOptionalData;
+  NewCI->setAttributes(CI->getAttributes());
   return NewCI;
 }
 
@@ -369,7 +369,7 @@ bool CallInst::dataOperandHasImpliedAttr(unsigned i,
 
   assert(hasOperandBundles() && i >= (getBundleOperandsStartIndex() + 1) &&
          "Must be either a call argument or an operand bundle!");
-  return getOperandBundleForOperand(i - 1).operandsHaveAttr(A);
+  return bundleOperandHasAttr(i - 1, A);
 }
 
 /// IsConstantOne - Return true only if val is constant int 1
@@ -586,14 +586,14 @@ InvokeInst::InvokeInst(const InvokeInst &II)
 
 InvokeInst *InvokeInst::Create(InvokeInst *II, ArrayRef<OperandBundleDef> OpB,
                                Instruction *InsertPt) {
-  CallSite CS(II);
-  std::vector<Value *> Args(CS.arg_begin(), CS.arg_end());
+  std::vector<Value *> Args(II->arg_begin(), II->arg_end());
 
   auto *NewII = InvokeInst::Create(II->getCalledValue(), II->getNormalDest(),
                                    II->getUnwindDest(), Args, OpB,
                                    II->getName(), InsertPt);
   NewII->setCallingConv(II->getCallingConv());
   NewII->SubclassOptionalData = II->SubclassOptionalData;
+  NewII->setAttributes(II->getAttributes());
   return NewII;
 }
 
@@ -646,7 +646,7 @@ bool InvokeInst::dataOperandHasImpliedAttr(unsigned i,
 
   assert(hasOperandBundles() && i >= (getBundleOperandsStartIndex() + 1) &&
          "Must be either an invoke argument or an operand bundle!");
-  return getOperandBundleForOperand(i - 1).operandsHaveAttr(A);
+  return bundleOperandHasAttr(i - 1, A);
 }
 
 void InvokeInst::addAttribute(unsigned i, Attribute::AttrKind attr) {
