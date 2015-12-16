@@ -406,6 +406,26 @@ added in the future:
     This calling convention, like the `PreserveMost` calling convention, will be
     used by a future version of the ObjectiveC runtime and should be considered
     experimental at this time.
+"``cxx_fast_tlscc``" - The `CXX_FAST_TLS` calling convention for access functions
+    Clang generates an access function to access C++-style TLS. The access
+    function generally has an entry block, an exit block and an initialization
+    block that is run at the first time. The entry and exit blocks can access
+    a few TLS IR variables, each access will be lowered to a platform-specific
+    sequence.
+
+    This calling convention aims to minimize overhead in the caller by
+    preserving as many registers as possible (all the registers that are
+    perserved on the fast path, composed of the entry and exit blocks).
+
+    This calling convention behaves identical to the `C` calling convention on
+    how arguments and return values are passed, but it uses a different set of
+    caller/callee-saved registers.
+
+    Given that each platform has its own lowering sequence, hence its own set
+    of preserved registers, we can't use the existing `PreserveMost`.
+
+    - On X86-64 the callee preserves all general purpose registers, except for
+      RDI and RAX.
 "``cc <n>``" - Numbered convention
     Any calling convention may be specified by number, allowing
     target-specific calling conventions to be used. Target specific
@@ -3731,9 +3751,9 @@ DICompileUnit
 """""""""""""
 
 ``DICompileUnit`` nodes represent a compile unit. The ``enums:``,
-``retainedTypes:``, ``subprograms:``, ``globals:`` and ``imports:`` fields are
-tuples containing the debug info to be emitted along with the compile unit,
-regardless of code optimizations (some nodes are only emitted if there are
+``retainedTypes:``, ``subprograms:``, ``globals:``, ``imports:`` and ``macros:``
+fields are tuples containing the debug info to be emitted along with the compile
+unit, regardless of code optimizations (some nodes are only emitted if there are
 references to them from instructions).
 
 .. code-block:: llvm
@@ -3742,7 +3762,7 @@ references to them from instructions).
                         isOptimized: true, flags: "-O2", runtimeVersion: 2,
                         splitDebugFilename: "abc.debug", emissionKind: 1,
                         enums: !2, retainedTypes: !3, subprograms: !4,
-                        globals: !5, imports: !6)
+                        globals: !5, imports: !6, macros: !7, dwoId: 0x0abcd)
 
 Compile unit descriptors provide the root scope for objects declared in a
 specific compilation unit. File descriptors are defined using this scope.
@@ -4107,6 +4127,32 @@ compile unit.
 
    !2 = !DIImportedEntity(tag: DW_TAG_imported_module, name: "foo", scope: !0,
                           entity: !1, line: 7)
+
+DIMacro
+"""""""
+
+``DIMacro`` nodes represent definition or undefinition of a macro identifiers.
+The ``name:`` field is the macro identifier, followed by macro parameters when
+definining a function-like macro, and the ``value`` field is the token-string
+used to expand the macro identifier.
+
+.. code-block:: llvm
+
+   !2 = !DIMacro(macinfo: DW_MACINFO_define, line: 7, name: "foo(x)",
+                 value: "((x) + 1)")
+   !3 = !DIMacro(macinfo: DW_MACINFO_undef, line: 30, name: "foo")
+
+DIMacroFile
+"""""""""""
+
+``DIMacroFile`` nodes represent inclusion of source files.
+The ``nodes:`` field is a list of ``DIMacro`` and ``DIMacroFile`` nodes that
+appear in the included source file.
+
+.. code-block:: llvm
+
+   !2 = !DIMacroFile(macinfo: DW_MACINFO_start_file, line: 7, file: !2,
+                     nodes: !3)
 
 '``tbaa``' Metadata
 ^^^^^^^^^^^^^^^^^^^

@@ -2893,8 +2893,10 @@ SDValue SelectionDAG::getNode(unsigned Opcode, SDLoc DL,
         return getConstantFP(APFloat(APFloat::IEEEhalf, Val), DL, VT);
       if (VT == MVT::f32 && C->getValueType(0) == MVT::i32)
         return getConstantFP(APFloat(APFloat::IEEEsingle, Val), DL, VT);
-      else if (VT == MVT::f64 && C->getValueType(0) == MVT::i64)
+      if (VT == MVT::f64 && C->getValueType(0) == MVT::i64)
         return getConstantFP(APFloat(APFloat::IEEEdouble, Val), DL, VT);
+      if (VT == MVT::f128 && C->getValueType(0) == MVT::i128)
+        return getConstantFP(APFloat(APFloat::IEEEquad, Val), DL, VT);
       break;
     case ISD::BSWAP:
       return getConstant(Val.byteSwap(), DL, VT, C->isTargetOpcode(),
@@ -3336,12 +3338,15 @@ SDValue SelectionDAG::FoldConstantVectorArithmetic(unsigned Opcode, SDLoc DL,
       !std::all_of(Ops.begin(), Ops.end(), IsScalarOrSameVectorSize))
     return SDValue();
 
+  // If we are comparing vectors, then the result needs to be a i1 boolean
+  // that is then sign-extended back to the legal result type.
+  EVT SVT = (Opcode == ISD::SETCC ? MVT::i1 : VT.getScalarType());
+
   // Find legal integer scalar type for constant promotion and
   // ensure that its scalar size is at least as large as source.
-  EVT SVT = VT.getScalarType();
-  EVT LegalSVT = SVT;
-  if (SVT.isInteger()) {
-    LegalSVT = TLI->getTypeToTransformTo(*getContext(), SVT);
+  EVT LegalSVT = VT.getScalarType();
+  if (LegalSVT.isInteger()) {
+    LegalSVT = TLI->getTypeToTransformTo(*getContext(), LegalSVT);
     if (LegalSVT.bitsLT(SVT))
       return SDValue();
   }
@@ -3378,7 +3383,7 @@ SDValue SelectionDAG::FoldConstantVectorArithmetic(unsigned Opcode, SDLoc DL,
 
     // Legalize the (integer) scalar constant if necessary.
     if (LegalSVT != SVT)
-      ScalarResult = getNode(ISD::ANY_EXTEND, DL, LegalSVT, ScalarResult);
+      ScalarResult = getNode(ISD::SIGN_EXTEND, DL, LegalSVT, ScalarResult);
 
     // Scalar folding only succeeded if the result is a constant or UNDEF.
     if (ScalarResult.getOpcode() != ISD::UNDEF &&
