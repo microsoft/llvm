@@ -771,6 +771,7 @@ def HasVLX       : Predicate<"Subtarget->hasVLX()">,
 def NoVLX        : Predicate<"!Subtarget->hasVLX()">;
 def NoVLX_Or_NoBWI : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasBWI()">;
 def NoVLX_Or_NoDQI : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasDQI()">;
+def PKU        : Predicate<"!Subtarget->hasPKU()">;
 
 def HasPOPCNT    : Predicate<"Subtarget->hasPOPCNT()">;
 def HasAES       : Predicate<"Subtarget->hasAES()">;
@@ -955,11 +956,12 @@ def loadi32 : PatFrag<(ops node:$ptr), (i32 (unindexedload node:$ptr)), [{
   return false;
 }]>;
 
-def loadi8  : PatFrag<(ops node:$ptr), (i8  (load node:$ptr))>;
-def loadi64 : PatFrag<(ops node:$ptr), (i64 (load node:$ptr))>;
-def loadf32 : PatFrag<(ops node:$ptr), (f32 (load node:$ptr))>;
-def loadf64 : PatFrag<(ops node:$ptr), (f64 (load node:$ptr))>;
-def loadf80 : PatFrag<(ops node:$ptr), (f80 (load node:$ptr))>;
+def loadi8   : PatFrag<(ops node:$ptr), (i8  (load node:$ptr))>;
+def loadi64  : PatFrag<(ops node:$ptr), (i64 (load node:$ptr))>;
+def loadf32  : PatFrag<(ops node:$ptr), (f32 (load node:$ptr))>;
+def loadf64  : PatFrag<(ops node:$ptr), (f64 (load node:$ptr))>;
+def loadf80  : PatFrag<(ops node:$ptr), (f80 (load node:$ptr))>;
+def loadf128 : PatFrag<(ops node:$ptr), (f128 (load node:$ptr))>;
 
 def sextloadi16i8  : PatFrag<(ops node:$ptr), (i16 (sextloadi8 node:$ptr))>;
 def sextloadi32i8  : PatFrag<(ops node:$ptr), (i32 (sextloadi8 node:$ptr))>;

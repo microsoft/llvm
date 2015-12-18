@@ -34,6 +34,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/SpecialCaseList.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -79,6 +80,16 @@ static cl::opt<bool>
 static cl::opt<std::string> ClStripPathPrefix(
     "strip_path_prefix", cl::init(""),
     cl::desc("Strip this prefix from file paths in reports."));
+
+static cl::opt<std::string>
+    ClBlacklist("blacklist", cl::init(""),
+                cl::desc("Blacklist file (sanitizer blacklist format)."));
+
+static cl::opt<bool> ClUseDefaultBlacklist(
+    "use_default_blacklist", cl::init(true), cl::Hidden,
+    cl::desc("Controls if default blacklist should be used."));
+
+static const char *const DefaultBlacklist = "fun:__sanitizer_*";
 
 // --------- FORMAT SPECIFICATION ---------
 
@@ -169,8 +180,8 @@ computeFunctionsMap(const std::set<uint64_t> &Addrs) {
   for (auto Addr : Addrs) {
     auto InliningInfo = Symbolizer.symbolizeInlinedCode(ClBinaryName, Addr);
     FailIfError(InliningInfo);
-    for (uint32_t i = 0; i < InliningInfo->getNumberOfFrames(); ++i) {
-      auto FrameInfo = InliningInfo->getFrame(i);
+    for (uint32_t I = 0; I < InliningInfo->getNumberOfFrames(); ++I) {
+      auto FrameInfo = InliningInfo->getFrame(I);
       SmallString<256> FileName(FrameInfo.FileName);
       sys::path::remove_dots(FileName, /* remove_dot_dot */ true);
       FileLoc Loc = {FileName.str(), FrameInfo.Line};
@@ -186,7 +197,7 @@ computeFunctionsMap(const std::set<uint64_t> &Addrs) {
 std::set<FunctionLoc> computeFunctionLocs(const std::set<uint64_t> &Addrs) {
   std::map<FileLoc, std::string> Fns = computeFunctionsMap(Addrs);
 
-  std::set<FunctionLoc> result;
+  std::set<FunctionLoc> Result;
   std::string LastFileName;
   std::set<std::string> ProcessedFunctions;
 
@@ -201,27 +212,36 @@ std::set<FunctionLoc> computeFunctionLocs(const std::set<uint64_t> &Addrs) {
     if (!ProcessedFunctions.insert(FunctionName).second)
       continue;
 
-    result.insert(FunctionLoc{P.first, P.second});
+    Result.insert(FunctionLoc{P.first, P.second});
   }
 
-  return result;
+  return Result;
 }
 
-// Locate __sanitizer_cov function address.
-static uint64_t findSanitizerCovFunction(const object::ObjectFile &O) {
+// Locate __sanitizer_cov* function addresses that are used for coverage
+// reporting.
+static std::set<uint64_t>
+findSanitizerCovFunctions(const object::ObjectFile &O) {
+  std::set<uint64_t> Result;
+
   for (const object::SymbolRef &Symbol : O.symbols()) {
     ErrorOr<uint64_t> AddressOrErr = Symbol.getAddress();
     FailIfError(AddressOrErr);
 
-    ErrorOr<StringRef> Name = Symbol.getName();
-    FailIfError(Name);
+    ErrorOr<StringRef> NameOrErr = Symbol.getName();
+    FailIfError(NameOrErr);
+    StringRef Name = NameOrErr.get();
 
-    if (Name.get() == "__sanitizer_cov") {
-      return AddressOrErr.get();
+    if (Name == "__sanitizer_cov" || Name == "__sanitizer_cov_with_check" ||
+        Name == "__sanitizer_cov_trace_func_enter") {
+      Result.insert(AddressOrErr.get());
     }
   }
-  FailIfNotEmpty("__sanitizer_cov not found");
-  return 0; // not reachable.
+
+  if (Result.empty())
+    FailIfNotEmpty("__sanitizer_cov* functions not found");
+
+  return Result;
 }
 
 // Locate addresses of all coverage points in a file. Coverage point
@@ -262,7 +282,7 @@ static void getObjectCoveragePoints(const object::ObjectFile &O,
       TheTarget->createMCInstrAnalysis(MII.get()));
   FailIfEmpty(MIA, "no instruction analysis info for target " + TripleName);
 
-  uint64_t SanCovAddr = findSanitizerCovFunction(O);
+  auto SanCovAddrs = findSanitizerCovFunctions(O);
 
   for (const auto Section : O.sections()) {
     if (Section.isVirtual() || !Section.isText()) // llvm-objdump does the same.
@@ -292,7 +312,7 @@ static void getObjectCoveragePoints(const object::ObjectFile &O,
       uint64_t Target;
       if (MIA->isCall(Inst) &&
           MIA->evaluateBranch(Inst, SectionAddr + Index, Size, Target)) {
-        if (Target == SanCovAddr) {
+        if (SanCovAddrs.find(Target) != SanCovAddrs.end()) {
           // Sanitizer coverage uses the address of the next instruction - 1.
           Addrs->insert(Index + SectionAddr + Size - 1);
         }
@@ -337,9 +357,41 @@ std::set<uint64_t> getCoveragePoints(std::string FileName) {
   return Result;
 }
 
+static std::unique_ptr<SpecialCaseList> createDefaultBlacklist() {
+  if (!ClUseDefaultBlacklist) 
+    return std::unique_ptr<SpecialCaseList>();
+  std::unique_ptr<MemoryBuffer> MB =
+      MemoryBuffer::getMemBuffer(DefaultBlacklist);
+  std::string Error;
+  auto Blacklist = SpecialCaseList::create(MB.get(), Error);
+  FailIfNotEmpty(Error);
+  return Blacklist;
+}
+
+static std::unique_ptr<SpecialCaseList> createUserBlacklist() {
+  if (ClBlacklist.empty())
+    return std::unique_ptr<SpecialCaseList>();
+
+  return SpecialCaseList::createOrDie({{ClBlacklist}});
+}
+
 static void printFunctionLocs(const std::set<FunctionLoc> &FnLocs,
                               raw_ostream &OS) {
+  std::unique_ptr<SpecialCaseList> DefaultBlacklist = createDefaultBlacklist();
+  std::unique_ptr<SpecialCaseList> UserBlacklist = createUserBlacklist();
+
   for (const FunctionLoc &FnLoc : FnLocs) {
+    if (DefaultBlacklist &&
+        DefaultBlacklist->inSection("fun", FnLoc.FunctionName))
+      continue;
+    if (DefaultBlacklist &&
+        DefaultBlacklist->inSection("src", FnLoc.Loc.FileName))
+      continue;
+    if (UserBlacklist && UserBlacklist->inSection("fun", FnLoc.FunctionName))
+      continue;
+    if (UserBlacklist && UserBlacklist->inSection("src", FnLoc.Loc.FileName))
+      continue;
+
     OS << stripPathPrefix(FnLoc.Loc.FileName) << ":" << FnLoc.Loc.Line << " "
        << FnLoc.FunctionName << "\n";
   }

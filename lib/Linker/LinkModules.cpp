@@ -17,6 +17,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/LLVMContext.h"
 using namespace llvm;
 
 namespace {
@@ -47,6 +48,11 @@ class ModuleLinker {
   /// as part of a different backend compilation process.
   bool HasExportedFunctions = false;
 
+  /// Association between metadata value id and temporary metadata that
+  /// remains unmapped after function importing. Saved during function
+  /// importing and consumed during the metadata linking postpass.
+  DenseMap<unsigned, MDNode *> *ValIDToTempMDMap;
+
   /// Used as the callback for lazy linking.
   /// The mover has just hit GV and we have to decide if it, and other members
   /// of the same comdat, should be linked. Every member to be linked is passed
@@ -67,7 +73,7 @@ class ModuleLinker {
 
   /// Should we have mover and linker error diag info?
   bool emitError(const Twine &Message) {
-    Mover.getDiagnosticHandler()(LinkDiagnosticInfo(DS_Error, Message));
+    SrcM.getContext().diagnose(LinkDiagnosticInfo(DS_Error, Message));
     return true;
   }
 
@@ -112,8 +118,8 @@ class ModuleLinker {
 
   /// Helper methods to check if we are importing from or potentially
   /// exporting from the current source module.
-  bool isPerformingImport() { return ImportFunction != nullptr; }
-  bool isModuleExporting() { return HasExportedFunctions; }
+  bool isPerformingImport() const { return ImportFunction != nullptr; }
+  bool isModuleExporting() const { return HasExportedFunctions; }
 
   /// If we are importing from the source module, checks if we should
   /// import SGV as a definition, otherwise import as a declaration.
@@ -149,9 +155,10 @@ class ModuleLinker {
 public:
   ModuleLinker(IRMover &Mover, Module &SrcM, unsigned Flags,
                const FunctionInfoIndex *Index = nullptr,
-               DenseSet<const GlobalValue *> *FunctionsToImport = nullptr)
+               DenseSet<const GlobalValue *> *FunctionsToImport = nullptr,
+               DenseMap<unsigned, MDNode *> *ValIDToTempMDMap = nullptr)
       : Mover(Mover), SrcM(SrcM), Flags(Flags), ImportIndex(Index),
-        ImportFunction(FunctionsToImport) {
+        ImportFunction(FunctionsToImport), ValIDToTempMDMap(ValIDToTempMDMap) {
     assert((ImportIndex || !ImportFunction) &&
            "Expect a FunctionInfoIndex when importing");
     // If we have a FunctionInfoIndex but no function to import,
@@ -160,6 +167,8 @@ public:
     // may be exported to another backend compilation.
     if (ImportIndex && !ImportFunction)
       HasExportedFunctions = ImportIndex->hasExportedFunctions(SrcM);
+    assert((ValIDToTempMDMap || !ImportFunction) &&
+           "Function importing must provide a ValIDToTempMDMap");
   }
 
   bool run();
@@ -501,6 +510,7 @@ bool ModuleLinker::getComdatResult(const Comdat *SrcC,
 bool ModuleLinker::shouldLinkFromSource(bool &LinkFromSrc,
                                         const GlobalValue &Dest,
                                         const GlobalValue &Src) {
+
   // Should we unconditionally use the Src?
   if (shouldOverrideFromSrc()) {
     LinkFromSrc = true;
@@ -775,7 +785,8 @@ bool ModuleLinker::run() {
   if (Mover.move(SrcM, ValuesToLink.getArrayRef(),
                  [this](GlobalValue &GV, IRMover::ValueAdder Add) {
                    addLazyFor(GV, Add);
-                 }))
+                 },
+                 ValIDToTempMDMap, false))
     return true;
   Module &DstM = Mover.getModule();
   for (auto &P : Internalize) {
@@ -786,14 +797,31 @@ bool ModuleLinker::run() {
   return false;
 }
 
-Linker::Linker(Module &M, DiagnosticHandlerFunction DiagnosticHandler)
-    : Mover(M, DiagnosticHandler) {}
+Linker::Linker(Module &M) : Mover(M) {}
 
-bool Linker::linkInModule(Module &Src, unsigned Flags,
+bool Linker::linkInModule(std::unique_ptr<Module> Src, unsigned Flags,
                           const FunctionInfoIndex *Index,
-                          DenseSet<const GlobalValue *> *FunctionsToImport) {
-  ModuleLinker TheLinker(Mover, Src, Flags, Index, FunctionsToImport);
+                          DenseSet<const GlobalValue *> *FunctionsToImport,
+                          DenseMap<unsigned, MDNode *> *ValIDToTempMDMap) {
+  ModuleLinker TheLinker(Mover, *Src, Flags, Index, FunctionsToImport,
+                         ValIDToTempMDMap);
   return TheLinker.run();
+}
+
+bool Linker::linkInModuleForCAPI(Module &Src) {
+  ModuleLinker TheLinker(Mover, Src, 0, nullptr, nullptr);
+  return TheLinker.run();
+}
+
+bool Linker::linkInMetadata(Module &Src,
+                            DenseMap<unsigned, MDNode *> *ValIDToTempMDMap) {
+  SetVector<GlobalValue *> ValuesToLink;
+  if (Mover.move(
+          Src, ValuesToLink.getArrayRef(),
+          [this](GlobalValue &GV, IRMover::ValueAdder Add) { assert(false); },
+          ValIDToTempMDMap, true))
+    return true;
+  return false;
 }
 
 //===----------------------------------------------------------------------===//
@@ -805,21 +833,19 @@ bool Linker::linkInModule(Module &Src, unsigned Flags,
 /// true is returned and ErrorMsg (if not null) is set to indicate the problem.
 /// Upon failure, the Dest module could be in a modified state, and shouldn't be
 /// relied on to be consistent.
-bool Linker::linkModules(Module &Dest, Module &Src,
-                         DiagnosticHandlerFunction DiagnosticHandler,
+bool Linker::linkModules(Module &Dest, std::unique_ptr<Module> Src,
                          unsigned Flags) {
-  Linker L(Dest, DiagnosticHandler);
-  return L.linkInModule(Src, Flags);
+  Linker L(Dest);
+  return L.linkInModule(std::move(Src), Flags);
 }
 
 std::unique_ptr<Module>
-llvm::renameModuleForThinLTO(std::unique_ptr<Module> &M,
-                             const FunctionInfoIndex *Index,
-                             DiagnosticHandlerFunction DiagnosticHandler) {
+llvm::renameModuleForThinLTO(std::unique_ptr<Module> M,
+                             const FunctionInfoIndex *Index) {
   std::unique_ptr<llvm::Module> RenamedModule(
       new llvm::Module(M->getModuleIdentifier(), M->getContext()));
-  Linker L(*RenamedModule.get(), DiagnosticHandler);
-  if (L.linkInModule(*M.get(), llvm::Linker::Flags::None, Index))
+  Linker L(*RenamedModule.get());
+  if (L.linkInModule(std::move(M), llvm::Linker::Flags::None, Index))
     return nullptr;
   return RenamedModule;
 }
@@ -828,19 +854,37 @@ llvm::renameModuleForThinLTO(std::unique_ptr<Module> &M,
 // C API.
 //===----------------------------------------------------------------------===//
 
+static void diagnosticHandler(const DiagnosticInfo &DI, void *C) {
+  auto *Message = reinterpret_cast<std::string *>(C);
+  raw_string_ostream Stream(*Message);
+  DiagnosticPrinterRawOStream DP(Stream);
+  DI.print(DP);
+}
+
 LLVMBool LLVMLinkModules(LLVMModuleRef Dest, LLVMModuleRef Src,
                          LLVMLinkerMode Unused, char **OutMessages) {
   Module *D = unwrap(Dest);
+  LLVMContext &Ctx = D->getContext();
+
+  LLVMContext::DiagnosticHandlerTy OldDiagnosticHandler =
+      Ctx.getDiagnosticHandler();
+  void *OldDiagnosticContext = Ctx.getDiagnosticContext();
   std::string Message;
-  raw_string_ostream Stream(Message);
-  DiagnosticPrinterRawOStream DP(Stream);
+  Ctx.setDiagnosticHandler(diagnosticHandler, &Message, true);
 
-  LLVMBool Result = Linker::linkModules(
-      *D, *unwrap(Src), [&](const DiagnosticInfo &DI) { DI.print(DP); });
+  Linker L(*D);
+  Module *M = unwrap(Src);
+  LLVMBool Result = L.linkInModuleForCAPI(*M);
 
-  if (OutMessages && Result) {
-    Stream.flush();
+  Ctx.setDiagnosticHandler(OldDiagnosticHandler, OldDiagnosticContext, true);
+
+  if (OutMessages && Result)
     *OutMessages = strdup(Message.c_str());
-  }
   return Result;
+}
+
+LLVMBool LLVMLinkModules2(LLVMModuleRef Dest, LLVMModuleRef Src) {
+  Module *D = unwrap(Dest);
+  std::unique_ptr<Module> M(unwrap(Src));
+  return Linker::linkModules(*D, std::move(M));
 }

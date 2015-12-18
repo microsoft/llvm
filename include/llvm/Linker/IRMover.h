@@ -12,10 +12,11 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/IR/DiagnosticInfo.h"
+#include <functional>
 
 namespace llvm {
 class GlobalValue;
+class MDNode;
 class Module;
 class StructType;
 class Type;
@@ -54,23 +55,20 @@ public:
     bool hasType(StructType *Ty);
   };
 
-  IRMover(Module &M, DiagnosticHandlerFunction DiagnosticHandler);
+  IRMover(Module &M);
 
   typedef std::function<void(GlobalValue &)> ValueAdder;
   /// Move in the provide values. The source is destroyed.
   /// Returns true on error.
   bool move(Module &Src, ArrayRef<GlobalValue *> ValuesToLink,
-            std::function<void(GlobalValue &GV, ValueAdder Add)> AddLazyFor);
+            std::function<void(GlobalValue &GV, ValueAdder Add)> AddLazyFor,
+            DenseMap<unsigned, MDNode *> *ValIDToTempMDMap = nullptr,
+            bool IsMetadataLinkingPostpass = false);
   Module &getModule() { return Composite; }
-
-  DiagnosticHandlerFunction getDiagnosticHandler() const {
-    return DiagnosticHandler;
-  }
 
 private:
   Module &Composite;
   IdentifiedStructTypeSet IdentifiedStructTypes;
-  DiagnosticHandlerFunction DiagnosticHandler;
 };
 
 } // End llvm namespace

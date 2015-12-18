@@ -222,7 +222,7 @@ bool LoopIdiomRecognize::runOnCountableLoop() {
   // If this loop executes exactly one time, then it should be peeled, not
   // optimized by this pass.
   if (const SCEVConstant *BECst = dyn_cast<SCEVConstant>(BECount))
-    if (BECst->getValue()->getValue() == 0)
+    if (BECst->getAPInt() == 0)
       return false;
 
   SmallVector<BasicBlock *, 8> ExitBlocks;
@@ -253,7 +253,7 @@ static unsigned getStoreSizeInBytes(StoreInst *SI, const DataLayout *DL) {
 
 static unsigned getStoreStride(const SCEVAddRecExpr *StoreEv) {
   const SCEVConstant *ConstStride = cast<SCEVConstant>(StoreEv->getOperand(1));
-  return ConstStride->getValue()->getValue().getZExtValue();
+  return ConstStride->getAPInt().getZExtValue();
 }
 
 bool LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
@@ -578,7 +578,7 @@ bool LoopIdiomRecognize::processLoopStridedStore(
     // Everything is emitted in default address space
     Type *Int8PtrTy = DestInt8PtrTy;
 
-    Module *M = TheStore->getParent()->getParent()->getParent();
+    Module *M = TheStore->getModule();
     Value *MSP =
         M->getOrInsertFunction("memset_pattern16", Builder.getVoidTy(),
                                Int8PtrTy, Int8PtrTy, IntPtr, (void *)nullptr);

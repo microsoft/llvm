@@ -28,6 +28,13 @@ LLVMBool LLVMParseBitcode(LLVMMemoryBufferRef MemBuf,
                                    OutMessage);
 }
 
+static void diagnosticHandler(const DiagnosticInfo &DI, void *C) {
+  auto *Message = reinterpret_cast<std::string *>(C);
+  raw_string_ostream Stream(*Message);
+  DiagnosticPrinterRawOStream DP(Stream);
+  DI.print(DP);
+}
+
 LLVMBool LLVMParseBitcodeInContext(LLVMContextRef ContextRef,
                                    LLVMMemoryBufferRef MemBuf,
                                    LLVMModuleRef *OutModule,
@@ -35,17 +42,19 @@ LLVMBool LLVMParseBitcodeInContext(LLVMContextRef ContextRef,
   MemoryBufferRef Buf = unwrap(MemBuf)->getMemBufferRef();
   LLVMContext &Ctx = *unwrap(ContextRef);
 
+  LLVMContext::DiagnosticHandlerTy OldDiagnosticHandler =
+      Ctx.getDiagnosticHandler();
+  void *OldDiagnosticContext = Ctx.getDiagnosticContext();
   std::string Message;
-  raw_string_ostream Stream(Message);
-  DiagnosticPrinterRawOStream DP(Stream);
+  Ctx.setDiagnosticHandler(diagnosticHandler, &Message, true);
 
-  ErrorOr<std::unique_ptr<Module>> ModuleOrErr = parseBitcodeFile(
-      Buf, Ctx, [&](const DiagnosticInfo &DI) { DI.print(DP); });
+  ErrorOr<std::unique_ptr<Module>> ModuleOrErr = parseBitcodeFile(Buf, Ctx);
+
+  Ctx.setDiagnosticHandler(OldDiagnosticHandler, OldDiagnosticContext, true);
+
   if (ModuleOrErr.getError()) {
-    if (OutMessage) {
-      Stream.flush();
+    if (OutMessage)
       *OutMessage = strdup(Message.c_str());
-    }
     *OutModule = wrap((Module*)nullptr);
     return 1;
   }
@@ -85,22 +94,4 @@ LLVMBool LLVMGetBitcodeModule(LLVMMemoryBufferRef MemBuf, LLVMModuleRef *OutM,
                               char **OutMessage) {
   return LLVMGetBitcodeModuleInContext(LLVMGetGlobalContext(), MemBuf, OutM,
                                        OutMessage);
-}
-
-/* Deprecated: Use LLVMGetBitcodeModuleInContext instead. */
-LLVMBool LLVMGetBitcodeModuleProviderInContext(LLVMContextRef ContextRef,
-                                               LLVMMemoryBufferRef MemBuf,
-                                               LLVMModuleProviderRef *OutMP,
-                                               char **OutMessage) {
-  return LLVMGetBitcodeModuleInContext(ContextRef, MemBuf,
-                                       reinterpret_cast<LLVMModuleRef*>(OutMP),
-                                       OutMessage);
-}
-
-/* Deprecated: Use LLVMGetBitcodeModule instead. */
-LLVMBool LLVMGetBitcodeModuleProvider(LLVMMemoryBufferRef MemBuf,
-                                      LLVMModuleProviderRef *OutMP,
-                                      char **OutMessage) {
-  return LLVMGetBitcodeModuleProviderInContext(LLVMGetGlobalContext(), MemBuf,
-                                               OutMP, OutMessage);
 }

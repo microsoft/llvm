@@ -1180,9 +1180,7 @@ bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
                            Deref, Offset);
 }
 
-/// changeToUnreachable - Insert an unreachable instruction before the specified
-/// instruction, making it and the rest of the code in the block dead.
-static void changeToUnreachable(Instruction *I, bool UseLLVMTrap) {
+void llvm::changeToUnreachable(Instruction *I, bool UseLLVMTrap) {
   BasicBlock *BB = I->getParent();
   // Loop over all of the successors, removing BB's entry from any PHI
   // nodes.
@@ -1338,19 +1336,15 @@ void llvm::removeUnwindEdge(BasicBlock *BB) {
   if (auto *CRI = dyn_cast<CleanupReturnInst>(TI)) {
     NewTI = CleanupReturnInst::Create(CRI->getCleanupPad(), nullptr, CRI);
     UnwindDest = CRI->getUnwindDest();
-  } else if (auto *CEP = dyn_cast<CleanupEndPadInst>(TI)) {
-    NewTI = CleanupEndPadInst::Create(CEP->getCleanupPad(), nullptr, CEP);
-    UnwindDest = CEP->getUnwindDest();
-  } else if (auto *CEP = dyn_cast<CatchEndPadInst>(TI)) {
-    NewTI = CatchEndPadInst::Create(CEP->getContext(), nullptr, CEP);
-    UnwindDest = CEP->getUnwindDest();
-  } else if (auto *TPI = dyn_cast<TerminatePadInst>(TI)) {
-    SmallVector<Value *, 3> TerminatePadArgs;
-    for (Value *Operand : TPI->arg_operands())
-      TerminatePadArgs.push_back(Operand);
-    NewTI = TerminatePadInst::Create(TPI->getContext(), nullptr,
-                                     TerminatePadArgs, TPI);
-    UnwindDest = TPI->getUnwindDest();
+  } else if (auto *CatchSwitch = dyn_cast<CatchSwitchInst>(TI)) {
+    auto *NewCatchSwitch = CatchSwitchInst::Create(
+        CatchSwitch->getParentPad(), nullptr, CatchSwitch->getNumHandlers(),
+        CatchSwitch->getName(), CatchSwitch);
+    for (BasicBlock *PadBB : CatchSwitch->handlers())
+      NewCatchSwitch->addHandler(PadBB);
+
+    NewTI = NewCatchSwitch;
+    UnwindDest = CatchSwitch->getUnwindDest();
   } else {
     llvm_unreachable("Could not find unwind successor");
   }
@@ -1358,6 +1352,7 @@ void llvm::removeUnwindEdge(BasicBlock *BB) {
   NewTI->takeName(TI);
   NewTI->setDebugLoc(TI->getDebugLoc());
   UnwindDest->removePredecessor(BB);
+  TI->replaceAllUsesWith(NewTI);
   TI->eraseFromParent();
 }
 

@@ -70,19 +70,17 @@ inline StringRef getInstrProfCoverageSectionName(bool AddSegment) {
 }
 
 /// Return the name prefix of variables containing instrumented function names.
-inline StringRef getInstrProfNameVarPrefix() { return "__llvm_profile_name_"; }
+inline StringRef getInstrProfNameVarPrefix() { return "__profn_"; }
 
 /// Return the name prefix of variables containing per-function control data.
-inline StringRef getInstrProfDataVarPrefix() { return "__llvm_profile_data_"; }
+inline StringRef getInstrProfDataVarPrefix() { return "__profd_"; }
 
 /// Return the name prefix of profile counter variables.
-inline StringRef getInstrProfCountersVarPrefix() {
-  return "__llvm_profile_counters_";
-}
+inline StringRef getInstrProfCountersVarPrefix() { return "__profc_"; }
 
 /// Return the name prefix of the COMDAT group for instrumentation variables
 /// associated with a COMDAT function.
-inline StringRef getInstrProfComdatPrefix() { return "__llvm_profile_vars_"; }
+inline StringRef getInstrProfComdatPrefix() { return "__profv_"; }
 
 /// Return the name of a covarage mapping variable (internal linkage)
 /// for each instrumented source module. Such variables are allocated
@@ -158,6 +156,10 @@ GlobalVariable *createPGOFuncNameVar(Module &M,
                                      GlobalValue::LinkageTypes Linkage,
                                      StringRef FuncName);
 
+/// Given a PGO function name, remove the filename prefix and return
+/// the original (static) function name.
+StringRef getFuncNameWithoutPrefix(StringRef PGOFuncName, StringRef FileName);
+
 const std::error_category &instrprof_category();
 
 enum class instrprof_error {
@@ -182,9 +184,50 @@ inline std::error_code make_error_code(instrprof_error E) {
   return std::error_code(static_cast<int>(E), instrprof_category());
 }
 
+inline instrprof_error MergeResult(instrprof_error &Accumulator,
+                                   instrprof_error Result) {
+  // Prefer first error encountered as later errors may be secondary effects of
+  // the initial problem.
+  if (Accumulator == instrprof_error::success &&
+      Result != instrprof_error::success)
+    Accumulator = Result;
+  return Accumulator;
+}
+
 enum InstrProfValueKind : uint32_t {
 #define VALUE_PROF_KIND(Enumerator, Value) Enumerator = Value,
 #include "llvm/ProfileData/InstrProfData.inc"
+};
+
+namespace object {
+class SectionRef;
+}
+/// A symbol table used for function PGO name look-up with keys
+/// (such as pointers, md5hash values) to the function. A function's
+/// PGO name or name's md5hash are used in retrieving the profile
+/// data of the function. See \c getPGOFuncName() method for details
+/// on how PGO name is formed.
+class InstrProfSymtab {
+private:
+  StringRef Data;
+  uint64_t Address;
+
+public:
+  InstrProfSymtab() : Data(), Address(0) {}
+
+  /// Create InstrProfSymtab from a object file section which
+  /// contains function PGO names that are uncompressed.
+  std::error_code create(object::SectionRef &Section);
+  std::error_code create(StringRef D, uint64_t BaseAddr) {
+    Data = D;
+    Address = BaseAddr;
+    return std::error_code();
+  }
+
+  /// Return function's PGO name from the function name's symabol
+  /// address in the object file. If an error occurs, Return
+  /// an empty string.
+  StringRef getFuncName(uint64_t FuncNameAddress, size_t NameSize);
 };
 
 struct InstrProfStringTable {
@@ -221,22 +264,35 @@ struct InstrProfValueSiteRecord {
   }
 
   /// Merge data from another InstrProfValueSiteRecord
-  void mergeValueData(InstrProfValueSiteRecord &Input) {
+  /// Optionally scale merged counts by \p Weight.
+  instrprof_error mergeValueData(InstrProfValueSiteRecord &Input,
+                                 uint64_t Weight = 1) {
     this->sortByTargetValues();
     Input.sortByTargetValues();
     auto I = ValueData.begin();
     auto IE = ValueData.end();
+    instrprof_error Result = instrprof_error::success;
     for (auto J = Input.ValueData.begin(), JE = Input.ValueData.end(); J != JE;
          ++J) {
       while (I != IE && I->Value < J->Value)
         ++I;
       if (I != IE && I->Value == J->Value) {
-        I->Count = SaturatingAdd(I->Count, J->Count);
+        uint64_t JCount = J->Count;
+        bool Overflowed;
+        if (Weight > 1) {
+          JCount = SaturatingMultiply(JCount, Weight, &Overflowed);
+          if (Overflowed)
+            Result = instrprof_error::counter_overflow;
+        }
+        I->Count = SaturatingAdd(I->Count, JCount, &Overflowed);
+        if (Overflowed)
+          Result = instrprof_error::counter_overflow;
         ++I;
         continue;
       }
       ValueData.insert(I, *J);
     }
+    return Result;
   }
 };
 
@@ -277,7 +333,8 @@ struct InstrProfRecord {
                            ValueMapType *HashKeys);
 
   /// Merge the counts in \p Other into this one.
-  inline instrprof_error merge(InstrProfRecord &Other);
+  /// Optionally scale merged counts by \p Weight.
+  inline instrprof_error merge(InstrProfRecord &Other, uint64_t Weight = 1);
 
   /// Used by InstrProfWriter: update the value strings to commoned strings in
   /// the writer instance.
@@ -329,7 +386,9 @@ private:
   }
 
   // Merge Value Profile data from Src record to this record for ValueKind.
-  instrprof_error mergeValueProfData(uint32_t ValueKind, InstrProfRecord &Src) {
+  // Scale merged value counts by \p Weight.
+  instrprof_error mergeValueProfData(uint32_t ValueKind, InstrProfRecord &Src,
+                                     uint64_t Weight) {
     uint32_t ThisNumValueSites = getNumValueSites(ValueKind);
     uint32_t OtherNumValueSites = Src.getNumValueSites(ValueKind);
     if (ThisNumValueSites != OtherNumValueSites)
@@ -338,9 +397,11 @@ private:
         getValueSitesForKind(ValueKind);
     std::vector<InstrProfValueSiteRecord> &OtherSiteRecords =
         Src.getValueSitesForKind(ValueKind);
+    instrprof_error Result = instrprof_error::success;
     for (uint32_t I = 0; I < ThisNumValueSites; I++)
-      ThisSiteRecords[I].mergeValueData(OtherSiteRecords[I]);
-    return instrprof_error::success;
+      MergeResult(Result, ThisSiteRecords[I].mergeValueData(OtherSiteRecords[I],
+                                                            Weight));
+    return Result;
   }
 };
 
@@ -425,7 +486,8 @@ void InstrProfRecord::updateStrings(InstrProfStringTable *StrTab) {
       VData.Value = (uint64_t)StrTab->insertString((const char *)VData.Value);
 }
 
-instrprof_error InstrProfRecord::merge(InstrProfRecord &Other) {
+instrprof_error InstrProfRecord::merge(InstrProfRecord &Other,
+                                       uint64_t Weight) {
   // If the number of counters doesn't match we either have bad data
   // or a hash collision.
   if (Counts.size() != Other.Counts.size())
@@ -434,17 +496,20 @@ instrprof_error InstrProfRecord::merge(InstrProfRecord &Other) {
   instrprof_error Result = instrprof_error::success;
 
   for (size_t I = 0, E = Other.Counts.size(); I < E; ++I) {
-    bool ResultOverflowed;
-    Counts[I] = SaturatingAdd(Counts[I], Other.Counts[I], &ResultOverflowed);
-    if (ResultOverflowed)
+    bool Overflowed;
+    uint64_t OtherCount = Other.Counts[I];
+    if (Weight > 1) {
+      OtherCount = SaturatingMultiply(OtherCount, Weight, &Overflowed);
+      if (Overflowed)
+        Result = instrprof_error::counter_overflow;
+    }
+    Counts[I] = SaturatingAdd(Counts[I], OtherCount, &Overflowed);
+    if (Overflowed)
       Result = instrprof_error::counter_overflow;
   }
 
-  for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind) {
-    instrprof_error MergeValueResult = mergeValueProfData(Kind, Other);
-    if (MergeValueResult != instrprof_error::success)
-      Result = MergeValueResult;
-  }
+  for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
+    MergeResult(Result, mergeValueProfData(Kind, Other, Weight));
 
   return Result;
 }
@@ -459,7 +524,7 @@ inline support::endianness getHostEndianness() {
 #include "llvm/ProfileData/InstrProfData.inc"
 
  /*
- * Initialize the record for runtime value profile data. 
+ * Initialize the record for runtime value profile data.
  * Return 0 if the initialization is successful, otherwise
  * return 1.
  */

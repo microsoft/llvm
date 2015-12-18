@@ -399,11 +399,10 @@ private:
   void visitEHPadPredecessors(Instruction &I);
   void visitLandingPadInst(LandingPadInst &LPI);
   void visitCatchPadInst(CatchPadInst &CPI);
-  void visitCatchEndPadInst(CatchEndPadInst &CEPI);
+  void visitCatchReturnInst(CatchReturnInst &CatchReturn);
   void visitCleanupPadInst(CleanupPadInst &CPI);
-  void visitCleanupEndPadInst(CleanupEndPadInst &CEPI);
+  void visitCatchSwitchInst(CatchSwitchInst &CatchSwitch);
   void visitCleanupReturnInst(CleanupReturnInst &CRI);
-  void visitTerminatePadInst(TerminatePadInst &TPI);
 
   void VerifyCallSite(CallSite CS);
   void verifyMustTailCall(CallInst &CI);
@@ -1252,7 +1251,9 @@ void Verifier::VerifyAttributeTypes(AttributeSet Attrs, unsigned Idx,
         I->getKindAsEnum() == Attribute::JumpTable ||
         I->getKindAsEnum() == Attribute::Convergent ||
         I->getKindAsEnum() == Attribute::ArgMemOnly ||
-        I->getKindAsEnum() == Attribute::NoRecurse) {
+        I->getKindAsEnum() == Attribute::NoRecurse ||
+        I->getKindAsEnum() == Attribute::InaccessibleMemOnly ||
+        I->getKindAsEnum() == Attribute::InaccessibleMemOrArgMemOnly) {
       if (!isFunction) {
         CheckFailed("Attribute '" + I->getAsString() +
                     "' only applies to functions!", V);
@@ -1421,6 +1422,18 @@ void Verifier::VerifyFunctionAttrs(FunctionType *FT, AttributeSet Attrs,
       !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone) &&
         Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadOnly)),
       "Attributes 'readnone and readonly' are incompatible!", V);
+
+  Assert(
+      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone) &&
+        Attrs.hasAttribute(AttributeSet::FunctionIndex, 
+                           Attribute::InaccessibleMemOrArgMemOnly)),
+      "Attributes 'readnone and inaccessiblemem_or_argmemonly' are incompatible!", V);
+
+  Assert(
+      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone) &&
+        Attrs.hasAttribute(AttributeSet::FunctionIndex, 
+                           Attribute::InaccessibleMemOnly)),
+      "Attributes 'readnone and inaccessiblememonly' are incompatible!", V);
 
   Assert(
       !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::NoInline) &&
@@ -2382,12 +2395,24 @@ void Verifier::VerifyCallSite(CallSite CS) {
     if (Intrinsic::ID ID = (Intrinsic::ID)F->getIntrinsicID())
       visitIntrinsicCallSite(ID, CS);
 
-  // Verify that a callsite has at most one "deopt" operand bundle.
-  bool FoundDeoptBundle = false;
+  // Verify that a callsite has at most one "deopt" and one "funclet" operand
+  // bundle.
+  bool FoundDeoptBundle = false, FoundFuncletBundle = false;
   for (unsigned i = 0, e = CS.getNumOperandBundles(); i < e; ++i) {
-    if (CS.getOperandBundleAt(i).getTagID() == LLVMContext::OB_deopt) {
+    OperandBundleUse BU = CS.getOperandBundleAt(i);
+    uint32_t Tag = BU.getTagID();
+    if (Tag == LLVMContext::OB_deopt) {
       Assert(!FoundDeoptBundle, "Multiple deopt operand bundles", I);
       FoundDeoptBundle = true;
+    }
+    if (Tag == LLVMContext::OB_funclet) {
+      Assert(!FoundFuncletBundle, "Multiple funclet operand bundles", I);
+      FoundFuncletBundle = true;
+      Assert(BU.Inputs.size() == 1,
+             "Expected exactly one funclet bundle operand", I);
+      Assert(isa<FuncletPadInst>(BU.Inputs.front()),
+             "Funclet bundle operands should correspond to a FuncletPadInst",
+             I);
     }
   }
 
@@ -2721,7 +2746,8 @@ void Verifier::visitLoadInst(LoadInst &LI) {
     Assert(LI.getAlignment() != 0,
            "Atomic load must specify explicit alignment", &LI);
     if (!ElTy->isPointerTy()) {
-      Assert(ElTy->isIntegerTy(), "atomic load operand must have integer type!",
+      Assert(ElTy->isIntegerTy() || ElTy->isFloatingPointTy(),
+             "atomic load operand must have integer or floating point type!",
              &LI, ElTy);
       unsigned Size = ElTy->getPrimitiveSizeInBits();
       Assert(Size >= 8 && !(Size & (Size - 1)),
@@ -2750,8 +2776,9 @@ void Verifier::visitStoreInst(StoreInst &SI) {
     Assert(SI.getAlignment() != 0,
            "Atomic store must specify explicit alignment", &SI);
     if (!ElTy->isPointerTy()) {
-      Assert(ElTy->isIntegerTy(),
-             "atomic store operand must have integer type!", &SI, ElTy);
+      Assert(ElTy->isIntegerTy() || ElTy->isFloatingPointTy(),
+             "atomic store operand must have integer or floating point type!",
+             &SI, ElTy);
       unsigned Size = ElTy->getPrimitiveSizeInBits();
       Assert(Size >= 8 && !(Size & (Size - 1)),
              "atomic store operand must be power-of-two byte-sized integer",
@@ -2885,25 +2912,23 @@ void Verifier::visitEHPadPredecessors(Instruction &I) {
     }
     return;
   }
+  if (auto *CPI = dyn_cast<CatchPadInst>(&I)) {
+    if (!pred_empty(BB))
+      Assert(BB->getUniquePredecessor() == CPI->getCatchSwitch()->getParent(),
+             "Block containg CatchPadInst must be jumped to "
+             "only by its catchswitch.",
+             CPI);
+    return;
+  }
 
   for (BasicBlock *PredBB : predecessors(BB)) {
     TerminatorInst *TI = PredBB->getTerminator();
-    if (auto *II = dyn_cast<InvokeInst>(TI))
+    if (auto *II = dyn_cast<InvokeInst>(TI)) {
       Assert(II->getUnwindDest() == BB && II->getNormalDest() != BB,
              "EH pad must be jumped to via an unwind edge", &I, II);
-    else if (auto *CPI = dyn_cast<CatchPadInst>(TI))
-      Assert(CPI->getUnwindDest() == BB && CPI->getNormalDest() != BB,
-             "EH pad must be jumped to via an unwind edge", &I, CPI);
-    else if (isa<CatchEndPadInst>(TI))
-      ;
-    else if (isa<CleanupReturnInst>(TI))
-      ;
-    else if (isa<CleanupEndPadInst>(TI))
-      ;
-    else if (isa<TerminatePadInst>(TI))
-      ;
-    else
+    } else if (!isa<CleanupReturnInst>(TI) && !isa<CatchSwitchInst>(TI)) {
       Assert(false, "EH pad must be jumped to via an unwind edge", &I, TI);
+    }
   }
 }
 
@@ -2952,67 +2977,29 @@ void Verifier::visitCatchPadInst(CatchPadInst &CPI) {
   visitEHPadPredecessors(CPI);
 
   BasicBlock *BB = CPI.getParent();
+
   Function *F = BB->getParent();
   Assert(F->hasPersonalityFn(),
          "CatchPadInst needs to be in a function with a personality.", &CPI);
 
+  Assert(isa<CatchSwitchInst>(CPI.getParentPad()),
+         "CatchPadInst needs to be directly nested in a CatchSwitchInst.",
+         CPI.getParentPad());
+
   // The catchpad instruction must be the first non-PHI instruction in the
   // block.
   Assert(BB->getFirstNonPHI() == &CPI,
-         "CatchPadInst not the first non-PHI instruction in the block.",
-         &CPI);
+         "CatchPadInst not the first non-PHI instruction in the block.", &CPI);
 
-  if (!BB->getSinglePredecessor())
-    for (BasicBlock *PredBB : predecessors(BB)) {
-      Assert(!isa<CatchPadInst>(PredBB->getTerminator()),
-             "CatchPadInst with CatchPadInst predecessor cannot have any other "
-             "predecessors.",
-             &CPI);
-    }
-
-  BasicBlock *UnwindDest = CPI.getUnwindDest();
-  Instruction *I = UnwindDest->getFirstNonPHI();
-  Assert(
-      isa<CatchPadInst>(I) || isa<CatchEndPadInst>(I),
-      "CatchPadInst must unwind to a CatchPadInst or a CatchEndPadInst.",
-      &CPI);
-
-  visitTerminatorInst(CPI);
+  visitInstruction(CPI);
 }
 
-void Verifier::visitCatchEndPadInst(CatchEndPadInst &CEPI) {
-  visitEHPadPredecessors(CEPI);
+void Verifier::visitCatchReturnInst(CatchReturnInst &CatchReturn) {
+  Assert(isa<CatchPadInst>(CatchReturn.getOperand(0)),
+         "CatchReturnInst needs to be provided a CatchPad", &CatchReturn,
+         CatchReturn.getOperand(0));
 
-  BasicBlock *BB = CEPI.getParent();
-  Function *F = BB->getParent();
-  Assert(F->hasPersonalityFn(),
-         "CatchEndPadInst needs to be in a function with a personality.",
-         &CEPI);
-
-  // The catchendpad instruction must be the first non-PHI instruction in the
-  // block.
-  Assert(BB->getFirstNonPHI() == &CEPI,
-         "CatchEndPadInst not the first non-PHI instruction in the block.",
-         &CEPI);
-
-  unsigned CatchPadsSeen = 0;
-  for (BasicBlock *PredBB : predecessors(BB))
-    if (isa<CatchPadInst>(PredBB->getTerminator()))
-      ++CatchPadsSeen;
-
-  Assert(CatchPadsSeen <= 1, "CatchEndPadInst must have no more than one "
-                               "CatchPadInst predecessor.",
-         &CEPI);
-
-  if (BasicBlock *UnwindDest = CEPI.getUnwindDest()) {
-    Instruction *I = UnwindDest->getFirstNonPHI();
-    Assert(
-        I->isEHPad() && !isa<LandingPadInst>(I),
-        "CatchEndPad must unwind to an EH block which is not a landingpad.",
-        &CEPI);
-  }
-
-  visitTerminatorInst(CEPI);
+  visitTerminatorInst(CatchReturn);
 }
 
 void Verifier::visitCleanupPadInst(CleanupPadInst &CPI) {
@@ -3030,57 +3017,77 @@ void Verifier::visitCleanupPadInst(CleanupPadInst &CPI) {
          "CleanupPadInst not the first non-PHI instruction in the block.",
          &CPI);
 
+  auto *ParentPad = CPI.getParentPad();
+  Assert(isa<CatchSwitchInst>(ParentPad) || isa<ConstantTokenNone>(ParentPad) ||
+             isa<CleanupPadInst>(ParentPad) || isa<CatchPadInst>(ParentPad),
+         "CleanupPadInst has an invalid parent.", &CPI);
+
   User *FirstUser = nullptr;
   BasicBlock *FirstUnwindDest = nullptr;
   for (User *U : CPI.users()) {
     BasicBlock *UnwindDest;
     if (CleanupReturnInst *CRI = dyn_cast<CleanupReturnInst>(U)) {
       UnwindDest = CRI->getUnwindDest();
+    } else if (isa<CleanupPadInst>(U) || isa<CatchSwitchInst>(U)) {
+      continue;
+    } else if (CallSite(U)) {
+      continue;
     } else {
-      UnwindDest = cast<CleanupEndPadInst>(U)->getUnwindDest();
+      Assert(false, "bogus cleanuppad use", &CPI);
     }
 
     if (!FirstUser) {
       FirstUser = U;
       FirstUnwindDest = UnwindDest;
     } else {
-      Assert(UnwindDest == FirstUnwindDest,
-             "Cleanuprets/cleanupendpads from the same cleanuppad must "
-             "have the same unwind destination",
-             FirstUser, U);
+      Assert(
+          UnwindDest == FirstUnwindDest,
+          "cleanupret instructions from the same cleanuppad must have the same "
+          "unwind destination",
+          FirstUser, U);
     }
   }
 
   visitInstruction(CPI);
 }
 
-void Verifier::visitCleanupEndPadInst(CleanupEndPadInst &CEPI) {
-  visitEHPadPredecessors(CEPI);
+void Verifier::visitCatchSwitchInst(CatchSwitchInst &CatchSwitch) {
+  visitEHPadPredecessors(CatchSwitch);
 
-  BasicBlock *BB = CEPI.getParent();
+  BasicBlock *BB = CatchSwitch.getParent();
+
   Function *F = BB->getParent();
   Assert(F->hasPersonalityFn(),
-         "CleanupEndPadInst needs to be in a function with a personality.",
-         &CEPI);
+         "CatchSwitchInst needs to be in a function with a personality.",
+         &CatchSwitch);
 
-  // The cleanupendpad instruction must be the first non-PHI instruction in the
+  // The catchswitch instruction must be the first non-PHI instruction in the
   // block.
-  Assert(BB->getFirstNonPHI() == &CEPI,
-         "CleanupEndPadInst not the first non-PHI instruction in the block.",
-         &CEPI);
+  Assert(BB->getFirstNonPHI() == &CatchSwitch,
+         "CatchSwitchInst not the first non-PHI instruction in the block.",
+         &CatchSwitch);
 
-  if (BasicBlock *UnwindDest = CEPI.getUnwindDest()) {
+  if (BasicBlock *UnwindDest = CatchSwitch.getUnwindDest()) {
     Instruction *I = UnwindDest->getFirstNonPHI();
-    Assert(
-        I->isEHPad() && !isa<LandingPadInst>(I),
-        "CleanupEndPad must unwind to an EH block which is not a landingpad.",
-        &CEPI);
+    Assert(I->isEHPad() && !isa<LandingPadInst>(I),
+           "CatchSwitchInst must unwind to an EH block which is not a "
+           "landingpad.",
+           &CatchSwitch);
   }
 
-  visitTerminatorInst(CEPI);
+  auto *ParentPad = CatchSwitch.getParentPad();
+  Assert(isa<CatchSwitchInst>(ParentPad) || isa<ConstantTokenNone>(ParentPad) ||
+             isa<CleanupPadInst>(ParentPad) || isa<CatchPadInst>(ParentPad),
+         "CatchSwitchInst has an invalid parent.", ParentPad);
+
+  visitTerminatorInst(CatchSwitch);
 }
 
 void Verifier::visitCleanupReturnInst(CleanupReturnInst &CRI) {
+  Assert(isa<CleanupPadInst>(CRI.getOperand(0)),
+         "CleanupReturnInst needs to be provided a CleanupPad", &CRI,
+         CRI.getOperand(0));
+
   if (BasicBlock *UnwindDest = CRI.getUnwindDest()) {
     Instruction *I = UnwindDest->getFirstNonPHI();
     Assert(I->isEHPad() && !isa<LandingPadInst>(I),
@@ -3090,32 +3097,6 @@ void Verifier::visitCleanupReturnInst(CleanupReturnInst &CRI) {
   }
 
   visitTerminatorInst(CRI);
-}
-
-void Verifier::visitTerminatePadInst(TerminatePadInst &TPI) {
-  visitEHPadPredecessors(TPI);
-
-  BasicBlock *BB = TPI.getParent();
-  Function *F = BB->getParent();
-  Assert(F->hasPersonalityFn(),
-         "TerminatePadInst needs to be in a function with a personality.",
-         &TPI);
-
-  // The terminatepad instruction must be the first non-PHI instruction in the
-  // block.
-  Assert(BB->getFirstNonPHI() == &TPI,
-         "TerminatePadInst not the first non-PHI instruction in the block.",
-         &TPI);
-
-  if (BasicBlock *UnwindDest = TPI.getUnwindDest()) {
-    Instruction *I = UnwindDest->getFirstNonPHI();
-    Assert(I->isEHPad() && !isa<LandingPadInst>(I),
-           "TerminatePadInst must unwind to an EH block which is not a "
-           "landingpad.",
-           &TPI);
-  }
-
-  visitTerminatorInst(TPI);
 }
 
 void Verifier::verifyDominatesUse(Instruction &I, unsigned i) {

@@ -2176,17 +2176,19 @@ let Predicates = [HasAVX512] in {
             (EXTRACT_SUBREG
              (AND32ri (KMOVWrk (COPY_TO_REGCLASS VK1:$src, VK16)), (i32 1)),
               sub_16bit)>;
-  def : Pat<(v16i1 (scalar_to_vector VK1:$src)),
-            (COPY_TO_REGCLASS VK1:$src, VK16)>;
-  def : Pat<(v8i1 (scalar_to_vector VK1:$src)),
-            (COPY_TO_REGCLASS VK1:$src, VK8)>;
 }
-let Predicates = [HasBWI] in {
-  def : Pat<(v32i1 (scalar_to_vector VK1:$src)),
-            (COPY_TO_REGCLASS VK1:$src, VK32)>;
-  def : Pat<(v64i1 (scalar_to_vector VK1:$src)),
-            (COPY_TO_REGCLASS VK1:$src, VK64)>;
-}
+def : Pat<(v16i1 (scalar_to_vector VK1:$src)),
+          (COPY_TO_REGCLASS VK1:$src, VK16)>;
+def : Pat<(v8i1 (scalar_to_vector VK1:$src)),
+          (COPY_TO_REGCLASS VK1:$src, VK8)>;
+def : Pat<(v4i1 (scalar_to_vector VK1:$src)),
+          (COPY_TO_REGCLASS VK1:$src, VK4)>;
+def : Pat<(v2i1 (scalar_to_vector VK1:$src)),
+          (COPY_TO_REGCLASS VK1:$src, VK2)>;
+def : Pat<(v32i1 (scalar_to_vector VK1:$src)),
+          (COPY_TO_REGCLASS VK1:$src, VK32)>;
+def : Pat<(v64i1 (scalar_to_vector VK1:$src)),
+          (COPY_TO_REGCLASS VK1:$src, VK64)>;
 
 
 // With AVX-512 only, 8-bit mask is promoted to 16-bit mask.
@@ -2489,6 +2491,9 @@ def : Pat<(v8i1 (extract_subvector (v16i1 VK16:$src), (iPTR 8))),
 def : Pat<(v16i1 (extract_subvector (v32i1 VK32:$src), (iPTR 0))),
           (v16i1 (COPY_TO_REGCLASS VK32:$src, VK16))>;
 
+def : Pat<(v16i1 (extract_subvector (v32i1 VK32:$src), (iPTR 16))),
+          (v16i1 (COPY_TO_REGCLASS (KSHIFTRDri VK32:$src, (i8 16)), VK16))>;
+
 def : Pat<(v32i1 (extract_subvector (v64i1 VK64:$src), (iPTR 0))),
           (v32i1 (COPY_TO_REGCLASS VK64:$src, VK32))>;
 
@@ -2497,6 +2502,7 @@ def : Pat<(v32i1 (extract_subvector (v64i1 VK64:$src), (iPTR 32))),
 
 def : Pat<(v4i1 (extract_subvector (v8i1 VK8:$src), (iPTR 0))),
           (v4i1 (COPY_TO_REGCLASS VK8:$src, VK4))>;
+
 def : Pat<(v2i1 (extract_subvector (v8i1 VK8:$src), (iPTR 0))),
           (v2i1 (COPY_TO_REGCLASS VK8:$src, VK2))>;
 
@@ -2879,13 +2885,13 @@ def VMOVDI2SSZrm  : AVX512BI<0x6E, MRMSrcMem, (outs FR32X:$dst), (ins i32mem:$sr
 //
 def VMOVPDI2DIZrr  : AVX512BI<0x7E, MRMDestReg, (outs GR32:$dst), (ins VR128X:$src),
                        "vmovd\t{$src, $dst|$dst, $src}",
-                       [(set GR32:$dst, (vector_extract (v4i32 VR128X:$src),
+                       [(set GR32:$dst, (extractelt (v4i32 VR128X:$src),
                                         (iPTR 0)))], IIC_SSE_MOVD_ToGP>,
                        EVEX, VEX_LIG;
 def VMOVPDI2DIZmr  : AVX512BI<0x7E, MRMDestMem, (outs),
                        (ins i32mem:$dst, VR128X:$src),
                        "vmovd\t{$src, $dst|$dst, $src}",
-                       [(store (i32 (vector_extract (v4i32 VR128X:$src),
+                       [(store (i32 (extractelt (v4i32 VR128X:$src),
                                      (iPTR 0))), addr:$dst)], IIC_SSE_MOVDQ>,
                        EVEX, VEX_LIG, EVEX_CD8<32, CD8VT1>;
 
@@ -3090,10 +3096,10 @@ let Predicates = [HasAVX512] in {
                        (EXTRACT_SUBREG (v4i64 VR256X:$src), sub_xmm)), sub_xmm)>;
 
   // Extract and store.
-  def : Pat<(store (f32 (vector_extract (v4f32 VR128X:$src), (iPTR 0))),
+  def : Pat<(store (f32 (extractelt (v4f32 VR128X:$src), (iPTR 0))),
                    addr:$dst),
             (VMOVSSZmr addr:$dst, (COPY_TO_REGCLASS (v4f32 VR128X:$src), FR32X))>;
-  def : Pat<(store (f64 (vector_extract (v2f64 VR128X:$src), (iPTR 0))),
+  def : Pat<(store (f64 (extractelt (v2f64 VR128X:$src), (iPTR 0))),
                    addr:$dst),
             (VMOVSDZmr addr:$dst, (COPY_TO_REGCLASS (v2f64 VR128X:$src), FR64X))>;
 

@@ -102,6 +102,35 @@ std::string getPGOFuncName(const Function &F, uint64_t Version) {
                         Version);
 }
 
+StringRef getFuncNameWithoutPrefix(StringRef PGOFuncName, StringRef FileName) {
+  if (FileName.empty())
+    return PGOFuncName;
+  // Drop the file name including ':'. See also getPGOFuncName.
+  if (PGOFuncName.startswith(FileName))
+    PGOFuncName = PGOFuncName.drop_front(FileName.size() + 1);
+  return PGOFuncName;
+}
+
+// \p FuncName is the string used as profile lookup key for the function. A
+// symbol is created to hold the name. Return the legalized symbol name.
+static std::string getPGOFuncNameVarName(StringRef FuncName,
+                                         GlobalValue::LinkageTypes Linkage) {
+  std::string VarName = getInstrProfNameVarPrefix();
+  VarName += FuncName;
+
+  if (!GlobalValue::isLocalLinkage(Linkage))
+    return VarName;
+
+  // Now fix up illegal chars in local VarName that may upset the assembler.
+  const char *InvalidChars = "-:<>\"'";
+  size_t found = VarName.find_first_of(InvalidChars);
+  while (found != std::string::npos) {
+    VarName[found] = '_';
+    found = VarName.find_first_of(InvalidChars, found + 1);
+  }
+  return VarName;
+}
+
 GlobalVariable *createPGOFuncNameVar(Module &M,
                                      GlobalValue::LinkageTypes Linkage,
                                      StringRef FuncName) {
@@ -120,7 +149,7 @@ GlobalVariable *createPGOFuncNameVar(Module &M,
   auto *Value = ConstantDataArray::getString(M.getContext(), FuncName, false);
   auto FuncNameVar =
       new GlobalVariable(M, Value->getType(), true, Linkage, Value,
-                         Twine(getInstrProfNameVarPrefix()) + FuncName);
+                         getPGOFuncNameVarName(FuncName, Linkage));
 
   // Hide the symbol so that we correctly get a copy for each executable.
   if (!GlobalValue::isLocalLinkage(FuncNameVar->getLinkage()))
@@ -182,8 +211,10 @@ uint64_t stringToHash(uint32_t ValueKind, uint64_t Value) {
 }
 
 ValueProfData *allocValueProfDataInstrProf(size_t TotalSizeInBytes) {
-  return (ValueProfData *)(new (::operator new(TotalSizeInBytes))
-                               ValueProfData());
+  ValueProfData *VD =
+      (ValueProfData *)(new (::operator new(TotalSizeInBytes)) ValueProfData());
+  memset(VD, 0, TotalSizeInBytes);
+  return VD;
 }
 
 static ValueProfRecordClosure InstrProfRecordClosure = {
@@ -194,8 +225,7 @@ static ValueProfRecordClosure InstrProfRecordClosure = {
     getNumValueDataForSiteInstrProf,
     stringToHash,
     getValueForSiteInstrProf,
-    allocValueProfDataInstrProf
-};
+    allocValueProfDataInstrProf};
 
 // Wrapper implementation using the closure mechanism.
 uint32_t ValueProfData::getSize(const InstrProfRecord &Record) {

@@ -227,9 +227,15 @@ bool Loop::isSafeToClone() const {
     if (isa<IndirectBrInst>((*I)->getTerminator()))
       return false;
 
-    if (const InvokeInst *II = dyn_cast<InvokeInst>((*I)->getTerminator()))
+    if (const InvokeInst *II = dyn_cast<InvokeInst>((*I)->getTerminator())) {
       if (II->cannotDuplicate())
         return false;
+      // Return false if any loop blocks contain invokes to EH-pads other than
+      // landingpads;  we don't know how to split those edges yet.
+      auto *FirstNonPHI = II->getUnwindDest()->getFirstNonPHI();
+      if (FirstNonPHI->isEHPad() && !isa<LandingPadInst>(FirstNonPHI))
+        return false;
+    }
 
     for (BasicBlock::iterator BI = (*I)->begin(), BE = (*I)->end(); BI != BE; ++BI) {
       if (const CallInst *CI = dyn_cast<CallInst>(BI)) {
@@ -624,14 +630,8 @@ LoopInfo::LoopInfo(const DominatorTreeBase<BasicBlock> &DomTree) {
   analyze(DomTree);
 }
 
-/// updateUnloop - The last backedge has been removed from a loop--now the
-/// "unloop". Find a new parent for the blocks contained within unloop and
-/// update the loop tree. We don't necessarily have valid dominators at this
-/// point, but LoopInfo is still valid except for the removal of this loop.
-///
-/// Note that Unloop may now be an empty loop. Calling Loop::getHeader without
-/// checking first is illegal.
 void LoopInfo::updateUnloop(Loop *Unloop) {
+  Unloop->markUnlooped();
 
   // First handle the special case of no parent loop to simplify the algorithm.
   if (!Unloop->getParentLoop()) {
