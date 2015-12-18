@@ -84,7 +84,7 @@ def : Pat<(X86callseq_start timm:$amt1),
 //   STATEPOINT
 // label:
 //   ...
-let usesCustomInserter = 1, Defs = [EFLAGS] in {
+let usesCustomInserter = 1, Defs = [EFLAGS], mayStore=1 in {
 def GC_TRANSITION_RA : I<0, Pseudo, (outs), (ins i8mem:$dst),
                          "#GC_TRANSITION_RA",
                          []>;
