@@ -725,10 +725,13 @@ public:
   // It uniformly handles invoke and call statepoints.
   void LowerStatepoint(ImmutableStatepoint Statepoint,
                        const BasicBlock *EHPadBB = nullptr);
+
 private:
+  // TODO: upstream change to add Invoke parameter when we can also upstream
+  // support for lowering funclet EH statepoints and so can upstream a lit test
   std::pair<SDValue, SDValue>
   lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
-                 const BasicBlock *EHPadBB = nullptr);
+                 const BasicBlock *EHPadBB, const InvokeInst *Invoke);
 
   // Terminator instructions.
   void visitRet(const ReturnInst &I);
