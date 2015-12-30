@@ -22,7 +22,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/EHPersonalities.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -167,8 +169,7 @@ static void calculateStateNumbersForInvokes(const Function *Fn,
       continue;
 
     auto &BBColors = BlockColors[&BB];
-    assert(BBColors.size() == 1 &&
-           "multi-color BB not removed by preparation");
+    assert(BBColors.size() == 1 && "multi-color BB not removed by preparation");
     BasicBlock *FuncletEntryBB = BBColors.front();
 
     BasicBlock *FuncletUnwindDest;
@@ -251,8 +252,13 @@ static void calculateCXXStateNumbers(WinEHFuncInfo &FuncInfo,
       FuncInfo.FuncletBaseStateMap[CatchPad] = CatchLow;
       for (const User *U : CatchPad->users()) {
         const auto *UserI = cast<Instruction>(U);
-        if (UserI->isEHPad())
-          calculateCXXStateNumbers(FuncInfo, UserI, CatchLow);
+        if (auto *InnerCatchSwitch = dyn_cast<CatchSwitchInst>(UserI))
+          if (InnerCatchSwitch->getUnwindDest() == CatchSwitch->getUnwindDest())
+            calculateCXXStateNumbers(FuncInfo, UserI, CatchLow);
+        if (auto *InnerCleanupPad = dyn_cast<CleanupPadInst>(UserI))
+          if (getCleanupRetUnwindDest(InnerCleanupPad) ==
+              CatchSwitch->getUnwindDest())
+            calculateCXXStateNumbers(FuncInfo, UserI, CatchLow);
       }
     }
     int CatchHigh = FuncInfo.getLastStateNumber();
@@ -349,9 +355,13 @@ static void calculateSEHStateNumbers(WinEHFuncInfo &FuncInfo,
     // outside the __try.
     for (const User *U : CatchPad->users()) {
       const auto *UserI = cast<Instruction>(U);
-      if (UserI->isEHPad()) {
-        calculateSEHStateNumbers(FuncInfo, UserI, ParentState);
-      }
+      if (auto *InnerCatchSwitch = dyn_cast<CatchSwitchInst>(UserI))
+        if (InnerCatchSwitch->getUnwindDest() == CatchSwitch->getUnwindDest())
+          calculateSEHStateNumbers(FuncInfo, UserI, ParentState);
+      if (auto *InnerCleanupPad = dyn_cast<CleanupPadInst>(UserI))
+        if (getCleanupRetUnwindDest(InnerCleanupPad) ==
+            CatchSwitch->getUnwindDest())
+          calculateSEHStateNumbers(FuncInfo, UserI, ParentState);
     }
   } else {
     auto *CleanupPad = cast<CleanupPadInst>(FirstNonPHI);
@@ -1190,3 +1200,5 @@ void WinEHFuncInfo::addIPToStateRange(const InvokeInst *II,
          "should get invoke with precomputed state");
   LabelToStateMap[InvokeBegin] = std::make_pair(InvokeStateMap[II], InvokeEnd);
 }
+
+WinEHFuncInfo::WinEHFuncInfo() {}

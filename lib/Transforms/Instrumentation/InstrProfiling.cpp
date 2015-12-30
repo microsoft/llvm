@@ -279,6 +279,18 @@ static inline bool shouldRecordFunctionAddr(Function *F) {
   return F->hasAddressTaken();
 }
 
+static inline Comdat *getOrCreateProfileComdat(Module &M,
+                                               InstrProfIncrementInst *Inc) {
+  // COFF format requires a COMDAT section to have a key symbol with the same
+  // name. The linker targeting COFF also requires that the COMDAT section
+  // a section is associated to must precede the associating section. For this
+  // reason, we must choose the name var's name as the name of the comdat.
+  StringRef ComdatPrefix = (Triple(M.getTargetTriple()).isOSBinFormatCOFF()
+                                ? getInstrProfNameVarPrefix()
+                                : getInstrProfComdatPrefix());
+  return M.getOrInsertComdat(StringRef(getVarName(Inc, ComdatPrefix)));
+}
+
 GlobalVariable *
 InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   GlobalVariable *NamePtr = Inc->getName();
@@ -297,8 +309,7 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   Function *Fn = Inc->getParent()->getParent();
   Comdat *ProfileVarsComdat = nullptr;
   if (Fn->hasComdat())
-    ProfileVarsComdat = M->getOrInsertComdat(
-        StringRef(getVarName(Inc, getInstrProfComdatPrefix())));
+    ProfileVarsComdat = getOrCreateProfileComdat(*M, Inc);
   NamePtr->setSection(getNameSection());
   NamePtr->setAlignment(1);
   NamePtr->setComdat(ProfileVarsComdat);

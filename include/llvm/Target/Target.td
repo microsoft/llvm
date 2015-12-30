@@ -620,6 +620,7 @@ class Operand<ValueType ty> : DAGOperand {
   string EncoderMethod = "";
   string DecoderMethod = "";
   bit hasCompleteDecoder = 1;
+  string OperandNamespace = "MCOI";
   string OperandType = "OPERAND_UNKNOWN";
   dag MIOperandInfo = (ops);
 
@@ -935,9 +936,6 @@ class AsmParser {
   // ShouldEmitMatchRegisterName - Set to false if the target needs a hand
   // written register name matcher
   bit ShouldEmitMatchRegisterName = 1;
-
-  /// Does the instruction mnemonic allow '.'
-  bit MnemonicContainsDot = 0;
 }
 def DefaultAsmParser : AsmParser;
 

@@ -97,7 +97,6 @@ public:
 class BitcodeReaderMDValueList {
   unsigned NumFwdRefs;
   bool AnyFwdRefs;
-  bool SavedFwdRefs;
   unsigned MinFwdRef;
   unsigned MaxFwdRef;
   std::vector<TrackingMDRef> MDValuePtrs;
@@ -105,12 +104,7 @@ class BitcodeReaderMDValueList {
   LLVMContext &Context;
 public:
   BitcodeReaderMDValueList(LLVMContext &C)
-      : NumFwdRefs(0), AnyFwdRefs(false), SavedFwdRefs(false), Context(C) {}
-  ~BitcodeReaderMDValueList() {
-    // Assert that we either replaced all forward references, or saved
-    // them for later replacement.
-    assert(!NumFwdRefs || SavedFwdRefs);
-  }
+      : NumFwdRefs(0), AnyFwdRefs(false), Context(C) {}
 
   // vector compatibility methods
   unsigned size() const       { return MDValuePtrs.size(); }
@@ -120,8 +114,6 @@ public:
   Metadata *back() const      { return MDValuePtrs.back(); }
   void pop_back()             { MDValuePtrs.pop_back(); }
   bool empty() const          { return MDValuePtrs.empty(); }
-
-  void savedFwdRefs() { SavedFwdRefs = true; }
 
   Metadata *operator[](unsigned i) const {
     assert(i < MDValuePtrs.size());
@@ -227,9 +219,6 @@ class BitcodeReader : public GVMaterializer {
   /// (e.g.) blockaddress forward references.
   bool WillMaterializeAllForwardRefs = false;
 
-  /// Functions that have block addresses taken.  This is usually empty.
-  SmallPtrSet<const Function *, 4> BlockAddressesTaken;
-
   /// True if any Metadata block has been materialized.
   bool IsMetadataMaterialized = false;
 
@@ -256,11 +245,9 @@ public:
 
   void releaseBuffer();
 
-  bool isDematerializable(const GlobalValue *GV) const override;
   std::error_code materialize(GlobalValue *GV) override;
-  std::error_code materializeModule(Module *M) override;
+  std::error_code materializeModule() override;
   std::vector<StructType *> getIdentifiedStructTypes() const override;
-  void dematerialize(GlobalValue *GV) override;
 
   /// \brief Main interface to parsing a bitcode buffer.
   /// \returns true if an error occurred.
@@ -1085,9 +1072,6 @@ Metadata *BitcodeReaderMDValueList::getValueFwdRef(unsigned Idx) {
     MinFwdRef = MaxFwdRef = Idx;
   }
   ++NumFwdRefs;
-  // Reset flag to ensure that we save this forward reference if we
-  // are delaying metadata mapping (e.g. for function importing).
-  SavedFwdRefs = false;
 
   // Create and return a placeholder, which will later be RAUW'd.
   Metadata *MD = MDNode::getTemporary(Context, None).release();
@@ -2951,9 +2935,6 @@ std::error_code BitcodeReader::parseConstants() {
       if (!Fn)
         return error("Invalid record");
 
-      // Don't let Fn get dematerialized.
-      BlockAddressesTaken.insert(Fn);
-
       // If the function is already parsed we can insert the block address right
       // away.
       BasicBlock *BB;
@@ -3036,7 +3017,7 @@ std::error_code BitcodeReader::parseUseLists() {
         V = ValueList[ID];
       unsigned NumUses = 0;
       SmallDenseMap<const Use *, unsigned, 16> Order;
-      for (const Use &U : V->uses()) {
+      for (const Use &U : V->materialized_uses()) {
         if (++NumUses > Record.size())
           break;
         Order[&U] = Record[NumUses - 1];
@@ -3097,10 +3078,6 @@ void BitcodeReader::saveMDValueList(
         continue;
       }
       MDValueToValIDMap[MD] = ValID;
-      // Flag that we saved the forward refs (temporary metadata) for error
-      // checking during MDValueList destruction.
-      if (OnlyTempMD)
-        MDValueList.savedFwdRefs();
     }
   }
 }
@@ -5274,7 +5251,8 @@ std::error_code BitcodeReader::materialize(GlobalValue *GV) {
 
   // Upgrade any old intrinsic calls in the function.
   for (auto &I : UpgradedIntrinsics) {
-    for (auto UI = I.first->user_begin(), UE = I.first->user_end(); UI != UE;) {
+    for (auto UI = I.first->materialized_user_begin(), UE = I.first->user_end();
+         UI != UE;) {
       User *U = *UI;
       ++UI;
       if (CallInst *CI = dyn_cast<CallInst>(U))
@@ -5291,36 +5269,7 @@ std::error_code BitcodeReader::materialize(GlobalValue *GV) {
   return materializeForwardReferencedFunctions();
 }
 
-bool BitcodeReader::isDematerializable(const GlobalValue *GV) const {
-  const Function *F = dyn_cast<Function>(GV);
-  if (!F || F->isDeclaration())
-    return false;
-
-  // Dematerializing F would leave dangling references that wouldn't be
-  // reconnected on re-materialization.
-  if (BlockAddressesTaken.count(F))
-    return false;
-
-  return DeferredFunctionInfo.count(const_cast<Function*>(F));
-}
-
-void BitcodeReader::dematerialize(GlobalValue *GV) {
-  Function *F = dyn_cast<Function>(GV);
-  // If this function isn't dematerializable, this is a noop.
-  if (!F || !isDematerializable(F))
-    return;
-
-  assert(DeferredFunctionInfo.count(F) && "No info to read function later?");
-
-  // Just forget the function body, we can remat it later.
-  F->dropAllReferences();
-  F->setIsMaterializable(true);
-}
-
-std::error_code BitcodeReader::materializeModule(Module *M) {
-  assert(M == TheModule &&
-         "Can only Materialize the Module this BitcodeReader is attached to.");
-
+std::error_code BitcodeReader::materializeModule() {
   if (std::error_code EC = materializeMetadata())
     return EC;
 
@@ -5363,7 +5312,7 @@ std::error_code BitcodeReader::materializeModule(Module *M) {
   for (unsigned I = 0, E = InstsWithTBAATag.size(); I < E; I++)
     UpgradeInstWithTBAATag(InstsWithTBAATag[I]);
 
-  UpgradeDebugInfo(*M);
+  UpgradeDebugInfo(*TheModule);
   return std::error_code();
 }
 
@@ -5881,7 +5830,7 @@ getBitcodeModuleImpl(std::unique_ptr<DataStreamer> Streamer, StringRef Name,
 
   if (MaterializeAll) {
     // Read in the entire module, and destroy the BitcodeReader.
-    if (std::error_code EC = M->materializeAllPermanently())
+    if (std::error_code EC = M->materializeAll())
       return cleanupOnError(EC);
   } else {
     // Resolve forward references from blockaddresses.
