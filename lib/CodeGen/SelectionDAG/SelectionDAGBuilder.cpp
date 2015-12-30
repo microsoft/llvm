@@ -5276,7 +5276,10 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
 
 std::pair<SDValue, SDValue>
 SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
-                                    const BasicBlock *EHPadBB) {
+                                    const BasicBlock *EHPadBB,
+                                    const InvokeInst *Invoke) {
+  // TODO: upstream change to add Invoke parameter when we can also upstream
+  // support for lowering funclet EH statepoints and so can upstream a lit test
   MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
   MCSymbol *BeginLabel = nullptr;
 
@@ -5331,10 +5334,9 @@ SelectionDAGBuilder::lowerInvokable(TargetLowering::CallLoweringInfo &CLI,
 
     // Inform MachineModuleInfo of range.
     if (MMI.hasEHFunclets()) {
-      assert(CLI.CS);
+      assert(Invoke);
       WinEHFuncInfo *EHInfo = DAG.getMachineFunction().getWinEHFuncInfo();
-      EHInfo->addIPToStateRange(cast<InvokeInst>(CLI.CS->getInstruction()),
-                                BeginLabel, EndLabel);
+      EHInfo->addIPToStateRange(Invoke, BeginLabel, EndLabel);
     } else {
       MMI.addInvoke(FuncInfo.MBBMap[EHPadBB], BeginLabel, EndLabel);
     }
@@ -5384,7 +5386,10 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
   CLI.setDebugLoc(getCurSDLoc()).setChain(getRoot())
     .setCallee(RetTy, FTy, Callee, std::move(Args), CS)
     .setTailCall(isTailCall);
-  std::pair<SDValue, SDValue> Result = lowerInvokable(CLI, EHPadBB);
+  // TODO: upstream change to add Invoke argument when we can also upstream
+  // support for lowering funclet EH statepoints and so can upstream a lit test
+  std::pair<SDValue, SDValue> Result = lowerInvokable(
+      CLI, EHPadBB, dyn_cast_or_null<InvokeInst>(CS.getInstruction()));
 
   if (Result.first.getNode())
     setValue(CS.getInstruction(), Result.first);
@@ -6716,7 +6721,10 @@ std::pair<SDValue, SDValue> SelectionDAGBuilder::lowerCallOperands(
     .setCallee(CS.getCallingConv(), ReturnTy, Callee, std::move(Args), NumArgs)
     .setDiscardResult(CS->use_empty()).setIsPatchPoint(IsPatchPoint);
 
-  return lowerInvokable(CLI, EHPadBB);
+  // TODO: upstream change to add Invoke argument when we can also upstream
+  // support for lowering funclet EH statepoints and so can upstream a lit test
+  return lowerInvokable(CLI, EHPadBB,
+                        dyn_cast_or_null<InvokeInst>(CS.getInstruction()));
 }
 
 /// \brief Add a stack map intrinsic call's live variable operands to a stackmap
