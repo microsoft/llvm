@@ -1224,7 +1224,7 @@ static Value *findBasePointer(Value *I, DefiningValueMapTy &cache) {
     }
     cache[BDV] = base;
   }
-  assert(cache.find(def) != cache.end());
+  assert(cache.count(def));
   return cache[def];
 }
 
