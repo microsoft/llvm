@@ -24,6 +24,7 @@
 #include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
@@ -717,6 +718,11 @@ void WinEHPrepare::cloneCommonBlocks(Function &F) {
   for (auto &Funclets : FuncletBlocks) {
     BasicBlock *FuncletPadBB = Funclets.first;
     std::vector<BasicBlock *> &BlocksInFunclet = Funclets.second;
+    Value *FuncletToken;
+    if (FuncletPadBB == &F.getEntryBlock())
+      FuncletToken = ConstantTokenNone::get(F.getContext());
+    else
+      FuncletToken = FuncletPadBB->getFirstNonPHI();
 
     std::vector<std::pair<BasicBlock *, BasicBlock *>> Orig2Clone;
     ValueToValueMapTy VMap;
@@ -788,15 +794,44 @@ void WinEHPrepare::cloneCommonBlocks(Function &F) {
         RemapInstruction(&I, VMap,
                          RF_IgnoreMissingEntries | RF_NoModuleLevelChanges);
 
+    // Catchrets targeting cloned blocks need to be updated separately from
+    // the loop above because they are not in the current funclet.
+    SmallVector<CatchReturnInst *, 2> FixupCatchrets;
+    for (auto &BBMapping : Orig2Clone) {
+      BasicBlock *OldBlock = BBMapping.first;
+      BasicBlock *NewBlock = BBMapping.second;
+
+      FixupCatchrets.clear();
+      for (BasicBlock *Pred : predecessors(OldBlock))
+        if (auto *CatchRet = dyn_cast<CatchReturnInst>(Pred->getTerminator()))
+          if (CatchRet->getParentPad() == FuncletToken)
+            FixupCatchrets.push_back(CatchRet);
+
+      for (CatchReturnInst *CatchRet : FixupCatchrets)
+        CatchRet->setSuccessor(NewBlock);
+    }
+
     auto UpdatePHIOnClonedBlock = [&](PHINode *PN, bool IsForOldBlock) {
       unsigned NumPreds = PN->getNumIncomingValues();
       for (unsigned PredIdx = 0, PredEnd = NumPreds; PredIdx != PredEnd;
            ++PredIdx) {
         BasicBlock *IncomingBlock = PN->getIncomingBlock(PredIdx);
-        ColorVector &IncomingColors = BlockColors[IncomingBlock];
-        bool BlockInFunclet = IncomingColors.size() == 1 &&
-                              IncomingColors.front() == FuncletPadBB;
-        if (IsForOldBlock != BlockInFunclet)
+        bool EdgeTargetsFunclet;
+        if (auto *CRI =
+                dyn_cast<CatchReturnInst>(IncomingBlock->getTerminator())) {
+          EdgeTargetsFunclet = (CRI->getParentPad() == FuncletToken);
+        } else {
+          ColorVector &IncomingColors = BlockColors[IncomingBlock];
+          assert(!IncomingColors.empty() && "Block not colored!");
+          assert((IncomingColors.size() == 1 ||
+                  llvm::all_of(IncomingColors,
+                               [&](BasicBlock *Color) {
+                                 return Color != FuncletPadBB;
+                               })) &&
+                 "Cloning should leave this funclet's blocks monochromatic");
+          EdgeTargetsFunclet = (IncomingColors.front() == FuncletPadBB);
+        }
+        if (IsForOldBlock != EdgeTargetsFunclet)
           continue;
         PN->removeIncomingValue(IncomingBlock, /*DeletePHIIfEmpty=*/false);
         // Revisit the next entry.
@@ -984,7 +1019,6 @@ void WinEHPrepare::cleanupPreparedFunclets(Function &F) {
 }
 
 void WinEHPrepare::verifyPreparedFunclets(Function &F) {
-  // Recolor the CFG to verify that all is well.
   for (BasicBlock &BB : F) {
     size_t NumColors = BlockColors[&BB].size();
     assert(NumColors == 1 && "Expected monochromatic BB!");
@@ -992,12 +1026,8 @@ void WinEHPrepare::verifyPreparedFunclets(Function &F) {
       report_fatal_error("Uncolored BB!");
     if (NumColors > 1)
       report_fatal_error("Multicolor BB!");
-    if (!DisableDemotion) {
-      bool EHPadHasPHI = BB.isEHPad() && isa<PHINode>(BB.begin());
-      assert(!EHPadHasPHI && "EH Pad still has a PHI!");
-      if (EHPadHasPHI)
-        report_fatal_error("EH Pad still has a PHI!");
-    }
+    assert((DisableDemotion || !(BB.isEHPad() && isa<PHINode>(BB.begin()))) &&
+           "EH Pad still has a PHI!");
   }
 }
 
@@ -1016,12 +1046,17 @@ bool WinEHPrepare::prepareExplicitEH(Function &F) {
     demotePHIsOnFunclets(F);
 
   if (!DisableCleanups) {
+    DEBUG(verifyFunction(F));
     removeImplausibleInstructions(F);
 
+    DEBUG(verifyFunction(F));
     cleanupPreparedFunclets(F);
   }
 
-  verifyPreparedFunclets(F);
+  DEBUG(verifyPreparedFunclets(F));
+  // Recolor the CFG to verify that all is well.
+  DEBUG(colorFunclets(F));
+  DEBUG(verifyPreparedFunclets(F));
 
   BlockColors.clear();
   FuncletBlocks.clear();

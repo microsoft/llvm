@@ -155,6 +155,8 @@ GlobalVariable *createPGOFuncNameVar(Function &F, StringRef FuncName);
 GlobalVariable *createPGOFuncNameVar(Module &M,
                                      GlobalValue::LinkageTypes Linkage,
                                      StringRef FuncName);
+/// Return the initializer in string of the PGO name var \c NameVar.
+StringRef getPGOFuncNameVarInitializer(GlobalVariable *NameVar);
 
 /// Given a PGO function name, remove the filename prefix and return
 /// the original (static) function name.
@@ -610,8 +612,14 @@ template <class IntPtrT> struct CovMapFunctionRecord {
   #define COVMAP_FUNC_RECORD(Type, LLVMType, Name, Init) Type Name;
   #include "llvm/ProfileData/InstrProfData.inc"
 };
-LLVM_PACKED_END
+// Per module coverage mapping data header, i.e. CoverageMapFileHeader
+// documented above.
+struct CovMapHeader {
+#define COVMAP_HEADER(Type, LLVMType, Name, Init) Type Name;
+#include "llvm/ProfileData/InstrProfData.inc"
+};
 
+LLVM_PACKED_END
 }
 
 } // end namespace llvm
