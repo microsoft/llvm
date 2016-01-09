@@ -394,10 +394,6 @@ static BaseDefiningValueResult findBaseDefiningValue(Value *I);
 /// particular element in 'I'.  
 static BaseDefiningValueResult
 findBaseDefiningValueOfVector(Value *I) {
-  assert(I->getType()->isVectorTy() &&
-         cast<VectorType>(I->getType())->getElementType()->isPointerTy() &&
-         "Illegal to ask for the base pointer of a non-pointer type");
-
   // Each case parallels findBaseDefiningValue below, see that code for
   // detailed motivation.
 
@@ -463,9 +459,6 @@ static BaseDefiningValueResult findBaseDefiningValue(Value *I) {
 
   if (I->getType()->isVectorTy())
     return findBaseDefiningValueOfVector(I);
-  
-  assert(I->getType()->isPointerTy() &&
-         "Illegal to ask for the base pointer of a non-pointer type");
 
   if (isa<Argument>(I))
     // An incoming argument to the function is a base pointer
