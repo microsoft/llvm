@@ -21,7 +21,7 @@ define i32 @foo() {
 ; CHECK-LABEL: call_memcpy:
 ; CHECK-NEXT: .param          i32, i32, i32{{$}}
 ; CHECK-NEXT: .result         i32{{$}}
-; CHECK-NEXT: call            memcpy, $0, $1, $2{{$}}
+; CHECK-NEXT: call            memcpy@FUNCTION, $0, $1, $2{{$}}
 ; CHECK-NEXT: return          $0{{$}}
 declare void @llvm.memcpy.p0i8.p0i8.i32(i8* nocapture, i8* nocapture readonly, i32, i32, i1)
 define i8* @call_memcpy(i8* %p, i8* nocapture readonly %q, i32 %n) {
@@ -175,3 +175,17 @@ define i8* @call_memcpy(i8* %p, i8* nocapture readonly %q, i32 %n) {
 ; CHECK: .skip    512{{$}}
 ; CHECK: .size    rom, 512{{$}}
 @rom = constant [128 x i32] zeroinitializer, align 16
+
+; CHECK: .type       array,@object
+; CHECK-NEXT: array:
+; CHECK-NEXT: .skip       8
+; CHECK-NEXT: .size       array, 8
+; CHECK: .type       pointer_to_array,@object
+; CHECK-NEXT: .section    .data.rel.ro,"aw",@progbits
+; CHECK-NEXT: .globl      pointer_to_array
+; CHECK-NEXT: .align      2
+; CHECK-NEXT: pointer_to_array:
+; CHECK-NEXT: .int32      array+4
+; CHECK-NEXT: .size       pointer_to_array, 4
+@array = internal constant [8 x i8] zeroinitializer, align 1
+@pointer_to_array = constant i8* getelementptr inbounds ([8 x i8], [8 x i8]* @array, i32 0, i32 4), align 4

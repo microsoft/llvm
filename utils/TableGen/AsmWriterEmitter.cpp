@@ -65,7 +65,7 @@ private:
 
 static void PrintCases(std::vector<std::pair<std::string,
                        AsmWriterOperand> > &OpsToPrint, raw_ostream &O) {
-  O << "    case " << OpsToPrint.back().first << ": ";
+  O << "    case " << OpsToPrint.back().first << ":";
   AsmWriterOperand TheOp = OpsToPrint.back().second;
   OpsToPrint.pop_back();
 
@@ -73,13 +73,13 @@ static void PrintCases(std::vector<std::pair<std::string,
   // emit a case label for them.
   for (unsigned i = OpsToPrint.size(); i != 0; --i)
     if (OpsToPrint[i-1].second == TheOp) {
-      O << "\n    case " << OpsToPrint[i-1].first << ": ";
+      O << "\n    case " << OpsToPrint[i-1].first << ":";
       OpsToPrint.erase(OpsToPrint.begin()+i-1);
     }
 
   // Finally, emit the code.
-  O << TheOp.getCode();
-  O << "break;\n";
+  O << "\n      " << TheOp.getCode();
+  O << "\n      break;\n";
 }
 
 
@@ -120,6 +120,7 @@ static void EmitInstructions(std::vector<AsmWriterInst> &Insts,
       // If this is the operand that varies between all of the instructions,
       // emit a switch for just this operand now.
       O << "    switch (MI->getOpcode()) {\n";
+      O << "    default: llvm_unreachable(\"Unexpected opcode.\");\n";
       std::vector<std::pair<std::string, AsmWriterOperand> > OpsToPrint;
       OpsToPrint.push_back(std::make_pair(FirstInst.CGI->Namespace + "::" +
                                           FirstInst.CGI->TheDef->getName(),
@@ -291,9 +292,8 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
 
   /// OpcodeInfo - This encodes the index of the string to use for the first
   /// chunk of the output as well as indices used for operand printing.
-  /// To reduce the number of unhandled cases, we expand the size from 32-bit
-  /// to 32+16 = 48-bit.
   std::vector<uint64_t> OpcodeInfo;
+  const unsigned OpcodeInfoBits = 64;
 
   // Add all strings to the string table upfront so it can generate an optimized
   // representation.
@@ -342,7 +342,7 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
 
   // To reduce code size, we compactify common instructions into a few bits
   // in the opcode-indexed table.
-  unsigned BitsLeft = 64-AsmStrBits;
+  unsigned BitsLeft = OpcodeInfoBits-AsmStrBits;
 
   std::vector<std::vector<std::string>> TableDrivenOperandPrinters;
 
@@ -370,7 +370,7 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
     // Otherwise, we can include this in the initial lookup table.  Add it in.
     for (unsigned i = 0, e = InstIdxs.size(); i != e; ++i)
       if (InstIdxs[i] != ~0U) {
-        OpcodeInfo[i] |= (uint64_t)InstIdxs[i] << (64-BitsLeft);
+        OpcodeInfo[i] |= (uint64_t)InstIdxs[i] << (OpcodeInfoBits-BitsLeft);
       }
     BitsLeft -= NumBits;
 
@@ -390,56 +390,55 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
     TableDrivenOperandPrinters.push_back(std::move(UniqueOperandCommands));
   }
 
-
-  // We always emit at least one 32-bit table. A second table is emitted if
-  // more bits are needed.
-  O<<"  static const uint32_t OpInfo[] = {\n";
-  for (unsigned i = 0, e = NumberedInstructions->size(); i != e; ++i) {
-    O << "    " << (OpcodeInfo[i] & 0xffffffff) << "U,\t// "
-      << NumberedInstructions->at(i)->TheDef->getName() << "\n";
-  }
-  // Add a dummy entry so the array init doesn't end with a comma.
-  O << "    0U\n";
-  O << "  };\n\n";
-
-  if (BitsLeft < 32) {
-    // Add a second OpInfo table only when it is necessary.
-    // Adjust the type of the second table based on the number of bits needed.
-    O << "  static const uint"
-      << ((BitsLeft < 16) ? "32" : (BitsLeft < 24) ? "16" : "8")
-      << "_t OpInfo2[] = {\n";
-    for (unsigned i = 0, e = NumberedInstructions->size(); i != e; ++i) {
-      O << "    " << (OpcodeInfo[i] >> 32) << "U,\t// "
-        << NumberedInstructions->at(i)->TheDef->getName() << "\n";
-    }
-    // Add a dummy entry so the array init doesn't end with a comma.
-    O << "    0U\n";
-    O << "  };\n\n";
-  }
-
-  // Emit the string itself.
+  // Emit the string table itself.
   O << "  static const char AsmStrs[] = {\n";
   StringTable.emit(O, printChar);
   O << "  };\n\n";
 
+  // Emit the lookup tables in pieces to minimize wasted bytes.
+  unsigned BytesNeeded = ((OpcodeInfoBits - BitsLeft) + 7) / 8;
+  unsigned Table = 0, Shift = 0;
+  SmallString<128> BitsString;
+  raw_svector_ostream BitsOS(BitsString);
+  // If the total bits is more than 32-bits we need to use a 64-bit type.
+  BitsOS << "  uint" << ((BitsLeft < (OpcodeInfoBits - 32)) ? 64 : 32)
+         << "_t Bits = 0;\n";
+  while (BytesNeeded != 0) {
+    // Figure out how big this table section needs to be, but no bigger than 4.
+    unsigned TableSize = std::min(1 << Log2_32(BytesNeeded), 4);
+    BytesNeeded -= TableSize;
+    TableSize *= 8; // Convert to bits;
+    uint64_t Mask = (1ULL << TableSize) - 1;
+    O << "  static const uint" << TableSize << "_t OpInfo" << Table
+      << "[] = {\n";
+    for (unsigned i = 0, e = NumberedInstructions->size(); i != e; ++i) {
+      O << "    " << ((OpcodeInfo[i] >> Shift) & Mask) << "U,\t// "
+        << NumberedInstructions->at(i)->TheDef->getName() << "\n";
+    }
+    O << "  };\n\n";
+    // Emit string to combine the individual table lookups.
+    BitsOS << "  Bits |= ";
+    // If the total bits is more than 32-bits we need to use a 64-bit type.
+    if (BitsLeft < (OpcodeInfoBits - 32))
+      BitsOS << "(uint64_t)";
+    BitsOS << "OpInfo" << Table << "[MI->getOpcode()] << " << Shift << ";\n";
+    // Prepare the shift for the next iteration and increment the table count.
+    Shift += TableSize;
+    ++Table;
+  }
+
+  // Emit the initial tab character.
   O << "  O << \"\\t\";\n\n";
 
   O << "  // Emit the opcode for the instruction.\n";
-  if (BitsLeft < 32) {
-    // If we have two tables then we need to perform two lookups and combine
-    // the results into a single 64-bit value.
-    O << "  uint64_t Bits1 = OpInfo[MI->getOpcode()];\n"
-      << "  uint64_t Bits2 = OpInfo2[MI->getOpcode()];\n"
-      << "  uint64_t Bits = (Bits2 << 32) | Bits1;\n";
-  } else {
-    // If only one table is used we just need to perform a single lookup.
-    O << "  uint32_t Bits = OpInfo[MI->getOpcode()];\n";
-  }
+  O << BitsString;
+
+  // Emit the starting string.
   O << "  assert(Bits != 0 && \"Cannot print this instruction.\");\n"
     << "  O << AsmStrs+(Bits & " << (1 << AsmStrBits)-1 << ")-1;\n\n";
 
   // Output the table driven operand information.
-  BitsLeft = 64-AsmStrBits;
+  BitsLeft = OpcodeInfoBits-AsmStrBits;
   for (unsigned i = 0, e = TableDrivenOperandPrinters.size(); i != e; ++i) {
     std::vector<std::string> &Commands = TableDrivenOperandPrinters[i];
 
@@ -455,7 +454,7 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
     if (Commands.size() == 2) {
       // Emit two possibilitys with if/else.
       O << "  if ((Bits >> "
-        << (64-BitsLeft) << ") & "
+        << (OpcodeInfoBits-BitsLeft) << ") & "
         << ((1 << NumBits)-1) << ") {\n"
         << Commands[1]
         << "  } else {\n"
@@ -466,7 +465,7 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
       O << Commands[0] << "\n\n";
     } else {
       O << "  switch ((Bits >> "
-        << (64-BitsLeft) << ") & "
+        << (OpcodeInfoBits-BitsLeft) << ") & "
         << ((1 << NumBits)-1) << ") {\n"
         << "  default: llvm_unreachable(\"Invalid command number.\");\n";
 
@@ -482,14 +481,11 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
   }
 
   // Okay, delete instructions with no operand info left.
-  for (unsigned i = 0, e = Instructions.size(); i != e; ++i) {
-    // Entire instruction has been emitted?
-    AsmWriterInst &Inst = Instructions[i];
-    if (Inst.Operands.empty()) {
-      Instructions.erase(Instructions.begin()+i);
-      --i; --e;
-    }
-  }
+  auto I = std::remove_if(Instructions.begin(), Instructions.end(),
+                          [](AsmWriterInst &Inst) {
+                            return Inst.Operands.empty();
+                          });
+  Instructions.erase(I, Instructions.end());
 
 
   // Because this is a vector, we want to emit from the end.  Reverse all of the
@@ -497,18 +493,18 @@ void AsmWriterEmitter::EmitPrintInstruction(raw_ostream &O) {
   std::reverse(Instructions.begin(), Instructions.end());
 
 
-  // Now that we've emitted all of the operand info that fit into 32 bits, emit
+  // Now that we've emitted all of the operand info that fit into 64 bits, emit
   // information for those instructions that are left.  This is a less dense
-  // encoding, but we expect the main 32-bit table to handle the majority of
+  // encoding, but we expect the main 64-bit table to handle the majority of
   // instructions.
   if (!Instructions.empty()) {
     // Find the opcode # of inline asm.
     O << "  switch (MI->getOpcode()) {\n";
+    O << "  default: llvm_unreachable(\"Unexpected opcode.\");\n";
     while (!Instructions.empty())
       EmitInstructions(Instructions, O);
 
     O << "  }\n";
-    O << "  return;\n";
   }
 
   O << "}\n";
@@ -1092,10 +1088,11 @@ void AsmWriterEmitter::EmitPrintAliasInstruction(raw_ostream &O) {
 
 AsmWriterEmitter::AsmWriterEmitter(RecordKeeper &R) : Records(R), Target(R) {
   Record *AsmWriter = Target.getAsmWriter();
+  unsigned Variant = AsmWriter->getValueAsInt("Variant");
+  unsigned PassSubtarget = AsmWriter->getValueAsInt("PassSubtarget");
   for (const CodeGenInstruction *I : Target.instructions())
     if (!I->AsmString.empty() && I->TheDef->getName() != "PHI")
-      Instructions.emplace_back(*I, AsmWriter->getValueAsInt("Variant"),
-                                AsmWriter->getValueAsInt("PassSubtarget"));
+      Instructions.emplace_back(*I, Variant, PassSubtarget);
 
   // Get the instruction numbering.
   NumberedInstructions = &Target.getInstructionsByEnumValue();
