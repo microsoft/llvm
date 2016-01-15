@@ -1,4 +1,4 @@
-//===-- llvm/lib/CodeGen/AsmPrinter/WinCodeViewLineTables.cpp --*- C++ -*--===//
+//===-- llvm/lib/CodeGen/AsmPrinter/CodeViewDebug.cpp --*- C++ -*--===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,18 +7,22 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file contains support for writing line tables info into COFF files.
+// This file contains support for writing Microsoft CodeView debug info.
 //
 //===----------------------------------------------------------------------===//
 
-#include "WinCodeViewLineTables.h"
+#include "CodeViewDebug.h"
+#include "llvm/DebugInfo/CodeView/CodeView.h"
+#include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/COFF.h"
 
+using namespace llvm::codeview;
+
 namespace llvm {
 
-StringRef WinCodeViewLineTables::getFullFilepath(const MDNode *S) {
+StringRef CodeViewDebug::getFullFilepath(const MDNode *S) {
   assert(S);
   assert((isa<DICompileUnit>(S) || isa<DIFile>(S) || isa<DISubprogram>(S) ||
           isa<DILexicalBlockBase>(S)) &&
@@ -77,7 +81,7 @@ StringRef WinCodeViewLineTables::getFullFilepath(const MDNode *S) {
   return Filepath;
 }
 
-void WinCodeViewLineTables::maybeRecordLocation(DebugLoc DL,
+void CodeViewDebug::maybeRecordLocation(DebugLoc DL,
                                                 const MachineFunction *MF) {
   const MDNode *Scope = DL.getScope();
   if (!Scope)
@@ -110,7 +114,7 @@ void WinCodeViewLineTables::maybeRecordLocation(DebugLoc DL,
   InstrInfo[MCL] = InstrInfoTy(Filename, LineNumber, ColumnNumber);
 }
 
-WinCodeViewLineTables::WinCodeViewLineTables(AsmPrinter *AP)
+CodeViewDebug::CodeViewDebug(AsmPrinter *AP)
     : Asm(nullptr), CurFn(nullptr) {
   MachineModuleInfo *MMI = AP->MMI;
 
@@ -125,10 +129,13 @@ WinCodeViewLineTables::WinCodeViewLineTables(AsmPrinter *AP)
   Asm = AP;
 }
 
-void WinCodeViewLineTables::endModule() {
+void CodeViewDebug::endModule() {
   if (FnDebugInfo.empty())
     return;
 
+  // FIXME: For functions that are comdat, we should emit separate .debug$S
+  // sections that are comdat associative with the main function instead of
+  // having one big .debug$S section.
   assert(Asm != nullptr);
   Asm->OutStreamer->SwitchSection(
       Asm->getObjFileLowering().getCOFFDebugSymbolsSection());
@@ -146,7 +153,7 @@ void WinCodeViewLineTables::endModule() {
 
   // This subsection holds a file index to offset in string table table.
   Asm->OutStreamer->AddComment("File index to string table offset subsection");
-  Asm->EmitInt32(COFF::DEBUG_INDEX_SUBSECTION);
+  Asm->EmitInt32(unsigned(ModuleSubstreamKind::FileChecksums));
   size_t NumFilenames = FileNameRegistry.Infos.size();
   Asm->EmitInt32(8 * NumFilenames);
   for (size_t I = 0, E = FileNameRegistry.Filenames.size(); I != E; ++I) {
@@ -159,7 +166,7 @@ void WinCodeViewLineTables::endModule() {
 
   // This subsection holds the string table.
   Asm->OutStreamer->AddComment("String table");
-  Asm->EmitInt32(COFF::DEBUG_STRING_TABLE_SUBSECTION);
+  Asm->EmitInt32(unsigned(ModuleSubstreamKind::StringTable));
   Asm->EmitInt32(FileNameRegistry.LastOffset);
   // The payload starts with a null character.
   Asm->EmitInt8(0);
@@ -188,7 +195,7 @@ static void EmitLabelDiff(MCStreamer &Streamer,
   Streamer.EmitValue(AddrDelta, Size);
 }
 
-void WinCodeViewLineTables::emitDebugInfoForFunction(const Function *GV) {
+void CodeViewDebug::emitDebugInfoForFunction(const Function *GV) {
   // For each function there is a separate subsection
   // which holds the PC to file:line table.
   const MCSymbol *Fn = Asm->getSymbol(GV);
@@ -203,17 +210,15 @@ void WinCodeViewLineTables::emitDebugInfoForFunction(const Function *GV) {
   if (auto *SP = getDISubprogram(GV))
     FuncName = SP->getDisplayName();
 
-  // FIXME Clang currently sets DisplayName to "bar" for a C++
-  // "namespace_foo::bar" function, see PR21528.  Luckily, dbghelp.dll is trying
-  // to demangle display names anyways, so let's just put a mangled name into
-  // the symbols subsection until Clang gives us what we need.
+  // If our DISubprogram name is empty, use the mangled name.
   if (FuncName.empty())
     FuncName = GlobalValue::getRealLinkageName(GV->getName());
+
   // Emit a symbol subsection, required by VS2012+ to find function boundaries.
   MCSymbol *SymbolsBegin = Asm->MMI->getContext().createTempSymbol(),
            *SymbolsEnd = Asm->MMI->getContext().createTempSymbol();
   Asm->OutStreamer->AddComment("Symbol subsection for " + Twine(FuncName));
-  Asm->EmitInt32(COFF::DEBUG_SYMBOL_SUBSECTION);
+  Asm->EmitInt32(unsigned(ModuleSubstreamKind::Symbols));
   EmitLabelDiff(*Asm->OutStreamer, SymbolsBegin, SymbolsEnd);
   Asm->OutStreamer->EmitLabel(SymbolsBegin);
   {
@@ -222,7 +227,8 @@ void WinCodeViewLineTables::emitDebugInfoForFunction(const Function *GV) {
     EmitLabelDiff(*Asm->OutStreamer, ProcSegmentBegin, ProcSegmentEnd, 2);
     Asm->OutStreamer->EmitLabel(ProcSegmentBegin);
 
-    Asm->EmitInt16(COFF::DEBUG_SYMBOL_TYPE_PROC_START);
+    Asm->EmitInt16(unsigned(SymbolRecordKind::S_GPROC32_ID));
+
     // Some bytes of this segment don't seem to be required for basic debugging,
     // so just fill them with zeroes.
     Asm->OutStreamer->EmitFill(12, 0);
@@ -240,7 +246,7 @@ void WinCodeViewLineTables::emitDebugInfoForFunction(const Function *GV) {
 
     // We're done with this function.
     Asm->EmitInt16(0x0002);
-    Asm->EmitInt16(COFF::DEBUG_SYMBOL_TYPE_PROC_END);
+    Asm->EmitInt16(unsigned(SymbolRecordKind::S_PROC_ID_END));
   }
   Asm->OutStreamer->EmitLabel(SymbolsEnd);
   // Every subsection must be aligned to a 4-byte boundary.
@@ -264,7 +270,7 @@ void WinCodeViewLineTables::emitDebugInfoForFunction(const Function *GV) {
 
   // Emit a line table subsection, required to do PC-to-file:line lookup.
   Asm->OutStreamer->AddComment("Line table subsection for " + Twine(FuncName));
-  Asm->EmitInt32(COFF::DEBUG_LINE_TABLE_SUBSECTION);
+  Asm->EmitInt32(unsigned(ModuleSubstreamKind::Lines));
   MCSymbol *LineTableBegin = Asm->MMI->getContext().createTempSymbol(),
            *LineTableEnd = Asm->MMI->getContext().createTempSymbol();
   EmitLabelDiff(*Asm->OutStreamer, LineTableBegin, LineTableEnd);
@@ -341,7 +347,7 @@ void WinCodeViewLineTables::emitDebugInfoForFunction(const Function *GV) {
   Asm->OutStreamer->EmitLabel(LineTableEnd);
 }
 
-void WinCodeViewLineTables::beginFunction(const MachineFunction *MF) {
+void CodeViewDebug::beginFunction(const MachineFunction *MF) {
   assert(!CurFn && "Can't process two functions at once!");
 
   if (!Asm || !Asm->MMI->hasDebugInfo())
@@ -381,7 +387,7 @@ void WinCodeViewLineTables::beginFunction(const MachineFunction *MF) {
   }
 }
 
-void WinCodeViewLineTables::endFunction(const MachineFunction *MF) {
+void CodeViewDebug::endFunction(const MachineFunction *MF) {
   if (!Asm || !CurFn)  // We haven't created any debug info for this function.
     return;
 
@@ -398,7 +404,7 @@ void WinCodeViewLineTables::endFunction(const MachineFunction *MF) {
   CurFn = nullptr;
 }
 
-void WinCodeViewLineTables::beginInstruction(const MachineInstr *MI) {
+void CodeViewDebug::beginInstruction(const MachineInstr *MI) {
   // Ignore DBG_VALUE locations and function prologue.
   if (!Asm || MI->isDebugValue() || MI->getFlag(MachineInstr::FrameSetup))
     return;

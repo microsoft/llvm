@@ -506,10 +506,9 @@ static void AddAliasScopeMetadata(CallSite CS, ValueToValueMapTy &VMap,
   const Function *CalledFunc = CS.getCalledFunction();
   SmallVector<const Argument *, 4> NoAliasArgs;
 
-  for (const Argument &I : CalledFunc->args()) {
-    if (I.hasNoAliasAttr() && !I.hasNUses(0))
-      NoAliasArgs.push_back(&I);
-  }
+  for (const Argument &Arg : CalledFunc->args())
+    if (Arg.hasNoAliasAttr() && !Arg.use_empty())
+      NoAliasArgs.push_back(&Arg);
 
   if (NoAliasArgs.empty())
     return;
@@ -1448,7 +1447,6 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
           NewInst = CallInst::Create(cast<CallInst>(I), OpBundles, I);
         else
           NewInst = InvokeInst::Create(cast<InvokeInst>(I), OpBundles, I);
-        NewInst->setDebugLoc(I->getDebugLoc());
         NewInst->takeName(I);
         I->replaceAllUsesWith(NewInst);
         I->eraseFromParent();

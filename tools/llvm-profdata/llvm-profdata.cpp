@@ -249,16 +249,22 @@ static int merge_main(int argc, const char *argv[]) {
 }
 
 static int showInstrProfile(std::string Filename, bool ShowCounts,
-                            bool ShowIndirectCallTargets, bool ShowAllFunctions,
-                            std::string ShowFunction, bool TextFormat,
-                            raw_fd_ostream &OS) {
+                            bool ShowIndirectCallTargets,
+                            bool ShowDetailedSummary,
+                            std::vector<uint32_t> DetailedSummaryCutoffs,
+                            bool ShowAllFunctions, std::string ShowFunction,
+                            bool TextFormat, raw_fd_ostream &OS) {
   auto ReaderOrErr = InstrProfReader::create(Filename);
+  std::vector<uint32_t> Cutoffs(DetailedSummaryCutoffs);
+  if (ShowDetailedSummary && DetailedSummaryCutoffs.empty()) {
+    Cutoffs = {800000, 900000, 950000, 990000, 999000, 999900, 999990};
+  }
+  ProfileSummary PS(Cutoffs);
   if (std::error_code EC = ReaderOrErr.getError())
     exitWithErrorCode(EC, Filename);
 
   auto Reader = std::move(ReaderOrErr.get());
-  uint64_t MaxFunctionCount = 0, MaxBlockCount = 0;
-  size_t ShownFunctions = 0, TotalFunctions = 0;
+  size_t ShownFunctions = 0;
   for (const auto &Func : *Reader) {
     bool Show =
         ShowAllFunctions || (!ShowFunction.empty() &&
@@ -272,15 +278,8 @@ static int showInstrProfile(std::string Filename, bool ShowCounts,
       continue;
     }
 
-    ++TotalFunctions;
     assert(Func.Counts.size() > 0 && "function missing entry counter");
-    if (Func.Counts[0] > MaxFunctionCount)
-      MaxFunctionCount = Func.Counts[0];
-
-    for (size_t I = 1, E = Func.Counts.size(); I < E; ++I) {
-      if (Func.Counts[I] > MaxBlockCount)
-        MaxBlockCount = Func.Counts[I];
-    }
+    PS.addRecord(Func);
 
     if (Show) {
 
@@ -332,9 +331,21 @@ static int showInstrProfile(std::string Filename, bool ShowCounts,
 
   if (ShowAllFunctions || !ShowFunction.empty())
     OS << "Functions shown: " << ShownFunctions << "\n";
-  OS << "Total functions: " << TotalFunctions << "\n";
-  OS << "Maximum function count: " << MaxFunctionCount << "\n";
-  OS << "Maximum internal block count: " << MaxBlockCount << "\n";
+  OS << "Total functions: " << PS.getNumFunctions() << "\n";
+  OS << "Maximum function count: " << PS.getMaxFunctionCount() << "\n";
+  OS << "Maximum internal block count: " << PS.getMaxBlockCount() << "\n";
+
+  if (ShowDetailedSummary) {
+    OS << "Detailed summary:\n";
+    OS << "Total number of blocks: " << PS.getNumBlocks() << "\n";
+    OS << "Total count: " << PS.getTotalCount() << "\n";
+    for (auto Entry : PS.getDetailedSummary()) {
+      OS << Entry.NumBlocks << " blocks with count >= " << Entry.MinBlockCount
+         << " account for "
+         << format("%0.6g", (float)Entry.Cutoff / ProfileSummary::Scale * 100)
+         << " percentage of the total counts.\n";
+    }
+  }
   return 0;
 }
 
@@ -370,6 +381,13 @@ static int show_main(int argc, const char *argv[]) {
   cl::opt<bool> ShowIndirectCallTargets(
       "ic-targets", cl::init(false),
       cl::desc("Show indirect call site target values for shown functions"));
+  cl::opt<bool> ShowDetailedSummary("detailed-summary", cl::init(false),
+                                    cl::desc("Show detailed profile summary"));
+  cl::list<uint32_t> DetailedSummaryCutoffs(
+      cl::CommaSeparated, "detailed-summary-cutoffs",
+      cl::desc(
+          "Cutoff percentages (times 10000) for generating detailed summary"),
+      cl::value_desc("800000,901000,999999"));
   cl::opt<bool> ShowAllFunctions("all-functions", cl::init(false),
                                  cl::desc("Details for every function"));
   cl::opt<std::string> ShowFunction("function",
@@ -397,8 +415,11 @@ static int show_main(int argc, const char *argv[]) {
   if (ShowAllFunctions && !ShowFunction.empty())
     errs() << "warning: -function argument ignored: showing all functions\n";
 
+  std::vector<uint32_t> Cutoffs(DetailedSummaryCutoffs.begin(),
+                                DetailedSummaryCutoffs.end());
   if (ProfileKind == instr)
     return showInstrProfile(Filename, ShowCounts, ShowIndirectCallTargets,
+                            ShowDetailedSummary, DetailedSummaryCutoffs,
                             ShowAllFunctions, ShowFunction, TextFormat, OS);
   else
     return showSampleProfile(Filename, ShowCounts, ShowAllFunctions,
