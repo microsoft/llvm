@@ -66,19 +66,22 @@ AMDGPUSubtarget::initializeSubtargetDependencies(const Triple &TT,
 
 AMDGPUSubtarget::AMDGPUSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
                                  TargetMachine &TM)
-    : AMDGPUGenSubtargetInfo(TT, GPU, FS), DevName(GPU), Is64bit(false),
+    : AMDGPUGenSubtargetInfo(TT, GPU, FS), DevName(GPU),
       DumpCode(false), R600ALUInst(false), HasVertexCache(false),
       TexVTXClauseSize(0), Gen(AMDGPUSubtarget::R600), FP64(false),
       FP64Denormals(false), FP32Denormals(false), FastFMAF32(false),
-      CaymanISA(false), FlatAddressSpace(false), FlatForGlobal(false),
-      EnableIRStructurizer(true), EnablePromoteAlloca(false), EnableIfCvt(true),
-      EnableLoadStoreOpt(false), EnableUnsafeDSOffsetFolding(false),
+      HalfRate64Ops(false), CaymanISA(false), FlatAddressSpace(false),
+      FlatForGlobal(false), EnableIRStructurizer(true),
+      EnablePromoteAlloca(false),
+      EnableIfCvt(true), EnableLoadStoreOpt(false),
+      EnableUnsafeDSOffsetFolding(false),
       EnableXNACK(false),
-      WavefrontSize(0), CFALUBug(false), LocalMemorySize(0),
+      WavefrontSize(0), CFALUBug(false),
+      LocalMemorySize(0),
       EnableVGPRSpilling(false), SGPRInitBug(false), IsGCN(false),
       GCN1Encoding(false), GCN3Encoding(false), CIInsts(false), LDSBankCount(0),
       IsaVersion(ISAVersion0_0_0), EnableHugeScratchBuffer(false),
-      FrameLowering(nullptr),
+      EnableSIScheduler(false), FrameLowering(nullptr),
       InstrItins(getInstrItineraryForCPU(GPU)), TargetTriple(TT) {
 
   initializeSubtargetDependencies(TT, GPU, FS);

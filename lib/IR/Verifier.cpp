@@ -217,6 +217,12 @@ class Verifier : public InstVisitor<Verifier>, VerifierSupport {
   /// Cache of constants visited in search of ConstantExprs.
   SmallPtrSet<const Constant *, 32> ConstantExprVisited;
 
+  // Verify that this GlobalValue is only used in this module.
+  // This map is used to avoid visiting uses twice. We can arrive at a user
+  // twice, if they have multiple operands. In particular for very large
+  // constant expressions, we can arrive at a particular user many times.
+  SmallPtrSet<const Value *, 32> GlobalValueVisited;
+
   void checkAtomicMemAccessSize(const Module *M, Type *Ty,
                                 const Instruction *I);
 public:
@@ -470,7 +476,7 @@ static void forEachUser(const Value *User,
                         llvm::function_ref<bool(const Value *)> Callback) {
   if (!Visited.insert(User).second)
     return;
-  for (const Value *TheNextUser : User->users())
+  for (const Value *TheNextUser : User->materialized_users())
     if (Callback(TheNextUser))
       forEachUser(TheNextUser, Visited, Callback);
 }
@@ -494,12 +500,7 @@ void Verifier::visitGlobalValue(const GlobalValue &GV) {
   if (GV.isDeclarationForLinker())
     Assert(!GV.hasComdat(), "Declaration may not be in a Comdat!", &GV);
 
-  // Verify that this GlobalValue is only used in this module.
-  // This map is used to avoid visiting uses twice. We can arrive at a user
-  // twice, if they have multiple operands. In particular for very large
-  // constant expressions, we can arrive at a particular user many times.
-  SmallPtrSet<const Value *, 32> Visited;
-  forEachUser(&GV, Visited, [&](const Value *V) -> bool {
+  forEachUser(&GV, GlobalValueVisited, [&](const Value *V) -> bool {
     if (const Instruction *I = dyn_cast<Instruction>(V)) {
       if (!I->getParent() || !I->getParent()->getParent())
         CheckFailed("Global is referenced by parentless instruction!", &GV,
@@ -521,7 +522,7 @@ void Verifier::visitGlobalValue(const GlobalValue &GV) {
 
 void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
   if (GV.hasInitializer()) {
-    Assert(GV.getInitializer()->getType() == GV.getType()->getElementType(),
+    Assert(GV.getInitializer()->getType() == GV.getValueType(),
            "Global variable initializer type does not match global "
            "variable type!",
            &GV);
@@ -1944,7 +1945,9 @@ void Verifier::visitFunction(const Function &F) {
 
   // If this function is actually an intrinsic, verify that it is only used in
   // direct call/invokes, never having its "address taken".
-  if (F.getIntrinsicID()) {
+  // Only do this if the module is materialized, otherwise we don't have all the
+  // uses.
+  if (F.getIntrinsicID() && F.getParent()->isMaterialized()) {
     const User *U;
     if (F.hasAddressTaken(&U))
       Assert(0, "Invalid user of intrinsic instruction!", U);
@@ -2510,17 +2513,21 @@ void Verifier::VerifyCallSite(CallSite CS) {
     if (Intrinsic::ID ID = (Intrinsic::ID)F->getIntrinsicID())
       visitIntrinsicCallSite(ID, CS);
 
-  // Verify that a callsite has at most one "deopt" and one "funclet" operand
-  // bundle.
-  bool FoundDeoptBundle = false, FoundFuncletBundle = false;
+  // Verify that a callsite has at most one "deopt", at most one "funclet" and
+  // at most one "gc-transition" operand bundle.
+  bool FoundDeoptBundle = false, FoundFuncletBundle = false,
+       FoundGCTransitionBundle = false;
   for (unsigned i = 0, e = CS.getNumOperandBundles(); i < e; ++i) {
     OperandBundleUse BU = CS.getOperandBundleAt(i);
     uint32_t Tag = BU.getTagID();
     if (Tag == LLVMContext::OB_deopt) {
       Assert(!FoundDeoptBundle, "Multiple deopt operand bundles", I);
       FoundDeoptBundle = true;
-    }
-    if (Tag == LLVMContext::OB_funclet) {
+    } else if (Tag == LLVMContext::OB_gc_transition) {
+      Assert(!FoundGCTransitionBundle, "Multiple gc-transition operand bundles",
+             I);
+      FoundGCTransitionBundle = true;
+    } else if (Tag == LLVMContext::OB_funclet) {
       Assert(!FoundFuncletBundle, "Multiple funclet operand bundles", I);
       FoundFuncletBundle = true;
       Assert(BU.Inputs.size() == 1,

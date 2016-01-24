@@ -637,7 +637,7 @@ static bool isObjectSizeLessThanOrEq(Value *V, uint64_t MaxSize,
       if (!GV->hasDefinitiveInitializer() || !GV->isConstant())
         return false;
 
-      uint64_t InitSize = DL.getTypeAllocSize(GV->getType()->getElementType());
+      uint64_t InitSize = DL.getTypeAllocSize(GV->getValueType());
       if (InitSize > MaxSize)
         return false;
       continue;
@@ -694,10 +694,8 @@ static bool canReplaceGEPIdxWithZero(InstCombiner &IC, GetElementPtrInst *GEPI,
     return false;
 
   SmallVector<Value *, 4> Ops(GEPI->idx_begin(), GEPI->idx_begin() + Idx);
-  Type *AllocTy = GetElementPtrInst::getIndexedType(
-      cast<PointerType>(GEPI->getOperand(0)->getType()->getScalarType())
-          ->getElementType(),
-      Ops);
+  Type *AllocTy =
+    GetElementPtrInst::getIndexedType(GEPI->getSourceElementType(), Ops);
   if (!AllocTy || !AllocTy->isSized())
     return false;
   const DataLayout &DL = IC.getDataLayout();
@@ -793,7 +791,7 @@ Instruction *InstCombiner::visitLoadInst(LoadInst &LI) {
   BasicBlock::iterator BBI(LI);
   AAMDNodes AATags;
   if (Value *AvailableVal =
-      FindAvailableLoadedValue(Op, LI.getParent(), BBI,
+      FindAvailableLoadedValue(&LI, LI.getParent(), BBI,
                                DefMaxInstsToScan, AA, &AATags)) {
     if (LoadInst *NLI = dyn_cast<LoadInst>(AvailableVal)) {
       unsigned KnownIDs[] = {

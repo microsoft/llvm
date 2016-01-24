@@ -2537,7 +2537,7 @@ std::error_code BitcodeReader::parseConstants() {
       return error("Malformed block");
     case BitstreamEntry::EndBlock:
       if (NextCstNo != ValueList.size())
-        return error("Invalid ronstant reference");
+        return error("Invalid constant reference");
 
       // Once all the constants have been read, go through and resolve forward
       // references.
@@ -3022,7 +3022,7 @@ std::error_code BitcodeReader::parseUseLists() {
         V = ValueList[ID];
       unsigned NumUses = 0;
       SmallDenseMap<const Use *, unsigned, 16> Order;
-      for (const Use &U : V->uses()) {
+      for (const Use &U : V->materialized_uses()) {
         if (++NumUses > Record.size())
           break;
         Order[&U] = Record[NumUses - 1];
@@ -3081,9 +3081,11 @@ void BitcodeReader::saveMetadataList(
     if (!OnlyTempMD || (N && N->isTemporary())) {
       // Will call this after materializing each function, in order to
       // handle remapping of the function's instructions/metadata.
+      auto IterBool = MetadataToIDs.insert(std::make_pair(MD, ID));
       // See if we already have an entry in that case.
-      if (OnlyTempMD && MetadataToIDs.count(MD)) {
-        assert(MetadataToIDs[MD] == ID && "Inconsistent metadata value id");
+      if (OnlyTempMD && !IterBool.second) {
+        assert(IterBool.first->second == ID &&
+               "Inconsistent metadata value id");
         continue;
       }
       if (N && N->isTemporary())
@@ -3091,7 +3093,6 @@ void BitcodeReader::saveMetadataList(
         // metadata while it is the key of a map. The flag will be set back
         // to true when the saved metadata list is destroyed.
         N->setCanReplace(false);
-      MetadataToIDs[MD] = ID;
     }
   }
 }
@@ -5267,7 +5268,8 @@ std::error_code BitcodeReader::materialize(GlobalValue *GV) {
 
   // Upgrade any old intrinsic calls in the function.
   for (auto &I : UpgradedIntrinsics) {
-    for (auto UI = I.first->user_begin(), UE = I.first->user_end(); UI != UE;) {
+    for (auto UI = I.first->materialized_user_begin(), UE = I.first->user_end();
+         UI != UE;) {
       User *U = *UI;
       ++UI;
       if (CallInst *CI = dyn_cast<CallInst>(U))

@@ -812,6 +812,11 @@ bool NVPTXAsmPrinter::doInitialization(Module &M) {
   const NVPTXTargetMachine &NTM = static_cast<const NVPTXTargetMachine &>(TM);
   const NVPTXSubtarget STI(TT, CPU, FS, NTM);
 
+  if (M.alias_size()) {
+    report_fatal_error("Module has aliases, which NVPTX does not support.");
+    return true; // error
+  }
+
   SmallString<128> Str1;
   raw_svector_ostream OS1(Str1);
 
@@ -1030,7 +1035,7 @@ void NVPTXAsmPrinter::printModuleLevelGV(const GlobalVariable *GVar,
 
   // GlobalVariables are always constant pointers themselves.
   PointerType *PTy = GVar->getType();
-  Type *ETy = PTy->getElementType();
+  Type *ETy = GVar->getValueType();
 
   if (GVar->hasExternalLinkage()) {
     if (GVar->hasInitializer())
@@ -1341,11 +1346,10 @@ void NVPTXAsmPrinter::emitPTXGlobalVariable(const GlobalVariable *GVar,
   const DataLayout &DL = getDataLayout();
 
   // GlobalVariables are always constant pointers themselves.
-  PointerType *PTy = GVar->getType();
-  Type *ETy = PTy->getElementType();
+  Type *ETy = GVar->getValueType();
 
   O << ".";
-  emitPTXAddressSpace(PTy->getAddressSpace(), O);
+  emitPTXAddressSpace(GVar->getType()->getAddressSpace(), O);
   if (GVar->getAlignment() == 0)
     O << " .align " << (int)DL.getPrefTypeAlignment(ETy);
   else
@@ -1428,6 +1432,11 @@ void NVPTXAsmPrinter::emitFunctionParamList(const Function *F, raw_ostream &O) {
   bool isKernelFunc = llvm::isKernelFunction(*F);
   bool isABI = (nvptxSubtarget->getSmVersion() >= 20);
   MVT thePointerTy = TLI->getPointerTy(DL);
+
+  if (F->arg_empty()) {
+    O << "()\n";
+    return;
+  }
 
   O << "(\n";
 
@@ -1715,9 +1724,8 @@ void NVPTXAsmPrinter::printScalarConstant(const Constant *CPV, raw_ostream &O) {
     return;
   }
   if (const GlobalValue *GVar = dyn_cast<GlobalValue>(CPV)) {
-    PointerType *PTy = dyn_cast<PointerType>(GVar->getType());
     bool IsNonGenericPointer = false;
-    if (PTy && PTy->getAddressSpace() != 0) {
+    if (GVar->getType()->getAddressSpace() != 0) {
       IsNonGenericPointer = true;
     }
     if (EmitGeneric && !isa<Function>(CPV) && !IsNonGenericPointer) {

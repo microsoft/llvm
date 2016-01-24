@@ -100,13 +100,18 @@ static const char *FlagValue(const char *Param, const char *Name) {
 // Avoid calling stol as it triggers a bug in clang/glibc build.
 static long MyStol(const char *Str) {
   long Res = 0;
+  long Sign = 1;
+  if (*Str == '-') {
+    Str++;
+    Sign = -1;
+  }
   for (size_t i = 0; Str[i]; i++) {
     char Ch = Str[i];
     if (Ch < '0' || Ch > '9')
       return Res;
     Res = Res * 10 + (Ch - '0');
   }
-  return Res;
+  return Res * Sign;
 }
 
 static bool ParseOneFlag(const char *Param) {
@@ -223,7 +228,7 @@ int RunOneTest(Fuzzer *F, const char *InputFilePath) {
 }
 
 int FuzzerDriver(int argc, char **argv, UserCallback Callback) {
-  FuzzerRandomLibc Rand(0);
+  FuzzerRandom_mt19937 Rand(0);
   SimpleUserSuppliedFuzzer SUSF(&Rand, Callback);
   return FuzzerDriver(argc, argv, SUSF);
 }
@@ -234,7 +239,7 @@ int FuzzerDriver(int argc, char **argv, UserSuppliedFuzzer &USF) {
 }
 
 int FuzzerDriver(const std::vector<std::string> &Args, UserCallback Callback) {
-  FuzzerRandomLibc Rand(0);
+  FuzzerRandom_mt19937 Rand(0);
   SimpleUserSuppliedFuzzer SUSF(&Rand, Callback);
   return FuzzerDriver(Args, SUSF);
 }
@@ -263,6 +268,7 @@ int FuzzerDriver(const std::vector<std::string> &Args,
   Options.Verbosity = Flags.verbosity;
   Options.MaxLen = Flags.max_len;
   Options.UnitTimeoutSec = Flags.timeout;
+  Options.AbortOnTimeout = Flags.abort_on_timeout;
   Options.MaxTotalTimeSec = Flags.max_total_time;
   Options.DoCrossOver = Flags.cross_over;
   Options.MutateDepth = Flags.mutate_depth;
@@ -301,7 +307,8 @@ int FuzzerDriver(const std::vector<std::string> &Args,
   Fuzzer F(USF, Options);
 
   for (auto &U: Dictionary)
-    USF.GetMD().AddWordToManualDictionary(U);
+    if (U.size() <= Word::GetMaxSize())
+      USF.GetMD().AddWordToManualDictionary(Word(U.data(), U.size()));
 
   // Timer
   if (Flags.timeout > 0)
@@ -325,7 +332,8 @@ int FuzzerDriver(const std::vector<std::string> &Args,
   unsigned Seed = Flags.seed;
   // Initialize Seed.
   if (Seed == 0)
-    Seed = time(0) * 10000 + getpid();
+    Seed = (std::chrono::system_clock::now().time_since_epoch().count() << 10) +
+           getpid();
   if (Flags.verbosity)
     Printf("Seed: %u\n", Seed);
   USF.GetRand().ResetSeed(Seed);

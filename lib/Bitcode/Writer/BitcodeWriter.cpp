@@ -2111,7 +2111,7 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
   case Instruction::AtomicCmpXchg:
     Code = bitc::FUNC_CODE_INST_CMPXCHG;
     PushValueAndType(I.getOperand(0), InstID, Vals, VE);  // ptrty + ptr
-    PushValueAndType(I.getOperand(1), InstID, Vals, VE);         // cmp.
+    PushValueAndType(I.getOperand(1), InstID, Vals, VE);  // cmp.
     pushValue(I.getOperand(2), InstID, Vals, VE);         // newval.
     Vals.push_back(cast<AtomicCmpXchgInst>(I).isVolatile());
     Vals.push_back(GetEncodedOrdering(
@@ -3045,7 +3045,7 @@ void llvm::WriteBitcodeToFile(const Module *M, raw_ostream &Out,
   // If this is darwin or another generic macho target, reserve space for the
   // header.
   Triple TT(M->getTargetTriple());
-  if (TT.isOSDarwin())
+  if (TT.isOSDarwin() || TT.isOSBinFormatMachO())
     Buffer.insert(Buffer.begin(), DarwinBCHeaderSize, 0);
 
   // Emit the module into the buffer.
@@ -3067,7 +3067,7 @@ void llvm::WriteBitcodeToFile(const Module *M, raw_ostream &Out,
                 EmitFunctionSummary);
   }
 
-  if (TT.isOSDarwin())
+  if (TT.isOSDarwin() || TT.isOSBinFormatMachO())
     EmitDarwinBCHeaderAndTrailer(Buffer, TT);
 
   // Write the generated bitstream to "Out".

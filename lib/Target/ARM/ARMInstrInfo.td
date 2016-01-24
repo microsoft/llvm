@@ -272,9 +272,6 @@ def HasVirtualization: Predicate<"false">,
 def HasTrustZone     : Predicate<"Subtarget->hasTrustZone()">,
                                  AssemblerPredicate<"FeatureTrustZone",
                                                     "TrustZone">;
-def Has8MSecExt      : Predicate<"Subtarget->has8MSecExt()">,
-                                 AssemblerPredicate<"Feature8MSecExt",
-                                                    "ARMv8-M Security Extensions">;
 def HasZCZ           : Predicate<"Subtarget->hasZeroCycleZeroing()">;
 def UseNEONForFP     : Predicate<"Subtarget->useNEONForSinglePrecisionFP()">;
 def DontUseNEONForFP : Predicate<"!Subtarget->useNEONForSinglePrecisionFP()">;
@@ -5598,13 +5595,13 @@ def : MnemonicAlias<"stmfd", "stmdb">;
 def : MnemonicAlias<"stmia", "stm">;
 def : MnemonicAlias<"stmea", "stm">;
 
-// PKHBT/PKHTB with default shift amount. PKHTB is equivalent to PKHBT when the
-// shift amount is zero (i.e., unspecified).
+// PKHBT/PKHTB with default shift amount. PKHTB is equivalent to PKHBT with the
+// input operands swapped when the shift amount is zero (i.e., unspecified).
 def : InstAlias<"pkhbt${p} $Rd, $Rn, $Rm",
                 (PKHBT GPRnopc:$Rd, GPRnopc:$Rn, GPRnopc:$Rm, 0, pred:$p)>,
         Requires<[IsARM, HasV6]>;
 def : InstAlias<"pkhtb${p} $Rd, $Rn, $Rm",
-                (PKHBT GPRnopc:$Rd, GPRnopc:$Rn, GPRnopc:$Rm, 0, pred:$p)>,
+                (PKHBT GPRnopc:$Rd, GPRnopc:$Rm, GPRnopc:$Rn, 0, pred:$p)>,
         Requires<[IsARM, HasV6]>;
 
 // PUSH/POP aliases for STM/LDM

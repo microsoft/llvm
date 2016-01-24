@@ -91,10 +91,12 @@ inline StringRef getCoverageMappingVarName() {
 }
 
 /// Return the name of the internal variable recording the array
-/// of PGO name vars referenced by the coverage mapping, The owning
+/// of PGO name vars referenced by the coverage mapping. The owning
 /// functions of those names are not emitted by FE (e.g, unused inline
 /// functions.)
-inline StringRef getCoverageNamesVarName() { return "__llvm_coverage_names"; }
+inline StringRef getCoverageUnusedNamesVarName() {
+  return "__llvm_coverage_names";
+}
 
 /// Return the name of function that registers all the per-function control
 /// data at program startup time by calling __llvm_register_function. This
@@ -186,10 +188,8 @@ int collectPGOFuncNameStrings(const std::vector<GlobalVariable *> &NameVars,
                               std::string &Result);
 class InstrProfSymtab;
 /// \c NameStrings is a string composed of one of more sub-strings encoded in
-/// the
-/// format described above. The substrings are seperated by 0 or more zero
-/// bytes.
-/// This method decodes the string and populates the \c Symtab.
+/// the format described above. The substrings are seperated by 0 or more zero
+/// bytes. This method decodes the string and populates the \c Symtab.
 int readPGOFuncNameStrings(StringRef NameStrings, InstrProfSymtab &Symtab);
 
 const std::error_category &instrprof_category();
@@ -261,17 +261,23 @@ public:
   InstrProfSymtab() : Data(), Address(0), HashNameMap(), AddrToMD5Map() {}
 
   /// Create InstrProfSymtab from an object file section which
-  /// contains function PGO names that are uncompressed.
-  /// This interface is used by CoverageMappingReader.
+  /// contains function PGO names. When section may contain raw 
+  /// string data or string data in compressed form. This method
+  /// only initialize the symtab with reference to the data and
+  /// the section base address. The decompression will be delayed
+  /// until before it is used. See also \c create(StringRef) method.
   std::error_code create(object::SectionRef &Section);
   /// This interface is used by reader of CoverageMapping test
   /// format.
   inline std::error_code create(StringRef D, uint64_t BaseAddr);
   /// \c NameStrings is a string composed of one of more sub-strings
-  ///  encoded in the format described above. The substrings are
-  /// seperated by 0 or more zero bytes. This method decodes the
-  /// string and populates the \c Symtab.
+  ///  encoded in the format described in \c collectPGOFuncNameStrings.
+  /// This method is a wrapper to \c readPGOFuncNameStrings method.
   inline std::error_code create(StringRef NameStrings);
+  /// A wrapper interface to populate the PGO symtab with functions
+  /// decls from module \c M. This interface is used by transformation
+  /// passes such as indirect function call promotion.
+  void create(const Module &M);
   /// Create InstrProfSymtab from a set of names iteratable from
   /// \p IterRange. This interface is used by IndexedProfReader.
   template <typename NameIterRange> void create(const NameIterRange &IterRange);
@@ -299,6 +305,12 @@ public:
   /// Return function's PGO name from the name's md5 hash value.
   /// If not found, return an empty string.
   inline StringRef getFuncName(uint64_t FuncMD5Hash);
+  /// Return the function's original assembly name by stripping off
+  /// the prefix attached (to symbols with priviate linkage). For
+  /// global functions, it returns the same string as getFuncName.
+  inline StringRef getOrigFuncName(uint64_t FuncMD5Hash);
+  /// Return the name section data.
+  inline StringRef getNameData() const { return Data; }
 };
 
 std::error_code InstrProfSymtab::create(StringRef D, uint64_t BaseAddr) {
@@ -338,6 +350,16 @@ StringRef InstrProfSymtab::getFuncName(uint64_t FuncMD5Hash) {
   if (Result != HashNameMap.end())
     return Result->second;
   return StringRef();
+}
+
+// See also getPGOFuncName implementation. These two need to be
+// matched.
+StringRef InstrProfSymtab::getOrigFuncName(uint64_t FuncMD5Hash) {
+  StringRef PGOName = getFuncName(FuncMD5Hash);
+  size_t S = PGOName.find_first_of(':');
+  if (S == StringRef::npos)
+    return PGOName;
+  return PGOName.drop_front(S + 1);
 }
 
 struct InstrProfValueSiteRecord {
@@ -573,16 +595,16 @@ class ProfileSummary {
   std::vector<uint32_t> DetailedSummaryCutoffs;
   // Sum of all counts.
   uint64_t TotalCount;
-  uint64_t MaxBlockCount, MaxFunctionCount;
+  uint64_t MaxBlockCount, MaxInternalBlockCount, MaxFunctionCount;
   uint32_t NumBlocks, NumFunctions;
-  inline void addCount(uint64_t Count);
+  inline void addCount(uint64_t Count, bool IsEntry);
   void computeDetailedSummary();
 
 public:
   static const int Scale = 1000000;
   ProfileSummary(std::vector<uint32_t> Cutoffs)
       : DetailedSummaryCutoffs(Cutoffs), TotalCount(0), MaxBlockCount(0),
-        MaxFunctionCount(0), NumBlocks(0), NumFunctions(0) {}
+        MaxInternalBlockCount(0), MaxFunctionCount(0), NumBlocks(0), NumFunctions(0) {}
   inline void addRecord(const InstrProfRecord &);
   inline std::vector<ProfileSummaryEntry> &getDetailedSummary();
   uint32_t getNumBlocks() { return NumBlocks; }
@@ -590,13 +612,16 @@ public:
   uint32_t getNumFunctions() { return NumFunctions; }
   uint64_t getMaxFunctionCount() { return MaxFunctionCount; }
   uint64_t getMaxBlockCount() { return MaxBlockCount; }
+  uint64_t getMaxInternalBlockCount() { return MaxInternalBlockCount; }
 };
 
 // This is called when a count is seen in the profile.
-void ProfileSummary::addCount(uint64_t Count) {
+void ProfileSummary::addCount(uint64_t Count, bool IsEntry) {
   TotalCount += Count;
   if (Count > MaxBlockCount)
     MaxBlockCount = Count;
+  if (!IsEntry && Count > MaxInternalBlockCount)
+    MaxInternalBlockCount = Count;
   NumBlocks++;
   CountFrequencies[Count]++;
 }
@@ -606,8 +631,8 @@ void ProfileSummary::addRecord(const InstrProfRecord &R) {
   if (R.Counts[0] > MaxFunctionCount)
     MaxFunctionCount = R.Counts[0];
 
-  for (size_t I = 1, E = R.Counts.size(); I < E; ++I)
-    addCount(R.Counts[I]);
+  for (size_t I = 0, E = R.Counts.size(); I < E; ++I)
+    addCount(R.Counts[I], (I == 0));
 }
 
 std::vector<ProfileSummaryEntry> &ProfileSummary::getDetailedSummary() {
