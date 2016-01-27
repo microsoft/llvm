@@ -57,10 +57,6 @@ def int_r600_read_workdim : AMDGPUReadPreloadRegisterIntrinsic <
 
 // FIXME: These should be renamed/moved to r600
 let TargetPrefix = "AMDGPU" in {
-def int_AMDGPU_rsq_clamped :  Intrinsic<
-  [llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrNoMem]
->;
-
 def int_AMDGPU_ldexp : Intrinsic<
   [llvm_anyfloat_ty], [LLVMMatchType<0>, llvm_i32_ty], [IntrNoMem]
 >;
@@ -112,6 +108,26 @@ def int_amdgcn_ldexp : Intrinsic<
 
 def int_amdgcn_class : Intrinsic<
   [llvm_i1_ty], [llvm_anyfloat_ty, llvm_i32_ty], [IntrNoMem]
+>;
+
+def int_amdgcn_cubeid : GCCBuiltin<"__builtin_amdgcn_cubeid">,
+  Intrinsic<[llvm_float_ty],
+    [llvm_float_ty, llvm_float_ty, llvm_float_ty], [IntrNoMem]
+>;
+
+def int_amdgcn_cubema : GCCBuiltin<"__builtin_amdgcn_cubema">,
+  Intrinsic<[llvm_float_ty],
+  [llvm_float_ty, llvm_float_ty, llvm_float_ty], [IntrNoMem]
+>;
+
+def int_amdgcn_cubesc : GCCBuiltin<"__builtin_amdgcn_cubesc">,
+  Intrinsic<[llvm_float_ty],
+    [llvm_float_ty, llvm_float_ty, llvm_float_ty], [IntrNoMem]
+>;
+
+def int_amdgcn_cubetc : GCCBuiltin<"__builtin_amdgcn_cubetc">,
+  Intrinsic<[llvm_float_ty],
+    [llvm_float_ty, llvm_float_ty, llvm_float_ty], [IntrNoMem]
 >;
 
 def int_amdgcn_read_workdim : AMDGPUReadPreloadRegisterIntrinsic <

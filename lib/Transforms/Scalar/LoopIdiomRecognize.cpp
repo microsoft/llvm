@@ -548,21 +548,10 @@ bool LoopIdiomRecognize::processLoopStores(SmallVectorImpl<StoreInst *> &SL,
 
       if (isConsecutiveAccess(SL[i], SL[k], *DL, *SE, false)) {
         if (ForMemset) {
-          ConstantInt *C1 = dyn_cast<ConstantInt>(FirstSplatValue);
-          ConstantInt *C2 = dyn_cast<ConstantInt>(SecondSplatValue);
-          if (!C1 || !C2 || C1 != C2)
+          if (FirstSplatValue != SecondSplatValue)
             continue;
         } else {
-          Constant *C1 = FirstPatternValue;
-          Constant *C2 = SecondPatternValue;
-
-          if (ConstantArray *CA1 = dyn_cast<ConstantArray>(C1))
-            C1 = CA1->getSplatValue();
-
-          if (ConstantArray *CA2 = dyn_cast<ConstantArray>(C2))
-            C2 = CA2->getSplatValue();
-
-          if (C1 != C2)
+          if (FirstPatternValue != SecondPatternValue)
             continue;
         }
         Tails.insert(SL[k]);
