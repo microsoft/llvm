@@ -1615,33 +1615,29 @@ makeStatepointExplicitImpl(const CallSite CS, /* to replace */
   CreateGCRelocates(LiveVariables, LiveStartIdx, BasePtrs, Token, Builder);
 }
 
-namespace {
-struct NameOrdering {
-  Value *Base;
-  Value *Derived;
-
-  bool operator()(NameOrdering const &a, NameOrdering const &b) {
-    return -1 == a.Derived->getName().compare(b.Derived->getName());
-  }
-};
-}
-
 static void StabilizeOrder(SmallVectorImpl<Value *> &BaseVec,
                            SmallVectorImpl<Value *> &LiveVec) {
   assert(BaseVec.size() == LiveVec.size());
 
-  SmallVector<NameOrdering, 64> Temp;
-  for (size_t i = 0; i < BaseVec.size(); i++) {
-    NameOrdering v;
-    v.Base = BaseVec[i];
-    v.Derived = LiveVec[i];
-    Temp.push_back(v);
-  }
+  struct BaseDerivedPair {
+    Value *Base;
+    Value *Derived;
+  };
 
-  std::sort(Temp.begin(), Temp.end(), NameOrdering());
+  SmallVector<BaseDerivedPair, 64> NameOrdering;
+  NameOrdering.reserve(BaseVec.size());
+
+  for (size_t i = 0, e = BaseVec.size(); i < e; i++)
+    NameOrdering.push_back({BaseVec[i], LiveVec[i]});
+
+  std::sort(NameOrdering.begin(), NameOrdering.end(),
+            [](const BaseDerivedPair &L, const BaseDerivedPair &R) {
+              return L.Derived->getName() < R.Derived->getName();
+            });
+
   for (size_t i = 0; i < BaseVec.size(); i++) {
-    BaseVec[i] = Temp[i].Base;
-    LiveVec[i] = Temp[i].Derived;
+    BaseVec[i] = NameOrdering[i].Base;
+    LiveVec[i] = NameOrdering[i].Derived;
   }
 }
 
@@ -1694,7 +1690,7 @@ insertRelocationStores(iterator_range<Value::user_iterator> GCRelocs,
     if (!Relocate)
       continue;
 
-    Value *OriginalValue = const_cast<Value *>(Relocate->getDerivedPtr());
+    Value *OriginalValue = Relocate->getDerivedPtr();
     assert(AllocaMap.count(OriginalValue));
     Value *Alloca = AllocaMap[OriginalValue];
 
@@ -2825,7 +2821,7 @@ static void checkBasicSSA(DominatorTree &DT, GCPtrLivenessData &Data,
 static void computeLiveInValues(DominatorTree &DT, Function &F,
                                 GCPtrLivenessData &Data) {
 
-  SmallSetVector<BasicBlock *, 200> Worklist;
+  SmallSetVector<BasicBlock *, 32> Worklist;
   auto AddPredsToWorklist = [&](BasicBlock *BB) {
     // We use a SetVector so that we don't have duplicates in the worklist.
     Worklist.insert(pred_begin(BB), pred_end(BB));

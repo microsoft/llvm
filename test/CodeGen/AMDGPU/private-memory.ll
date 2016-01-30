@@ -1,4 +1,3 @@
-; RUN: llc -march=r600 -mcpu=redwood < %s | FileCheck %s -check-prefix=R600 -check-prefix=FUNC
 ; RUN: llc -show-mc-encoding -mattr=+promote-alloca -verify-machineinstrs -march=amdgcn -mcpu=SI < %s | FileCheck %s -check-prefix=SI-PROMOTE -check-prefix=SI -check-prefix=FUNC
 ; RUN: llc -show-mc-encoding -mattr=+promote-alloca -verify-machineinstrs -mtriple=amdgcn--amdhsa -mcpu=kaveri < %s | FileCheck %s -check-prefix=SI-PROMOTE -check-prefix=SI -check-prefix=FUNC -check-prefix=HSA-PROMOTE
 ; RUN: llc -show-mc-encoding -mattr=-promote-alloca -verify-machineinstrs -march=amdgcn -mcpu=SI < %s | FileCheck %s -check-prefix=SI-ALLOCA -check-prefix=SI -check-prefix=FUNC
@@ -6,7 +5,10 @@
 ; RUN: llc -show-mc-encoding -mattr=+promote-alloca -verify-machineinstrs -march=amdgcn -mcpu=tonga < %s | FileCheck %s -check-prefix=SI-PROMOTE -check-prefix=SI -check-prefix=FUNC
 ; RUN: llc -show-mc-encoding -mattr=-promote-alloca -verify-machineinstrs -march=amdgcn -mcpu=tonga < %s | FileCheck %s -check-prefix=SI-ALLOCA -check-prefix=SI -check-prefix=FUNC
 
-declare i32 @llvm.r600.read.tidig.x() nounwind readnone
+; RUN: opt -S -mtriple=amdgcn-unknown-amdhsa -mcpu=kaveri -amdgpu-promote-alloca < %s | FileCheck -check-prefix=HSAOPT %s
+; RUN: opt -S -mtriple=amdgcn-unknown-unknown -mcpu=kaveri -amdgpu-promote-alloca < %s | FileCheck -check-prefix=NOHSAOPT %s
+
+declare i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
 
 ; FUNC-LABEL: {{^}}mova_same_clause:
 
@@ -18,6 +20,10 @@ declare i32 @llvm.r600.read.tidig.x() nounwind readnone
 ; HSA-PROMOTE: .amd_kernel_code_t
 ; HSA-PROMOTE: workgroup_group_segment_byte_size = 5120
 ; HSA-PROMOTE: .end_amd_kernel_code_t
+
+; FIXME: These should be merged
+; HSA-PROMOTE: s_load_dword s{{[0-9]+}}, s[4:5], 0x1
+; HSA-PROMOTE: s_load_dword s{{[0-9]+}}, s[4:5], 0x2
 
 ; SI-PROMOTE: ds_write_b32
 ; SI-PROMOTE: ds_write_b32
@@ -32,6 +38,25 @@ declare i32 @llvm.r600.read.tidig.x() nounwind readnone
 
 ; SI-ALLOCA: buffer_store_dword v{{[0-9]+}}, v{{[0-9]+}}, s[{{[0-9]+:[0-9]+}}], s{{[0-9]+}} offen ; encoding: [0x00,0x10,0x70,0xe0
 ; SI-ALLOCA: buffer_store_dword v{{[0-9]+}}, v{{[0-9]+}}, s[{{[0-9]+:[0-9]+}}], s{{[0-9]+}} offen ; encoding: [0x00,0x10,0x70,0xe0
+
+
+; HSAOPT: [[DISPATCH_PTR:%[0-9]+]] = call noalias nonnull dereferenceable(64) i8 addrspace(2)* @llvm.amdgcn.dispatch.ptr()
+; HSAOPT: [[CAST_DISPATCH_PTR:%[0-9]+]] = bitcast i8 addrspace(2)* [[DISPATCH_PTR]] to i32 addrspace(2)*
+; HSAOPT: [[GEP0:%[0-9]+]] = getelementptr inbounds i32, i32 addrspace(2)* [[CAST_DISPATCH_PTR]], i64 1
+; HSAOPT: [[LDXY:%[0-9]+]] = load i32, i32 addrspace(2)* [[GEP0]], align 4, !invariant.load !0
+; HSAOPT: [[GEP1:%[0-9]+]] = getelementptr inbounds i32, i32 addrspace(2)* [[CAST_DISPATCH_PTR]], i64 2
+; HSAOPT: [[LDZU:%[0-9]+]] = load i32, i32 addrspace(2)* [[GEP1]], align 4, !range !1, !invariant.load !0
+; HSAOPT: [[EXTRACTY:%[0-9]+]] = lshr i32 [[LDXY]], 16
+
+; HSAOPT: call i32 @llvm.amdgcn.workitem.id.x(), !range !1
+; HSAOPT: call i32 @llvm.amdgcn.workitem.id.y(), !range !1
+; HSAOPT: call i32 @llvm.amdgcn.workitem.id.z(), !range !1
+
+; NOHSAOPT: call i32 @llvm.r600.read.local.size.y(), !range !0
+; NOHSAOPT: call i32 @llvm.r600.read.local.size.z(), !range !0
+; NOHSAOPT: call i32 @llvm.amdgcn.workitem.id.x(), !range !0
+; NOHSAOPT: call i32 @llvm.amdgcn.workitem.id.y(), !range !0
+; NOHSAOPT: call i32 @llvm.amdgcn.workitem.id.z(), !range !0
 define void @mova_same_clause(i32 addrspace(1)* nocapture %out, i32 addrspace(1)* nocapture %in) {
 entry:
   %stack = alloca [5 x i32], align 4
@@ -185,7 +210,7 @@ entry:
   store i32 1, i32* %2
   %3 = getelementptr [2 x i32], [2 x i32]* %0, i32 0, i32 %in
   %4 = load i32, i32* %3
-  %5 = call i32 @llvm.r600.read.tidig.x()
+  %5 = call i32 @llvm.amdgcn.workitem.id.x()
   %6 = add i32 %4, %5
   store i32 %6, i32 addrspace(1)* %out
   ret void
@@ -323,3 +348,8 @@ define void @ptrtoint(i32 addrspace(1)* %out, i32 %a, i32 %b) {
   store i32 %tmp5, i32 addrspace(1)* %out
   ret void
 }
+
+; HSAOPT: !0 = !{}
+; HSAOPT: !1 = !{i32 0, i32 2048}
+
+; NOHSAOPT: !0 = !{i32 0, i32 2048}
