@@ -390,13 +390,17 @@ StatepointBase<FunTy, InstructionTy, ValueTy, CallSiteTy>::getRelocates()
     return Result;
 
   // We need to scan thorough exceptional relocations if it is invoke statepoint
-  LandingPadInst *LandingPad =
-      cast<InvokeInst>(getInstruction())->getLandingPadInst();
+  const InvokeInst *Invoke = cast<InvokeInst>(getInstruction());
+
+  // FIXME: Getting relocates on WinEH invokes needs to work too.
+  if (Invoke->getUnwindDest()->isLandingPad()) {
+    LandingPadInst *LandingPad = Invoke->getLandingPadInst();
 
   // Search for gc relocates that are attached to this landingpad.
-  for (const User *LandingPadUser : LandingPad->users()) {
-    if (auto *Relocate = dyn_cast<GCRelocateInst>(LandingPadUser))
-      Result.push_back(Relocate);
+    for (const User *LandingPadUser : LandingPad->users()) {
+      if (auto *Relocate = dyn_cast<GCRelocateInst>(LandingPadUser))
+        Result.push_back(Relocate);
+    }
   }
   return Result;
 }

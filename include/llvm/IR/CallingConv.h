@@ -75,6 +75,12 @@ namespace CallingConv {
     // CXX_FAST_TLS - Calling convention for access functions.
     CXX_FAST_TLS = 17,
 
+    // CLR Virtual Dispatch Stub - Calling convention used for CLR virtual dispatch stub calls
+    CLR_VirtualDispatchStub = 18,
+
+    // CLR Secret Parameter - Calling convention used for CLR calls that accept a secret parameter
+    CLR_SecretParameter = 19,
+
     // Target - This is the start of the target-specific calling conventions,
     // e.g. fastcall and thiscall on X86.
     FirstTargetCC = 64,
