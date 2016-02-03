@@ -594,6 +594,9 @@ void MCStreamer::EmitCOFFSectionIndex(MCSymbol const *Symbol) {
 void MCStreamer::EmitCOFFSecRel32(MCSymbol const *Symbol) {
 }
 
+void MCStreamer::EmitCOFFSecRel32Value(MCExpr const *Value) {
+}
+
 /// EmitRawText - If this file is backed by an assembly streamer, this dumps
 /// the specified string in the output .s file.  This capability is
 /// indicated by the hasRawTextSupport() predicate.
