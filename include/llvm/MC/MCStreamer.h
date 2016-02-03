@@ -458,6 +458,13 @@ public:
   /// \param Symbol - Symbol the section relative relocation should point to.
   virtual void EmitCOFFSecRel32(MCSymbol const *Symbol);
 
+  /// \brief Emits a COFF section relative relocation in form of an general 
+  /// (arithmetic) expression.
+  ///
+  /// \param Value - Symbol expression the section relative relocation should 
+  /// point to.
+  virtual void EmitCOFFSecRel32Value(MCExpr const *Value);
+
   /// \brief Emit an ELF .size directive.
   ///
   /// This corresponds to an assembler statement such as:
