@@ -15,6 +15,7 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCCodeView.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCExpr.h"
@@ -300,6 +301,10 @@ uint64_t MCAssembler::computeFragmentSize(const MCAsmLayout &Layout,
     return cast<MCDwarfLineAddrFragment>(F).getContents().size();
   case MCFragment::FT_DwarfFrame:
     return cast<MCDwarfCallFrameFragment>(F).getContents().size();
+  case MCFragment::FT_CVInlineLines:
+    return cast<MCCVInlineLineTableFragment>(F).getContents().size();
+  case MCFragment::FT_CVDefRange:
+    return cast<MCCVDefRangeFragment>(F).getContents().size();
   case MCFragment::FT_Dummy:
     llvm_unreachable("Should not have been added");
   }
@@ -537,6 +542,16 @@ static void writeFragment(const MCAssembler &Asm, const MCAsmLayout &Layout,
     OW->writeBytes(CF.getContents());
     break;
   }
+  case MCFragment::FT_CVInlineLines: {
+    const auto &OF = cast<MCCVInlineLineTableFragment>(F);
+    OW->writeBytes(OF.getContents());
+    break;
+  }
+  case MCFragment::FT_CVDefRange: {
+    const auto &DRF = cast<MCCVDefRangeFragment>(F);
+    OW->writeBytes(DRF.getContents());
+    break;
+  }
   case MCFragment::FT_Dummy:
     llvm_unreachable("Should not have been added");
   }
@@ -665,19 +680,24 @@ void MCAssembler::layout(MCAsmLayout &Layout) {
   // Evaluate and apply the fixups, generating relocation entries as necessary.
   for (MCSection &Sec : *this) {
     for (MCFragment &Frag : Sec) {
-      MCEncodedFragment *F = dyn_cast<MCEncodedFragment>(&Frag);
       // Data and relaxable fragments both have fixups.  So only process
       // those here.
       // FIXME: Is there a better way to do this?  MCEncodedFragmentWithFixups
       // being templated makes this tricky.
-      if (!F || isa<MCCompactEncodedInstFragment>(F))
+      if (isa<MCEncodedFragment>(&Frag) &&
+          isa<MCCompactEncodedInstFragment>(&Frag))
+        continue;
+      if (!isa<MCEncodedFragment>(&Frag) && !isa<MCCVDefRangeFragment>(&Frag))
         continue;
       ArrayRef<MCFixup> Fixups;
       MutableArrayRef<char> Contents;
-      if (auto *FragWithFixups = dyn_cast<MCDataFragment>(F)) {
+      if (auto *FragWithFixups = dyn_cast<MCDataFragment>(&Frag)) {
         Fixups = FragWithFixups->getFixups();
         Contents = FragWithFixups->getContents();
-      } else if (auto *FragWithFixups = dyn_cast<MCRelaxableFragment>(F)) {
+      } else if (auto *FragWithFixups = dyn_cast<MCRelaxableFragment>(&Frag)) {
+        Fixups = FragWithFixups->getFixups();
+        Contents = FragWithFixups->getContents();
+      } else if (auto *FragWithFixups = dyn_cast<MCCVDefRangeFragment>(&Frag)) {
         Fixups = FragWithFixups->getFixups();
         Contents = FragWithFixups->getContents();
       } else
@@ -685,7 +705,7 @@ void MCAssembler::layout(MCAsmLayout &Layout) {
       for (const MCFixup &Fixup : Fixups) {
         uint64_t FixedValue;
         bool IsPCRel;
-        std::tie(FixedValue, IsPCRel) = handleFixup(Layout, *F, Fixup);
+        std::tie(FixedValue, IsPCRel) = handleFixup(Layout, Frag, Fixup);
         getBackend().applyFixup(Fixup, Contents.data(),
                                 Contents.size(), FixedValue, IsPCRel);
       }
@@ -813,6 +833,20 @@ bool MCAssembler::relaxDwarfCallFrameFragment(MCAsmLayout &Layout,
   return OldSize != Data.size();
 }
 
+bool MCAssembler::relaxCVInlineLineTable(MCAsmLayout &Layout,
+                                         MCCVInlineLineTableFragment &F) {
+  unsigned OldSize = F.getContents().size();
+  getContext().getCVContext().encodeInlineLineTable(Layout, F);
+  return OldSize != F.getContents().size();
+}
+
+bool MCAssembler::relaxCVDefRange(MCAsmLayout &Layout,
+                                  MCCVDefRangeFragment &F) {
+  unsigned OldSize = F.getContents().size();
+  getContext().getCVContext().encodeDefRange(Layout, F);
+  return OldSize != F.getContents().size();
+}
+
 bool MCAssembler::layoutSectionOnce(MCAsmLayout &Layout, MCSection &Sec) {
   // Holds the first fragment which needed relaxing during this layout. It will
   // remain NULL if none were relaxed.
@@ -843,6 +877,13 @@ bool MCAssembler::layoutSectionOnce(MCAsmLayout &Layout, MCSection &Sec) {
       break;
     case MCFragment::FT_LEB:
       RelaxedFrag = relaxLEB(Layout, *cast<MCLEBFragment>(I));
+      break;
+    case MCFragment::FT_CVInlineLines:
+      RelaxedFrag =
+          relaxCVInlineLineTable(Layout, *cast<MCCVInlineLineTableFragment>(I));
+      break;
+    case MCFragment::FT_CVDefRange:
+      RelaxedFrag = relaxCVDefRange(Layout, *cast<MCCVDefRangeFragment>(I));
       break;
     }
     if (RelaxedFrag && !FirstRelaxedFragment)

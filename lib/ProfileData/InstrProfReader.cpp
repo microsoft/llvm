@@ -280,13 +280,12 @@ RawInstrProfReader<IntPtrT>::readNextHeader(const char *CurrentPos) {
 
 template <class IntPtrT>
 void RawInstrProfReader<IntPtrT>::createSymtab(InstrProfSymtab &Symtab) {
+  Symtab.create(StringRef(NamesStart, NamesSize));
   for (const RawInstrProf::ProfileData<IntPtrT> *I = Data; I != DataEnd; ++I) {
-    StringRef FunctionName(getName(I->NamePtr), swap(I->NameSize));
-    Symtab.addFuncName(FunctionName);
     const IntPtrT FPtr = swap(I->FunctionPointer);
     if (!FPtr)
       continue;
-    Symtab.mapAddress(FPtr, IndexedInstrProf::ComputeHash(FunctionName));
+    Symtab.mapAddress(FPtr, I->NameRef);
   }
   Symtab.finalizeSymtab();
 }
@@ -301,7 +300,7 @@ RawInstrProfReader<IntPtrT>::readHeader(const RawInstrProf::Header &Header) {
   NamesDelta = swap(Header.NamesDelta);
   auto DataSize = swap(Header.DataSize);
   auto CountersSize = swap(Header.CountersSize);
-  auto NamesSize = swap(Header.NamesSize);
+  NamesSize = swap(Header.NamesSize);
   auto ValueDataSize = swap(Header.ValueDataSize);
   ValueKindLast = swap(Header.ValueKindLast);
 
@@ -334,11 +333,7 @@ RawInstrProfReader<IntPtrT>::readHeader(const RawInstrProf::Header &Header) {
 
 template <class IntPtrT>
 std::error_code RawInstrProfReader<IntPtrT>::readName(InstrProfRecord &Record) {
-  Record.Name = StringRef(getName(Data->NamePtr), swap(Data->NameSize));
-  if (Record.Name.data() < NamesStart ||
-      Record.Name.data() + Record.Name.size() >
-          reinterpret_cast<const char *>(ValueDataStart))
-    return error(instrprof_error::malformed);
+  Record.Name = getName(Data->NameRef);
   return success();
 }
 
@@ -554,6 +549,41 @@ bool IndexedInstrProfReader::hasFormat(const MemoryBuffer &DataBuffer) {
   return Magic == IndexedInstrProf::Magic;
 }
 
+const unsigned char *
+IndexedInstrProfReader::readSummary(IndexedInstrProf::ProfVersion Version,
+                                    const unsigned char *Cur) {
+  using namespace support;
+  if (Version >= IndexedInstrProf::Version4) {
+    const IndexedInstrProf::Summary *SummaryInLE =
+        reinterpret_cast<const IndexedInstrProf::Summary *>(Cur);
+    uint64_t NFields =
+        endian::byte_swap<uint64_t, little>(SummaryInLE->NumSummaryFields);
+    uint64_t NEntries =
+        endian::byte_swap<uint64_t, little>(SummaryInLE->NumCutoffEntries);
+    uint32_t SummarySize =
+        IndexedInstrProf::Summary::getSize(NFields, NEntries);
+    std::unique_ptr<IndexedInstrProf::Summary> SummaryData =
+        IndexedInstrProf::allocSummary(SummarySize);
+
+    const uint64_t *Src = reinterpret_cast<const uint64_t *>(SummaryInLE);
+    uint64_t *Dst = reinterpret_cast<uint64_t *>(SummaryData.get());
+    for (unsigned I = 0; I < SummarySize / sizeof(uint64_t); I++)
+      Dst[I] = endian::byte_swap<uint64_t, little>(Src[I]);
+
+    // initialize ProfileSummary using the SummaryData from disk.
+    this->Summary = llvm::make_unique<ProfileSummary>(*(SummaryData.get()));
+    return Cur + SummarySize;
+  } else {
+    // For older version of profile data, we need to compute on the fly:
+    using namespace IndexedInstrProf;
+    std::vector<uint32_t> Cutoffs(&SummaryCutoffs[0],
+                                  &SummaryCutoffs[NumSummaryCutoffs]);
+    this->Summary = llvm::make_unique<ProfileSummary>(Cutoffs);
+    this->Summary->computeDetailedSummary();
+    return Cur;
+  }
+}
+
 std::error_code IndexedInstrProfReader::readHeader() {
   const unsigned char *Start =
       (const unsigned char *)DataBuffer->getBufferStart();
@@ -576,9 +606,7 @@ std::error_code IndexedInstrProfReader::readHeader() {
   if (FormatVersion > IndexedInstrProf::ProfVersion::CurrentVersion)
     return error(instrprof_error::unsupported_version);
 
-  // Read the maximal function count.
-  MaxFunctionCount =
-      endian::byte_swap<uint64_t, little>(Header->MaxFunctionCount);
+  Cur = readSummary((IndexedInstrProf::ProfVersion)FormatVersion, Cur);
 
   // Read the hash type and start offset.
   IndexedInstrProf::HashT HashType = static_cast<IndexedInstrProf::HashT>(

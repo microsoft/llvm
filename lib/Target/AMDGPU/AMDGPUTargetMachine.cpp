@@ -54,6 +54,7 @@ extern "C" void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPUAnnotateUniformValuesPass(*PR);
   initializeAMDGPUPromoteAllocaPass(*PR);
   initializeSIAnnotateControlFlowPass(*PR);
+  initializeSIInsertWaitsPass(*PR);
 }
 
 static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
@@ -123,20 +124,20 @@ AMDGPUTargetMachine::~AMDGPUTargetMachine() { }
 //===----------------------------------------------------------------------===//
 
 R600TargetMachine::R600TargetMachine(const Target &T, const Triple &TT,
-                                     StringRef FS, StringRef CPU,
+                                     StringRef CPU, StringRef FS,
                                      TargetOptions Options, Reloc::Model RM,
                                      CodeModel::Model CM, CodeGenOpt::Level OL)
-    : AMDGPUTargetMachine(T, TT, FS, CPU, Options, RM, CM, OL) {}
+    : AMDGPUTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL) {}
 
 //===----------------------------------------------------------------------===//
 // GCN Target Machine (SI+)
 //===----------------------------------------------------------------------===//
 
 GCNTargetMachine::GCNTargetMachine(const Target &T, const Triple &TT,
-                                   StringRef FS, StringRef CPU,
+                                   StringRef CPU, StringRef FS,
                                    TargetOptions Options, Reloc::Model RM,
                                    CodeModel::Model CM, CodeGenOpt::Level OL)
-    : AMDGPUTargetMachine(T, TT, FS, CPU, Options, RM, CM, OL) {}
+    : AMDGPUTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL) {}
 
 //===----------------------------------------------------------------------===//
 // AMDGPU Pass Setup
@@ -229,7 +230,7 @@ void AMDGPUPassConfig::addIRPasses() {
 void AMDGPUPassConfig::addCodeGenPrepare() {
   const AMDGPUTargetMachine &TM = getAMDGPUTargetMachine();
   const AMDGPUSubtarget &ST = *TM.getSubtargetImpl();
-  if (ST.isPromoteAllocaEnabled()) {
+  if (TM.getOptLevel() > CodeGenOpt::None && ST.isPromoteAllocaEnabled()) {
     addPass(createAMDGPUPromoteAlloca(&TM));
     addPass(createSROAPass());
   }
@@ -360,7 +361,7 @@ void GCNPassConfig::addPreSched2() {
 }
 
 void GCNPassConfig::addPreEmitPass() {
-  addPass(createSIInsertWaits(*TM), false);
+  addPass(createSIInsertWaitsPass(), false);
   addPass(createSILowerControlFlowPass(*TM), false);
 }
 

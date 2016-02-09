@@ -386,12 +386,21 @@ void MCObjectStreamer::EmitCVLinetableDirective(unsigned FunctionId,
 
 void MCObjectStreamer::EmitCVInlineLinetableDirective(
     unsigned PrimaryFunctionId, unsigned SourceFileId, unsigned SourceLineNum,
+    const MCSymbol *FnStartSym, const MCSymbol *FnEndSym,
     ArrayRef<unsigned> SecondaryFunctionIds) {
   getContext().getCVContext().emitInlineLineTableForFunction(
-      *this, PrimaryFunctionId, SourceFileId, SourceLineNum,
-      SecondaryFunctionIds);
+      *this, PrimaryFunctionId, SourceFileId, SourceLineNum, FnStartSym,
+      FnEndSym, SecondaryFunctionIds);
   this->MCStreamer::EmitCVInlineLinetableDirective(
-      PrimaryFunctionId, SourceFileId, SourceLineNum, SecondaryFunctionIds);
+      PrimaryFunctionId, SourceFileId, SourceLineNum, FnStartSym, FnEndSym,
+      SecondaryFunctionIds);
+}
+
+void MCObjectStreamer::EmitCVDefRangeDirective(
+    ArrayRef<std::pair<const MCSymbol *, const MCSymbol *>> Ranges,
+    StringRef FixedSizePortion) {
+  getContext().getCVContext().emitDefRange(*this, Ranges, FixedSizePortion);
+  this->MCStreamer::EmitCVDefRangeDirective(Ranges, FixedSizePortion);
 }
 
 void MCObjectStreamer::EmitCVStringTableDirective() {

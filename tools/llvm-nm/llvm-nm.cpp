@@ -791,35 +791,27 @@ static char getSymbolNMTypeChar(MachOObjectFile &Obj, basic_symbol_iterator I) {
 }
 
 static char getSymbolNMTypeChar(const GlobalValue &GV) {
-  if (GV.getValueType()->isFunctionTy())
-    return 't';
   // FIXME: should we print 'b'? At the IR level we cannot be sure if this
   // will be in bss or not, but we could approximate.
-  return 'd';
+  return GV.getValueType()->isFunctionTy() ? 't' : 'd';
 }
 
 static char getSymbolNMTypeChar(IRObjectFile &Obj, basic_symbol_iterator I) {
   const GlobalValue *GV = Obj.getSymbolGV(I->getRawDataRefImpl());
-  if (!GV)
-    return 't';
-  return getSymbolNMTypeChar(*GV);
+  return !GV ? 't' : getSymbolNMTypeChar(*GV);
 }
 
 static bool isObject(SymbolicFile &Obj, basic_symbol_iterator I) {
-  auto *ELF = dyn_cast<ELFObjectFileBase>(&Obj);
-  if (!ELF)
-    return false;
-
-  return elf_symbol_iterator(I)->getELFType() == ELF::STT_OBJECT;
+  return !dyn_cast<ELFObjectFileBase>(&Obj)
+             ? false
+             : elf_symbol_iterator(I)->getELFType() == ELF::STT_OBJECT;
 }
 
 static char getNMTypeChar(SymbolicFile &Obj, basic_symbol_iterator I) {
   uint32_t Symflags = I->getFlags();
   if ((Symflags & object::SymbolRef::SF_Weak) && !isa<MachOObjectFile>(Obj)) {
     char Ret = isObject(Obj, I) ? 'v' : 'w';
-    if (!(Symflags & object::SymbolRef::SF_Undefined))
-      Ret = toupper(Ret);
-    return Ret;
+    return (!(Symflags & object::SymbolRef::SF_Undefined)) ? toupper(Ret) : Ret;
   }
 
   if (Symflags & object::SymbolRef::SF_Undefined)
@@ -834,10 +826,8 @@ static char getNMTypeChar(SymbolicFile &Obj, basic_symbol_iterator I) {
   else if (IRObjectFile *IR = dyn_cast<IRObjectFile>(&Obj)) {
     Ret = getSymbolNMTypeChar(*IR, I);
     Triple Host(sys::getDefaultTargetTriple());
-    if (Ret == 'd' && Host.isOSDarwin()) {
-      if(Symflags & SymbolRef::SF_Const)
-        Ret = 's';
-    }
+    if (Ret == 'd' && Host.isOSDarwin() && Symflags & SymbolRef::SF_Const)
+      Ret = 's';
   }
   else if (COFFObjectFile *COFF = dyn_cast<COFFObjectFile>(&Obj))
     Ret = getSymbolNMTypeChar(*COFF, I);
@@ -1271,15 +1261,10 @@ int main(int argc, char **argv) {
     PrintAddress = false;
   if (OutputFormat == sysv || SizeSort)
     PrintSize = true;
-
-  switch (InputFilenames.size()) {
-  case 0:
+  if (InputFilenames.empty())
     InputFilenames.push_back("a.out");
-  case 1:
-    break;
-  default:
+  if (InputFilenames.size() > 1)
     MultipleFiles = true;
-  }
 
   for (unsigned i = 0; i < ArchFlags.size(); ++i) {
     if (ArchFlags[i] == "all") {

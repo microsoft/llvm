@@ -55,71 +55,77 @@
 ; X86-NEXT: .long   4
 ; Symbol subsection for x
 ; X86-NEXT: .long   241
-; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X86-NEXT: [[F1_START]]:
-; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X86-NEXT: [[PROC_SEGMENT_START]]:
 ; X86-NEXT: .short  4423
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .long [[END_OF_X]]-_x
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .secrel32 _x
 ; X86-NEXT: .secidx _x
 ; X86-NEXT: .byte   0
-; X86-NEXT: .byte   120
-; X86-NEXT: .byte   0
+; X86-NEXT: .asciz "x"
 ; X86-NEXT: [[PROC_SEGMENT_END]]:
 ; X86-NEXT: .short  2
 ; X86-NEXT: .short  4431
 ; X86-NEXT: [[F1_END]]:
-; Padding
-; X86-NEXT: .zero   3
+; X86-NEXT: .p2align 2
 ; Line table subsection for x
 ; X86: .cv_linetable 0, _x, [[END_OF_X]]
 ; Symbol subsection for y
 ; X86-NEXT: .long   241
-; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X86-NEXT: [[F1_START]]:
-; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X86-NEXT: [[PROC_SEGMENT_START]]:
 ; X86-NEXT: .short  4423
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .long [[END_OF_Y]]-_y
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .secrel32 _y
 ; X86-NEXT: .secidx _y
 ; X86-NEXT: .byte   0
-; X86-NEXT: .byte   121
-; X86-NEXT: .byte   0
+; X86-NEXT: .asciz "y"
 ; X86-NEXT: [[PROC_SEGMENT_END]]:
 ; X86-NEXT: .short  2
 ; X86-NEXT: .short  4431
 ; X86-NEXT: [[F1_END]]:
-; Padding
-; X86-NEXT: .zero   3
+; X86-NEXT: .p2align 2
 ; Line table subsection for y
 ; X86: .cv_linetable 1, _y, [[END_OF_Y]]
 ; Symbol subsection for f
 ; X86-NEXT: .long   241
-; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X86-NEXT: [[F1_START]]:
-; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X86-NEXT: [[PROC_SEGMENT_START]]:
 ; X86-NEXT: .short  4423
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .long [[END_OF_F]]-_f
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .secrel32 _f
 ; X86-NEXT: .secidx _f
 ; X86-NEXT: .byte   0
-; X86-NEXT: .byte   102
-; X86-NEXT: .byte   0
+; X86-NEXT: .asciz "f"
 ; X86-NEXT: [[PROC_SEGMENT_END]]:
 ; X86-NEXT: .short  2
 ; X86-NEXT: .short  4431
 ; X86-NEXT: [[F1_END]]:
-; Padding
-; X86-NEXT: .zero   3
+; X86-NEXT: .p2align 2
 ; Line table subsection for f
 ; X86: .cv_linetable 2, _f, [[END_OF_F]]
 ; X86: .cv_filechecksums
@@ -309,71 +315,77 @@
 ; X64-NEXT: .long   4
 ; Symbol subsection for x
 ; X64-NEXT: .long   241
-; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X64-NEXT: [[F1_START]]:
-; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X64-NEXT: [[PROC_SEGMENT_START]]:
 ; X64-NEXT: .short  4423
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .long [[END_OF_X]]-x
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .secrel32 x
 ; X64-NEXT: .secidx x
 ; X64-NEXT: .byte   0
-; X64-NEXT: .byte   120
-; X64-NEXT: .byte   0
+; X64-NEXT: .asciz "x"
 ; X64-NEXT: [[PROC_SEGMENT_END]]:
 ; X64-NEXT: .short  2
 ; X64-NEXT: .short  4431
 ; X64-NEXT: [[F1_END]]:
-; Padding
-; X64-NEXT: .zero   3
+; X64-NEXT: .p2align 2
 ; Line table subsection for x
 ; X64: .cv_linetable 0, x, [[END_OF_X]]
 ; Symbol subsection for y
 ; X64-NEXT: .long   241
-; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X64-NEXT: [[F1_START]]:
-; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X64-NEXT: [[PROC_SEGMENT_START]]:
 ; X64-NEXT: .short  4423
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .long [[END_OF_Y]]-y
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .secrel32 y
 ; X64-NEXT: .secidx y
 ; X64-NEXT: .byte   0
-; X64-NEXT: .byte   121
-; X64-NEXT: .byte   0
+; X64-NEXT: .asciz "y"
 ; X64-NEXT: [[PROC_SEGMENT_END]]:
 ; X64-NEXT: .short  2
 ; X64-NEXT: .short  4431
 ; X64-NEXT: [[F1_END]]:
-; Padding
-; X64-NEXT: .zero   3
+; X64-NEXT: .p2align 2
 ; Line table subsection for y
 ; X64: .cv_linetable 1, y, [[END_OF_Y]]
 ; Symbol subsection for f
 ; X64-NEXT: .long   241
-; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X64-NEXT: [[F1_START]]:
-; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X64-NEXT: [[PROC_SEGMENT_START]]:
 ; X64-NEXT: .short  4423
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .long [[END_OF_F]]-f
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .secrel32 f
 ; X64-NEXT: .secidx f
 ; X64-NEXT: .byte   0
-; X64-NEXT: .byte   102
-; X64-NEXT: .byte   0
+; X64-NEXT: .asciz "f"
 ; X64-NEXT: [[PROC_SEGMENT_END]]:
 ; X64-NEXT: .short  2
 ; X64-NEXT: .short  4431
 ; X64-NEXT: [[F1_END]]:
-; Padding
-; X64-NEXT: .zero   3
+; X64-NEXT: .p2align 2
 ; Line table subsection for f
 ; X64: .cv_linetable 2, f, [[END_OF_F]]
 ; File index to string table offset subsection

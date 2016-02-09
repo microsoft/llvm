@@ -12,12 +12,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCCodeView.h"
+#include "llvm/MC/MCAsmLayout.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/Line.h"
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCObjectStreamer.h"
+#include "llvm/MC/MCValue.h"
 #include "llvm/Support/COFF.h"
 
 using namespace llvm;
@@ -226,40 +228,191 @@ static uint32_t encodeSignedNumber(uint32_t Data) {
 
 void CodeViewContext::emitInlineLineTableForFunction(
     MCObjectStreamer &OS, unsigned PrimaryFunctionId, unsigned SourceFileId,
-    unsigned SourceLineNum, ArrayRef<unsigned> SecondaryFunctionIds) {
-  std::vector<MCCVLineEntry> Locs = getFunctionLineEntries(PrimaryFunctionId);
-  std::vector<std::pair<BinaryAnnotationsOpCode, uint32_t>> Annotations;
+    unsigned SourceLineNum, const MCSymbol *FnStartSym,
+    const MCSymbol *FnEndSym, ArrayRef<unsigned> SecondaryFunctionIds) {
+  // Create and insert a fragment into the current section that will be encoded
+  // later.
+  new MCCVInlineLineTableFragment(
+      PrimaryFunctionId, SourceFileId, SourceLineNum, FnStartSym, FnEndSym,
+      SecondaryFunctionIds, OS.getCurrentSectionOnly());
+}
 
-  const MCCVLineEntry *LastLoc = nullptr;
-  unsigned LastFileId = SourceFileId;
-  unsigned LastLineNum = SourceLineNum;
+void CodeViewContext::emitDefRange(
+    MCObjectStreamer &OS,
+    ArrayRef<std::pair<const MCSymbol *, const MCSymbol *>> Ranges,
+    StringRef FixedSizePortion) {
+  // Create and insert a fragment into the current section that will be encoded
+  // later.
+  new MCCVDefRangeFragment(Ranges, FixedSizePortion,
+                           OS.getCurrentSectionOnly());
+}
 
+static unsigned computeLabelDiff(MCAsmLayout &Layout, const MCSymbol *Begin,
+                                 const MCSymbol *End) {
+  MCContext &Ctx = Layout.getAssembler().getContext();
+  MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
+  const MCExpr *BeginRef = MCSymbolRefExpr::create(Begin, Variant, Ctx),
+               *EndRef = MCSymbolRefExpr::create(End, Variant, Ctx);
+  const MCExpr *AddrDelta =
+      MCBinaryExpr::create(MCBinaryExpr::Sub, EndRef, BeginRef, Ctx);
+  int64_t Result;
+  bool Success = AddrDelta->evaluateKnownAbsolute(Result, Layout);
+  assert(Success && "failed to evaluate label difference as absolute");
+  (void)Success;
+  assert(Result >= 0 && "negative label difference requested");
+  assert(Result < UINT_MAX && "label difference greater than 2GB");
+  return unsigned(Result);
+}
+
+void CodeViewContext::encodeInlineLineTable(MCAsmLayout &Layout,
+                                            MCCVInlineLineTableFragment &Frag) {
+  size_t LocBegin;
+  size_t LocEnd;
+  std::tie(LocBegin, LocEnd) = getLineExtent(Frag.SiteFuncId);
+  for (unsigned SecondaryId : Frag.SecondaryFuncs) {
+    auto Extent = getLineExtent(SecondaryId);
+    LocBegin = std::min(LocBegin, Extent.first);
+    LocEnd = std::max(LocEnd, Extent.second);
+  }
+  if (LocBegin >= LocEnd)
+    return;
+  ArrayRef<MCCVLineEntry> Locs = getLinesForExtent(LocBegin, LocEnd);
+  if (Locs.empty())
+    return;
+
+  SmallSet<unsigned, 8> InlinedFuncIds;
+  InlinedFuncIds.insert(Frag.SiteFuncId);
+  InlinedFuncIds.insert(Frag.SecondaryFuncs.begin(), Frag.SecondaryFuncs.end());
+
+  // Make an artificial start location using the function start and the inlinee
+  // lines start location information. All deltas start relative to this
+  // location.
+  MCCVLineEntry StartLoc(Frag.getFnStartSym(), MCCVLoc(Locs.front()));
+  StartLoc.setFileNum(Frag.StartFileId);
+  StartLoc.setLine(Frag.StartLineNum);
+  const MCCVLineEntry *LastLoc = &StartLoc;
+  bool WithinFunction = true;
+
+  SmallVectorImpl<char> &Buffer = Frag.getContents();
+  Buffer.clear(); // Clear old contents if we went through relaxation.
   for (const MCCVLineEntry &Loc : Locs) {
-    if (!LastLoc) {
-      // TODO ChangeCodeOffset
-      // TODO ChangeCodeLength
+    if (!InlinedFuncIds.count(Loc.getFunctionId())) {
+      // We've hit a cv_loc not attributed to this inline call site. Use this
+      // label to end the PC range.
+      if (WithinFunction) {
+        unsigned Length =
+            computeLabelDiff(Layout, LastLoc->getLabel(), Loc.getLabel());
+        compressAnnotation(ChangeCodeLength, Buffer);
+        compressAnnotation(Length, Buffer);
+      }
+      WithinFunction = false;
+      continue;
+    }
+    WithinFunction = true;
+
+    if (Loc.getFileNum() != LastLoc->getFileNum()) {
+      compressAnnotation(ChangeFile, Buffer);
+      compressAnnotation(Loc.getFileNum(), Buffer);
     }
 
-    if (Loc.getFileNum() != LastFileId)
-      Annotations.push_back({ChangeFile, Loc.getFileNum()});
+    int LineDelta = Loc.getLine() - LastLoc->getLine();
+    if (LineDelta == 0)
+      continue;
 
-    if (Loc.getLine() != LastLineNum)
-      Annotations.push_back(
-          {ChangeLineOffset, encodeSignedNumber(Loc.getLine() - LastLineNum)});
+    unsigned EncodedLineDelta = encodeSignedNumber(LineDelta);
+    unsigned CodeDelta =
+        computeLabelDiff(Layout, LastLoc->getLabel(), Loc.getLabel());
+    if (CodeDelta == 0) {
+      compressAnnotation(ChangeLineOffset, Buffer);
+      compressAnnotation(EncodedLineDelta, Buffer);
+    } else if (EncodedLineDelta < 0x8 && CodeDelta <= 0xf) {
+      // The ChangeCodeOffsetAndLineOffset combination opcode is used when the
+      // encoded line delta uses 3 or fewer set bits and the code offset fits
+      // in one nibble.
+      unsigned Operand = (EncodedLineDelta << 4) | CodeDelta;
+      compressAnnotation(ChangeCodeOffsetAndLineOffset, Buffer);
+      compressAnnotation(Operand, Buffer);
+    } else {
+      // Otherwise use the separate line and code deltas.
+      compressAnnotation(ChangeLineOffset, Buffer);
+      compressAnnotation(EncodedLineDelta, Buffer);
+      compressAnnotation(ChangeCodeOffset, Buffer);
+      compressAnnotation(CodeDelta, Buffer);
+    }
 
     LastLoc = &Loc;
-    LastFileId = Loc.getFileNum();
-    LastLineNum = Loc.getLine();
   }
 
-  SmallString<32> Buffer;
-  for (auto Annotation : Annotations) {
-    BinaryAnnotationsOpCode Opcode = Annotation.first;
-    uint32_t Operand = Annotation.second;
-    compressAnnotation(Opcode, Buffer);
-    compressAnnotation(Operand, Buffer);
+  assert(WithinFunction);
+
+  unsigned EndSymLength =
+      computeLabelDiff(Layout, LastLoc->getLabel(), Frag.getFnEndSym());
+  unsigned LocAfterLength = ~0U;
+  ArrayRef<MCCVLineEntry> LocAfter = getLinesForExtent(LocEnd, LocEnd + 1);
+  if (!LocAfter.empty()) {
+    // Only try to compute this difference if we're in the same section.
+    const MCCVLineEntry &Loc = LocAfter[0];
+    if (&Loc.getLabel()->getSection(false) ==
+        &LastLoc->getLabel()->getSection(false)) {
+      LocAfterLength =
+          computeLabelDiff(Layout, LastLoc->getLabel(), Loc.getLabel());
+    }
   }
-  OS.EmitBytes(Buffer);
+
+  compressAnnotation(ChangeCodeLength, Buffer);
+  compressAnnotation(std::min(EndSymLength, LocAfterLength), Buffer);
+}
+
+void CodeViewContext::encodeDefRange(MCAsmLayout &Layout,
+                                     MCCVDefRangeFragment &Frag) {
+  MCContext &Ctx = Layout.getAssembler().getContext();
+  SmallVectorImpl<char> &Contents = Frag.getContents();
+  Contents.clear();
+  SmallVectorImpl<MCFixup> &Fixups = Frag.getFixups();
+  Fixups.clear();
+  raw_svector_ostream OS(Contents);
+
+  // Write down each range where the variable is defined.
+  for (std::pair<const MCSymbol *, const MCSymbol *> Range : Frag.getRanges()) {
+    unsigned RangeSize = computeLabelDiff(Layout, Range.first, Range.second);
+    unsigned Bias = 0;
+    // We must split the range into chunks of MaxDefRange, this is a fundamental
+    // limitation of the file format.
+    do {
+      uint16_t Chunk = std::min((uint32_t)MaxDefRange, RangeSize);
+
+      const MCSymbolRefExpr *SRE = MCSymbolRefExpr::create(Range.first, Ctx);
+      const MCBinaryExpr *BE =
+          MCBinaryExpr::createAdd(SRE, MCConstantExpr::create(Bias, Ctx), Ctx);
+      MCValue Res;
+      BE->evaluateAsRelocatable(Res, &Layout, /*Fixup=*/nullptr);
+
+      // Each record begins with a 2-byte number indicating how large the record
+      // is.
+      StringRef FixedSizePortion = Frag.getFixedSizePortion();
+      // Our record is a fixed sized prefix and a LocalVariableAddrRange that we
+      // are artificially constructing.
+      size_t RecordSize =
+          FixedSizePortion.size() + sizeof(LocalVariableAddrRange);
+      // Write out the recrod size.
+      support::endian::Writer<support::little>(OS).write<uint16_t>(RecordSize);
+      // Write out the fixed size prefix.
+      OS << FixedSizePortion;
+      // Make space for a fixup that will eventually have a section relative
+      // relocation pointing at the offset where the variable becomes live.
+      Fixups.push_back(MCFixup::create(Contents.size(), BE, FK_SecRel_4));
+      Contents.resize(Contents.size() + 4); // Fixup for code start.
+      // Make space for a fixup that will record the section index for the code.
+      Fixups.push_back(MCFixup::create(Contents.size(), BE, FK_SecRel_2));
+      Contents.resize(Contents.size() + 2); // Fixup for section index.
+      // Write down the range's extent.
+      support::endian::Writer<support::little>(OS).write<uint16_t>(Chunk);
+
+      // Move on to the next range.
+      Bias += Chunk;
+      RangeSize -= Chunk;
+    } while (RangeSize > 0);
+  }
 }
 
 //
