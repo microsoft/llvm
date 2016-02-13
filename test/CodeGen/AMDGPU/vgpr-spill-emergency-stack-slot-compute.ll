@@ -29,7 +29,7 @@
 
 ; GCN: buffer_store_dword {{v[0-9]+}}, s[12:15], s16 offset:{{[0-9]+}} ; 4-byte Folded Spill
 
-; GCN: buffer_store_dword {{v[0-9]+}}, {{v[0-9]+}}, s[12:15], s16 offen offset:{{[0-9]+}}
+; GCN: buffer_store_dwordx4 {{v\[[0-9]+:[0-9]+\]}}, {{v[0-9]+}}, s[12:15], s16 offen offset:{{[0-9]+}}
 ; GCN: buffer_load_dwordx4 {{v\[[0-9]+:[0-9]+\]}}, {{v[0-9]+}}, s[12:15], s16 offen offset:{{[0-9]+}}
 
 ; GCN: NumVgprs: 256
@@ -177,7 +177,8 @@ bb12:                                             ; preds = %bb145, %bb
   %tmp140 = phi float [ 0.000000e+00, %bb ], [ %tmp405, %bb145 ]
   %tmp141 = phi float [ 0.000000e+00, %bb ], [ %tmp406, %bb145 ]
   %tmp142 = bitcast float %tmp95 to i32
-  %tmp143 = icmp sgt i32 %tmp142, 125
+  %tid = call i32 @llvm.r600.read.tidig.x() #1
+  %tmp143 = icmp sgt i32 %tmp142, %tid
   br i1 %tmp143, label %bb144, label %bb145
 
 bb144:                                            ; preds = %bb12
@@ -582,6 +583,8 @@ bb145:                                            ; preds = %bb12
   %tmp409 = bitcast i32 %tmp408 to float
   br label %bb12
 }
+
+declare i32 @llvm.r600.read.tidig.x() #1
 
 attributes #0 = { nounwind }
 attributes #1 = { nounwind readnone }

@@ -130,6 +130,10 @@ SITargetLowering::SITargetLowering(TargetMachine &TM,
 
   setOperationAction(ISD::INTRINSIC_VOID, MVT::Other, Custom);
   setOperationAction(ISD::BRCOND, MVT::Other, Custom);
+  setOperationAction(ISD::BR_CC, MVT::i32, Expand);
+  setOperationAction(ISD::BR_CC, MVT::i64, Expand);
+  setOperationAction(ISD::BR_CC, MVT::f32, Expand);
+  setOperationAction(ISD::BR_CC, MVT::f64, Expand);
 
   for (MVT VT : MVT::integer_valuetypes()) {
     if (VT == MVT::i64)
@@ -1192,6 +1196,23 @@ SDValue SITargetLowering::LowerFrameIndex(SDValue Op, SelectionDAG &DAG) const {
                     DAG.getValueType(EVT::getIntegerVT(*DAG.getContext(), 31)));
 }
 
+bool SITargetLowering::isCFIntrinsic(const SDNode *Intr) const {
+  if (Intr->getOpcode() != ISD::INTRINSIC_W_CHAIN)
+    return false;
+
+  switch (cast<ConstantSDNode>(Intr->getOperand(1))->getZExtValue()) {
+  default: return false;
+  case AMDGPUIntrinsic::amdgcn_if:
+  case AMDGPUIntrinsic::amdgcn_else:
+  case AMDGPUIntrinsic::amdgcn_break:
+  case AMDGPUIntrinsic::amdgcn_if_break:
+  case AMDGPUIntrinsic::amdgcn_else_break:
+  case AMDGPUIntrinsic::amdgcn_loop:
+  case AMDGPUIntrinsic::amdgcn_end_cf:
+    return true;
+  }
+}
+
 /// This transforms the control flow intrinsics to get the branch destination as
 /// last parameter, also switches branch target with BR if the need arise
 SDValue SITargetLowering::LowerBRCOND(SDValue BRCOND,
@@ -1202,13 +1223,11 @@ SDValue SITargetLowering::LowerBRCOND(SDValue BRCOND,
   SDNode *Intr = BRCOND.getOperand(1).getNode();
   SDValue Target = BRCOND.getOperand(2);
   SDNode *BR = nullptr;
+  SDNode *SetCC = nullptr;
 
   if (Intr->getOpcode() == ISD::SETCC) {
     // As long as we negate the condition everything is fine
-    SDNode *SetCC = Intr;
-    assert(SetCC->getConstantOperandVal(1) == 1);
-    assert(cast<CondCodeSDNode>(SetCC->getOperand(2).getNode())->get() ==
-           ISD::SETNE);
+    SetCC = Intr;
     Intr = SetCC->getOperand(0).getNode();
 
   } else {
@@ -1217,7 +1236,16 @@ SDValue SITargetLowering::LowerBRCOND(SDValue BRCOND,
     Target = BR->getOperand(1);
   }
 
-  assert(Intr->getOpcode() == ISD::INTRINSIC_W_CHAIN);
+  if (Intr->getOpcode() != ISD::INTRINSIC_W_CHAIN) {
+    // This is a uniform branch so we don't need to legalize.
+    return BRCOND;
+  }
+
+  assert(!SetCC ||
+        (SetCC->getConstantOperandVal(1) == 1 &&
+         isCFIntrinsic(Intr) &&
+         cast<CondCodeSDNode>(SetCC->getOperand(2).getNode())->get() ==
+                                                             ISD::SETNE));
 
   // Build the result and
   ArrayRef<EVT> Res(Intr->value_begin() + 1, Intr->value_end());
@@ -1351,10 +1379,10 @@ SDValue SITargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::amdgcn_rsq:
   case AMDGPUIntrinsic::AMDGPU_rsq: // Legacy name
     return DAG.getNode(AMDGPUISD::RSQ, DL, VT, Op.getOperand(1));
-  case Intrinsic::amdgcn_rsq_clamped:
+  case Intrinsic::amdgcn_rsq_clamp:
   case AMDGPUIntrinsic::AMDGPU_rsq_clamped: { // Legacy name
     if (Subtarget->getGeneration() < AMDGPUSubtarget::VOLCANIC_ISLANDS)
-      return DAG.getNode(AMDGPUISD::RSQ_CLAMPED, DL, VT, Op.getOperand(1));
+      return DAG.getNode(AMDGPUISD::RSQ_CLAMP, DL, VT, Op.getOperand(1));
 
     Type *Type = VT.getTypeForEVT(*DAG.getContext());
     APFloat Max = APFloat::getLargest(Type->getFltSemantics());
@@ -1507,6 +1535,22 @@ SDValue SITargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
                        Op.getOperand(2), Op.getOperand(3), Op.getOperand(4),
                        Glue);
   }
+  case Intrinsic::amdgcn_sin:
+    return DAG.getNode(AMDGPUISD::SIN_HW, DL, VT, Op.getOperand(1));
+
+  case Intrinsic::amdgcn_cos:
+    return DAG.getNode(AMDGPUISD::COS_HW, DL, VT, Op.getOperand(1));
+
+  case Intrinsic::amdgcn_log_clamp: {
+    if (Subtarget->getGeneration() < AMDGPUSubtarget::VOLCANIC_ISLANDS)
+      return SDValue();
+
+    DiagnosticInfoUnsupported BadIntrin(
+      *MF.getFunction(), "intrinsic not supported on subtarget",
+      DL.getDebugLoc());
+      DAG.getContext()->diagnose(BadIntrin);
+      return DAG.getUNDEF(VT);
+  }
   case Intrinsic::amdgcn_ldexp:
     return DAG.getNode(AMDGPUISD::LDEXP, DL, VT,
                        Op.getOperand(1), Op.getOperand(2));
@@ -1649,11 +1693,31 @@ SDValue SITargetLowering::LowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     //
     // Fall-through
   case AMDGPUAS::GLOBAL_ADDRESS:
-  case AMDGPUAS::PRIVATE_ADDRESS:
-    if (NumElements >= 8)
+  case AMDGPUAS::FLAT_ADDRESS:
+    if (NumElements > 4)
       return SplitVectorLoad(Op, DAG);
     // v4 loads are supported for private and global memory.
     return SDValue();
+  case AMDGPUAS::PRIVATE_ADDRESS: {
+    // Depending on the setting of the private_element_size field in the
+    // resource descriptor, we can only make private accesses up to a certain
+    // size.
+    switch (Subtarget->getMaxPrivateElementSize()) {
+    case 4:
+      return ScalarizeVectorLoad(Op, DAG);
+    case 8:
+      if (NumElements > 2)
+        return SplitVectorLoad(Op, DAG);
+      return SDValue();
+    case 16:
+      // Same as global/flat
+      if (NumElements > 4)
+        return SplitVectorLoad(Op, DAG);
+      return SDValue();
+    default:
+      llvm_unreachable("unsupported private_element_size");
+    }
+  }
   case AMDGPUAS::LOCAL_ADDRESS:
     // If properly aligned, if we split we might be able to use ds_read_b64.
     return SplitVectorLoad(Op, DAG);
@@ -1863,21 +1927,35 @@ SDValue SITargetLowering::LowerSTORE(SDValue Op, SelectionDAG &DAG) const {
 
   assert(Store->getValue().getValueType().getScalarType() == MVT::i32);
 
-  unsigned NElts = VT.getVectorNumElements();
-  unsigned AS = Store->getAddressSpace();
-  if (AS == AMDGPUAS::LOCAL_ADDRESS) {
+  unsigned NumElements = VT.getVectorNumElements();
+  switch (Store->getAddressSpace()) {
+  case AMDGPUAS::GLOBAL_ADDRESS:
+  case AMDGPUAS::FLAT_ADDRESS:
+    if (NumElements > 4)
+      return SplitVectorStore(Op, DAG);
+    return SDValue();
+  case AMDGPUAS::PRIVATE_ADDRESS: {
+    switch (Subtarget->getMaxPrivateElementSize()) {
+    case 4:
+      return ScalarizeVectorStore(Op, DAG);
+    case 8:
+      if (NumElements > 2)
+        return SplitVectorStore(Op, DAG);
+      return SDValue();
+    case 16:
+      if (NumElements > 4)
+        return SplitVectorStore(Op, DAG);
+      return SDValue();
+    default:
+      llvm_unreachable("unsupported private_element_size");
+    }
+  }
+  case AMDGPUAS::LOCAL_ADDRESS:
     // If properly aligned, if we split we might be able to use ds_write_b64.
     return SplitVectorStore(Op, DAG);
+  default:
+    llvm_unreachable("unhandled address space");
   }
-
-  if (AS == AMDGPUAS::PRIVATE_ADDRESS && NElts > 4)
-    return ScalarizeVectorStore(Op, DAG);
-
-  // These stores are legal. private, global and flat.
-  if (NElts >= 8)
-    return SplitVectorStore(Op, DAG);
-
-  return SDValue();
 }
 
 SDValue SITargetLowering::LowerTrig(SDValue Op, SelectionDAG &DAG) const {

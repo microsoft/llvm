@@ -247,6 +247,30 @@ def si_truncstore_local_i16 : PatFrag <
   return cast<StoreSDNode>(N)->getMemoryVT() == MVT::i16;
 }]>;
 
+def si_setcc_uniform : PatFrag <
+  (ops node:$lhs, node:$rhs, node:$cond),
+  (setcc node:$lhs, node:$rhs, node:$cond), [{
+  for (SDNode *Use : N->uses()) {
+    if (Use->isMachineOpcode() || Use->getOpcode() != ISD::CopyToReg)
+      return false;
+
+    unsigned Reg = cast<RegisterSDNode>(Use->getOperand(1))->getReg();
+    if (Reg != AMDGPU::SCC)
+      return false;
+  }
+  return true;
+}]>;
+
+def si_uniform_br : PatFrag <
+  (ops node:$cond, node:$bb), (brcond node:$cond, node:$bb), [{
+  return isUniformBr(N);
+}]>;
+
+def si_uniform_br_scc : PatFrag <
+  (ops node:$cond, node:$bb), (si_uniform_br node:$cond, node:$bb), [{
+  return isCBranchSCC(N);
+}]>;
+
 multiclass SIAtomicM0Glue2 <string op_name> {
 
   def _glue : SDNode <"ISD::ATOMIC_"#op_name, SDTAtomic2,
@@ -826,7 +850,8 @@ multiclass SOP2_64_32 <sop2 op, string opName, list<dag> pattern> : SOP2_m <
 class SOPC_Helper <bits<7> op, RegisterOperand rc, ValueType vt,
                     string opName, PatLeaf cond> : SOPC <
   op, (outs), (ins rc:$src0, rc:$src1),
-  opName#" $src0, $src1", []> {
+  opName#" $src0, $src1",
+  [(set SCC, (si_setcc_uniform vt:$src0, vt:$src1, cond))] > {
   let Defs = [SCC];
 }
 
@@ -1058,6 +1083,11 @@ class getVOPSrc1ForVT<ValueType VT> {
   RegisterClass ret = !if(!eq(VT.Size, 64), VReg_64, VGPR_32);
 }
 
+// Returns the register class to use for DPP source operands.
+class getDPPSrcForVT<ValueType VT> {
+  RegisterClass ret = !if(!eq(VT.Size, 64), VReg_64, VGPR_32);
+}
+
 // Returns the register class to use for sources of VOP3 instructions for the
 // given VT.
 class getVOP3SrcForVT<ValueType VT> {
@@ -1125,6 +1155,34 @@ class getIns64 <RegisterOperand Src0RC, RegisterOperand Src1RC,
       /* endif */ )));
 }
 
+class getInsDPP <RegisterClass Src0RC, RegisterClass Src1RC, int NumSrcArgs,
+                                                             bit HasModifiers> {
+
+  dag ret = !if (!eq(NumSrcArgs, 1),
+              !if (!eq(HasModifiers, 1),
+                // VOP1_DPP with modifiers
+                (ins InputModsNoDefault:$src0_modifiers, Src0RC:$src0,
+                     i32imm:$dpp_ctrl, i1imm:$bound_ctrl,
+                     i32imm:$bank_mask, i32imm:$row_mask)
+              /* else */,
+                // VOP1_DPP without modifiers
+                (ins Src0RC:$src0, i32imm:$dpp_ctrl, i1imm:$bound_ctrl,
+                     i32imm:$bank_mask, i32imm:$row_mask)
+              /* endif */)
+            /* NumSrcArgs == 2 */,
+              !if (!eq(HasModifiers, 1),
+                // VOP2_DPP with modifiers
+                (ins InputModsNoDefault:$src0_modifiers, Src0RC:$src0,
+                     InputModsNoDefault:$src1_modifiers, Src1RC:$src1,
+                     i32imm:$dpp_ctrl, i1imm:$bound_ctrl,
+                     i32imm:$bank_mask, i32imm:$row_mask)
+              /* else */,
+                // VOP2_DPP without modifiers
+                (ins Src0RC:$src0, Src1RC:$src1, i32imm:$dpp_ctrl, i1imm:$bound_ctrl,
+                     i32imm:$bank_mask, i32imm:$row_mask)
+             /* endif */));
+}
+
 // Returns the assembly string for the inputs and outputs of a VOP[12C]
 // instruction.  This does not add the _e32 suffix, so it can be reused
 // by getAsm64.
@@ -1153,6 +1211,17 @@ class getAsm64 <bit HasDst, int NumSrcArgs, bit HasModifiers> {
       "$dst, "#src0#src1#src2#"$clamp"#"$omod");
 }
 
+class getAsmDPP <bit HasDst, int NumSrcArgs, bit HasModifiers> {
+  string src0 = !if(!eq(NumSrcArgs, 1), "$src0_modifiers", "$src0_modifiers,");
+  string src1 = !if(!eq(NumSrcArgs, 1), "",
+                   !if(!eq(NumSrcArgs, 2), " $src1_modifiers",
+                                           " $src1_modifiers,"));
+  string args = !if(!eq(HasModifiers, 0),
+                     getAsm32<0, NumSrcArgs>.ret,
+                     src0#src1);
+  string ret = " $dst"#args#", $dpp_ctrl, "#"$bound_ctrl, "#"$bank_mask, "#"$row_mask";
+}
+
 class VOPProfile <list<ValueType> _ArgVT> {
 
   field list<ValueType> ArgVT = _ArgVT;
@@ -1162,11 +1231,14 @@ class VOPProfile <list<ValueType> _ArgVT> {
   field ValueType Src1VT = ArgVT[2];
   field ValueType Src2VT = ArgVT[3];
   field RegisterOperand DstRC = getVALUDstForVT<DstVT>.ret;
+  field RegisterClass DstRCDPP = !if(!eq(DstVT.Size, 64), VReg_64, VGPR_32);
   field RegisterOperand Src0RC32 = getVOPSrc0ForVT<Src0VT>.ret;
   field RegisterClass Src1RC32 = getVOPSrc1ForVT<Src1VT>.ret;
   field RegisterOperand Src0RC64 = getVOP3SrcForVT<Src0VT>.ret;
   field RegisterOperand Src1RC64 = getVOP3SrcForVT<Src1VT>.ret;
   field RegisterOperand Src2RC64 = getVOP3SrcForVT<Src2VT>.ret;
+  field RegisterClass Src0DPP = getDPPSrcForVT<Src0VT>.ret;
+  field RegisterClass Src1DPP = getDPPSrcForVT<Src1VT>.ret;
 
   field bit HasDst = !if(!eq(DstVT.Value, untyped.Value), 0, 1);
   field bit HasDst32 = HasDst;
@@ -1179,13 +1251,16 @@ class VOPProfile <list<ValueType> _ArgVT> {
   // output. This is manually overridden for them.
   field dag Outs32 = Outs;
   field dag Outs64 = Outs;
+  field dag OutsDPP = (outs DstRCDPP:$dst);
 
   field dag Ins32 = getIns32<Src0RC32, Src1RC32, NumSrcArgs>.ret;
   field dag Ins64 = getIns64<Src0RC64, Src1RC64, Src2RC64, NumSrcArgs,
                              HasModifiers>.ret;
+  field dag InsDPP = getInsDPP<Src0DPP, Src1DPP, NumSrcArgs, HasModifiers>.ret;
 
   field string Asm32 = getAsm32<HasDst, NumSrcArgs>.ret;
   field string Asm64 = getAsm64<HasDst, NumSrcArgs, HasModifiers>.ret;
+  field string AsmDPP = getAsmDPP<HasDst, NumSrcArgs, HasModifiers>.ret;
 }
 
 // FIXME: I think these F16/I16 profiles will need to use f16/i16 types in order
@@ -1401,6 +1476,16 @@ multiclass VOP1_m <vop1 op, string opName, VOPProfile p, list<dag> pattern,
 
   def _vi : VOP1_Real_vi <opName, op, p.Outs, p.Ins32, asm>;
 
+}
+
+class VOP1_DPP <vop1 op, string opName, VOPProfile p> :
+  VOP1_DPPe <op.VI>,
+  VOP_DPP <p.OutsDPP, p.InsDPP, opName#p.AsmDPP, []> {
+  // FIXME: remove when we are using the correct names for the encoding fields.
+  field bit vdst = 0;
+  let AssemblerPredicates = [isVI];
+  let src0_modifiers =  !if(p.HasModifiers, ?, 0);
+  let src1_modifiers = 0;
 }
 
 multiclass VOP1SI_m <vop1 op, string opName, VOPProfile p, list<dag> pattern,
@@ -1650,6 +1735,8 @@ multiclass VOP1_Helper <vop1 op, string opName, VOPProfile p, list<dag> pat32,
 
   defm _e64 : VOP3_1_m <op, p.Outs, p.Ins64, opName#p.Asm64, pat64, opName,
                         p.HasModifiers>;
+
+  def _dpp : VOP1_DPP <op, opName, p>;
 }
 
 multiclass VOP1Inst <vop1 op, string opName, VOPProfile P,
@@ -2652,9 +2739,9 @@ multiclass FLAT_Load_Helper <flat op, string asm_name,
 multiclass FLAT_Store_Helper <flat op, string asm_name,
     RegisterClass vdataClass,
     dag outs = (outs),
-    dag ins = (ins vdataClass:$data, VReg_64:$addr, glc_flat:$glc,
+    dag ins = (ins VReg_64:$addr, vdataClass:$data, glc_flat:$glc,
                    slc_flat:$slc, tfe_flat:$tfe),
-    string asm = asm_name#" $data, $addr"#"$glc"#"$slc"#"$tfe"> {
+    string asm = asm_name#" $addr, $data"#"$glc"#"$slc"#"$tfe"> {
 
   let mayLoad = 0, mayStore = 1, vdst = 0 in {
 
