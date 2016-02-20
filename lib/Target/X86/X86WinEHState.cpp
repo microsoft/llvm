@@ -114,9 +114,6 @@ INITIALIZE_PASS(WinEHStatePass, "x86-winehstate",
 
 bool WinEHStatePass::doInitialization(Module &M) {
   TheModule = &M;
-  FrameEscape = Intrinsic::getDeclaration(TheModule, Intrinsic::localescape);
-  FrameRecover = Intrinsic::getDeclaration(TheModule, Intrinsic::localrecover);
-  FrameAddress = Intrinsic::getDeclaration(TheModule, Intrinsic::frameaddress);
   return false;
 }
 
@@ -161,6 +158,10 @@ bool WinEHStatePass::runOnFunction(Function &F) {
   }
   if (!HasPads)
     return false;
+
+  FrameEscape = Intrinsic::getDeclaration(TheModule, Intrinsic::localescape);
+  FrameRecover = Intrinsic::getDeclaration(TheModule, Intrinsic::localrecover);
+  FrameAddress = Intrinsic::getDeclaration(TheModule, Intrinsic::frameaddress);
 
   // Disable frame pointer elimination in this function.
   // FIXME: Do the nested handlers need to keep the parent ebp in ebp, or can we
@@ -433,7 +434,7 @@ static int getStateForCallSite(DenseMap<BasicBlock *, ColorVector> &BlockColors,
 }
 
 // Calculate the intersection of all the FinalStates for a BasicBlock's
-// predecessor.
+// predecessors.
 static int getPredState(DenseMap<BasicBlock *, int> &FinalStates, Function &F,
                         int ParentBaseState, BasicBlock *BB) {
   // The entry block has no predecessors but we know that the prologue always
@@ -467,6 +468,42 @@ static int getPredState(DenseMap<BasicBlock *, int> &FinalStates, Function &F,
     // At least two predecessors have different FinalStates,
     // conservatively report this basic block as overdefined.
     if (CommonState != PredState)
+      return OverdefinedState;
+  }
+
+  return CommonState;
+}
+
+// Calculate the intersection of all the InitialStates for a BasicBlock's
+// successors.
+static int getSuccState(DenseMap<BasicBlock *, int> &InitialStates, Function &F,
+                        int ParentBaseState, BasicBlock *BB) {
+  // This block rejoins normal control flow,
+  // conservatively report this basic block as overdefined.
+  if (isa<CatchReturnInst>(BB->getTerminator()))
+    return OverdefinedState;
+
+  int CommonState = OverdefinedState;
+  for (BasicBlock *SuccBB : successors(BB)) {
+    // We didn't manage to get a state for one of these predecessors,
+    // conservatively report this basic block as overdefined.
+    auto SuccStartState = InitialStates.find(SuccBB);
+    if (SuccStartState == InitialStates.end())
+      return OverdefinedState;
+
+    // This is an EH Pad, conservatively report this basic block as overdefined.
+    if (SuccBB->isEHPad())
+      return OverdefinedState;
+
+    int SuccState = SuccStartState->second;
+    assert(SuccState != OverdefinedState &&
+           "overdefined BBs shouldn't be in FinalStates");
+    if (CommonState == OverdefinedState)
+      CommonState = SuccState;
+
+    // At least two successors have different InitialStates,
+    // conservatively report this basic block as overdefined.
+    if (CommonState != SuccState)
       return OverdefinedState;
   }
 
@@ -559,6 +596,17 @@ void WinEHStatePass::addStateStores(Function &F, WinEHFuncInfo &FuncInfo) {
       Worklist.push_back(SuccBB);
   }
 
+  // Try to hoist stores from successors.
+  for (BasicBlock *BB : RPOT) {
+    int SuccState = getSuccState(InitialStates, F, ParentBaseState, BB);
+    if (SuccState == OverdefinedState)
+      continue;
+
+    // Update our FinalState to reflect the common InitialState of our
+    // successors.
+    FinalStates.insert({BB, SuccState});
+  }
+
   // Finally, insert state stores before call-sites which transition us to a new
   // state.
   for (BasicBlock *BB : RPOT) {
@@ -581,6 +629,12 @@ void WinEHStatePass::addStateStores(Function &F, WinEHFuncInfo &FuncInfo) {
         insertStateNumberStore(&I, State);
       PrevState = State;
     }
+
+    // We might have hoisted a state store into this block, emit it now.
+    auto EndState = FinalStates.find(BB);
+    if (EndState != FinalStates.end())
+      if (EndState->second != PrevState)
+        insertStateNumberStore(BB->getTerminator(), EndState->second);
   }
 }
 
