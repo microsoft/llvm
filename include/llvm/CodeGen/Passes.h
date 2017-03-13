@@ -163,6 +163,11 @@ namespace llvm {
   ///
   FunctionPass *createDefaultPBQPRegisterAllocator();
 
+  /// TiledRegisterAllocation Pass - This pass implements a hierarchical tiled
+  /// register allocator.
+  ///
+  FunctionPass *createTiledRegisterAllocator();
+
   /// PrologEpilogCodeInserter - This pass inserts prolog and epilog code,
   /// and eliminates abstract frame references.
   extern char &PrologEpilogCodeInserterID;

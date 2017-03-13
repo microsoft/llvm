@@ -251,6 +251,10 @@ HANDLE_TARGET_OPCODE(G_STORE)
 /// Generic conditional branch instruction.
 HANDLE_TARGET_OPCODE(G_BRCOND)
 
+/// ENTER/EXITTILE for tiled register allocator
+HANDLE_TARGET_OPCODE(ENTERTILE)
+HANDLE_TARGET_OPCODE(EXITTILE)
+
 /// Generic intrinsic use (without side effects).
 HANDLE_TARGET_OPCODE(G_INTRINSIC)
 

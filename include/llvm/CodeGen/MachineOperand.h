@@ -187,8 +187,11 @@ private:
     } OffsetedInfo;
   } Contents;
 
+  // ISSUE-REVIEW-aasmith-2016/11/21: Added for tiled allocator
+  unsigned SpillAliasTag;
+
   explicit MachineOperand(MachineOperandType K)
-    : OpKind(K), SubReg_TargetFlags(0), ParentMI(nullptr) {}
+    : OpKind(K), SubReg_TargetFlags(0), ParentMI(nullptr), SpillAliasTag(0) {}
 public:
   /// getType - Returns the MachineOperandType for this operand.
   ///
@@ -521,6 +524,12 @@ public:
     return Contents.MD;
   }
 
+  // ISSUE-REVIEW-aasmith-2016/11/21: Added for tiled allocator
+  unsigned getSpillTag() const {
+     assert(isReg() && "Wrong MachineOperand accessor");
+     return SpillAliasTag;
+  }
+
   //===--------------------------------------------------------------------===//
   // Mutators for various operand types.
   //===--------------------------------------------------------------------===//
@@ -561,6 +570,12 @@ public:
   void setRegMask(const uint32_t *RegMaskPtr) {
     assert(isRegMask() && "Wrong MachineOperand mutator");
     Contents.RegMask = RegMaskPtr;
+  }
+
+  // ISSUE-REVIEW-aasmith-2016/11/21: Added for tiled allocator
+  void setSpillTag(unsigned tag) {
+     assert(isReg() && "Wrong MachineOperand accessor");
+     SpillAliasTag = tag;
   }
 
   //===--------------------------------------------------------------------===//

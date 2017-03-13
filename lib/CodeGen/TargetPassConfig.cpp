@@ -88,6 +88,10 @@ static cl::opt<bool> PrintISelInput("print-isel-input", cl::Hidden,
     cl::desc("Print LLVM IR input to isel pass"));
 static cl::opt<bool> PrintGCInfo("print-gc", cl::Hidden,
     cl::desc("Dump garbage collector data"));
+static cl::opt<bool> Tiled(
+    "tiled",
+    cl::desc("Enable tiled register allocator"),
+    cl::init(false));
 static cl::opt<bool> VerifyMachineCode("verify-machineinstrs", cl::Hidden,
     cl::desc("Verify generated machine code"),
     cl::init(false),
@@ -763,9 +767,12 @@ static void initializeDefaultRegisterAllocatorOnce() {
 /// allocation may still override this for per-target regalloc
 /// selection. But -regalloc=... always takes precedence.
 FunctionPass *TargetPassConfig::createTargetRegisterAllocator(bool Optimized) {
-  if (Optimized)
-    return createGreedyRegisterAllocator();
-  else
+  if (Optimized) {
+    if (Tiled)
+      return createTiledRegisterAllocator();
+    else
+      return createGreedyRegisterAllocator();
+  } else
     return createFastRegisterAllocator();
 }
 

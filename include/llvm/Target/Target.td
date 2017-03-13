@@ -967,6 +967,20 @@ def PATCHABLE_OP : Instruction {
   let mayStore = 1;
   let hasSideEffects = 1;
 }
+
+def ENTERTILE : Instruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins variable_ops);
+  let hasSideEffects = 0;
+  bit isPseudo = 1;
+}
+def EXITTILE : Instruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins variable_ops);
+  let hasSideEffects = 0;
+  bit isPseudo = 1;
+}
+
 def PATCHABLE_FUNCTION_ENTER : Instruction {
   let OutOperandList = (outs);
   let InOperandList = (ins);

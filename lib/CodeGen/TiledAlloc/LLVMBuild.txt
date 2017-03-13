@@ -1,4 +1,4 @@
-;===- ./lib/CodeGen/LLVMBuild.txt ------------------------------*- Conf -*--===;
+;===- ./lib/CodeGen/TiledAlloc/LLVMBuild.txt -------------------*- Conf -*--===;
 ;
 ;                     The LLVM Compiler Infrastructure
 ;
@@ -15,11 +15,8 @@
 ;
 ;===------------------------------------------------------------------------===;
 
-[common]
-subdirectories = AsmPrinter SelectionDAG MIRParser GlobalISel TiledAlloc
-
 [component_0]
-type = Library
-name = CodeGen
-parent = Libraries
-required_libraries = Analysis BitReader BitWriter Core MC Scalar Support Target Tiled TransformUtils
+type = OptionalLibrary
+name = Tiled
+parent = CodeGen
+required_libraries = Core MC Support Target

@@ -757,6 +757,11 @@ namespace ISD {
     /// known nonzero constant. The only operand here is the chain.
     GET_DYNAMIC_AREA_OFFSET,
 
+    /// ENTERTILE/EXITTILE - These operators mark the beginning and end
+    /// of tiles for tiled register allocation.
+    ENTERTILE,
+    EXITTILE,
+
     /// BUILTIN_OP_END - This must be the last enum value in this list.
     /// The target-specific pre-isel opcode values start here.
     BUILTIN_OP_END
