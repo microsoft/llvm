@@ -7,10 +7,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "traverser.h"
-#include "liveness.h"
-#include "defined.h"
-#include "../graphs/graph.h"
+#include "Traverser.h"
+#include "Liveness.h"
+#include "Defined.h"
+#include "../Graphs/Graph.h"
 
 #if defined(TILED_DEBUG_SUPPORT)
 #include <iostream>

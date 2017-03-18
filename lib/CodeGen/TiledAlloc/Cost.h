@@ -17,7 +17,7 @@
 #ifndef TILED_COSTONE_H
 #define TILED_COSTONE_H
 
-#include "typedefs.h"
+#include "Typedefs.h"
 
 namespace Tiled
 {

@@ -27,20 +27,8 @@ typedef uint32_t         UInt32;
 typedef uint64_t         UInt64;
 typedef float            Float32;
 typedef double           Float64;
-
 typedef bool             Boolean;
-
 typedef size_t           Size;
-
-#if defined(_WIN64) || defined(__APPLE__)
-typedef Int64            IntPointer;
-#elif defined(_WIN32)
-typedef Int32            IntPointer;
-#else
-#error IntPointer Undefined
-#error Int Undefined
-#endif
-
 typedef int              Int; // Generic signed integer
 typedef unsigned int     UInt; // Generic unsigned integer
 

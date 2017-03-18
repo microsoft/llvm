@@ -5967,7 +5967,7 @@ Profile::Count
 Allocator::getProfileCount
 (
    llvm::MachineInstr * instruction
-)
+) const
 {
    llvm::MachineBasicBlock * mbb = instruction->getParent();
 
@@ -5985,7 +5985,7 @@ Profile::Count
 Allocator::getProfileCount
 (
    llvm::MachineBasicBlock * mbb
-)
+) const
 {
    Profile::Count count = (this->MbbFreqInfo->getBlockFreq(mbb)).getFrequency();
 

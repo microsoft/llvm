@@ -1710,8 +1710,8 @@ TileGraph::BuildGraph()
 bool
 lessProfileCount
 (
-   Graphs::FlowEdge& edge1,
-   Graphs::FlowEdge& edge2
+   const Graphs::FlowEdge& edge1,
+   const Graphs::FlowEdge& edge2
 )
 {
    return (Graphs::FlowEdge::CompareProfileCounts(edge1, edge2) == -1);
@@ -3104,7 +3104,7 @@ Tile::RemoveEntryEdge
    Graphs::FlowEdge& edge
 )
 {
-   Graphs::FlowEdgeList::const_iterator f;
+   Graphs::FlowEdgeList::iterator f;
    f = std::find_if(this->EntryEdgeList->begin(), this->EntryEdgeList->end(), std::bind2nd(equalEdges(), edge));
    if (f != this->EntryEdgeList->end()) {
       this->EntryEdgeList->erase(f);
@@ -3188,7 +3188,7 @@ Tile::RemoveExitEdge
    Graphs::FlowEdge& edge
 )
 {
-   Graphs::FlowEdgeList::const_iterator f;
+   Graphs::FlowEdgeList::iterator f;
    f = std::find_if(this->ExitEdgeList->begin(), this->ExitEdgeList->end(), std::bind2nd(equalEdges(), edge));
    if (f != this->ExitEdgeList->end()) {
       this->ExitEdgeList->erase(f);

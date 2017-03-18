@@ -37,7 +37,7 @@ bool operator==(const FlowEdge& fe1, const FlowEdge& fe2)
 };
 
 Tiled::Profile::Count
-FlowEdge::getProfileCount()
+FlowEdge::getProfileCount() const
 {
    Tiled::Profile::Count sourceBlockCount = 0;
    llvm::MachineInstr * lastBranch = (this->predecessorBlock->empty()) ? nullptr : &(this->predecessorBlock->back());
@@ -55,7 +55,7 @@ FlowEdge::getProfileCount()
 }
 
 Tiled::Profile::Probability
-FlowEdge::getProfileProbability()
+FlowEdge::getProfileProbability() const
 {
    return FlowEdge::flowGraph->getEdgeProfileProbability(this->predecessorBlock, this->successorBlock);
 }
@@ -63,14 +63,14 @@ FlowEdge::getProfileProbability()
 int
 FlowEdge::CompareProfileCounts
 (
-   Graphs::FlowEdge& edge1,
-   Graphs::FlowEdge& edge2
+   const Graphs::FlowEdge& edge1,
+   const Graphs::FlowEdge& edge2
 )
 {
    assert(!edge1.isUninitialized() && !edge2.isUninitialized());
 
-   Profile::Count count1 = edge1.getProfileCount();
-   Profile::Count count2 = edge2.getProfileCount();
+   const Profile::Count count1 = edge1.getProfileCount();
+   const Profile::Count count2 = edge2.getProfileCount();
 
    bool isEdge1Larger = Tiled::CostValue::CompareGT(count1, count2);
    if (isEdge1Larger) {
@@ -900,7 +900,7 @@ Tiled::Profile::Count
 FlowGraph::getProfileCount
 (
    llvm::MachineBasicBlock * block
-)
+) const
 {
    if (block->empty()) {
       llvm::MachineBasicBlock * uniquePredecessor = uniquePredecessorBlock(block);
@@ -917,7 +917,7 @@ FlowGraph::getEdgeProfileCount
 (
    llvm::MachineBasicBlock * sourceBlock,
    llvm::MachineBasicBlock * destinationBlock
-)
+) const
 {
    llvm::BranchProbability probability = this->MBranchProbInfo->getEdgeProbability(sourceBlock, destinationBlock);
    llvm::BlockFrequency mbbFrequency = this->MbbFreqInfo->getBlockFreq(sourceBlock);

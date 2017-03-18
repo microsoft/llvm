@@ -98,16 +98,16 @@ struct FlowEdge
    }
 
    Tiled::Profile::Count
-   getProfileCount();
+   getProfileCount() const;
 
    Tiled::Profile::Probability
-   getProfileProbability();
+   getProfileProbability() const;
 
    static int
    CompareProfileCounts
    (
-      Graphs::FlowEdge& edge1,
-      Graphs::FlowEdge& edge2
+      const Graphs::FlowEdge& edge1,
+      const Graphs::FlowEdge& edge2
    );
 
    static FlowGraph * flowGraph;
@@ -244,14 +244,14 @@ public:
    getProfileCount
    (
       llvm::MachineBasicBlock * block
-   );
+   ) const;
 
    Tiled::Profile::Count
    getEdgeProfileCount
    (
       llvm::MachineBasicBlock * sourceBlock,
       llvm::MachineBasicBlock * destinationBlock
-   );
+   ) const;
 
    Tiled::Profile::Probability
    getEdgeProfileProbability

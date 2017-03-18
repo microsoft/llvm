@@ -387,13 +387,13 @@ public:
    getProfileCount
    (
       llvm::MachineInstr * instruction
-   );
+   ) const;
 
    Profile::Count
    getProfileCount
    (
       llvm::MachineBasicBlock * block
-   );
+   ) const;
 
    llvm::SparseBitVector<> *
    GetCategoryRegisters
