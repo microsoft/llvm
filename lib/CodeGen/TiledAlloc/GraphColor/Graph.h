@@ -170,6 +170,55 @@ public:
 } // namespace RegisterAllocator
 } // namespace Tiled
 
+#define foreach_source_and_destination_opnd_editing(operand, instruction, end_iter) \
+   llvm::MachineInstr::mop_iterator end_iter = instruction->explicit_operands().end();  \
+   llvm::MachineInstr::mop_iterator operand;  \
+   llvm::MachineInstr::mop_iterator begin_iter;  \
+   bool iteratingSources;  \
+   if (instruction->uses().begin() == instruction->uses().end()) {  \
+      iteratingSources = false; begin_iter = instruction->defs().begin();  \
+   } else {  \
+      iteratingSources = true; begin_iter = instruction->uses().begin();  \
+   }  \
+   for (operand = begin_iter; operand != end_iter;)
+
+#define next_source_and_destination_opnd_editing(operand, instruction, end_iter) \
+   ++operand; \
+   if (iteratingSources && operand == end_iter) { \
+      iteratingSources = false; \
+      operand = instruction->defs().begin();  \
+      end_iter = instruction->defs().end(); \
+   }
+
+//TBD: when const-ness is enforced throughout the code, replace with: const_mop_iterator
+#define foreach_source_and_destination_opnd(operand, instruction, end_iter)  \
+   llvm::MachineInstr::mop_iterator end_iter = instruction->explicit_operands().end();  \
+   llvm::MachineInstr::mop_iterator begin_iter = instruction->uses().begin();  \
+   llvm::MachineInstr::mop_iterator operand;  \
+   bool iteratingSources;  \
+   if (begin_iter == end_iter) {  \
+      iteratingSources = false; begin_iter = instruction->defs().begin();  \
+      if (begin_iter == instruction->defs().end()) {  \
+         end_iter = instruction->implicit_operands().end(); begin_iter = instruction->implicit_operands().begin();  \
+      } else {  \
+         end_iter = instruction->defs().end();  \
+      }  \
+   } else {  \
+      iteratingSources = true;  \
+   }  \
+   for (operand = begin_iter; operand != end_iter;)
+
+#define next_source_and_destination_opnd(operand, instruction, end_iter) \
+   ++operand; \
+   if (iteratingSources && operand == end_iter) { \
+      iteratingSources = false; \
+      operand = instruction->defs().begin();  \
+      end_iter = instruction->defs().end();  \
+      if (operand == end_iter) {  \
+         end_iter = instruction->implicit_operands().end(); operand = instruction->implicit_operands().begin();  \
+      }  \
+   }
+
 
 #define foreach_source_and_destination_opnd_v2(operand, instruction, end_iter)  \
    llvm::MachineInstr::mop_iterator end_iter = instruction->operands_end();  \
@@ -205,4 +254,5 @@ public:
    } else if (operand == end_iter && operand == instruction->defs().end()) {  \
       operand = instruction->implicit_operands().begin(); end_iter = instruction->implicit_operands().end();  \
    }
+
 #endif // end TILED_GRAPHCOLOR_GRAPH_H

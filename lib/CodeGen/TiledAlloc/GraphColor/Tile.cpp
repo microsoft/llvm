@@ -2303,7 +2303,14 @@ Tile::ComputeTileFrequency()
    {
       case GraphColor::TileKind::Root:
       {
-         llvm::MachineInstr * firstInstruction = &(this->HeadBlock->front());
+         llvm::MachineInstr * firstInstruction;
+         if (!this->HeadBlock->empty()) {
+            firstInstruction = &(this->HeadBlock->front());
+         } else {
+            llvm::MachineBasicBlock * uniqueSuccessor = allocator->FunctionUnit->uniqueSuccessorBlock(this->HeadBlock);
+            assert(uniqueSuccessor != nullptr);
+            firstInstruction = &(uniqueSuccessor->front());
+         }
          llvm::MachineInstr * enterFunctionInstruction = firstInstruction;
 
          frequency = allocator->GetBiasedInstructionFrequency(enterFunctionInstruction);
@@ -4907,21 +4914,18 @@ Tile::BeginIteration
       GraphColor::SpillOptimizer *  spillOptimizer = allocator->SpillOptimizer;
 
       if (this->Iteration <= spillOptimizer->CallerSaveIterationLimit) {
-         //FIXME - FP register update is removed since it is only updating single-precision FP. 
-         //TODO support updates for all RC instead of only INT and SFP.
          std::vector<unsigned> *      registerCategoryIdToAllocatableRegisterCount
             = allocator->RegisterCategoryIdToAllocatableRegisterCount;
          const llvm::TargetRegisterClass * baseIntegerRegisterCategory = allocator->BaseIntegerRegisterCategory;
-         //const llvm::TargetRegisterClass * baseFloatRegisterCategory = allocator->BaseFloatRegisterCategory;
+         const llvm::TargetRegisterClass * baseFloatRegisterCategory = allocator->BaseFloatRegisterCategory;
 
          conflictGraph->DoPressureCalculation = true;
          conflictGraph->MaxIntegerRegisterCount
             = ((*registerCategoryIdToAllocatableRegisterCount)[baseIntegerRegisterCategory->getID()]
                + targetRegisterAllocator->IntegerPressureAdjustment());
-         //TODO:
-         //conflictGraph->MaxFloatRegisterCount
-         //   = ((*registerCategoryIdToAllocatableRegisterCount)[baseFloatRegisterCategory->getID()]
-         //      + targetRegisterAllocator->FloatPressureAdjustment());
+         conflictGraph->MaxFloatRegisterCount
+            = ((*registerCategoryIdToAllocatableRegisterCount)[baseFloatRegisterCategory->getID()]
+               + targetRegisterAllocator->FloatPressureAdjustment());
       }
 
       this->ConflictGraph = conflictGraph;
@@ -6302,91 +6306,6 @@ Tile::CountGlobalTransparentSpills()
    this->GlobalTransparentSpillCount = count;
 }
 
-
-void
-Tile::computeRegsOverwrittenInTile()
-{
-   if (this->IsRoot()) {
-      // No compensation code for the root tile, early out.
-      return;
-   }
-
-   GraphColor::TileList * nestedTiles = this->NestedTileList;
-   GraphColor::TileList::iterator ntiter;
-
-   // foreach_nested_tile_in_tile
-   for (ntiter = nestedTiles->begin(); ntiter != nestedTiles->end(); ++ntiter)
-   {
-      GraphColor::Tile * nestedTile = *ntiter;
-
-      //  Or with registers overwritten in nested tiles.
-      (*this->RegistersOverwrittentInTile) |= (*nestedTile->RegistersOverwrittentInTile);
-   }
-
-   //llvm::SparseBitVector<> * callKilledBitVector;
-   Graphs::MachineBasicBlockVector * mbbVector = this->BlockVector;
-   Graphs::MachineBasicBlockVector::iterator tb;
-
-   // foreach_block_in_tile
-   for (tb = mbbVector->begin(); tb != mbbVector->end(); ++tb)
-   {
-      llvm::MachineBasicBlock * block = *tb;
-
-      llvm::MachineBasicBlock::instr_iterator(ii);
-
-      // foreach_instr_in_block
-      for (ii = block->instr_begin(); ii != block->instr_end(); ++ii)
-      {
-         llvm::MachineInstr * instruction = &(*ii);
-         if (Tile::IsTileBoundaryInstruction(instruction)) {
-            continue;
-         }
-
-         llvm::iterator_range<llvm::MachineInstr::mop_iterator> range(instruction->defs().begin(),
-                                                                      instruction->defs().end());
-         llvm::MachineInstr::mop_iterator destOperand;
-
-         // foreach_destination_opnd
-         for (destOperand = range.begin(); destOperand != range.end(); ++destOperand)
-         {
-            this->RegistersOverwrittentInTile->set(destOperand->getReg());
-         }
-
-         llvm::iterator_range<llvm::MachineInstr::mop_iterator> imp_range(instruction->implicit_operands().begin(),
-                                                                          instruction->implicit_operands().end());
-         for (destOperand = imp_range.begin(); destOperand != imp_range.end(); ++destOperand)
-         {
-            if (destOperand->isReg() && destOperand->isDef()) {
-               this->RegistersOverwrittentInTile->set(destOperand->getReg());
-            }
-         }
-
-         if (instruction->isCall()) {
-            llvm::SparseBitVector<> callKilledBitVector;
-
-            const llvm::TargetRegisterInfo * TRI = this->MF->getSubtarget().getRegisterInfo();
-            unsigned vectorSize = ((TRI->getNumRegs() + 31) / 32) * 32;
-
-            llvm::BitVector  callPreservedBitVector(vectorSize);
-            callPreservedBitVector.setBitsInMask(TRI->getCallPreservedMask(*MF, llvm::CallingConv::Fast));
-
-            llvm::BitVector  allocatableRegBitVector(vectorSize);
-            allocatableRegBitVector = TRI->getAllocatableSet(*MF);
-            allocatableRegBitVector.reset(0);  //TODO:  is 0 a valid register in ARM, or other targets?
-
-            allocatableRegBitVector.reset(callPreservedBitVector);  // X &= ~Y
-
-            for (int reg = allocatableRegBitVector.find_first(); reg != -1; reg = allocatableRegBitVector.find_next(reg))
-            {
-               callKilledBitVector.set(reg);
-            }
-
-            (*this->RegistersOverwrittentInTile) |= callKilledBitVector;
-         }
-      }
-   }
-}
-
 void
 Tile::pruneCompensatingCopysOfTile()
 {
@@ -6460,7 +6379,7 @@ Tile::pruneCompensatingCopysOfTile()
                assert(i->getNumOperands() == 2);
                CopyVector::iterator ci = std::find(bc->second.begin(), bc->second.end(), instruction);
                llvm::MachineOperand& destination = instruction->getOperand(0);
-               unsigned destReg = destination.getReg();
+               unsigned destReg = (instruction->getOperand(0)).getReg();
 
                if (ci != bc->second.end() &&
                   !this->RegistersOverwrittentInTile->test(destReg) && !overwrittenOnBoundaryRegs.test(destReg)) {
@@ -6472,6 +6391,7 @@ Tile::pruneCompensatingCopysOfTile()
       }
    }
 }
+
 //------------------------------------------------------------------------------
 // Description:
 //

@@ -17,6 +17,7 @@
 
 namespace Tiled
 {
+   static const unsigned NoReg = 0;
 
 namespace VR
 {

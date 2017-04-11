@@ -244,6 +244,7 @@ Allocator::Initialize()
    // Initialize spill tracking alias tag bit vectors.
    this->PendingSpillAliasTagBitVector = new llvm::SparseBitVector<>();
    this->DoNotSpillAliasTagBitVector = new llvm::SparseBitVector<>();
+   this->callKilledRegBitVector = new llvm::SparseBitVector<>(/*this->Lifetime*/);
 
    // Initialize undefined register alias tags bit vector
    llvm::SparseBitVector<> * undefinedRegisterAliasTagBitVector = new llvm::SparseBitVector<>();
@@ -8117,12 +8118,11 @@ Allocator::ComputeCalleeSaveHeuristic
             break;
          }
       }
-      //TODO: assert(exitBlock != nullptr);
+      assert(exitBlock != nullptr);
 
       llvm::MachineBasicBlock * headBlock = tile->HeadBlock;
 
-
-      if (headBlock != nullptr /*TODO:*/ && exitBlock != nullptr && flowGraph->Dominates(headBlock, exitBlock)) {
+      if (headBlock != nullptr && flowGraph->Dominates(headBlock, exitBlock)) {
          // Override global decision with tile decision.  Logic for this is that if the tile dominates the
          // exit (this is a straight line function) and we go optimistic in this tile there's no benefit to
          // going conservative in the parent since there is no way to avoid compensation spills based on the

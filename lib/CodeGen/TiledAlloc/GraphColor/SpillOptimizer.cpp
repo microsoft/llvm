@@ -3180,6 +3180,7 @@ SpillOptimizer::ComputeTransfer
       (std::find(tile->EntryBlockList->begin(), tile->EntryBlockList->end(), block) != tile->EntryBlockList->end()) :
       (std::find(otherTile->EntryBlockList->begin(), otherTile->EntryBlockList->end(), block) != otherTile->EntryBlockList->end());
    //   bool            isValidInMemory = false;
+   llvm::MachineBasicBlock * uniqueSuccessor = nullptr;
 
    TargetRegisterAllocInfo *  targetRegisterAllocator = allocator->TargetRegisterAllocator;
 
@@ -3251,10 +3252,8 @@ SpillOptimizer::ComputeTransfer
             destinationOperand = new llvm::MachineOperand(llvm::MachineOperand::CreateReg(otherRegister, true)); // other allocation
          }
 
-         if (doInsert) {
-            block->addLiveIn(sourceOperand->getReg());
-            //std::cout << " *** BB#" << block->getNumber() << "  addLiveIn  R" << (sourceOperand->getReg() - 1) << std::endl;
-         }
+         unsigned  sourceRegister = sourceOperand->getReg();
+         unsigned  destinationRegister = destinationOperand->getReg();
 
          llvm::MachineInstr * insertInstruction = this->GetCopyTransferInsertionPoint(destinationOperand, sourceOperand, block);
 
@@ -3341,7 +3340,7 @@ SpillOptimizer::ComputeTransfer
                if (doInsert) {
                   allocator->Indexes->insertMachineInstrInMaps(*moveOneInstruction);
                   allocator->Indexes->insertMachineInstrInMaps(*moveTwoInstruction);
-              } else {
+               } else {
                   SpillOptimizer::RemoveInstruction(moveOneInstruction);
                   SpillOptimizer::RemoveInstruction(moveTwoInstruction);
                }
@@ -3350,9 +3349,6 @@ SpillOptimizer::ComputeTransfer
                // Insert spill through mem.
 
                assert(doInsert);
-
-               unsigned  sourceRegister;
-               unsigned  destinationRegister;
 
                if (otherIsParent == isEntry) {
                   destinationRegister = tileRegister; // this allocation
@@ -3380,6 +3376,13 @@ SpillOptimizer::ComputeTransfer
 
                Tiled::Cost enterLoadCost = this->ComputeEnterLoad(tile, boundaryTag, destinationRegister, lastInstruction, doInsert);
                cost.IncrementBy(&enterLoadCost);
+            }
+         }
+
+         if (doInsert) {
+            block->addLiveIn(sourceRegister);
+            if ((uniqueSuccessor = flowGraph->uniqueSuccessorBlock(block))) {
+               uniqueSuccessor->addLiveIn(destinationRegister);
             }
          }
       }
@@ -3419,6 +3422,9 @@ SpillOptimizer::ComputeTransfer
             }
 
             cost = ComputeEnterLoad(tile, boundaryTag, otherRegister, lastInstruction, doInsert);
+            if (doInsert && (uniqueSuccessor = flowGraph->uniqueSuccessorBlock(block))) {
+               uniqueSuccessor->addLiveIn(otherRegister);
+            }
          }
 
       } else {
@@ -3434,6 +3440,9 @@ SpillOptimizer::ComputeTransfer
             if (!otherIsParent || tile->GlobalTransitiveUsedAliasTagSet->test(globalLiveRangeTag)
                 || tile->GlobalTransitiveDefinedAliasTagSet->test(globalLiveRangeTag)) {
                cost = ComputeEnterLoad(otherTile, boundaryTag, tileRegister, lastInstruction, doInsert);
+               if (doInsert && (uniqueSuccessor = flowGraph->uniqueSuccessorBlock(block))) {
+                  uniqueSuccessor->addLiveIn(tileRegister);
+               }
             }
          } else {
             assert((otherIsParent && !isEntry) || (!otherIsParent && isEntry));
@@ -3445,11 +3454,12 @@ SpillOptimizer::ComputeTransfer
 
             // Add opt out case if the other tile isn't memory
 
-            assert(tileRegister != VR::Constants::InvalidReg);
-
             if (otherTile->IsMemory(globalLiveRangeTag)
                 && (!otherIsParent || tile->GlobalTransitiveDefinedAliasTagSet->test(globalLiveRangeTag))) {
                cost = ComputeExitSave(otherTile, boundaryTag, tileRegister, firstInstruction, doInsert);
+               if (doInsert) {
+                  block->addLiveIn(tileRegister);
+               }
             }
          }
       }
@@ -5336,8 +5346,6 @@ SpillOptimizer::Cost
             totalSpillCost.IncrementBy(&spillCost);
         }
     }
-
-    //TBD: ??? instruction->MarkAsLegalized();
 
    // update live range costs with additional info.
    liveRange->AllocationCost = totalAllocationCost;

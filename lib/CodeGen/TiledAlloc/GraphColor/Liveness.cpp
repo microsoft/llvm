@@ -375,6 +375,10 @@ Liveness::EnumerateGlobalLiveRanges
    unsigned                     aliasTag;
    GraphColor::LiveRange *      liveRange;
    unsigned                     reg;
+   llvm::SparseBitVector<> *    registerAliasTagBitVector = allocator->ScratchBitVector2;
+   llvm::SparseBitVector<> *    doNotAllocateAliasTagBitVector =
+      allocator->DoNotAllocateRegisterAliasTagBitVector;
+
    llvm::SparseBitVector<>::iterator a;
 
    // foreach_sparse_bv_bit
@@ -1016,6 +1020,7 @@ Liveness::EnumerateLiveRanges
    llvm::SparseBitVector<> *     categoryRegisterAliasTagSet;
       //This code supports only 1 category of registers, the vector is kept for future ports
    llvm::MachineFunction *          MF = allocator->FunctionUnit->machineFunction;
+   const llvm::TargetRegisterInfo * TRI = MF->getSubtarget().getRegisterInfo();
    unsigned                      aliasTag;
    unsigned                      reg;
    GraphColor::LiveRange *       liveRange = nullptr;
@@ -1069,7 +1074,6 @@ Liveness::EnumerateLiveRanges
                reg = operand->getReg();
 
                if (!(reg == VR::Constants::InitialPseudoReg || VR::Info::IsVirtualRegister(reg))) {
-                  //TODO:   (operand->IsRegisterAlias)  ??
                   unsigned aliasTag = vrInfo->GetTag(operand->getReg());
                   assert(aliasTag != VR::Constants::InvalidTag);
 
@@ -1091,6 +1095,29 @@ Liveness::EnumerateLiveRanges
             }
 
             continue;
+         }
+
+         if (instruction->isCall()) {
+            if (allocator->callKilledRegBitVector->empty()) {
+               unsigned vectorSize = ((TRI->getNumRegs() + 31) / 32) * 32;
+
+               llvm::BitVector  callPreservedBitVector(vectorSize);
+               callPreservedBitVector.setBitsInMask(TRI->getCallPreservedMask(*MF, llvm::CallingConv::Fast));
+
+               llvm::BitVector  callKilledRegBitVector(vectorSize);
+               callKilledRegBitVector = TRI->getAllocatableSet(*MF);
+               callKilledRegBitVector.reset(Tiled::NoReg);
+
+               callKilledRegBitVector.reset(callPreservedBitVector);  // X &= ~Y
+
+               for (int reg = callKilledRegBitVector.find_first(); reg != -1; reg = callKilledRegBitVector.find_next(reg))
+               {
+                  unsigned tag = vrInfo->GetTag(reg);
+                  allocator->callKilledRegBitVector->set(tag);
+               }
+            }
+
+            vrInfo->OrMayPartialTags(allocator->callKilledRegBitVector, killedRegisterAliasTagSet);
          }
 
          // foreach_dataflow_source_and_destination_opnd => foreach_register_source_and_destination_opnd
@@ -1372,7 +1399,7 @@ Liveness::EnumerateLiveRanges
 
                                        unsigned predReg = predecessorOperand->getReg();
                                        const llvm::TargetRegisterClass * operandRegisterCategory = allocator->GetBaseRegisterCategory(predReg);
-                                       const llvm::TargetRegisterClass * liveRangeRegisterCategory = allocator->GetBaseRegisterCategory(sourceOperand->getReg());
+                                       const llvm::TargetRegisterClass * liveRangeRegisterCategory = allocator->GetRegisterCategory(sourceOperand->getReg());
                                        //was: sourceLiveRange->RegisterCategory->BaseRegisterCategory
 
                                        // in a single register-type architecture the below condition will always be true
@@ -2345,7 +2372,7 @@ IsValueInstruction
    // foreach_source_opnd
    for (srcOperand = uses.begin(); srcOperand != uses.end(); ++srcOperand)
    {
-      if (srcOperand->isMetadata() || srcOperand->isRegMask() || (srcOperand->isReg() && srcOperand->isDef() /*impl*/)) {
+      if (srcOperand->isMetadata() || srcOperand->isRegMask() || (srcOperand->isReg() && (/*impl*/ srcOperand->isDef() || srcOperand->isUndef()))) {
          return false;
       }
       hasUses = true;

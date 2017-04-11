@@ -227,7 +227,7 @@ public:
       BaseFloatRegisterCategory(nullptr), BaseIntegerRegisterCategory(nullptr),
       BiasedEntryCount(), CallCountConservativeThreshold(std::numeric_limits<unsigned>::max()),
       CallerSaveSpillLiveRangeIdSetScratch(nullptr), ColdCostModel(nullptr), CostSpillSymbol(std::numeric_limits<Graphs::FrameIndex>::max()),
-      DoNotAllocateRegisterAliasTagBitVector(nullptr), DoNotSpillAliasTagBitVector(nullptr), DoPassTwoReallocate(true),
+      DoNotAllocateRegisterAliasTagBitVector(nullptr), DoNotSpillAliasTagBitVector(nullptr), callKilledRegBitVector(nullptr), DoPassTwoReallocate(true),
       DummySpillSymbol(std::numeric_limits<Graphs::FrameIndex>::max()), EarlyOutTraceBlockSizeLimit(50), EntryProfileCount(),
       FlowExtendedBasicBlockReversePostOrder(nullptr), FlowReversePostOrder(nullptr), FunctionUnit(nullptr), LocalIdMap(nullptr),
       MF(nullptr), TRI(nullptr), VRM(nullptr), Indexes(nullptr), LoopInfo(nullptr), AA(nullptr), MbbFreqInfo(nullptr), MBranchProbInfo(nullptr),
@@ -711,6 +711,7 @@ public:
 
    llvm::SparseBitVector<> *                   DoNotAllocateRegisterAliasTagBitVector;
    llvm::SparseBitVector<> *                   DoNotSpillAliasTagBitVector;
+   llvm::SparseBitVector<> *                   callKilledRegBitVector;
    bool                                        DoPassTwoReallocate;
    /*
    bool

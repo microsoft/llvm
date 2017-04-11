@@ -52,20 +52,17 @@ struct FlowEdge
 
    friend bool operator==(const FlowEdge &, const FlowEdge &);
 
-   bool
-   isUninitialized()
+   bool isUninitialized() const
    {
       return (this->predecessorBlock == nullptr || this->successorBlock == nullptr);
    }
 
-   bool
-   isCritical()
+   bool isCritical() const
    {
       return (this->predecessorBlock->succ_size() > 1 && this->successorBlock->pred_size() > 1);
    }
 
-   bool
-   isBack
+   bool isBack
    (
       llvm::MachineLoopInfo * mli
    )
@@ -74,8 +71,7 @@ struct FlowEdge
       return (mli->isLoopHeader(succBlock) && (mli->getLoopFor(succBlock)->contains(mli->getLoopFor(this->predecessorBlock))));
    }
 
-   bool
-   isSplittable()
+   bool isSplittable()
    {
       if (this->successorBlock->isEHPad())
          return false;
@@ -97,14 +93,11 @@ struct FlowEdge
       return true;
    }
 
-   Tiled::Profile::Count
-   getProfileCount() const;
+   Tiled::Profile::Count getProfileCount() const;
 
-   Tiled::Profile::Probability
-   getProfileProbability() const;
+   Tiled::Profile::Probability getProfileProbability() const;
 
-   static int
-   CompareProfileCounts
+   static int CompareProfileCounts
    (
       const Graphs::FlowEdge& edge1,
       const Graphs::FlowEdge& edge2
@@ -131,9 +124,9 @@ struct SlotEntry
       Tiled::VR::StorageClass  storage = Tiled::VR::StorageClass::IllegalSentinel
    ) : frameSlot(index), storageClass(storage) {}
 };
-  
 //TBD: typedef stdext::hash_map<unsigned, Graphs::FrameIndex> OperandToSlotMap;
 typedef std::map<unsigned, Graphs::SlotEntry> OperandToSlotMap;
+
 
 class FlowGraph
 {
@@ -150,14 +143,14 @@ public:
 
    FlowGraph(llvm::Pass& P) : pass(P) {}
 
-   llvm::Pass&                 pass;
-   llvm::MachineFunction *     machineFunction;
-   llvm::MachineDominatorTree* MDT;
-   llvm::MachineLoopInfo *     LoopInfo;
-   llvm::MachineBasicBlock *   StartNode;
-   llvm::MachineBasicBlock *   EndNode;
-   Tiled::VR::Info *           vrInfo;
-   llvm::MachineBlockFrequencyInfo * MbbFreqInfo;
+   llvm::Pass&                          pass;
+   llvm::MachineFunction *              machineFunction;
+   llvm::MachineDominatorTree*          MDT;
+   llvm::MachineLoopInfo *              LoopInfo;
+   llvm::MachineBasicBlock *            StartNode;
+   llvm::MachineBasicBlock *            EndNode;
+   Tiled::VR::Info *                    vrInfo;
+   llvm::MachineBlockFrequencyInfo *    MbbFreqInfo;
    llvm::MachineBranchProbabilityInfo * MBranchProbInfo;
 
    llvm::MachineBasicBlock *
@@ -193,6 +186,7 @@ public:
       Graphs::FlowEdge&         edge,
       llvm::MachineBasicBlock * newSuccessorBlock
    );
+
 
    void
    NewEdge
