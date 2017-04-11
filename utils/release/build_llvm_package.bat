@@ -51,7 +51,7 @@ svn.exe export -r %revision% http://llvm.org/svn/llvm-project/lldb/%branch% llvm
 
 
 REM Setting CMAKE_CL_SHOWINCLUDES_PREFIX to work around PR27226.
-set cmake_flags=-DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON -DLLVM_USE_CRT_RELEASE=MT -DCLANG_FORMAT_VS_VERSION=%clang_format_vs_version% -DPACKAGE_VERSION=%package_version% -DLLDB_RELOCATABLE_PYTHON=1 -DLLDB_TEST_COMPILER=%cd%\build32_stage0\bin\clang.exe -DCMAKE_CL_SHOWINCLUDES_PREFIX="Note: including file: "
+set cmake_flags=-DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON -DCMAKE_INSTALL_UCRT_LIBRARIES=ON -DCLANG_FORMAT_VS_VERSION=%clang_format_vs_version% -DPACKAGE_VERSION=%package_version% -DLLDB_RELOCATABLE_PYTHON=1 -DLLDB_TEST_COMPILER=%cd%\build32_stage0\bin\clang.exe -DCMAKE_CL_SHOWINCLUDES_PREFIX="Note: including file: "
 
 REM TODO: Run all tests, including lld and compiler-rt.
 
@@ -70,12 +70,22 @@ mkdir build32
 cd build32
 set CC=..\build32_stage0\bin\clang-cl
 set CXX=..\build32_stage0\bin\clang-cl
-cmake -GNinja %cmake_flags% -DBUILD_CLANG_FORMAT_VS_PLUGIN=ON -DPYTHON_HOME=%python32_dir% ..\llvm || exit /b
+cmake -GNinja %cmake_flags% -DPYTHON_HOME=%python32_dir% ..\llvm || exit /b
 ninja all || exit /b
 ninja check || ninja check || ninja check || exit /b
 ninja check-clang || ninja check-clang || ninja check-clang ||  exit /b
 copy ..\llvm\tools\clang\tools\clang-format-vs\ClangFormat\bin\Release\ClangFormat.vsix ClangFormat-r%revision%.vsix
 ninja package || exit /b
+cd ..
+
+REM The plug-in is built separately as it uses a statically linked clang-cl.exe.
+mkdir build_vsix
+cd build_vsix
+set CC=..\build32_stage0\bin\clang-cl
+set CXX=..\build32_stage0\bin\clang-cl
+cmake -GNinja %cmake_flags% -DLLVM_USE_CRT_RELEASE=MT -DBUILD_CLANG_FORMAT_VS_PLUGIN=ON -DPYTHON_HOME=%python32_dir% ..\llvm || exit /b
+ninja clang_format_vsix || exit /b
+copy ..\llvm\tools\clang\tools\clang-format-vs\ClangFormat\bin\Release\ClangFormat.vsix ClangFormat-r%revision%.vsix
 cd ..
 
 

@@ -42,8 +42,6 @@
 using namespace llvm;
 using namespace lowertypetests;
 
-using SummaryAction = LowerTypeTestsSummaryAction;
-
 #define DEBUG_TYPE "lowertypetests"
 
 STATISTIC(ByteArraySizeBits, "Byte array size in bits");
@@ -57,13 +55,13 @@ static cl::opt<bool> AvoidReuse(
     cl::desc("Try to avoid reuse of byte array addresses using aliases"),
     cl::Hidden, cl::init(true));
 
-static cl::opt<SummaryAction> ClSummaryAction(
+static cl::opt<PassSummaryAction> ClSummaryAction(
     "lowertypetests-summary-action",
     cl::desc("What to do with the summary when running this pass"),
-    cl::values(clEnumValN(SummaryAction::None, "none", "Do nothing"),
-               clEnumValN(SummaryAction::Import, "import",
+    cl::values(clEnumValN(PassSummaryAction::None, "none", "Do nothing"),
+               clEnumValN(PassSummaryAction::Import, "import",
                           "Import typeid resolutions from summary and globals"),
-               clEnumValN(SummaryAction::Export, "export",
+               clEnumValN(PassSummaryAction::Export, "export",
                           "Export typeid resolutions to summary and globals")),
     cl::Hidden);
 
@@ -234,8 +232,8 @@ public:
 class LowerTypeTestsModule {
   Module &M;
 
-  SummaryAction Action;
-  ModuleSummaryIndex *Summary;
+  ModuleSummaryIndex *ExportSummary;
+  const ModuleSummaryIndex *ImportSummary;
 
   bool LinkerSubsectionsViaSymbols;
   Triple::ArchType Arch;
@@ -267,7 +265,7 @@ class LowerTypeTestsModule {
   /// regular LTO or the regular LTO phase of ThinLTO), or indirectly using type
   /// identifier summaries and external symbol references (in ThinLTO backends).
   struct TypeIdLowering {
-    TypeTestResolution::Kind TheKind;
+    TypeTestResolution::Kind TheKind = TypeTestResolution::Unsat;
 
     /// All except Unsat: the start address within the combined global.
     Constant *OffsetedGlobal;
@@ -334,8 +332,8 @@ class LowerTypeTestsModule {
   void createJumpTable(Function *F, ArrayRef<GlobalTypeMember *> Functions);
 
 public:
-  LowerTypeTestsModule(Module &M, SummaryAction Action,
-                       ModuleSummaryIndex *Summary);
+  LowerTypeTestsModule(Module &M, ModuleSummaryIndex *ExportSummary,
+                       const ModuleSummaryIndex *ImportSummary);
   bool lower();
 
   // Lower the module using the action and summary passed as command line
@@ -348,15 +346,17 @@ struct LowerTypeTests : public ModulePass {
 
   bool UseCommandLine = false;
 
-  SummaryAction Action;
-  ModuleSummaryIndex *Summary;
+  ModuleSummaryIndex *ExportSummary;
+  const ModuleSummaryIndex *ImportSummary;
 
   LowerTypeTests() : ModulePass(ID), UseCommandLine(true) {
     initializeLowerTypeTestsPass(*PassRegistry::getPassRegistry());
   }
 
-  LowerTypeTests(SummaryAction Action, ModuleSummaryIndex *Summary)
-      : ModulePass(ID), Action(Action), Summary(Summary) {
+  LowerTypeTests(ModuleSummaryIndex *ExportSummary,
+                 const ModuleSummaryIndex *ImportSummary)
+      : ModulePass(ID), ExportSummary(ExportSummary),
+        ImportSummary(ImportSummary) {
     initializeLowerTypeTestsPass(*PassRegistry::getPassRegistry());
   }
 
@@ -365,7 +365,7 @@ struct LowerTypeTests : public ModulePass {
       return false;
     if (UseCommandLine)
       return LowerTypeTestsModule::runForTesting(M);
-    return LowerTypeTestsModule(M, Action, Summary).lower();
+    return LowerTypeTestsModule(M, ExportSummary, ImportSummary).lower();
   }
 };
 
@@ -375,9 +375,10 @@ INITIALIZE_PASS(LowerTypeTests, "lowertypetests", "Lower type metadata", false,
                 false)
 char LowerTypeTests::ID = 0;
 
-ModulePass *llvm::createLowerTypeTestsPass(SummaryAction Action,
-                                           ModuleSummaryIndex *Summary) {
-  return new LowerTypeTests(Action, Summary);
+ModulePass *
+llvm::createLowerTypeTestsPass(ModuleSummaryIndex *ExportSummary,
+                               const ModuleSummaryIndex *ImportSummary) {
+  return new LowerTypeTests(ExportSummary, ImportSummary);
 }
 
 /// Build a bit set for TypeId using the object layouts in
@@ -501,8 +502,7 @@ Value *LowerTypeTestsModule::createBitSetTest(IRBuilder<> &B,
     return createMaskedBitTest(B, TIL.InlineBits, BitOffset);
   } else {
     Constant *ByteArray = TIL.TheByteArray;
-    if (!LinkerSubsectionsViaSymbols && AvoidReuse &&
-        Action != SummaryAction::Import) {
+    if (!LinkerSubsectionsViaSymbols && AvoidReuse && !ImportSummary) {
       // Each use of the byte array uses a different alias. This makes the
       // backend less likely to reuse previously computed byte array addresses,
       // improving the security of the CFI mechanism based on this pass.
@@ -602,8 +602,7 @@ Value *LowerTypeTestsModule::lowerTypeTestCall(Metadata *TypeId, CallInst *CI,
                      IntPtrTy));
   Value *BitOffset = B.CreateOr(OffsetSHR, OffsetSHL);
 
-  Constant *BitSizeConst = ConstantExpr::getZExtOrBitCast(TIL.SizeM1, IntPtrTy);
-  Value *OffsetInRange = B.CreateICmpULE(BitOffset, BitSizeConst);
+  Value *OffsetInRange = B.CreateICmpULE(BitOffset, TIL.SizeM1);
 
   // If the bit set is all ones, testing against it is unnecessary.
   if (TIL.TheKind == TypeTestResolution::AllOnes)
@@ -703,7 +702,8 @@ void LowerTypeTestsModule::buildBitSetsFromGlobalVariables(
 /// information about the type identifier.
 void LowerTypeTestsModule::exportTypeId(StringRef TypeId,
                                         const TypeIdLowering &TIL) {
-  TypeTestResolution &TTRes = Summary->getTypeIdSummary(TypeId).TTRes;
+  TypeTestResolution &TTRes =
+      ExportSummary->getOrInsertTypeIdSummary(TypeId).TTRes;
   TTRes.TheKind = TIL.TheKind;
 
   auto ExportGlobal = [&](StringRef Name, Constant *C) {
@@ -741,13 +741,15 @@ void LowerTypeTestsModule::exportTypeId(StringRef TypeId,
 
 LowerTypeTestsModule::TypeIdLowering
 LowerTypeTestsModule::importTypeId(StringRef TypeId) {
-  TypeTestResolution &TTRes = Summary->getTypeIdSummary(TypeId).TTRes;
+  const TypeIdSummary *TidSummary = ImportSummary->getTypeIdSummary(TypeId);
+  if (!TidSummary)
+    return {}; // Unsat: no globals match this type id.
+  const TypeTestResolution &TTRes = TidSummary->TTRes;
 
   TypeIdLowering TIL;
   TIL.TheKind = TTRes.TheKind;
 
   auto ImportGlobal = [&](StringRef Name, unsigned AbsWidth) {
-    unsigned PtrWidth = IntPtrTy->getBitWidth();
     Constant *C =
         M.getOrInsertGlobal(("__typeid_" + TypeId + "_" + Name).str(), Int8Ty);
     auto *GV = dyn_cast<GlobalVariable>(C);
@@ -758,13 +760,12 @@ LowerTypeTestsModule::importTypeId(StringRef TypeId) {
 
     GV->setVisibility(GlobalValue::HiddenVisibility);
     auto SetAbsRange = [&](uint64_t Min, uint64_t Max) {
-      auto *T = IntegerType::get(M.getContext(), PtrWidth);
-      auto *MinC = ConstantAsMetadata::get(ConstantInt::get(T, Min));
-      auto *MaxC = ConstantAsMetadata::get(ConstantInt::get(T, Max));
+      auto *MinC = ConstantAsMetadata::get(ConstantInt::get(IntPtrTy, Min));
+      auto *MaxC = ConstantAsMetadata::get(ConstantInt::get(IntPtrTy, Max));
       GV->setMetadata(LLVMContext::MD_absolute_symbol,
                       MDNode::get(M.getContext(), {MinC, MaxC}));
     };
-    if (AbsWidth == PtrWidth)
+    if (AbsWidth == IntPtrTy->getBitWidth())
       SetAbsRange(~0ull, ~0ull); // Full set.
     else if (AbsWidth)
       SetAbsRange(0, 1ull << AbsWidth);
@@ -832,14 +833,12 @@ void LowerTypeTestsModule::lowerTypeTestCalls(
     TIL.OffsetedGlobal = ConstantExpr::getGetElementPtr(
         Int8Ty, CombinedGlobalAddr, ConstantInt::get(IntPtrTy, BSI.ByteOffset)),
     TIL.AlignLog2 = ConstantInt::get(Int8Ty, BSI.AlignLog2);
+    TIL.SizeM1 = ConstantInt::get(IntPtrTy, BSI.BitSize - 1);
     if (BSI.isAllOnes()) {
       TIL.TheKind = (BSI.BitSize == 1) ? TypeTestResolution::Single
                                        : TypeTestResolution::AllOnes;
-      TIL.SizeM1 = ConstantInt::get((BSI.BitSize <= 128) ? Int8Ty : Int32Ty,
-                                    BSI.BitSize - 1);
     } else if (BSI.BitSize <= 64) {
       TIL.TheKind = TypeTestResolution::Inline;
-      TIL.SizeM1 = ConstantInt::get(Int8Ty, BSI.BitSize - 1);
       uint64_t InlineBits = 0;
       for (auto Bit : BSI.Bits)
         InlineBits |= uint64_t(1) << Bit;
@@ -850,8 +849,6 @@ void LowerTypeTestsModule::lowerTypeTestCalls(
             (BSI.BitSize <= 32) ? Int32Ty : Int64Ty, InlineBits);
     } else {
       TIL.TheKind = TypeTestResolution::ByteArray;
-      TIL.SizeM1 = ConstantInt::get((BSI.BitSize <= 128) ? Int8Ty : Int32Ty,
-                                    BSI.BitSize - 1);
       ++NumByteArraysCreated;
       ByteArrayInfo *BAI = createByteArray(BSI);
       TIL.TheByteArray = BAI->ByteArray;
@@ -883,9 +880,9 @@ void LowerTypeTestsModule::verifyTypeMDNode(GlobalObject *GO, MDNode *Type) {
     report_fatal_error(
         "A member of a type identifier may not have an explicit section");
 
-  if (isa<GlobalVariable>(GO) && GO->isDeclarationForLinker())
-    report_fatal_error(
-        "A global var member of a type identifier must be a definition");
+  // FIXME: We previously checked that global var member of a type identifier
+  // must be a definition, but the IR linker may leave type metadata on
+  // declarations. We should restore this check after fixing PR31759.
 
   auto OffsetConstMD = dyn_cast<ConstantAsMetadata>(Type->getOperand(0));
   if (!OffsetConstMD)
@@ -1299,9 +1296,11 @@ void LowerTypeTestsModule::buildBitSetsFromDisjointSet(
 }
 
 /// Lower all type tests in this module.
-LowerTypeTestsModule::LowerTypeTestsModule(Module &M, SummaryAction Action,
-                                           ModuleSummaryIndex *Summary)
-    : M(M), Action(Action), Summary(Summary) {
+LowerTypeTestsModule::LowerTypeTestsModule(
+    Module &M, ModuleSummaryIndex *ExportSummary,
+    const ModuleSummaryIndex *ImportSummary)
+    : M(M), ExportSummary(ExportSummary), ImportSummary(ImportSummary) {
+  assert(!(ExportSummary && ImportSummary));
   Triple TargetTriple(M.getTargetTriple());
   LinkerSubsectionsViaSymbols = TargetTriple.isMacOSX();
   Arch = TargetTriple.getArch();
@@ -1325,7 +1324,11 @@ bool LowerTypeTestsModule::runForTesting(Module &M) {
     ExitOnErr(errorCodeToError(In.error()));
   }
 
-  bool Changed = LowerTypeTestsModule(M, ClSummaryAction, &Summary).lower();
+  bool Changed =
+      LowerTypeTestsModule(
+          M, ClSummaryAction == PassSummaryAction::Export ? &Summary : nullptr,
+          ClSummaryAction == PassSummaryAction::Import ? &Summary : nullptr)
+          .lower();
 
   if (!ClWriteSummary.empty()) {
     ExitOnError ExitOnErr("-lowertypetests-write-summary: " + ClWriteSummary +
@@ -1344,13 +1347,15 @@ bool LowerTypeTestsModule::runForTesting(Module &M) {
 bool LowerTypeTestsModule::lower() {
   Function *TypeTestFunc =
       M.getFunction(Intrinsic::getName(Intrinsic::type_test));
-  if ((!TypeTestFunc || TypeTestFunc->use_empty()) &&
-      Action != SummaryAction::Export)
+  if ((!TypeTestFunc || TypeTestFunc->use_empty()) && !ExportSummary)
     return false;
 
-  if (Action == SummaryAction::Import) {
-    for (const Use &U : TypeTestFunc->uses())
-      importTypeTest(cast<CallInst>(U.getUser()));
+  if (ImportSummary) {
+    for (auto UI = TypeTestFunc->use_begin(), UE = TypeTestFunc->use_end();
+         UI != UE;) {
+      auto *CI = cast<CallInst>((*UI++).getUser());
+      importTypeTest(CI);
+    }
     return true;
   }
 
@@ -1377,6 +1382,9 @@ bool LowerTypeTestsModule::lower() {
   unsigned I = 0;
   SmallVector<MDNode *, 2> Types;
   for (GlobalObject &GO : M.global_objects()) {
+    if (isa<GlobalVariable>(GO) && GO.isDeclarationForLinker())
+      continue;
+
     Types.clear();
     GO.getMetadata(LLVMContext::MD_type, Types);
     if (Types.empty())
@@ -1423,7 +1431,7 @@ bool LowerTypeTestsModule::lower() {
     }
   }
 
-  if (Action == SummaryAction::Export) {
+  if (ExportSummary) {
     DenseMap<GlobalValue::GUID, TinyPtrVector<Metadata *>> MetadataByGUID;
     for (auto &P : TypeIdInfo) {
       if (auto *TypeId = dyn_cast<MDString>(P.first))
@@ -1431,7 +1439,7 @@ bool LowerTypeTestsModule::lower() {
             TypeId);
     }
 
-    for (auto &P : *Summary) {
+    for (auto &P : *ExportSummary) {
       for (auto &S : P.second) {
         auto *FS = dyn_cast<FunctionSummary>(S.get());
         if (!FS)
@@ -1502,8 +1510,9 @@ bool LowerTypeTestsModule::lower() {
 
 PreservedAnalyses LowerTypeTestsPass::run(Module &M,
                                           ModuleAnalysisManager &AM) {
-  bool Changed =
-      LowerTypeTestsModule(M, SummaryAction::None, /*Summary=*/nullptr).lower();
+  bool Changed = LowerTypeTestsModule(M, /*ExportSummary=*/nullptr,
+                                      /*ImportSummary=*/nullptr)
+                     .lower();
   if (!Changed)
     return PreservedAnalyses::all();
   return PreservedAnalyses::none();

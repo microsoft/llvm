@@ -41,6 +41,8 @@ STATISTIC(NumSDivs,     "Number of sdiv converted to udiv");
 STATISTIC(NumAShrs,     "Number of ashr converted to lshr");
 STATISTIC(NumSRems,     "Number of srem converted to urem");
 
+static cl::opt<bool> DontProcessAdds("cvp-dont-process-adds", cl::init(true));
+
 namespace {
   class CorrelatedValuePropagation : public FunctionPass {
   public:
@@ -233,8 +235,7 @@ static bool processSwitch(SwitchInst *SI, LazyValueInfo *LVI) {
   // Analyse each switch case in turn.  This is done in reverse order so that
   // removing a case doesn't cause trouble for the iteration.
   bool Changed = false;
-  for (SwitchInst::CaseIt CI = SI->case_end(), CE = SI->case_begin(); CI-- != CE;
-       ) {
+  for (auto CI = SI->case_begin(), CE = SI->case_end(); CI != CE;) {
     ConstantInt *Case = CI.getCaseValue();
 
     // Check to see if the switch condition is equal to/not equal to the case
@@ -269,7 +270,8 @@ static bool processSwitch(SwitchInst *SI, LazyValueInfo *LVI) {
     if (State == LazyValueInfo::False) {
       // This case never fires - remove it.
       CI.getCaseSuccessor()->removePredecessor(BB);
-      SI->removeCase(CI); // Does not invalidate the iterator.
+      CI = SI->removeCase(CI);
+      CE = SI->case_end();
 
       // The condition can be modified by removePredecessor's PHI simplification
       // logic.
@@ -277,7 +279,9 @@ static bool processSwitch(SwitchInst *SI, LazyValueInfo *LVI) {
 
       ++NumDeadCases;
       Changed = true;
-    } else if (State == LazyValueInfo::True) {
+      continue;
+    }
+    if (State == LazyValueInfo::True) {
       // This case always fires.  Arrange for the switch to be turned into an
       // unconditional branch by replacing the switch condition with the case
       // value.
@@ -286,6 +290,9 @@ static bool processSwitch(SwitchInst *SI, LazyValueInfo *LVI) {
       Changed = true;
       break;
     }
+
+    // Increment the case iterator sense we didn't delete it.
+    ++CI;
   }
 
   if (Changed)
@@ -320,7 +327,7 @@ static bool processCallSite(CallSite CS, LazyValueInfo *LVI) {
   if (Indices.empty())
     return false;
 
-  AttributeSet AS = CS.getAttributes();
+  AttributeList AS = CS.getAttributes();
   LLVMContext &Ctx = CS.getInstruction()->getContext();
   AS = AS.addAttribute(Ctx, Indices, Attribute::get(Ctx, Attribute::NonNull));
   CS.setAttributes(AS);
@@ -404,6 +411,9 @@ static bool processAShr(BinaryOperator *SDI, LazyValueInfo *LVI) {
 
 static bool processAdd(BinaryOperator *AddOp, LazyValueInfo *LVI) {
   typedef OverflowingBinaryOperator OBO;
+
+  if (DontProcessAdds)
+    return false;
 
   if (AddOp->getType()->isVectorTy() || hasLocalDefs(AddOp))
     return false;
@@ -564,10 +574,6 @@ CorrelatedValuePropagationPass::run(Function &F, FunctionAnalysisManager &AM) {
 
   LazyValueInfo *LVI = &AM.getResult<LazyValueAnalysis>(F);
   bool Changed = runImpl(F, LVI);
-
-  // FIXME: We need to invalidate LVI to avoid PR28400. Is there a better
-  // solution?
-  AM.invalidate<LazyValueAnalysis>(F);
 
   if (!Changed)
     return PreservedAnalyses::all();

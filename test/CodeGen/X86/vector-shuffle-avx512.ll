@@ -10,7 +10,7 @@ define <8 x float> @expand(<4 x float> %a) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX64-NEXT:    movb $5, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vexpandps %ymm0, %ymm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -25,7 +25,7 @@ define <8 x float> @expand(<4 x float> %a) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX32-NEXT:    movb $5, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vexpandps %ymm0, %ymm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -44,7 +44,7 @@ define <8 x float> @expand1(<4 x float> %a ) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX64-NEXT:    movb $-86, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vexpandps %ymm0, %ymm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -61,7 +61,7 @@ define <8 x float> @expand1(<4 x float> %a ) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX32-NEXT:    movb $-86, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vexpandps %ymm0, %ymm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -83,7 +83,7 @@ define <4 x double> @expand2(<2 x double> %a) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX64-NEXT:    movb $9, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vexpandpd %ymm0, %ymm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -99,7 +99,7 @@ define <4 x double> @expand2(<2 x double> %a) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX32-NEXT:    movb $9, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vexpandpd %ymm0, %ymm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -120,13 +120,12 @@ define <8 x i32> @expand3(<4 x i32> %a ) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX64-NEXT:    movb $-127, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vpexpandd %ymm0, %ymm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
 ; KNL64-LABEL: expand3:
 ; KNL64:       # BB#0:
-; KNL64-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; KNL64-NEXT:    vpbroadcastq %xmm0, %ymm0
 ; KNL64-NEXT:    vpxor %ymm1, %ymm1, %ymm1
 ; KNL64-NEXT:    vpblendd {{.*#+}} ymm0 = ymm0[0],ymm1[1,2,3,4,5,6],ymm0[7]
@@ -136,13 +135,12 @@ define <8 x i32> @expand3(<4 x i32> %a ) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX32-NEXT:    movb $-127, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vpexpandd %ymm0, %ymm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
 ; KNL32-LABEL: expand3:
 ; KNL32:       # BB#0:
-; KNL32-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; KNL32-NEXT:    vpbroadcastq %xmm0, %ymm0
 ; KNL32-NEXT:    vpxor %ymm1, %ymm1, %ymm1
 ; KNL32-NEXT:    vpblendd {{.*#+}} ymm0 = ymm0[0],ymm1[1,2,3,4,5,6],ymm0[7]
@@ -157,7 +155,7 @@ define <4 x i64> @expand4(<2 x i64> %a ) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX64-NEXT:    movb $9, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vpexpandq %ymm0, %ymm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -173,7 +171,7 @@ define <4 x i64> @expand4(<2 x i64> %a ) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX32-NEXT:    movb $9, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vpexpandq %ymm0, %ymm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -255,7 +253,7 @@ define <16 x float> @expand7(<8 x float> %a) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX64-NEXT:    movw $1285, %ax # imm = 0x505
-; SKX64-NEXT:    kmovw %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vexpandps %zmm0, %zmm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -271,7 +269,7 @@ define <16 x float> @expand7(<8 x float> %a) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX32-NEXT:    movw $1285, %ax # imm = 0x505
-; SKX32-NEXT:    kmovw %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vexpandps %zmm0, %zmm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -291,7 +289,7 @@ define <16 x float> @expand8(<8 x float> %a ) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX64-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX64-NEXT:    kmovw %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vexpandps %zmm0, %zmm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -307,7 +305,7 @@ define <16 x float> @expand8(<8 x float> %a ) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX32-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX32-NEXT:    kmovw %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vexpandps %zmm0, %zmm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -328,7 +326,7 @@ define <8 x double> @expand9(<4 x double> %a) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX64-NEXT:    movb $-127, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vexpandpd %zmm0, %zmm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -344,7 +342,7 @@ define <8 x double> @expand9(<4 x double> %a) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX32-NEXT:    movb $-127, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vexpandpd %zmm0, %zmm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -364,7 +362,7 @@ define <16 x i32> @expand10(<8 x i32> %a ) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX64-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX64-NEXT:    kmovw %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vpexpandd %zmm0, %zmm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -380,7 +378,7 @@ define <16 x i32> @expand10(<8 x i32> %a ) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX32-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX32-NEXT:    kmovw %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vpexpandd %zmm0, %zmm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -400,7 +398,7 @@ define <8 x i64> @expand11(<4 x i64> %a) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX64-NEXT:    movb $-127, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vpexpandq %zmm0, %zmm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -416,7 +414,7 @@ define <8 x i64> @expand11(<4 x i64> %a) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; SKX32-NEXT:    movb $-127, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vpexpandq %zmm0, %zmm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -507,7 +505,7 @@ define <8 x float> @expand14(<4 x float> %a) {
 ; SKX64:       # BB#0:
 ; SKX64-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX64-NEXT:    movb $20, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vexpandps %ymm0, %ymm0 {%k1} {z}
 ; SKX64-NEXT:    retq
 ;
@@ -525,7 +523,7 @@ define <8 x float> @expand14(<4 x float> %a) {
 ; SKX32:       # BB#0:
 ; SKX32-NEXT:    # kill: %XMM0<def> %XMM0<kill> %YMM0<def>
 ; SKX32-NEXT:    movb $20, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vexpandps %ymm0, %ymm0 {%k1} {z}
 ; SKX32-NEXT:    retl
 ;
@@ -683,7 +681,7 @@ define <16 x i32> @test_mm512_mask_blend_epi32(<16 x i32> %A, <16 x i32> %W){
 ; SKX64-LABEL: test_mm512_mask_blend_epi32:
 ; SKX64:       # BB#0: # %entry
 ; SKX64-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX64-NEXT:    kmovw %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vpblendmd %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX64-NEXT:    retq
 ;
@@ -697,7 +695,7 @@ define <16 x i32> @test_mm512_mask_blend_epi32(<16 x i32> %A, <16 x i32> %W){
 ; SKX32-LABEL: test_mm512_mask_blend_epi32:
 ; SKX32:       # BB#0: # %entry
 ; SKX32-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX32-NEXT:    kmovw %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vpblendmd %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX32-NEXT:    retl
 ;
@@ -716,7 +714,7 @@ define <8 x i64> @test_mm512_mask_blend_epi64(<8 x i64> %A, <8 x i64> %W){
 ; SKX64-LABEL: test_mm512_mask_blend_epi64:
 ; SKX64:       # BB#0: # %entry
 ; SKX64-NEXT:    movb $-86, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vpblendmq %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX64-NEXT:    retq
 ;
@@ -730,7 +728,7 @@ define <8 x i64> @test_mm512_mask_blend_epi64(<8 x i64> %A, <8 x i64> %W){
 ; SKX32-LABEL: test_mm512_mask_blend_epi64:
 ; SKX32:       # BB#0: # %entry
 ; SKX32-NEXT:    movb $-86, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vpblendmq %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX32-NEXT:    retl
 ;
@@ -749,7 +747,7 @@ define <16 x float> @test_mm512_mask_blend_ps(<16 x float> %A, <16 x float> %W){
 ; SKX64-LABEL: test_mm512_mask_blend_ps:
 ; SKX64:       # BB#0: # %entry
 ; SKX64-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX64-NEXT:    kmovw %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vblendmps %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX64-NEXT:    retq
 ;
@@ -763,7 +761,7 @@ define <16 x float> @test_mm512_mask_blend_ps(<16 x float> %A, <16 x float> %W){
 ; SKX32-LABEL: test_mm512_mask_blend_ps:
 ; SKX32:       # BB#0: # %entry
 ; SKX32-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX32-NEXT:    kmovw %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vblendmps %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX32-NEXT:    retl
 ;
@@ -782,7 +780,7 @@ define <8 x double> @test_mm512_mask_blend_pd(<8 x double> %A, <8 x double> %W){
 ; SKX64-LABEL: test_mm512_mask_blend_pd:
 ; SKX64:       # BB#0: # %entry
 ; SKX64-NEXT:    movb $-88, %al
-; SKX64-NEXT:    kmovb %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vblendmpd %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX64-NEXT:    retq
 ;
@@ -796,7 +794,7 @@ define <8 x double> @test_mm512_mask_blend_pd(<8 x double> %A, <8 x double> %W){
 ; SKX32-LABEL: test_mm512_mask_blend_pd:
 ; SKX32:       # BB#0: # %entry
 ; SKX32-NEXT:    movb $-88, %al
-; SKX32-NEXT:    kmovb %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vblendmpd %zmm0, %zmm1, %zmm0 {%k1}
 ; SKX32-NEXT:    retl
 ;
@@ -847,7 +845,7 @@ define <16 x i8> @test_mm_mask_blend_epi8(<16 x i8> %A, <16 x i8> %W){
 ; SKX64-LABEL: test_mm_mask_blend_epi8:
 ; SKX64:       # BB#0: # %entry
 ; SKX64-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX64-NEXT:    kmovw %eax, %k1
+; SKX64-NEXT:    kmovd %eax, %k1
 ; SKX64-NEXT:    vpblendmb %xmm0, %xmm1, %xmm0 {%k1}
 ; SKX64-NEXT:    retq
 ;
@@ -860,7 +858,7 @@ define <16 x i8> @test_mm_mask_blend_epi8(<16 x i8> %A, <16 x i8> %W){
 ; SKX32-LABEL: test_mm_mask_blend_epi8:
 ; SKX32:       # BB#0: # %entry
 ; SKX32-NEXT:    movw $-21846, %ax # imm = 0xAAAA
-; SKX32-NEXT:    kmovw %eax, %k1
+; SKX32-NEXT:    kmovd %eax, %k1
 ; SKX32-NEXT:    vpblendmb %xmm0, %xmm1, %xmm0 {%k1}
 ; SKX32-NEXT:    retl
 ;

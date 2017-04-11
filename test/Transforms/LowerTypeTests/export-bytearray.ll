@@ -13,13 +13,13 @@
 
 ; CHECK: @__typeid_typeid1_global_addr = hidden alias i8, getelementptr inbounds ({ [2048 x i8] }, { [2048 x i8] }* [[G]], i32 0, i32 0, i32 0)
 ; CHECK: @__typeid_typeid1_align = hidden alias i8, inttoptr (i8 1 to i8*)
-; CHECK: @__typeid_typeid1_size_m1 = hidden alias i8, inttoptr (i8 65 to i8*)
+; CHECK: @__typeid_typeid1_size_m1 = hidden alias i8, inttoptr (i64 65 to i8*)
 ; CHECK: @__typeid_typeid1_byte_array = hidden alias i8, i8* @bits.1
 ; CHECK: @__typeid_typeid1_bit_mask = hidden alias i8, inttoptr (i8 2 to i8*)
 
 ; CHECK: @__typeid_typeid2_global_addr = hidden alias i8, getelementptr inbounds ({ [2048 x i8] }, { [2048 x i8] }* [[G]], i32 0, i32 0, i64 4)
 ; CHECK: @__typeid_typeid2_align = hidden alias i8, inttoptr (i8 2 to i8*)
-; CHECK: @__typeid_typeid2_size_m1 = hidden alias i8, inttoptr (i32 257 to i8*)
+; CHECK: @__typeid_typeid2_size_m1 = hidden alias i8, inttoptr (i64 257 to i8*)
 ; CHECK: @__typeid_typeid2_byte_array = hidden alias i8, i8* @bits
 ; CHECK: @__typeid_typeid2_bit_mask = hidden alias i8, inttoptr (i8 1 to i8*)
 
@@ -32,7 +32,9 @@
 ; SUMMARY-NEXT:     TTRes:
 ; SUMMARY-NEXT:       Kind:            ByteArray
 ; SUMMARY-NEXT:       SizeM1BitWidth:  7
+; SUMMARY-NEXT:     WPDRes:
 ; SUMMARY-NEXT:   typeid2:
 ; SUMMARY-NEXT:     TTRes:
 ; SUMMARY-NEXT:       Kind:            ByteArray
 ; SUMMARY-NEXT:       SizeM1BitWidth:  32
+; SUMMARY-NEXT:     WPDRes:

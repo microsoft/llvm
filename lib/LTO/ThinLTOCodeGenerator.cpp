@@ -73,27 +73,6 @@ namespace {
 static cl::opt<int>
     ThreadCount("threads", cl::init(llvm::heavyweight_hardware_concurrency()));
 
-Expected<std::unique_ptr<tool_output_file>>
-setupOptimizationRemarks(LLVMContext &Ctx, int Count) {
-  if (LTOPassRemarksWithHotness)
-    Ctx.setDiagnosticHotnessRequested(true);
-
-  if (LTORemarksFilename.empty())
-    return nullptr;
-
-  std::string FileName =
-      LTORemarksFilename + ".thin." + llvm::utostr(Count) + ".yaml";
-  std::error_code EC;
-  auto DiagnosticOutputFile =
-      llvm::make_unique<tool_output_file>(FileName, EC, sys::fs::F_None);
-  if (EC)
-    return errorCodeToError(EC);
-  Ctx.setDiagnosticsOutputFile(
-      llvm::make_unique<yaml::Output>(DiagnosticOutputFile->os()));
-  DiagnosticOutputFile->keep();
-  return std::move(DiagnosticOutputFile);
-}
-
 // Simple helper to save temporary files for debug.
 static void saveTempBitcode(const Module &TheModule, StringRef TempDir,
                             unsigned count, StringRef Suffix) {
@@ -150,13 +129,13 @@ static void computePrevailingCopies(
 }
 
 static StringMap<MemoryBufferRef>
-generateModuleMap(const std::vector<MemoryBufferRef> &Modules) {
+generateModuleMap(const std::vector<ThinLTOBuffer> &Modules) {
   StringMap<MemoryBufferRef> ModuleMap;
   for (auto &ModuleBuffer : Modules) {
     assert(ModuleMap.find(ModuleBuffer.getBufferIdentifier()) ==
                ModuleMap.end() &&
            "Expect unique Buffer Identifier");
-    ModuleMap[ModuleBuffer.getBufferIdentifier()] = ModuleBuffer;
+    ModuleMap[ModuleBuffer.getBufferIdentifier()] = ModuleBuffer.getMemBuffer();
   }
   return ModuleMap;
 }
@@ -208,10 +187,12 @@ crossImportIntoModule(Module &TheModule, const ModuleSummaryIndex &Index,
 }
 
 static void optimizeModule(Module &TheModule, TargetMachine &TM,
-                           unsigned OptLevel) {
+                           unsigned OptLevel, bool Freestanding) {
   // Populate the PassManager
   PassManagerBuilder PMB;
   PMB.LibraryInfo = new TargetLibraryInfoImpl(TM.getTargetTriple());
+  if (Freestanding)
+    PMB.LibraryInfo->disableAllFunctions();
   PMB.Inliner = createFunctionInliningPass();
   // FIXME: should get it from the bitcode?
   PMB.OptLevel = OptLevel;
@@ -285,7 +266,7 @@ public:
       const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
       const GVSummaryMapTy &DefinedFunctions,
       const DenseSet<GlobalValue::GUID> &PreservedSymbols, unsigned OptLevel,
-      const TargetMachineBuilder &TMBuilder) {
+      bool Freestanding, const TargetMachineBuilder &TMBuilder) {
     if (CachePath.empty())
       return;
 
@@ -342,6 +323,7 @@ public:
       AddUnsigned(*TMBuilder.RelocModel);
     AddUnsigned(TMBuilder.CGOptLevel);
     AddUnsigned(OptLevel);
+    AddUnsigned(Freestanding);
 
     Hasher.update(ArrayRef<uint8_t>((uint8_t *)&ModHash[0], sizeof(ModHash)));
     for (auto F : ExportList)
@@ -369,7 +351,10 @@ public:
             ArrayRef<uint8_t>((const uint8_t *)&Entry, sizeof(GlobalValue::GUID)));
     }
 
-    sys::path::append(EntryPath, CachePath, toHex(Hasher.result()));
+    // This choice of file name allows the cache to be pruned (see pruneCache()
+    // in include/llvm/Support/CachePruning.h).
+    sys::path::append(EntryPath, CachePath,
+                      "llvmcache-" + toHex(Hasher.result()));
   }
 
   // Access the path to this entry in the cache.
@@ -422,7 +407,7 @@ ProcessThinLTOModule(Module &TheModule, ModuleSummaryIndex &Index,
                      const GVSummaryMapTy &DefinedGlobals,
                      const ThinLTOCodeGenerator::CachingOptions &CacheOptions,
                      bool DisableCodeGen, StringRef SaveTempsDir,
-                     unsigned OptLevel, unsigned count) {
+                     bool Freestanding, unsigned OptLevel, unsigned count) {
 
   // "Benchmark"-like optimization: single-source case
   bool SingleModule = (ModuleMap.size() == 1);
@@ -454,7 +439,7 @@ ProcessThinLTOModule(Module &TheModule, ModuleSummaryIndex &Index,
     saveTempBitcode(TheModule, SaveTempsDir, count, ".3.imported.bc");
   }
 
-  optimizeModule(TheModule, TM, OptLevel);
+  optimizeModule(TheModule, TM, OptLevel, Freestanding);
 
   saveTempBitcode(TheModule, SaveTempsDir, count, ".4.opt.bc");
 
@@ -522,13 +507,13 @@ static void initTMBuilder(TargetMachineBuilder &TMBuilder,
 } // end anonymous namespace
 
 void ThinLTOCodeGenerator::addModule(StringRef Identifier, StringRef Data) {
-  MemoryBufferRef Buffer(Data, Identifier);
+  ThinLTOBuffer Buffer(Data, Identifier);
   if (Modules.empty()) {
     // First module added, so initialize the triple and some options
     LLVMContext Context;
     StringRef TripleStr;
-    ErrorOr<std::string> TripleOrErr =
-        expectedToErrorOrAndEmitErrors(Context, getBitcodeTargetTriple(Buffer));
+    ErrorOr<std::string> TripleOrErr = expectedToErrorOrAndEmitErrors(
+        Context, getBitcodeTargetTriple(Buffer.getMemBuffer()));
     if (TripleOrErr)
       TripleStr = *TripleOrErr;
     Triple TheTriple(TripleStr);
@@ -538,8 +523,8 @@ void ThinLTOCodeGenerator::addModule(StringRef Identifier, StringRef Data) {
   else {
     LLVMContext Context;
     StringRef TripleStr;
-    ErrorOr<std::string> TripleOrErr =
-        expectedToErrorOrAndEmitErrors(Context, getBitcodeTargetTriple(Buffer));
+    ErrorOr<std::string> TripleOrErr = expectedToErrorOrAndEmitErrors(
+        Context, getBitcodeTargetTriple(Buffer.getMemBuffer()));
     if (TripleOrErr)
       TripleStr = *TripleOrErr;
     assert(TMBuilder.TheTriple.str() == TripleStr &&
@@ -588,7 +573,8 @@ std::unique_ptr<ModuleSummaryIndex> ThinLTOCodeGenerator::linkCombinedIndex() {
   uint64_t NextModuleId = 0;
   for (auto &ModuleBuffer : Modules) {
     Expected<std::unique_ptr<object::ModuleSummaryIndexObjectFile>> ObjOrErr =
-        object::ModuleSummaryIndexObjectFile::create(ModuleBuffer);
+        object::ModuleSummaryIndexObjectFile::create(
+            ModuleBuffer.getMemBuffer());
     if (!ObjOrErr) {
       // FIXME diagnose
       logAllUnhandledErrors(
@@ -779,7 +765,7 @@ void ThinLTOCodeGenerator::optimize(Module &TheModule) {
   initTMBuilder(TMBuilder, Triple(TheModule.getTargetTriple()));
 
   // Optimize now
-  optimizeModule(TheModule, *TMBuilder.create(), OptLevel);
+  optimizeModule(TheModule, *TMBuilder.create(), OptLevel, Freestanding);
 }
 
 /**
@@ -829,11 +815,22 @@ static std::string writeGeneratedObject(int count, StringRef CacheEntryPath,
 
 // Main entry point for the ThinLTO processing
 void ThinLTOCodeGenerator::run() {
+  // Prepare the resulting object vector
+  assert(ProducedBinaries.empty() && "The generator should not be reused");
+  if (SavedObjectsDirectoryPath.empty())
+    ProducedBinaries.resize(Modules.size());
+  else {
+    sys::fs::create_directories(SavedObjectsDirectoryPath);
+    bool IsDir;
+    sys::fs::is_directory(SavedObjectsDirectoryPath, IsDir);
+    if (!IsDir)
+      report_fatal_error("Unexistent dir: '" + SavedObjectsDirectoryPath + "'");
+    ProducedBinaryFiles.resize(Modules.size());
+  }
+
   if (CodeGenOnly) {
     // Perform only parallel codegen and return.
     ThreadPool Pool;
-    assert(ProducedBinaries.empty() && "The generator should not be reused");
-    ProducedBinaries.resize(Modules.size());
     int count = 0;
     for (auto &ModuleBuffer : Modules) {
       Pool.async([&](int count) {
@@ -841,11 +838,17 @@ void ThinLTOCodeGenerator::run() {
         Context.setDiscardValueNames(LTODiscardValueNames);
 
         // Parse module now
-        auto TheModule = loadModuleFromBuffer(ModuleBuffer, Context, false,
-                                              /*IsImporting*/ false);
+        auto TheModule =
+            loadModuleFromBuffer(ModuleBuffer.getMemBuffer(), Context, false,
+                                 /*IsImporting*/ false);
 
         // CodeGen
-        ProducedBinaries[count] = codegen(*TheModule);
+        auto OutputBuffer = codegen(*TheModule);
+        if (SavedObjectsDirectoryPath.empty())
+          ProducedBinaries[count] = std::move(OutputBuffer);
+        else
+          ProducedBinaryFiles[count] = writeGeneratedObject(
+              count, "", SavedObjectsDirectoryPath, *OutputBuffer);
       }, count++);
     }
 
@@ -866,18 +869,6 @@ void ThinLTOCodeGenerator::run() {
     WriteIndexToFile(*Index, OS);
   }
 
-  // Prepare the resulting object vector
-  assert(ProducedBinaries.empty() && "The generator should not be reused");
-  if (SavedObjectsDirectoryPath.empty())
-    ProducedBinaries.resize(Modules.size());
-  else {
-    sys::fs::create_directories(SavedObjectsDirectoryPath);
-    bool IsDir;
-    sys::fs::is_directory(SavedObjectsDirectoryPath, IsDir);
-    if (!IsDir)
-      report_fatal_error("Unexistent dir: '" + SavedObjectsDirectoryPath + "'");
-    ProducedBinaryFiles.resize(Modules.size());
-  }
 
   // Prepare the module map.
   auto ModuleMap = generateModuleMap(Modules);
@@ -939,8 +930,8 @@ void ThinLTOCodeGenerator::run() {
   std::iota(ModulesOrdering.begin(), ModulesOrdering.end(), 0);
   std::sort(ModulesOrdering.begin(), ModulesOrdering.end(),
             [&](int LeftIndex, int RightIndex) {
-              auto LSize = Modules[LeftIndex].getBufferSize();
-              auto RSize = Modules[RightIndex].getBufferSize();
+              auto LSize = Modules[LeftIndex].getBuffer().size();
+              auto RSize = Modules[RightIndex].getBuffer().size();
               return LSize > RSize;
             });
 
@@ -960,7 +951,7 @@ void ThinLTOCodeGenerator::run() {
                                     ImportLists[ModuleIdentifier], ExportList,
                                     ResolvedODR[ModuleIdentifier],
                                     DefinedFunctions, GUIDPreservedSymbols,
-                                    OptLevel, TMBuilder);
+                                    OptLevel, Freestanding, TMBuilder);
         auto CacheEntryPath = CacheEntry.getEntryPath();
 
         {
@@ -984,7 +975,8 @@ void ThinLTOCodeGenerator::run() {
         LLVMContext Context;
         Context.setDiscardValueNames(LTODiscardValueNames);
         Context.enableDebugTypeODRUniquing();
-        auto DiagFileOrErr = setupOptimizationRemarks(Context, count);
+        auto DiagFileOrErr = lto::setupOptimizationRemarks(
+            Context, LTORemarksFilename, LTOPassRemarksWithHotness, count);
         if (!DiagFileOrErr) {
           errs() << "Error: " << toString(DiagFileOrErr.takeError()) << "\n";
           report_fatal_error("ThinLTO: Can't get an output file for the "
@@ -992,8 +984,9 @@ void ThinLTOCodeGenerator::run() {
         }
 
         // Parse module now
-        auto TheModule = loadModuleFromBuffer(ModuleBuffer, Context, false,
-                                              /*IsImporting*/ false);
+        auto TheModule =
+            loadModuleFromBuffer(ModuleBuffer.getMemBuffer(), Context, false,
+                                 /*IsImporting*/ false);
 
         // Save temps: original file.
         saveTempBitcode(*TheModule, SaveTempsDir, count, ".0.original.bc");
@@ -1004,7 +997,7 @@ void ThinLTOCodeGenerator::run() {
             *TheModule, *Index, ModuleMap, *TMBuilder.create(), ImportList,
             ExportList, GUIDPreservedSymbols,
             ModuleToDefinedGVSummaries[ModuleIdentifier], CacheOptions,
-            DisableCodeGen, SaveTempsDir, OptLevel, count);
+            DisableCodeGen, SaveTempsDir, Freestanding, OptLevel, count);
 
         // Commit to the cache (if enabled)
         CacheEntry.write(*OutputBuffer);
@@ -1036,11 +1029,7 @@ void ThinLTOCodeGenerator::run() {
     }
   }
 
-  CachePruning(CacheOptions.Path)
-      .setPruningInterval(std::chrono::seconds(CacheOptions.PruningInterval))
-      .setEntryExpiration(std::chrono::seconds(CacheOptions.Expiration))
-      .setMaxSize(CacheOptions.MaxPercentageOfAvailableSpace)
-      .prune();
+  pruneCache(CacheOptions.Path, CacheOptions.Policy);
 
   // If statistics were requested, print them out now.
   if (llvm::AreStatisticsEnabled())

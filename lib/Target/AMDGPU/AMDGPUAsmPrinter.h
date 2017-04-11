@@ -15,6 +15,8 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPUASMPRINTER_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUASMPRINTER_H
 
+#include "AMDKernelCodeT.h"
+#include "AMDGPU.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include <cstddef>
@@ -26,6 +28,7 @@
 
 namespace llvm {
 
+class AMDGPUTargetStreamer;
 class MCOperand;
 
 class AMDGPUAsmPrinter final : public AsmPrinter {
@@ -69,13 +72,14 @@ private:
     uint16_t ReservedVGPRCount = 0;
 
     // Fixed SGPR number used to hold wave scratch offset for entire kernel
-    // execution, or uint16_t(-1) if the register is not used or not known.
+    // execution, or std::numeric_limits<uint16_t>::max() if the register is not
+    // used or not known.
     uint16_t DebuggerWavefrontPrivateSegmentOffsetSGPR =
         std::numeric_limits<uint16_t>::max();
 
     // Fixed SGPR number of the first 4 SGPRs used to hold scratch V# for entire
-    // kernel execution, or uint16_t(-1) if the register is not used or not
-    // known.
+    // kernel execution, or std::numeric_limits<uint16_t>::max() if the register
+    // is not used or not known.
     uint16_t DebuggerPrivateSegmentBufferSGPR =
         std::numeric_limits<uint16_t>::max();
 
@@ -87,6 +91,8 @@ private:
   };
 
   void getSIProgramInfo(SIProgramInfo &Out, const MachineFunction &MF) const;
+  void getAmdKernelCode(amd_kernel_code_t &Out, const SIProgramInfo &KernelInfo,
+                        const MachineFunction &MF) const;
   void findNumUsedRegistersSI(const MachineFunction &MF,
                               unsigned &NumSGPR,
                               unsigned &NumVGPR) const;
@@ -95,20 +101,27 @@ private:
   /// can correctly setup the GPU state.
   void EmitProgramInfoR600(const MachineFunction &MF);
   void EmitProgramInfoSI(const MachineFunction &MF, const SIProgramInfo &KernelInfo);
-  void EmitAmdKernelCodeT(const MachineFunction &MF,
-                          const SIProgramInfo &KernelInfo) const;
 
 public:
   explicit AMDGPUAsmPrinter(TargetMachine &TM,
                             std::unique_ptr<MCStreamer> Streamer);
 
-  bool runOnMachineFunction(MachineFunction &MF) override;
-
   StringRef getPassName() const override;
+
+  const MCSubtargetInfo* getSTI() const;
+
+  AMDGPUTargetStreamer& getTargetStreamer() const;
+
+  bool runOnMachineFunction(MachineFunction &MF) override;
 
   /// \brief Wrapper for MCInstLowering.lowerOperand() for the tblgen'erated
   /// pseudo lowering.
   bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp) const;
+
+  /// \brief Lower the specified LLVM Constant to an MCExpr.
+  /// The AsmPrinter::lowerConstantof does not know how to lower
+  /// addrspacecast, therefore they should be lowered by this function.
+  const MCExpr *lowerConstant(const Constant *CV) override;
 
   /// \brief tblgen'erated driver function for lowering simple MI->MC pseudo
   /// instructions.
@@ -126,6 +139,8 @@ public:
 
   void EmitStartOfAsmFile(Module &M) override;
 
+  void EmitEndOfAsmFile(Module &M) override;
+
   bool isBlockOnlyReachableByFallthrough(
     const MachineBasicBlock *MBB) const override;
 
@@ -136,6 +151,7 @@ public:
 protected:
   std::vector<std::string> DisasmLines, HexLines;
   size_t DisasmLineMaxLen;
+  AMDGPUAS AMDGPUASI;
 };
 
 } // end namespace llvm

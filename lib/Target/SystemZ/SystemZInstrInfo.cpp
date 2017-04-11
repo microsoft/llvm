@@ -11,12 +11,33 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "SystemZInstrInfo.h"
+#include "MCTargetDesc/SystemZMCTargetDesc.h"
+#include "SystemZ.h"
 #include "SystemZInstrBuilder.h"
-#include "SystemZTargetMachine.h"
-#include "llvm/CodeGen/LiveVariables.h"
+#include "SystemZInstrInfo.h"
+#include "SystemZSubtarget.h"
+#include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
+#include "llvm/CodeGen/LiveVariables.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Support/BranchProbability.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
+#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
+#include <cassert>
+#include <cstdint>
+#include <iterator>
 
 using namespace llvm;
 
@@ -58,11 +79,24 @@ void SystemZInstrInfo::splitMove(MachineBasicBlock::iterator MI,
   MachineInstr *EarlierMI = MF.CloneMachineInstr(&*MI);
   MBB->insert(MI, EarlierMI);
 
-  // Set up the two 64-bit registers.
+  // Set up the two 64-bit registers and remember super reg and its flags.
   MachineOperand &HighRegOp = EarlierMI->getOperand(0);
   MachineOperand &LowRegOp = MI->getOperand(0);
+  unsigned Reg128 = LowRegOp.getReg();
+  unsigned Reg128Killed = getKillRegState(LowRegOp.isKill());
+  unsigned Reg128Undef  = getUndefRegState(LowRegOp.isUndef());
   HighRegOp.setReg(RI.getSubReg(HighRegOp.getReg(), SystemZ::subreg_h64));
   LowRegOp.setReg(RI.getSubReg(LowRegOp.getReg(), SystemZ::subreg_l64));
+
+  if (MI->mayStore()) {
+    // Add implicit uses of the super register in case one of the subregs is
+    // undefined. We could track liveness and skip storing an undefined
+    // subreg, but this is hopefully rare (discovered with llvm-stress).
+    // If Reg128 was killed, set kill flag on MI.
+    unsigned Reg128UndefImpl = (Reg128Undef | RegState::Implicit);
+    MachineInstrBuilder(MF, EarlierMI).addReg(Reg128, Reg128UndefImpl);
+    MachineInstrBuilder(MF, MI).addReg(Reg128, (Reg128UndefImpl | Reg128Killed));
+  }
 
   // The address in the first (high) instruction is already correct.
   // Adjust the offset in the second (low) instruction.
@@ -186,9 +220,15 @@ void SystemZInstrInfo::expandLOCRPseudo(MachineInstr &MI, unsigned LowOpcode,
 // are low registers, otherwise use RISB[LH]G.
 void SystemZInstrInfo::expandZExtPseudo(MachineInstr &MI, unsigned LowOpcode,
                                         unsigned Size) const {
-  emitGRX32Move(*MI.getParent(), MI, MI.getDebugLoc(),
-                MI.getOperand(0).getReg(), MI.getOperand(1).getReg(), LowOpcode,
-                Size, MI.getOperand(1).isKill(), MI.getOperand(1).isUndef());
+  MachineInstrBuilder MIB =
+    emitGRX32Move(*MI.getParent(), MI, MI.getDebugLoc(),
+               MI.getOperand(0).getReg(), MI.getOperand(1).getReg(), LowOpcode,
+               Size, MI.getOperand(1).isKill(), MI.getOperand(1).isUndef());
+
+  // Keep the remaining operands as-is.
+  for (unsigned I = 2; I < MI.getNumOperands(); ++I)
+    MIB.add(MI.getOperand(I));
+
   MI.eraseFromParent();
 }
 
@@ -228,12 +268,13 @@ void SystemZInstrInfo::expandLoadStackGuard(MachineInstr *MI) const {
 // are low registers, otherwise use RISB[LH]G.  Size is the number of bits
 // taken from the low end of SrcReg (8 for LLCR, 16 for LLHR and 32 for LR).
 // KillSrc is true if this move is the last use of SrcReg.
-void SystemZInstrInfo::emitGRX32Move(MachineBasicBlock &MBB,
-                                     MachineBasicBlock::iterator MBBI,
-                                     const DebugLoc &DL, unsigned DestReg,
-                                     unsigned SrcReg, unsigned LowLowOpcode,
-                                     unsigned Size, bool KillSrc,
-                                     bool UndefSrc) const {
+MachineInstrBuilder
+SystemZInstrInfo::emitGRX32Move(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI,
+                                const DebugLoc &DL, unsigned DestReg,
+                                unsigned SrcReg, unsigned LowLowOpcode,
+                                unsigned Size, bool KillSrc,
+                                bool UndefSrc) const {
   unsigned Opcode;
   bool DestIsHigh = isHighReg(DestReg);
   bool SrcIsHigh = isHighReg(SrcReg);
@@ -244,17 +285,15 @@ void SystemZInstrInfo::emitGRX32Move(MachineBasicBlock &MBB,
   else if (!DestIsHigh && SrcIsHigh)
     Opcode = SystemZ::RISBLH;
   else {
-    BuildMI(MBB, MBBI, DL, get(LowLowOpcode), DestReg)
+    return BuildMI(MBB, MBBI, DL, get(LowLowOpcode), DestReg)
       .addReg(SrcReg, getKillRegState(KillSrc) | getUndefRegState(UndefSrc));
-    return;
   }
   unsigned Rotate = (DestIsHigh != SrcIsHigh ? 32 : 0);
-  BuildMI(MBB, MBBI, DL, get(Opcode), DestReg)
+  return BuildMI(MBB, MBBI, DL, get(Opcode), DestReg)
     .addReg(DestReg, RegState::Undef)
     .addReg(SrcReg, getKillRegState(KillSrc) | getUndefRegState(UndefSrc))
     .addImm(32 - Size).addImm(128 + 31).addImm(Rotate);
 }
-
 
 MachineInstr *SystemZInstrInfo::commuteInstructionImpl(MachineInstr &MI,
                                                        bool NewMI,
@@ -283,7 +322,6 @@ MachineInstr *SystemZInstrInfo::commuteInstructionImpl(MachineInstr &MI,
     return TargetInstrInfo::commuteInstructionImpl(MI, NewMI, OpIdx1, OpIdx2);
   }
 }
-
 
 // If MI is a simple load or store for a frame object, return the register
 // it loads or stores and set FrameIndex to the index of the frame object.
@@ -588,7 +626,6 @@ bool SystemZInstrInfo::optimizeCompareInstr(
          removeIPMBasedCompare(Compare, SrcReg, MRI, &RI);
 }
 
-
 bool SystemZInstrInfo::canInsertSelect(const MachineBasicBlock &MBB,
                                        ArrayRef<MachineOperand> Pred,
                                        unsigned TrueReg, unsigned FalseReg,
@@ -642,6 +679,12 @@ void SystemZInstrInfo::insertSelect(MachineBasicBlock &MBB,
     else {
       Opc = SystemZ::LOCR;
       MRI.constrainRegClass(DstReg, &SystemZ::GR32BitRegClass);
+      unsigned TReg = MRI.createVirtualRegister(&SystemZ::GR32BitRegClass);
+      unsigned FReg = MRI.createVirtualRegister(&SystemZ::GR32BitRegClass);
+      BuildMI(MBB, I, DL, get(TargetOpcode::COPY), TReg).addReg(TrueReg);
+      BuildMI(MBB, I, DL, get(TargetOpcode::COPY), FReg).addReg(FalseReg);
+      TrueReg = TReg;
+      FalseReg = FReg;
     }
   } else if (SystemZ::GR64BitRegClass.hasSubClassEq(RC))
     Opc = SystemZ::LOCGR;
@@ -708,7 +751,7 @@ bool SystemZInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
   return true;
 }
 
-bool SystemZInstrInfo::isPredicable(MachineInstr &MI) const {
+bool SystemZInstrInfo::isPredicable(const MachineInstr &MI) const {
   unsigned Opcode = MI.getOpcode();
   if (Opcode == SystemZ::Return ||
       Opcode == SystemZ::Trap ||
@@ -892,15 +935,19 @@ static bool isSimpleBD12Move(const MachineInstr *MI, unsigned Flag) {
 }
 
 namespace {
+
 struct LogicOp {
-  LogicOp() : RegSize(0), ImmLSB(0), ImmSize(0) {}
+  LogicOp() = default;
   LogicOp(unsigned regSize, unsigned immLSB, unsigned immSize)
     : RegSize(regSize), ImmLSB(immLSB), ImmSize(immSize) {}
 
   explicit operator bool() const { return RegSize; }
 
-  unsigned RegSize, ImmLSB, ImmSize;
+  unsigned RegSize = 0;
+  unsigned ImmLSB = 0;
+  unsigned ImmSize = 0;
 };
+
 } // end anonymous namespace
 
 static LogicOp interpretAndImmediate(unsigned Opcode) {
@@ -1044,7 +1091,7 @@ MachineInstr *SystemZInstrInfo::foldMemoryOperandImpl(
       MCRegUnitIterator CCUnit(SystemZ::CC, TRI);
       LiveRange &CCLiveRange = LIS->getRegUnit(*CCUnit);
       ++CCUnit;
-      assert (!CCUnit.isValid() && "CC only has one reg unit.");
+      assert(!CCUnit.isValid() && "CC only has one reg unit.");
       SlotIndex MISlot =
           LIS->getSlotIndexes()->getInstructionIndex(MI).getRegSlot();
       if (!CCLiveRange.liveAt(MISlot)) {
@@ -1104,12 +1151,12 @@ MachineInstr *SystemZInstrInfo::foldMemoryOperandImpl(
     // destination register instead.
     if (OpNum == 1) {
       unsigned LoadOpcode = Op0IsGPR ? SystemZ::LG : SystemZ::LD;
-      unsigned Dest = MI.getOperand(0).getReg();
       return BuildMI(*InsertPt->getParent(), InsertPt, MI.getDebugLoc(),
-                     get(LoadOpcode), Dest)
-          .addFrameIndex(FrameIndex)
-          .addImm(0)
-          .addReg(0);
+                     get(LoadOpcode))
+        .add(MI.getOperand(0))
+        .addFrameIndex(FrameIndex)
+        .addImm(0)
+        .addReg(0);
     }
   }
 

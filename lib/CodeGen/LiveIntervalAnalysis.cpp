@@ -162,7 +162,7 @@ void LiveIntervals::printInstrs(raw_ostream &OS) const {
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-void LiveIntervals::dumpInstrs() const {
+LLVM_DUMP_METHOD void LiveIntervals::dumpInstrs() const {
   printInstrs(dbgs());
 }
 #endif
@@ -253,23 +253,30 @@ void LiveIntervals::computeRegUnitRange(LiveRange &LR, unsigned Unit) {
   // may share super-registers. That's OK because createDeadDefs() is
   // idempotent. It is very rare for a register unit to have multiple roots, so
   // uniquing super-registers is probably not worthwhile.
+  bool IsReserved = true;
   for (MCRegUnitRootIterator Root(Unit, TRI); Root.isValid(); ++Root) {
     for (MCSuperRegIterator Super(*Root, TRI, /*IncludeSelf=*/true);
          Super.isValid(); ++Super) {
       unsigned Reg = *Super;
       if (!MRI->reg_empty(Reg))
         LRCalc->createDeadDefs(LR, Reg);
+      // A register unit is considered reserved if all its roots and all their
+      // super registers are reserved.
+      if (!MRI->isReserved(Reg))
+        IsReserved = false;
     }
   }
 
   // Now extend LR to reach all uses.
   // Ignore uses of reserved registers. We only track defs of those.
-  for (MCRegUnitRootIterator Root(Unit, TRI); Root.isValid(); ++Root) {
-    for (MCSuperRegIterator Super(*Root, TRI, /*IncludeSelf=*/true);
-         Super.isValid(); ++Super) {
-      unsigned Reg = *Super;
-      if (!MRI->isReserved(Reg) && !MRI->reg_empty(Reg))
-        LRCalc->extendToUses(LR, Reg);
+  if (!IsReserved) {
+    for (MCRegUnitRootIterator Root(Unit, TRI); Root.isValid(); ++Root) {
+      for (MCSuperRegIterator Super(*Root, TRI, /*IncludeSelf=*/true);
+           Super.isValid(); ++Super) {
+        unsigned Reg = *Super;
+        if (!MRI->reg_empty(Reg))
+          LRCalc->extendToUses(LR, Reg);
+      }
     }
   }
 
@@ -1225,10 +1232,12 @@ private:
           LiveRange::iterator NewIdxIn = NewIdxOut;
           assert(NewIdxIn == LR.find(NewIdx.getBaseIndex()));
           const SlotIndex SplitPos = NewIdxDef;
+          OldIdxVNI = OldIdxIn->valno;
 
           // Merge the OldIdxIn and OldIdxOut segments into OldIdxOut.
+          OldIdxOut->valno->def = OldIdxIn->start;
           *OldIdxOut = LiveRange::Segment(OldIdxIn->start, OldIdxOut->end,
-                                          OldIdxIn->valno);
+                                          OldIdxOut->valno);
           // OldIdxIn and OldIdxVNI are now undef and can be overridden.
           // We Slide [NewIdxIn, OldIdxIn) down one position.
           //    |- X0/NewIdxIn -| ... |- Xn-1 -||- Xn/OldIdxIn -||- OldIdxOut -|

@@ -36,6 +36,12 @@ let isConvergent = 1 in {
 def INT_BARRIER0 : NVPTXInst<(outs), (ins),
                   "bar.sync \t0;",
       [(int_nvvm_barrier0)]>;
+def INT_BARRIERN : NVPTXInst<(outs), (ins Int32Regs:$src1),
+                  "bar.sync \t$src1;",
+      [(int_nvvm_barrier_n Int32Regs:$src1)]>;
+def INT_BARRIER : NVPTXInst<(outs), (ins Int32Regs:$src1, Int32Regs:$src2),
+                  "bar.sync \t$src1, $src2;",
+      [(int_nvvm_barrier Int32Regs:$src1, Int32Regs:$src2)]>;
 def INT_BARRIER0_POPC : NVPTXInst<(outs Int32Regs:$dst), (ins Int32Regs:$pred),
   !strconcat("{{ \n\t",
              ".reg .pred \t%p1; \n\t",
@@ -187,42 +193,12 @@ class F_MATH_3<string OpcStr, NVPTXRegClass t_regclass,
 // MISC
 //
 
-def INT_NVVM_CLZ_I : F_MATH_1<"clz.b32 \t$dst, $src0;", Int32Regs, Int32Regs,
-  int_nvvm_clz_i>;
-def INT_NVVM_CLZ_LL : F_MATH_1<"clz.b64 \t$dst, $src0;", Int32Regs, Int64Regs,
-  int_nvvm_clz_ll>;
-
-def INT_NVVM_POPC_I : F_MATH_1<"popc.b32 \t$dst, $src0;", Int32Regs, Int32Regs,
-  int_nvvm_popc_i>;
-def INT_NVVM_POPC_LL : F_MATH_1<"popc.b64 \t$dst, $src0;", Int32Regs, Int64Regs,
-  int_nvvm_popc_ll>;
-
 def INT_NVVM_PRMT : F_MATH_3<"prmt.b32 \t$dst, $src0, $src1, $src2;", Int32Regs,
   Int32Regs, Int32Regs, Int32Regs, int_nvvm_prmt>;
 
 //
 // Min Max
 //
-
-def INT_NVVM_MIN_I : F_MATH_2<"min.s32 \t$dst, $src0, $src1;", Int32Regs,
-  Int32Regs, Int32Regs, int_nvvm_min_i>;
-def INT_NVVM_MIN_UI : F_MATH_2<"min.u32 \t$dst, $src0, $src1;", Int32Regs,
-  Int32Regs, Int32Regs, int_nvvm_min_ui>;
-
-def INT_NVVM_MIN_LL : F_MATH_2<"min.s64 \t$dst, $src0, $src1;", Int64Regs,
-  Int64Regs, Int64Regs, int_nvvm_min_ll>;
-def INT_NVVM_MIN_ULL : F_MATH_2<"min.u64 \t$dst, $src0, $src1;", Int64Regs,
-  Int64Regs, Int64Regs, int_nvvm_min_ull>;
-
-def INT_NVVM_MAX_I : F_MATH_2<"max.s32 \t$dst, $src0, $src1;", Int32Regs,
-  Int32Regs, Int32Regs, int_nvvm_max_i>;
-def INT_NVVM_MAX_UI : F_MATH_2<"max.u32 \t$dst, $src0, $src1;", Int32Regs,
-  Int32Regs, Int32Regs, int_nvvm_max_ui>;
-
-def INT_NVVM_MAX_LL : F_MATH_2<"max.s64 \t$dst, $src0, $src1;", Int64Regs,
-  Int64Regs, Int64Regs, int_nvvm_max_ll>;
-def INT_NVVM_MAX_ULL : F_MATH_2<"max.u64 \t$dst, $src0, $src1;", Int64Regs,
-  Int64Regs, Int64Regs, int_nvvm_max_ull>;
 
 def INT_NVVM_FMIN_F : F_MATH_2<"min.f32 \t$dst, $src0, $src1;", Float32Regs,
   Float32Regs, Float32Regs, int_nvvm_fmin_f>;
@@ -238,6 +214,7 @@ def INT_NVVM_FMIN_D : F_MATH_2<"min.f64 \t$dst, $src0, $src1;", Float64Regs,
   Float64Regs, Float64Regs, int_nvvm_fmin_d>;
 def INT_NVVM_FMAX_D : F_MATH_2<"max.f64 \t$dst, $src0, $src1;", Float64Regs,
   Float64Regs, Float64Regs, int_nvvm_fmax_d>;
+
 
 //
 // Multiplication
@@ -321,15 +298,6 @@ def INT_NVVM_DIV_RP_D : F_MATH_2<"div.rp.f64 \t$dst, $src0, $src1;",
   Float64Regs, Float64Regs, Float64Regs, int_nvvm_div_rp_d>;
 
 //
-// Brev
-//
-
-def INT_NVVM_BREV32 : F_MATH_1<"brev.b32 \t$dst, $src0;", Int32Regs, Int32Regs,
-  int_nvvm_brev32>;
-def INT_NVVM_BREV64 : F_MATH_1<"brev.b64 \t$dst, $src0;", Int64Regs, Int64Regs,
-  int_nvvm_brev64>;
-
-//
 // Sad
 //
 
@@ -359,11 +327,6 @@ def : Pat<(int_nvvm_ceil_d Float64Regs:$a),
 //
 // Abs
 //
-
-def INT_NVVM_ABS_I : F_MATH_1<"abs.s32 \t$dst, $src0;", Int32Regs, Int32Regs,
-  int_nvvm_abs_i>;
-def INT_NVVM_ABS_LL : F_MATH_1<"abs.s64 \t$dst, $src0;", Int64Regs, Int64Regs,
-  int_nvvm_abs_ll>;
 
 def INT_NVVM_FABS_FTZ_F : F_MATH_1<"abs.ftz.f32 \t$dst, $src0;", Float32Regs,
   Float32Regs, int_nvvm_fabs_ftz_f>;
@@ -809,9 +772,6 @@ def : Pat<(int_nvvm_f2h_rn_ftz Float32Regs:$a),
           (BITCONVERT_16_F2I (CVT_f16_f32 Float32Regs:$a, CvtRN_FTZ))>;
 def : Pat<(int_nvvm_f2h_rn Float32Regs:$a),
           (BITCONVERT_16_F2I (CVT_f16_f32 Float32Regs:$a, CvtRN))>;
-
-def : Pat<(int_nvvm_h2f Int16Regs:$a),
-          (CVT_f32_f16 (BITCONVERT_16_I2F Int16Regs:$a), CvtNONE)>;
 
 //
 // Bitcast
@@ -1543,6 +1503,8 @@ defm INT_PTX_LDU_GLOBAL_i8  : LDU_G<"u8 \t$result, [$src];", Int16Regs>;
 defm INT_PTX_LDU_GLOBAL_i16 : LDU_G<"u16 \t$result, [$src];", Int16Regs>;
 defm INT_PTX_LDU_GLOBAL_i32 : LDU_G<"u32 \t$result, [$src];", Int32Regs>;
 defm INT_PTX_LDU_GLOBAL_i64 : LDU_G<"u64 \t$result, [$src];", Int64Regs>;
+defm INT_PTX_LDU_GLOBAL_f16 : LDU_G<"b16 \t$result, [$src];", Float16Regs>;
+defm INT_PTX_LDU_GLOBAL_f16x2 : LDU_G<"b32 \t$result, [$src];", Float16x2Regs>;
 defm INT_PTX_LDU_GLOBAL_f32 : LDU_G<"f32 \t$result, [$src];", Float32Regs>;
 defm INT_PTX_LDU_GLOBAL_f64 : LDU_G<"f64 \t$result, [$src];", Float64Regs>;
 defm INT_PTX_LDU_GLOBAL_p32 : LDU_G<"u32 \t$result, [$src];", Int32Regs>;
@@ -1593,6 +1555,10 @@ defm INT_PTX_LDU_G_v2i16_ELE
   : VLDU_G_ELE_V2<"v2.u16 \t{{$dst1, $dst2}}, [$src];", Int16Regs>;
 defm INT_PTX_LDU_G_v2i32_ELE
   : VLDU_G_ELE_V2<"v2.u32 \t{{$dst1, $dst2}}, [$src];", Int32Regs>;
+defm INT_PTX_LDU_G_v2f16_ELE
+  : VLDU_G_ELE_V2<"v2.b16 \t{{$dst1, $dst2}}, [$src];", Float16Regs>;
+defm INT_PTX_LDU_G_v2f16x2_ELE
+  : VLDU_G_ELE_V2<"v2.b32 \t{{$dst1, $dst2}}, [$src];", Float16x2Regs>;
 defm INT_PTX_LDU_G_v2f32_ELE
   : VLDU_G_ELE_V2<"v2.f32 \t{{$dst1, $dst2}}, [$src];", Float32Regs>;
 defm INT_PTX_LDU_G_v2i64_ELE
@@ -1607,6 +1573,12 @@ defm INT_PTX_LDU_G_v4i16_ELE
 defm INT_PTX_LDU_G_v4i32_ELE
   : VLDU_G_ELE_V4<"v4.u32 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];",
     Int32Regs>;
+defm INT_PTX_LDU_G_v4f16_ELE
+  : VLDU_G_ELE_V4<"v4.b16 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];",
+    Float16Regs>;
+defm INT_PTX_LDU_G_v4f16x2_ELE
+  : VLDU_G_ELE_V4<"v4.b32 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];",
+    Float16x2Regs>;
 defm INT_PTX_LDU_G_v4f32_ELE
   : VLDU_G_ELE_V4<"v4.f32 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];",
     Float32Regs>;
@@ -1646,6 +1618,10 @@ defm INT_PTX_LDG_GLOBAL_i32
   : LDG_G<"u32 \t$result, [$src];", Int32Regs>;
 defm INT_PTX_LDG_GLOBAL_i64
   : LDG_G<"u64 \t$result, [$src];", Int64Regs>;
+defm INT_PTX_LDG_GLOBAL_f16
+  : LDG_G<"b16 \t$result, [$src];", Float16Regs>;
+defm INT_PTX_LDG_GLOBAL_f16x2
+  : LDG_G<"b32 \t$result, [$src];", Float16x2Regs>;
 defm INT_PTX_LDG_GLOBAL_f32
   : LDG_G<"f32 \t$result, [$src];", Float32Regs>;
 defm INT_PTX_LDG_GLOBAL_f64
@@ -1701,6 +1677,10 @@ defm INT_PTX_LDG_G_v2i16_ELE
   : VLDG_G_ELE_V2<"v2.u16 \t{{$dst1, $dst2}}, [$src];", Int16Regs>;
 defm INT_PTX_LDG_G_v2i32_ELE
   : VLDG_G_ELE_V2<"v2.u32 \t{{$dst1, $dst2}}, [$src];", Int32Regs>;
+defm INT_PTX_LDG_G_v2f16_ELE
+  : VLDG_G_ELE_V2<"v2.b16 \t{{$dst1, $dst2}}, [$src];", Float16Regs>;
+defm INT_PTX_LDG_G_v2f16x2_ELE
+  : VLDG_G_ELE_V2<"v2.b32 \t{{$dst1, $dst2}}, [$src];", Float16x2Regs>;
 defm INT_PTX_LDG_G_v2f32_ELE
   : VLDG_G_ELE_V2<"v2.f32 \t{{$dst1, $dst2}}, [$src];", Float32Regs>;
 defm INT_PTX_LDG_G_v2i64_ELE
@@ -1713,6 +1693,10 @@ defm INT_PTX_LDG_G_v4i16_ELE
   : VLDG_G_ELE_V4<"v4.u16 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];", Int16Regs>;
 defm INT_PTX_LDG_G_v4i32_ELE
   : VLDG_G_ELE_V4<"v4.u32 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];", Int32Regs>;
+defm INT_PTX_LDG_G_v4f16_ELE
+  : VLDG_G_ELE_V4<"v4.b16 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];", Float16Regs>;
+defm INT_PTX_LDG_G_v4f16x2_ELE
+  : VLDG_G_ELE_V4<"v4.b32 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];", Float16x2Regs>;
 defm INT_PTX_LDG_G_v4f32_ELE
   : VLDG_G_ELE_V4<"v4.f32 \t{{$dst1, $dst2, $dst3, $dst4}}, [$src];", Float32Regs>;
 

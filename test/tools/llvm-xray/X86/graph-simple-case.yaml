@@ -1,19 +1,19 @@
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml \
-#RUN:    | FileCheck %s -check-prefix=COUNT
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml -e count \
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml \
+#RUN:    | FileCheck %s -check-prefix=EMPTY
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -e count \
 #RUN:    | FileCheck %s -check-prefix=COUNT
 #
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml -e min \
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -e min \
 #RUN:    | FileCheck %s -check-prefix=TIME
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml -e med \
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -e med \
 #RUN:    | FileCheck %s -check-prefix=TIME
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml -e 90p \
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -e 90p \
 #RUN:    | FileCheck %s -check-prefix=TIME
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml -e 99p \
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -e 99p \
 #RUN:    | FileCheck %s -check-prefix=TIME
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml -e max \
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -e max \
 #RUN:    | FileCheck %s -check-prefix=TIME
-#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -t yaml -e sum \
+#RUN: llvm-xray graph %s -o - -m %S/Inputs/simple-instrmap.yaml -e sum \
 #RUN:    | FileCheck %s -check-prefix=TIME
 ---
 header:
@@ -23,10 +23,8 @@ header:
   nonstop-tsc: true
   cycle-frequency: 2601000000
 records:
-  - { type: 0, func-id: 1, cpu: 1, thread: 111, kind: function-enter,
-    tsc: 10001 }
-  - { type: 0, func-id: 1, cpu: 1, thread: 111, kind: function-exit,
-    tsc: 10100 }
+  - { type: 0, func-id: 1, cpu: 1, thread: 111, kind: function-enter, tsc: 10001 }
+  - { type: 0, func-id: 1, cpu: 1, thread: 111, kind: function-exit, tsc: 10100 }
 ...
 
 

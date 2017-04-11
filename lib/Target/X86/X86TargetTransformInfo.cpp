@@ -78,7 +78,7 @@ unsigned X86TTIImpl::getNumberOfRegisters(bool Vector) {
   return 8;
 }
 
-unsigned X86TTIImpl::getRegisterBitWidth(bool Vector) {
+unsigned X86TTIImpl::getRegisterBitWidth(bool Vector) const {
   if (Vector) {
     if (ST->hasAVX512())
       return 512;
@@ -93,6 +93,10 @@ unsigned X86TTIImpl::getRegisterBitWidth(bool Vector) {
     return 64;
 
   return 32;
+}
+
+unsigned X86TTIImpl::getLoadStoreVecRegBitWidth(unsigned) const {
+  return getRegisterBitWidth(true);
 }
 
 unsigned X86TTIImpl::getMaxInterleaveFactor(unsigned VF) {
@@ -819,7 +823,14 @@ int X86TTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
     { TTI::SK_Reverse,   MVT::v32i8,  2 }, // vperm2i128 + pshufb
 
     { TTI::SK_Alternate, MVT::v16i16, 1 }, // vpblendw
-    { TTI::SK_Alternate, MVT::v32i8,  1 }  // vpblendvb
+    { TTI::SK_Alternate, MVT::v32i8,  1 }, // vpblendvb
+
+    { TTI::SK_PermuteSingleSrc, MVT::v4i64,  1 }, // vpermq
+    { TTI::SK_PermuteSingleSrc, MVT::v8i32,  1 }, // vpermd
+    { TTI::SK_PermuteSingleSrc, MVT::v16i16, 4 }, // vperm2i128 + 2 * vpshufb
+                                                  // + vpblendvb
+    { TTI::SK_PermuteSingleSrc, MVT::v32i8,  4 }  // vperm2i128 + 2 * vpshufb
+                                                  // + vpblendvb
   };
 
   if (ST->hasAVX2())
@@ -876,7 +887,10 @@ int X86TTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
     { TTI::SK_Reverse,   MVT::v16i8,  1 }, // pshufb
 
     { TTI::SK_Alternate, MVT::v8i16,  3 }, // pshufb + pshufb + por
-    { TTI::SK_Alternate, MVT::v16i8,  3 }  // pshufb + pshufb + por
+    { TTI::SK_Alternate, MVT::v16i8,  3 }, // pshufb + pshufb + por
+
+    { TTI::SK_PermuteSingleSrc, MVT::v8i16, 1 }, // pshufb
+    { TTI::SK_PermuteSingleSrc, MVT::v16i8, 1 }  // pshufb
   };
 
   if (ST->hasSSSE3())
@@ -901,7 +915,10 @@ int X86TTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
     { TTI::SK_Alternate, MVT::v2f64,  1 }, // movsd
     { TTI::SK_Alternate, MVT::v4i32,  2 }, // 2*shufps
     { TTI::SK_Alternate, MVT::v8i16,  3 }, // pand + pandn + por
-    { TTI::SK_Alternate, MVT::v16i8,  3 }  // pand + pandn + por
+    { TTI::SK_Alternate, MVT::v16i8,  3 }, // pand + pandn + por
+
+    { TTI::SK_PermuteSingleSrc, MVT::v2i64, 1 }, // pshufd
+    { TTI::SK_PermuteSingleSrc, MVT::v4i32, 1 }  // pshufd
   };
 
   if (ST->hasSSE2())
@@ -1357,7 +1374,8 @@ int X86TTIImpl::getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy) {
 }
 
 int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
-                                      ArrayRef<Type *> Tys, FastMathFlags FMF) {
+                                      ArrayRef<Type *> Tys, FastMathFlags FMF,
+                                      unsigned ScalarizationCostPassed) {
   // Costs should match the codegen from:
   // BITREVERSE: llvm\test\CodeGen\X86\vector-bitreverse.ll
   // BSWAP: llvm\test\CodeGen\X86\bswap-vector.ll
@@ -1433,8 +1451,8 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     { ISD::FSQRT,      MVT::v4f64,  43 }, // SNB from http://www.agner.org/
   };
   static const CostTblEntry SSE42CostTbl[] = {
-    { ISD::FSQRT, MVT::f32,   18 }, // Nehalem from http://www.agner.org/
-    { ISD::FSQRT, MVT::v4f32, 18 }, // Nehalem from http://www.agner.org/
+    { ISD::FSQRT,      MVT::f32,    18 }, // Nehalem from http://www.agner.org/
+    { ISD::FSQRT,      MVT::v4f32,  18 }, // Nehalem from http://www.agner.org/
   };
   static const CostTblEntry SSSE3CostTbl[] = {
     { ISD::BITREVERSE, MVT::v2i64,   5 },
@@ -1458,6 +1476,10 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     { ISD::CTTZ,       MVT::v16i8,   9 }
   };
   static const CostTblEntry SSE2CostTbl[] = {
+    { ISD::BITREVERSE, MVT::v2i64,  29 },
+    { ISD::BITREVERSE, MVT::v4i32,  27 },
+    { ISD::BITREVERSE, MVT::v8i16,  27 },
+    { ISD::BITREVERSE, MVT::v16i8,  20 },
     { ISD::BSWAP,      MVT::v2i64,   7 },
     { ISD::BSWAP,      MVT::v4i32,   7 },
     { ISD::BSWAP,      MVT::v8i16,   7 },
@@ -1477,8 +1499,16 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     { ISD::FSQRT,      MVT::v2f64,  32 }, // Nehalem from http://www.agner.org/
   };
   static const CostTblEntry SSE1CostTbl[] = {
-    { ISD::FSQRT, MVT::f32,   28 }, // Pentium III from http://www.agner.org/
-    { ISD::FSQRT, MVT::v4f32, 56 }, // Pentium III from http://www.agner.org/
+    { ISD::FSQRT,      MVT::f32,    28 }, // Pentium III from http://www.agner.org/
+    { ISD::FSQRT,      MVT::v4f32,  56 }, // Pentium III from http://www.agner.org/
+  };
+  static const CostTblEntry X64CostTbl[] = { // 64-bit targets
+    { ISD::BITREVERSE, MVT::i64,    14 }
+  };
+  static const CostTblEntry X86CostTbl[] = { // 32 or 64-bit targets
+    { ISD::BITREVERSE, MVT::i32,    14 },
+    { ISD::BITREVERSE, MVT::i16,    14 },
+    { ISD::BITREVERSE, MVT::i8,     11 }
   };
 
   unsigned ISD = ISD::DELETED_NODE;
@@ -1538,12 +1568,19 @@ int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
     if (const auto *Entry = CostTableLookup(SSE1CostTbl, ISD, MTy))
       return LT.first * Entry->Cost;
 
-  return BaseT::getIntrinsicInstrCost(IID, RetTy, Tys, FMF);
+  if (ST->is64Bit())
+    if (const auto *Entry = CostTableLookup(X64CostTbl, ISD, MTy))
+      return LT.first * Entry->Cost;
+
+  if (const auto *Entry = CostTableLookup(X86CostTbl, ISD, MTy))
+    return LT.first * Entry->Cost;
+
+  return BaseT::getIntrinsicInstrCost(IID, RetTy, Tys, FMF, ScalarizationCostPassed);
 }
 
 int X86TTIImpl::getIntrinsicInstrCost(Intrinsic::ID IID, Type *RetTy,
-                                      ArrayRef<Value *> Args, FastMathFlags FMF) {
-  return BaseT::getIntrinsicInstrCost(IID, RetTy, Args, FMF);
+                     ArrayRef<Value *> Args, FastMathFlags FMF, unsigned VF) {
+  return BaseT::getIntrinsicInstrCost(IID, RetTy, Args, FMF, VF);
 }
 
 int X86TTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val, unsigned Index) {
@@ -1575,20 +1612,6 @@ int X86TTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val, unsigned Index) {
     RegisterFileMoveCost = 1;
 
   return BaseT::getVectorInstrCost(Opcode, Val, Index) + RegisterFileMoveCost;
-}
-
-int X86TTIImpl::getScalarizationOverhead(Type *Ty, bool Insert, bool Extract) {
-  assert (Ty->isVectorTy() && "Can only scalarize vectors");
-  int Cost = 0;
-
-  for (int i = 0, e = Ty->getVectorNumElements(); i < e; ++i) {
-    if (Insert)
-      Cost += getVectorInstrCost(Instruction::InsertElement, Ty, i);
-    if (Extract)
-      Cost += getVectorInstrCost(Instruction::ExtractElement, Ty, i);
-  }
-
-  return Cost;
 }
 
 int X86TTIImpl::getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
@@ -2147,7 +2170,7 @@ bool X86TTIImpl::enableInterleavedAccessVectorization() {
   // TODO: We expect this to be beneficial regardless of arch,
   // but there are currently some unexplained performance artifacts on Atom.
   // As a temporary solution, disable on Atom.
-  return !(ST->isAtom() || ST->isSLM());
+  return !(ST->isAtom());
 }
 
 // Get estimation for interleaved load/store operations and strided load.

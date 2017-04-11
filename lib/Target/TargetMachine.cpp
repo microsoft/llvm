@@ -35,10 +35,6 @@ cl::opt<bool> EnableIPRA("enable-ipra", cl::init(false), cl::Hidden,
                          cl::desc("Enable interprocedural register allocation "
                                   "to reduce load/store at procedure calls."));
 
-cl::opt<bool> DebugInfoForProfiling(
-    "debug-info-for-profiling", cl::init(false), cl::Hidden,
-    cl::desc("Emit extra debug info to make sample profile more accurate."));
-
 //---------------------------------------------------------------------------
 // TargetMachine Class
 //
@@ -51,8 +47,6 @@ TargetMachine::TargetMachine(const Target &T, StringRef DataLayoutString,
       RequireStructuredCFG(false), DefaultOptions(Options), Options(Options) {
   if (EnableIPRA.getNumOccurrences())
     this->Options.EnableIPRA = EnableIPRA;
-  if (DebugInfoForProfiling.getNumOccurrences())
-    this->Options.DebugInfoForProfiling = DebugInfoForProfiling;
 }
 
 TargetMachine::~TargetMachine() {
@@ -80,10 +74,10 @@ void TargetMachine::resetTargetOptions(const Function &F) const {
       Options.X = DefaultOptions.X;                                            \
   } while (0)
 
-  RESET_OPTION(LessPreciseFPMADOption, "less-precise-fpmad");
   RESET_OPTION(UnsafeFPMath, "unsafe-fp-math");
   RESET_OPTION(NoInfsFPMath, "no-infs-fp-math");
   RESET_OPTION(NoNaNsFPMath, "no-nans-fp-math");
+  RESET_OPTION(NoSignedZerosFPMath, "no-signed-zeros-fp-math");
   RESET_OPTION(NoTrappingFPMath, "no-trapping-math");
 
   StringRef Denormal =
@@ -162,8 +156,11 @@ bool TargetMachine::shouldAssumeDSOLocal(const Module &M,
     bool IsTLS = GV && GV->isThreadLocal();
     bool IsAccessViaCopyRelocs =
         Options.MCOptions.MCPIECopyRelocations && GV && isa<GlobalVariable>(GV);
-    // Check if we can use copy relocations.
-    if (!IsTLS && (RM == Reloc::Static || IsAccessViaCopyRelocs))
+    Triple::ArchType Arch = TT.getArch();
+    bool IsPPC =
+        Arch == Triple::ppc || Arch == Triple::ppc64 || Arch == Triple::ppc64le;
+    // Check if we can use copy relocations. PowerPC has no copy relocations.
+    if (!IsTLS && !IsPPC && (RM == Reloc::Static || IsAccessViaCopyRelocs))
       return true;
   }
 

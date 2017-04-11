@@ -307,7 +307,7 @@ CallInst::CallInst(const CallInst &CI)
     : Instruction(CI.getType(), Instruction::Call,
                   OperandTraits<CallInst>::op_end(this) - CI.getNumOperands(),
                   CI.getNumOperands()),
-      AttributeList(CI.AttributeList), FTy(CI.FTy) {
+      Attrs(CI.Attrs), FTy(CI.FTy) {
   setTailCallKind(CI.getTailCallKind());
   setCallingConv(CI.getCallingConv());
 
@@ -334,7 +334,7 @@ CallInst *CallInst::Create(CallInst *CI, ArrayRef<OperandBundleDef> OpB,
 Value *CallInst::getReturnedArgOperand() const {
   unsigned Index;
 
-  if (AttributeList.hasAttrSomewhere(Attribute::Returned, &Index) && Index)
+  if (Attrs.hasAttrSomewhere(Attribute::Returned, &Index) && Index)
     return getArgOperand(Index-1);
   if (const Function *F = getCalledFunction())
     if (F->getAttributes().hasAttrSomewhere(Attribute::Returned, &Index) &&
@@ -345,37 +345,37 @@ Value *CallInst::getReturnedArgOperand() const {
 }
 
 void CallInst::addAttribute(unsigned i, Attribute::AttrKind Kind) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addAttribute(getContext(), i, Kind);
   setAttributes(PAL);
 }
 
 void CallInst::addAttribute(unsigned i, Attribute Attr) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addAttribute(getContext(), i, Attr);
   setAttributes(PAL);
 }
 
 void CallInst::removeAttribute(unsigned i, Attribute::AttrKind Kind) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.removeAttribute(getContext(), i, Kind);
   setAttributes(PAL);
 }
 
 void CallInst::removeAttribute(unsigned i, StringRef Kind) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.removeAttribute(getContext(), i, Kind);
   setAttributes(PAL);
 }
 
 void CallInst::addDereferenceableAttr(unsigned i, uint64_t Bytes) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addDereferenceableAttr(getContext(), i, Bytes);
   setAttributes(PAL);
 }
 
 void CallInst::addDereferenceableOrNullAttr(unsigned i, uint64_t Bytes) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addDereferenceableOrNullAttr(getContext(), i, Bytes);
   setAttributes(PAL);
 }
@@ -383,7 +383,7 @@ void CallInst::addDereferenceableOrNullAttr(unsigned i, uint64_t Bytes) {
 bool CallInst::paramHasAttr(unsigned i, Attribute::AttrKind Kind) const {
   assert(i < (getNumArgOperands() + 1) && "Param index out of bounds!");
 
-  if (AttributeList.hasAttribute(i, Kind))
+  if (Attrs.hasAttribute(i, Kind))
     return true;
   if (const Function *F = getCalledFunction())
     return F->getAttributes().hasAttribute(i, Kind);
@@ -646,7 +646,7 @@ InvokeInst::InvokeInst(const InvokeInst &II)
                      OperandTraits<InvokeInst>::op_end(this) -
                          II.getNumOperands(),
                      II.getNumOperands()),
-      AttributeList(II.AttributeList), FTy(II.FTy) {
+      Attrs(II.Attrs), FTy(II.FTy) {
   setCallingConv(II.getCallingConv());
   std::copy(II.op_begin(), II.op_end(), op_begin());
   std::copy(II.bundle_op_info_begin(), II.bundle_op_info_end(),
@@ -681,7 +681,7 @@ void InvokeInst::setSuccessorV(unsigned idx, BasicBlock *B) {
 Value *InvokeInst::getReturnedArgOperand() const {
   unsigned Index;
 
-  if (AttributeList.hasAttrSomewhere(Attribute::Returned, &Index) && Index)
+  if (Attrs.hasAttrSomewhere(Attribute::Returned, &Index) && Index)
     return getArgOperand(Index-1);
   if (const Function *F = getCalledFunction())
     if (F->getAttributes().hasAttrSomewhere(Attribute::Returned, &Index) &&
@@ -694,7 +694,7 @@ Value *InvokeInst::getReturnedArgOperand() const {
 bool InvokeInst::paramHasAttr(unsigned i, Attribute::AttrKind Kind) const {
   assert(i < (getNumArgOperands() + 1) && "Param index out of bounds!");
 
-  if (AttributeList.hasAttribute(i, Kind))
+  if (Attrs.hasAttribute(i, Kind))
     return true;
   if (const Function *F = getCalledFunction())
     return F->getAttributes().hasAttribute(i, Kind);
@@ -720,37 +720,37 @@ bool InvokeInst::dataOperandHasImpliedAttr(unsigned i,
 }
 
 void InvokeInst::addAttribute(unsigned i, Attribute::AttrKind Kind) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addAttribute(getContext(), i, Kind);
   setAttributes(PAL);
 }
 
 void InvokeInst::addAttribute(unsigned i, Attribute Attr) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addAttribute(getContext(), i, Attr);
   setAttributes(PAL);
 }
 
 void InvokeInst::removeAttribute(unsigned i, Attribute::AttrKind Kind) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.removeAttribute(getContext(), i, Kind);
   setAttributes(PAL);
 }
 
 void InvokeInst::removeAttribute(unsigned i, StringRef Kind) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.removeAttribute(getContext(), i, Kind);
   setAttributes(PAL);
 }
 
 void InvokeInst::addDereferenceableAttr(unsigned i, uint64_t Bytes) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addDereferenceableAttr(getContext(), i, Bytes);
   setAttributes(PAL);
 }
 
 void InvokeInst::addDereferenceableOrNullAttr(unsigned i, uint64_t Bytes) {
-  AttributeSet PAL = getAttributes();
+  AttributeList PAL = getAttributes();
   PAL = PAL.addDereferenceableOrNullAttr(getContext(), i, Bytes);
   setAttributes(PAL);
 }
@@ -1199,34 +1199,38 @@ static Value *getAISize(LLVMContext &Context, Value *Amt) {
   return Amt;
 }
 
-AllocaInst::AllocaInst(Type *Ty, const Twine &Name, Instruction *InsertBefore)
-    : AllocaInst(Ty, /*ArraySize=*/nullptr, Name, InsertBefore) {}
-
-AllocaInst::AllocaInst(Type *Ty, const Twine &Name, BasicBlock *InsertAtEnd)
-    : AllocaInst(Ty, /*ArraySize=*/nullptr, Name, InsertAtEnd) {}
-
-AllocaInst::AllocaInst(Type *Ty, Value *ArraySize, const Twine &Name,
+AllocaInst::AllocaInst(Type *Ty, unsigned AddrSpace, const Twine &Name,
                        Instruction *InsertBefore)
-    : AllocaInst(Ty, ArraySize, /*Align=*/0, Name, InsertBefore) {}
+  : AllocaInst(Ty, AddrSpace, /*ArraySize=*/nullptr, Name, InsertBefore) {}
 
-AllocaInst::AllocaInst(Type *Ty, Value *ArraySize, const Twine &Name,
+AllocaInst::AllocaInst(Type *Ty, unsigned AddrSpace, const Twine &Name,
                        BasicBlock *InsertAtEnd)
-    : AllocaInst(Ty, ArraySize, /*Align=*/0, Name, InsertAtEnd) {}
+  : AllocaInst(Ty, AddrSpace, /*ArraySize=*/nullptr, Name, InsertAtEnd) {}
 
-AllocaInst::AllocaInst(Type *Ty, Value *ArraySize, unsigned Align,
+AllocaInst::AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize,
                        const Twine &Name, Instruction *InsertBefore)
-    : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
-                       getAISize(Ty->getContext(), ArraySize), InsertBefore),
-      AllocatedType(Ty) {
+  : AllocaInst(Ty, AddrSpace, ArraySize, /*Align=*/0, Name, InsertBefore) {}
+
+AllocaInst::AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize,
+                       const Twine &Name, BasicBlock *InsertAtEnd)
+  : AllocaInst(Ty, AddrSpace, ArraySize, /*Align=*/0, Name, InsertAtEnd) {}
+
+AllocaInst::AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize,
+                       unsigned Align, const Twine &Name,
+                       Instruction *InsertBefore)
+  : UnaryInstruction(PointerType::get(Ty, AddrSpace), Alloca,
+                     getAISize(Ty->getContext(), ArraySize), InsertBefore),
+    AllocatedType(Ty) {
   setAlignment(Align);
   assert(!Ty->isVoidTy() && "Cannot allocate void!");
   setName(Name);
 }
 
-AllocaInst::AllocaInst(Type *Ty, Value *ArraySize, unsigned Align,
-                       const Twine &Name, BasicBlock *InsertAtEnd)
-    : UnaryInstruction(PointerType::getUnqual(Ty), Alloca,
-                       getAISize(Ty->getContext(), ArraySize), InsertAtEnd),
+AllocaInst::AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize,
+                       unsigned Align, const Twine &Name,
+                       BasicBlock *InsertAtEnd)
+  : UnaryInstruction(PointerType::get(Ty, AddrSpace), Alloca,
+                     getAISize(Ty->getContext(), ArraySize), InsertAtEnd),
       AllocatedType(Ty) {
   setAlignment(Align);
   assert(!Ty->isVoidTy() && "Cannot allocate void!");
@@ -3662,7 +3666,7 @@ void SwitchInst::addCase(ConstantInt *OnVal, BasicBlock *Dest) {
 
 /// removeCase - This method removes the specified case and its successor
 /// from the switch instruction.
-void SwitchInst::removeCase(CaseIt i) {
+SwitchInst::CaseIt SwitchInst::removeCase(CaseIt i) {
   unsigned idx = i.getCaseIndex();
   
   assert(2 + idx*2 < getNumOperands() && "Case index out of range!!!");
@@ -3680,6 +3684,8 @@ void SwitchInst::removeCase(CaseIt i) {
   OL[NumOps-2].set(nullptr);
   OL[NumOps-2+1].set(nullptr);
   setNumHungOffUseOperands(NumOps-2);
+
+  return CaseIt(this, idx);
 }
 
 /// growOperands - grow operands - This grows the operand list in response
@@ -3826,6 +3832,7 @@ InsertValueInst *InsertValueInst::cloneImpl() const {
 
 AllocaInst *AllocaInst::cloneImpl() const {
   AllocaInst *Result = new AllocaInst(getAllocatedType(),
+                                      getType()->getAddressSpace(),
                                       (Value *)getOperand(0), getAlignment());
   Result->setUsedWithInAlloca(isUsedWithInAlloca());
   Result->setSwiftError(isSwiftError());

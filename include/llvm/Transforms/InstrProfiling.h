@@ -59,6 +59,11 @@ private:
   GlobalVariable *NamesVar;
   size_t NamesSize;
 
+  // The start value of precise value profile range for memory intrinsic sizes.
+  int64_t MemOPSizeRangeStart;
+  // The end value of precise value profile range for memory intrinsic sizes.
+  int64_t MemOPSizeRangeLast;
+
   bool isMachO() const;
 
   /// Get the section name for the counter variables.

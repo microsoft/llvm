@@ -34,10 +34,6 @@ class AArch64TTIImpl : public BasicTTIImplBase<AArch64TTIImpl> {
   const AArch64Subtarget *ST;
   const AArch64TargetLowering *TLI;
 
-  /// Estimate the overhead of scalarizing an instruction. Insert and Extract
-  /// are set if the result needs to be inserted and/or extracted from vectors.
-  unsigned getScalarizationOverhead(Type *Ty, bool Insert, bool Extract);
-
   const AArch64Subtarget *getST() const { return ST; }
   const AArch64TargetLowering *getTLI() const { return TLI; }
 
@@ -124,6 +120,10 @@ public:
   int getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy, unsigned Factor,
                                  ArrayRef<unsigned> Indices, unsigned Alignment,
                                  unsigned AddressSpace);
+
+  bool
+  shouldConsiderAddressTypePromotion(const Instruction &I,
+                                     bool &AllowPromotionWithoutCommonHeader);
 
   unsigned getCacheLineSize();
 

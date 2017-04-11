@@ -5,7 +5,7 @@
 ; RUN: llc -march=amdgcn -mcpu=stoney -mattr=-xnack -verify-machineinstrs < %s | FileCheck -check-prefix=VI-NOXNACK  -check-prefix=GCN %s
 
 ; RUN: llc -march=amdgcn -mcpu=carrizo -verify-machineinstrs < %s | FileCheck -check-prefix=VI-XNACK  -check-prefix=GCN %s
-; RUN: llc -march=amdgcn -mcpu=stoney -verify-machineinstrs < %s | FileCheck -check-prefix=VI-XNACK  -check-prefix=GCN %s
+; RUN: llc -march=amdgcn -mcpu=stoney  -verify-machineinstrs < %s | FileCheck -check-prefix=VI-XNACK  -check-prefix=GCN %s
 
 ; RUN: llc -march=amdgcn -mtriple=amdgcn--amdhsa -mcpu=kaveri -verify-machineinstrs < %s | FileCheck -check-prefix=HSA-CI -check-prefix=GCN %s
 ; RUN: llc -march=amdgcn -mtriple=amdgcn--amdhsa -mcpu=carrizo -mattr=-xnack -verify-machineinstrs < %s | FileCheck -check-prefix=HSA-VI-NOXNACK -check-prefix=GCN %s
@@ -19,7 +19,7 @@
 ; CI: ; NumSgprs: 8
 ; VI-NOXNACK: ; NumSgprs: 8
 ; VI-XNACK: ; NumSgprs: 12
-define void @no_vcc_no_flat() {
+define amdgpu_kernel void @no_vcc_no_flat() {
 entry:
   call void asm sideeffect "", "~{SGPR7}"()
   ret void
@@ -33,7 +33,7 @@ entry:
 ; CI: ; NumSgprs: 10
 ; VI-NOXNACK: ; NumSgprs: 10
 ; VI-XNACK: ; NumSgprs: 12
-define void @vcc_no_flat() {
+define amdgpu_kernel void @vcc_no_flat() {
 entry:
   call void asm sideeffect "", "~{SGPR7},~{VCC}"()
   ret void
@@ -50,7 +50,7 @@ entry:
 ; HSA-CI: ; NumSgprs: 8
 ; HSA-VI-NOXNACK: ; NumSgprs: 8
 ; HSA-VI-XNACK: ; NumSgprs: 12
-define void @no_vcc_flat() {
+define amdgpu_kernel void @no_vcc_flat() {
 entry:
   call void asm sideeffect "", "~{SGPR7},~{FLAT_SCR}"()
   ret void
@@ -66,7 +66,7 @@ entry:
 ; HSA-CI: ; NumSgprs: 10
 ; HSA-VI-NOXNACK: ; NumSgprs: 10
 ; HSA-VI-XNACK: ; NumSgprs: 12
-define void @vcc_flat() {
+define amdgpu_kernel void @vcc_flat() {
 entry:
   call void asm sideeffect "", "~{SGPR7},~{VCC},~{FLAT_SCR}"()
   ret void

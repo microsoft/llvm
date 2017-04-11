@@ -277,6 +277,9 @@ class Verifier : public InstVisitor<Verifier>, VerifierSupport {
   /// already.
   bool SawFrameEscape;
 
+  /// Whether the current function has a DISubprogram attached to it.
+  bool HasDebugInfo = false;
+
   /// Stores the count of how many objects were passed to llvm.localescape for a
   /// given function and the largest index passed to llvm.localrecover.
   DenseMap<Function *, std::pair<unsigned, unsigned>> FrameEscapeInfo;
@@ -296,6 +299,9 @@ class Verifier : public InstVisitor<Verifier>, VerifierSupport {
   // twice, if they have multiple operands. In particular for very large
   // constant expressions, we can arrive at a particular user many times.
   SmallPtrSet<const Value *, 32> GlobalValueVisited;
+
+  // Keeps track of duplicate function argument debug info.
+  SmallVector<const DILocalVariable *, 16> DebugFnArgs;
 
   TBAAVerifier TBAAVerifyHelper;
 
@@ -342,6 +348,7 @@ public:
     visit(const_cast<Function &>(F));
     verifySiblingFuncletUnwinds();
     InstsInThisBlock.clear();
+    DebugFnArgs.clear();
     LandingPadResultTy = nullptr;
     SawFrameEscape = false;
     SiblingFuncletInfo.clear();
@@ -457,6 +464,7 @@ private:
   void visitUserOp1(Instruction &I);
   void visitUserOp2(Instruction &I) { visitUserOp1(I); }
   void visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS);
+  void visitConstrainedFPIntrinsic(ConstrainedFPIntrinsic &FPI);
   template <class DbgIntrinsicTy>
   void visitDbgIntrinsic(StringRef Kind, DbgIntrinsicTy &DII);
   void visitAtomicCmpXchgInst(AtomicCmpXchgInst &CXI);
@@ -481,12 +489,12 @@ private:
   void verifyMustTailCall(CallInst &CI);
   bool performTypeCheck(Intrinsic::ID ID, Function *F, Type *Ty, int VT,
                         unsigned ArgNo, std::string &Suffix);
-  bool verifyAttributeCount(AttributeSet Attrs, unsigned Params);
-  void verifyAttributeTypes(AttributeSet Attrs, unsigned Idx, bool isFunction,
+  bool verifyAttributeCount(AttributeList Attrs, unsigned Params);
+  void verifyAttributeTypes(AttributeList Attrs, unsigned Idx, bool isFunction,
                             const Value *V);
-  void verifyParameterAttrs(AttributeSet Attrs, unsigned Idx, Type *Ty,
+  void verifyParameterAttrs(AttributeList Attrs, unsigned Idx, Type *Ty,
                             bool isReturnValue, const Value *V);
-  void verifyFunctionAttrs(FunctionType *FT, AttributeSet Attrs,
+  void verifyFunctionAttrs(FunctionType *FT, AttributeList Attrs,
                            const Value *V);
   void verifyFunctionMetadata(ArrayRef<std::pair<unsigned, MDNode *>> MDs);
 
@@ -497,6 +505,7 @@ private:
   void verifySiblingFuncletUnwinds();
 
   void verifyFragmentExpression(const DbgInfoIntrinsic &I);
+  void verifyFnArgs(const DbgInfoIntrinsic &I);
 
   /// Module-level debug info verification...
   void verifyCompileUnits();
@@ -652,7 +661,8 @@ void Verifier::visitGlobalVariable(const GlobalVariable &GV) {
     if (auto *GVE = dyn_cast<DIGlobalVariableExpression>(MD))
       visitDIGlobalVariableExpression(*GVE);
     else
-      AssertDI(false, "!dbg attachment of global variable must be a DIGlobalVariableExpression");
+      AssertDI(false, "!dbg attachment of global variable must be a "
+                      "DIGlobalVariableExpression");
   }
 
   if (!GV.hasInitializer()) {
@@ -900,6 +910,13 @@ void Verifier::visitDIDerivedType(const DIDerivedType &N) {
   AssertDI(isScope(N.getRawScope()), "invalid scope", &N, N.getRawScope());
   AssertDI(isType(N.getRawBaseType()), "invalid base type", &N,
            N.getRawBaseType());
+
+  if (N.getDWARFAddressSpace()) {
+    AssertDI(N.getTag() == dwarf::DW_TAG_pointer_type ||
+                 N.getTag() == dwarf::DW_TAG_reference_type,
+             "DWARF address space only applies to pointer or reference types",
+             &N);
+  }
 }
 
 static bool hasConflictingReferenceFlags(unsigned Flags) {
@@ -1024,6 +1041,8 @@ void Verifier::visitDISubprogram(const DISubprogram &N) {
   AssertDI(isScope(N.getRawScope()), "invalid scope", &N, N.getRawScope());
   if (auto *F = N.getRawFile())
     AssertDI(isa<DIFile>(F), "invalid file", &N, F);
+  else
+    AssertDI(N.getLine() == 0, "line specified with no file", &N, N.getLine());
   if (auto *T = N.getRawType())
     AssertDI(isa<DISubroutineType>(T), "invalid subroutine type", &N, T);
   AssertDI(isType(N.getRawContainingType()), "invalid containing type", &N,
@@ -1312,7 +1331,7 @@ Verifier::visitModuleFlag(const MDNode *Op,
   }
 }
 
-void Verifier::verifyAttributeTypes(AttributeSet Attrs, unsigned Idx,
+void Verifier::verifyAttributeTypes(AttributeList Attrs, unsigned Idx,
                                     bool isFunction, const Value *V) {
   unsigned Slot = ~0U;
   for (unsigned I = 0, E = Attrs.getNumSlots(); I != E; ++I)
@@ -1323,8 +1342,8 @@ void Verifier::verifyAttributeTypes(AttributeSet Attrs, unsigned Idx,
 
   assert(Slot != ~0U && "Attribute set inconsistency!");
 
-  for (AttributeSet::iterator I = Attrs.begin(Slot), E = Attrs.end(Slot);
-         I != E; ++I) {
+  for (AttributeList::iterator I = Attrs.begin(Slot), E = Attrs.end(Slot);
+       I != E; ++I) {
     if (I->isStringAttribute())
       continue;
 
@@ -1384,7 +1403,7 @@ void Verifier::verifyAttributeTypes(AttributeSet Attrs, unsigned Idx,
 
 // VerifyParameterAttrs - Check the given attributes for an argument or return
 // value of the specified type.  The value V is printed in error messages.
-void Verifier::verifyParameterAttrs(AttributeSet Attrs, unsigned Idx, Type *Ty,
+void Verifier::verifyParameterAttrs(AttributeList Attrs, unsigned Idx, Type *Ty,
                                     bool isReturnValue, const Value *V) {
   if (!Attrs.hasAttributes(Idx))
     return;
@@ -1462,7 +1481,7 @@ void Verifier::verifyParameterAttrs(AttributeSet Attrs, unsigned Idx, Type *Ty,
   Assert(
       !AttrBuilder(Attrs, Idx).overlaps(AttributeFuncs::typeIncompatible(Ty)),
       "Wrong types for attribute: " +
-          AttributeSet::get(Context, Idx, AttributeFuncs::typeIncompatible(Ty))
+          AttributeList::get(Context, Idx, AttributeFuncs::typeIncompatible(Ty))
               .getAsString(Idx),
       V);
 
@@ -1492,7 +1511,7 @@ void Verifier::verifyParameterAttrs(AttributeSet Attrs, unsigned Idx, Type *Ty,
 
 // Check parameter attributes against a function type.
 // The value V is printed in error messages.
-void Verifier::verifyFunctionAttrs(FunctionType *FT, AttributeSet Attrs,
+void Verifier::verifyFunctionAttrs(FunctionType *FT, AttributeList Attrs,
                                    const Value *V) {
   if (Attrs.isEmpty())
     return;
@@ -1558,67 +1577,70 @@ void Verifier::verifyFunctionAttrs(FunctionType *FT, AttributeSet Attrs,
     }
   }
 
-  if (!Attrs.hasAttributes(AttributeSet::FunctionIndex))
+  if (!Attrs.hasAttributes(AttributeList::FunctionIndex))
     return;
 
-  verifyAttributeTypes(Attrs, AttributeSet::FunctionIndex, true, V);
+  verifyAttributeTypes(Attrs, AttributeList::FunctionIndex, true, V);
 
   Assert(
-      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone) &&
-        Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadOnly)),
+      !(Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::ReadNone) &&
+        Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::ReadOnly)),
       "Attributes 'readnone and readonly' are incompatible!", V);
 
   Assert(
-      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone) &&
-        Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::WriteOnly)),
+      !(Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::ReadNone) &&
+        Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::WriteOnly)),
       "Attributes 'readnone and writeonly' are incompatible!", V);
 
   Assert(
-      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadOnly) &&
-        Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::WriteOnly)),
+      !(Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::ReadOnly) &&
+        Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::WriteOnly)),
       "Attributes 'readonly and writeonly' are incompatible!", V);
 
   Assert(
-      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone) &&
-        Attrs.hasAttribute(AttributeSet::FunctionIndex, 
+      !(Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::ReadNone) &&
+        Attrs.hasAttribute(AttributeList::FunctionIndex,
                            Attribute::InaccessibleMemOrArgMemOnly)),
-      "Attributes 'readnone and inaccessiblemem_or_argmemonly' are incompatible!", V);
+      "Attributes 'readnone and inaccessiblemem_or_argmemonly' are "
+      "incompatible!",
+      V);
 
   Assert(
-      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone) &&
-        Attrs.hasAttribute(AttributeSet::FunctionIndex, 
+      !(Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::ReadNone) &&
+        Attrs.hasAttribute(AttributeList::FunctionIndex,
                            Attribute::InaccessibleMemOnly)),
       "Attributes 'readnone and inaccessiblememonly' are incompatible!", V);
 
   Assert(
-      !(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::NoInline) &&
-        Attrs.hasAttribute(AttributeSet::FunctionIndex,
+      !(Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::NoInline) &&
+        Attrs.hasAttribute(AttributeList::FunctionIndex,
                            Attribute::AlwaysInline)),
       "Attributes 'noinline and alwaysinline' are incompatible!", V);
 
-  if (Attrs.hasAttribute(AttributeSet::FunctionIndex, 
+  if (Attrs.hasAttribute(AttributeList::FunctionIndex,
                          Attribute::OptimizeNone)) {
-    Assert(Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::NoInline),
-           "Attribute 'optnone' requires 'noinline'!", V);
+    Assert(
+        Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::NoInline),
+        "Attribute 'optnone' requires 'noinline'!", V);
 
-    Assert(!Attrs.hasAttribute(AttributeSet::FunctionIndex,
+    Assert(!Attrs.hasAttribute(AttributeList::FunctionIndex,
                                Attribute::OptimizeForSize),
            "Attributes 'optsize and optnone' are incompatible!", V);
 
-    Assert(!Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::MinSize),
-           "Attributes 'minsize and optnone' are incompatible!", V);
+    Assert(
+        !Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::MinSize),
+        "Attributes 'minsize and optnone' are incompatible!", V);
   }
 
-  if (Attrs.hasAttribute(AttributeSet::FunctionIndex,
-                         Attribute::JumpTable)) {
+  if (Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::JumpTable)) {
     const GlobalValue *GV = cast<GlobalValue>(V);
     Assert(GV->hasGlobalUnnamedAddr(),
            "Attribute 'jumptable' requires 'unnamed_addr'", V);
   }
 
-  if (Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::AllocSize)) {
+  if (Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::AllocSize)) {
     std::pair<unsigned, Optional<unsigned>> Args =
-        Attrs.getAllocSizeArgs(AttributeSet::FunctionIndex);
+        Attrs.getAllocSizeArgs(AttributeList::FunctionIndex);
 
     auto CheckParam = [&](StringRef Name, unsigned ParamNo) {
       if (ParamNo >= FT->getNumParams()) {
@@ -1649,8 +1671,8 @@ void Verifier::verifyFunctionMetadata(
   for (const auto &Pair : MDs) {
     if (Pair.first == LLVMContext::MD_prof) {
       MDNode *MD = Pair.second;
-      Assert(MD->getNumOperands() == 2,
-             "!prof annotations should have exactly 2 operands", MD);
+      Assert(MD->getNumOperands() >= 2,
+             "!prof annotations should have no less than 2 operands", MD);
 
       // Check first operand.
       Assert(MD->getOperand(0) != nullptr, "first operand should not be null",
@@ -1725,15 +1747,15 @@ void Verifier::visitConstantExpr(const ConstantExpr *CE) {
   }
 }
 
-bool Verifier::verifyAttributeCount(AttributeSet Attrs, unsigned Params) {
+bool Verifier::verifyAttributeCount(AttributeList Attrs, unsigned Params) {
   if (Attrs.getNumSlots() == 0)
     return true;
 
   unsigned LastSlot = Attrs.getNumSlots() - 1;
   unsigned LastIndex = Attrs.getSlotIndex(LastSlot);
-  if (LastIndex <= Params
-      || (LastIndex == AttributeSet::FunctionIndex
-          && (LastSlot == 0 || Attrs.getSlotIndex(LastSlot - 1) <= Params)))
+  if (LastIndex <= Params ||
+      (LastIndex == AttributeList::FunctionIndex &&
+       (LastSlot == 0 || Attrs.getSlotIndex(LastSlot - 1) <= Params)))
     return true;
 
   return false;
@@ -1963,7 +1985,7 @@ void Verifier::visitFunction(const Function &F) {
   Assert(!F.hasStructRetAttr() || F.getReturnType()->isVoidTy(),
          "Invalid struct return type!", &F);
 
-  AttributeSet Attrs = F.getAttributes();
+  AttributeList Attrs = F.getAttributes();
 
   Assert(verifyAttributeCount(Attrs, FT->getNumParams()),
          "Attribute after last parameter!", &F);
@@ -1974,7 +1996,7 @@ void Verifier::visitFunction(const Function &F) {
   // On function declarations/definitions, we do not support the builtin
   // attribute. We do not check this in VerifyFunctionAttrs since that is
   // checking for Attributes that can/can not ever be on functions.
-  Assert(!Attrs.hasAttribute(AttributeSet::FunctionIndex, Attribute::Builtin),
+  Assert(!Attrs.hasAttribute(AttributeList::FunctionIndex, Attribute::Builtin),
          "Attribute 'builtin' can only be applied to a callsite.", &F);
 
   // Check that this function meets the restrictions on this calling convention.
@@ -1984,6 +2006,18 @@ void Verifier::visitFunction(const Function &F) {
   default:
   case CallingConv::C:
     break;
+  case CallingConv::AMDGPU_KERNEL:
+  case CallingConv::SPIR_KERNEL:
+    Assert(F.getReturnType()->isVoidTy(),
+           "Calling convention requires void return type", &F);
+    LLVM_FALLTHROUGH;
+  case CallingConv::AMDGPU_VS:
+  case CallingConv::AMDGPU_GS:
+  case CallingConv::AMDGPU_PS:
+  case CallingConv::AMDGPU_CS:
+    Assert(!F.hasStructRetAttr(),
+           "Calling convention does not allow sret", &F);
+    LLVM_FALLTHROUGH;
   case CallingConv::Fast:
   case CallingConv::Cold:
   case CallingConv::Intel_OCL_BI:
@@ -2113,10 +2147,9 @@ void Verifier::visitFunction(const Function &F) {
          "Function is marked as dllimport, but not external.", &F);
 
   auto *N = F.getSubprogram();
-  if (!N)
+  HasDebugInfo = (N != nullptr);
+  if (!HasDebugInfo)
     return;
-
-  visitDISubprogram(*N);
 
   // Check that all !dbg attachments lead to back to N (or, at least, another
   // subprogram that describes the same function).
@@ -2601,7 +2634,7 @@ void Verifier::verifyCallSite(CallSite CS) {
            "Call parameter type does not match function signature!",
            CS.getArgument(i), FTy->getParamType(i), I);
 
-  AttributeSet Attrs = CS.getAttributes();
+  AttributeList Attrs = CS.getAttributes();
 
   Assert(verifyAttributeCount(Attrs, CS.arg_size()),
          "Attribute after last parameter!", I);
@@ -2726,9 +2759,9 @@ void Verifier::verifyCallSite(CallSite CS) {
   // do so causes assertion failures when the inliner sets up inline scope info.
   if (I->getFunction()->getSubprogram() && CS.getCalledFunction() &&
       CS.getCalledFunction()->getSubprogram())
-    Assert(I->getDebugLoc(), "inlinable function call in a function with debug "
-                             "info must have a !dbg location",
-           I);
+    AssertDI(I->getDebugLoc(), "inlinable function call in a function with "
+                               "debug info must have a !dbg location",
+             I);
 
   visitInstruction(*I);
 }
@@ -2745,7 +2778,7 @@ static bool isTypeCongruent(Type *L, Type *R) {
   return PL->getAddressSpace() == PR->getAddressSpace();
 }
 
-static AttrBuilder getParameterABIAttributes(int I, AttributeSet Attrs) {
+static AttrBuilder getParameterABIAttributes(int I, AttributeList Attrs) {
   static const Attribute::AttrKind ABIAttrs[] = {
       Attribute::StructRet, Attribute::ByVal, Attribute::InAlloca,
       Attribute::InReg, Attribute::Returned, Attribute::SwiftSelf,
@@ -2787,8 +2820,8 @@ void Verifier::verifyMustTailCall(CallInst &CI) {
 
   // - All ABI-impacting function attributes, such as sret, byval, inreg,
   //   returned, and inalloca, must match.
-  AttributeSet CallerAttrs = F->getAttributes();
-  AttributeSet CalleeAttrs = CI.getAttributes();
+  AttributeList CallerAttrs = F->getAttributes();
+  AttributeList CalleeAttrs = CI.getAttributes();
   for (int I = 0, E = CallerTy->getNumParams(); I != E; ++I) {
     AttrBuilder CallerABIAttrs = getParameterABIAttributes(I, CallerAttrs);
     AttrBuilder CalleeABIAttrs = getParameterABIAttributes(I, CalleeAttrs);
@@ -3148,8 +3181,9 @@ void Verifier::verifySwiftErrorValue(const Value *SwiftErrorVal) {
 void Verifier::visitAllocaInst(AllocaInst &AI) {
   SmallPtrSet<Type*, 4> Visited;
   PointerType *PTy = AI.getType();
-  Assert(PTy->getAddressSpace() == 0,
-         "Allocation instruction pointer not in the generic address space!",
+  // TODO: Relax this restriction?
+  Assert(PTy->getAddressSpace() == DL.getAllocaAddrSpace(),
+         "Allocation instruction pointer not in the stack address space!",
          &AI);
   Assert(AI.getAllocatedType()->isSized(&Visited),
          "Cannot allocate unsized type", &AI);
@@ -3929,6 +3963,14 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
            "constant int",
            CS);
     break;
+  case Intrinsic::experimental_constrained_fadd:
+  case Intrinsic::experimental_constrained_fsub:
+  case Intrinsic::experimental_constrained_fmul:
+  case Intrinsic::experimental_constrained_fdiv:
+  case Intrinsic::experimental_constrained_frem:
+    visitConstrainedFPIntrinsic(
+        cast<ConstrainedFPIntrinsic>(*CS.getInstruction()));
+    break;
   case Intrinsic::dbg_declare: // llvm.dbg.declare
     Assert(isa<MetadataAsValue>(CS.getArgOperand(0)),
            "invalid llvm.dbg.declare intrinsic call 1", CS);
@@ -4294,6 +4336,15 @@ static DISubprogram *getSubprogram(Metadata *LocalScope) {
   return nullptr;
 }
 
+void Verifier::visitConstrainedFPIntrinsic(ConstrainedFPIntrinsic &FPI) {
+  Assert(isa<MetadataAsValue>(FPI.getOperand(2)),
+         "invalid rounding mode argument", &FPI);
+  Assert(FPI.getRoundingMode() != ConstrainedFPIntrinsic::rmInvalid,
+         "invalid rounding mode argument", &FPI);
+  Assert(FPI.getExceptionBehavior() != ConstrainedFPIntrinsic::ebInvalid,
+         "invalid exception behavior argument", &FPI);
+}
+
 template <class DbgIntrinsicTy>
 void Verifier::visitDbgIntrinsic(StringRef Kind, DbgIntrinsicTy &DII) {
   auto *MD = cast<MetadataAsValue>(DII.getArgOperand(0))->getMetadata();
@@ -4330,6 +4381,8 @@ void Verifier::visitDbgIntrinsic(StringRef Kind, DbgIntrinsicTy &DII) {
                                " variable and !dbg attachment",
            &DII, BB, F, Var, Var->getScope()->getSubprogram(), Loc,
            Loc->getScope()->getSubprogram());
+
+  verifyFnArgs(DII);
 }
 
 static uint64_t getVariableSize(const DILocalVariable &V) {
@@ -4398,15 +4451,49 @@ void Verifier::verifyFragmentExpression(const DbgInfoIntrinsic &I) {
   AssertDI(FragSize != VarSize, "fragment covers entire variable", &I, V, E);
 }
 
+void Verifier::verifyFnArgs(const DbgInfoIntrinsic &I) {
+  // This function does not take the scope of noninlined function arguments into
+  // account. Don't run it if current function is nodebug, because it may
+  // contain inlined debug intrinsics.
+  if (!HasDebugInfo)
+    return;
+
+  DILocalVariable *Var;
+  if (auto *DV = dyn_cast<DbgValueInst>(&I)) {
+    // For performance reasons only check non-inlined ones.
+    if (DV->getDebugLoc()->getInlinedAt())
+      return;
+    Var = DV->getVariable();
+  } else {
+    auto *DD = cast<DbgDeclareInst>(&I);
+    if (DD->getDebugLoc()->getInlinedAt())
+      return;
+    Var = DD->getVariable();
+  }
+  AssertDI(Var, "dbg intrinsic without variable");
+
+  unsigned ArgNo = Var->getArg();
+  if (!ArgNo)
+    return;
+
+  // Verify there are no duplicate function argument debug info entries.
+  // These will cause hard-to-debug assertions in the DWARF backend.
+  if (DebugFnArgs.size() < ArgNo)
+    DebugFnArgs.resize(ArgNo, nullptr);
+
+  auto *Prev = DebugFnArgs[ArgNo - 1];
+  DebugFnArgs[ArgNo - 1] = Var;
+  AssertDI(!Prev || (Prev == Var), "conflicting debug info for argument", &I,
+           Prev, Var);
+}
+
 void Verifier::verifyCompileUnits() {
   auto *CUs = M.getNamedMetadata("llvm.dbg.cu");
   SmallPtrSet<const Metadata *, 2> Listed;
   if (CUs)
     Listed.insert(CUs->op_begin(), CUs->op_end());
-  AssertDI(
-      all_of(CUVisited,
-             [&Listed](const Metadata *CU) { return Listed.count(CU); }),
-      "All DICompileUnits must be listed in llvm.dbg.cu");
+  for (auto *CU : CUVisited)
+    AssertDI(Listed.count(CU), "DICompileUnit not listed in llvm.dbg.cu", CU);
   CUVisited.clear();
 }
 

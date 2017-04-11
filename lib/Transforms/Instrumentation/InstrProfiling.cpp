@@ -51,6 +51,21 @@ using namespace llvm;
 
 #define DEBUG_TYPE "instrprof"
 
+// The start and end values of precise value profile range for memory
+// intrinsic sizes
+cl::opt<std::string> MemOPSizeRange(
+    "memop-size-range",
+    cl::desc("Set the range of size in memory intrinsic calls to be profiled "
+             "precisely, in a format of <start_val>:<end_val>"),
+    cl::init(""));
+
+// The value that considered to be large value in  memory intrinsic.
+cl::opt<unsigned> MemOPSizeLarge(
+    "memop-size-large",
+    cl::desc("Set large value thresthold in memory intrinsic size profiling. "
+             "Value of 0 disables the large value profiling."),
+    cl::init(8192));
+
 namespace {
 
 cl::opt<bool> DoNameCompression("enable-name-compression",
@@ -165,6 +180,8 @@ bool InstrProfiling::run(Module &M, const TargetLibraryInfo &TLI) {
   NamesSize = 0;
   ProfileDataMap.clear();
   UsedVars.clear();
+  getMemOPSizeRangeFromOption(MemOPSizeRange, MemOPSizeRangeStart,
+                              MemOPSizeRangeLast);
 
   // We did not know how many value sites there would be inside
   // the instrumented function. This is counting the number of instrumented
@@ -217,17 +234,34 @@ bool InstrProfiling::run(Module &M, const TargetLibraryInfo &TLI) {
 }
 
 static Constant *getOrInsertValueProfilingCall(Module &M,
-                                               const TargetLibraryInfo &TLI) {
+                                               const TargetLibraryInfo &TLI,
+                                               bool IsRange = false) {
   LLVMContext &Ctx = M.getContext();
   auto *ReturnTy = Type::getVoidTy(M.getContext());
-  Type *ParamTypes[] = {
+
+  Constant *Res;
+  if (!IsRange) {
+    Type *ParamTypes[] = {
 #define VALUE_PROF_FUNC_PARAM(ParamType, ParamName, ParamLLVMType) ParamLLVMType
 #include "llvm/ProfileData/InstrProfData.inc"
-  };
-  auto *ValueProfilingCallTy =
-      FunctionType::get(ReturnTy, makeArrayRef(ParamTypes), false);
-  Constant *Res = M.getOrInsertFunction(getInstrProfValueProfFuncName(),
-                                        ValueProfilingCallTy);
+    };
+    auto *ValueProfilingCallTy =
+        FunctionType::get(ReturnTy, makeArrayRef(ParamTypes), false);
+    Res = M.getOrInsertFunction(getInstrProfValueProfFuncName(),
+                                ValueProfilingCallTy);
+  } else {
+    Type *RangeParamTypes[] = {
+#define VALUE_RANGE_PROF 1
+#define VALUE_PROF_FUNC_PARAM(ParamType, ParamName, ParamLLVMType) ParamLLVMType
+#include "llvm/ProfileData/InstrProfData.inc"
+#undef VALUE_RANGE_PROF
+    };
+    auto *ValueRangeProfilingCallTy =
+        FunctionType::get(ReturnTy, makeArrayRef(RangeParamTypes), false);
+    Res = M.getOrInsertFunction(getInstrProfValueRangeProfFuncName(),
+                                ValueRangeProfilingCallTy);
+  }
+
   if (Function *FunRes = dyn_cast<Function>(Res)) {
     if (auto AK = TLI.getExtAttrForI32Param(false))
       FunRes->addAttribute(3, AK);
@@ -261,11 +295,25 @@ void InstrProfiling::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
     Index += It->second.NumValueSites[Kind];
 
   IRBuilder<> Builder(Ind);
-  Value *Args[3] = {Ind->getTargetValue(),
-                    Builder.CreateBitCast(DataVar, Builder.getInt8PtrTy()),
-                    Builder.getInt32(Index)};
-  CallInst *Call = Builder.CreateCall(getOrInsertValueProfilingCall(*M, *TLI),
-                                      Args);
+  bool IsRange = (Ind->getValueKind()->getZExtValue() ==
+                  llvm::InstrProfValueKind::IPVK_MemOPSize);
+  CallInst *Call = nullptr;
+  if (!IsRange) {
+    Value *Args[3] = {Ind->getTargetValue(),
+                      Builder.CreateBitCast(DataVar, Builder.getInt8PtrTy()),
+                      Builder.getInt32(Index)};
+    Call = Builder.CreateCall(getOrInsertValueProfilingCall(*M, *TLI), Args);
+  } else {
+    Value *Args[6] = {
+        Ind->getTargetValue(),
+        Builder.CreateBitCast(DataVar, Builder.getInt8PtrTy()),
+        Builder.getInt32(Index),
+        Builder.getInt64(MemOPSizeRangeStart),
+        Builder.getInt64(MemOPSizeRangeLast),
+        Builder.getInt64(MemOPSizeLarge == 0 ? INT64_MIN : MemOPSizeLarge)};
+    Call =
+        Builder.CreateCall(getOrInsertValueProfilingCall(*M, *TLI, true), Args);
+  }
   if (auto AK = TLI->getExtAttrForI32Param(false))
     Call->addAttribute(3, AK);
   Ind->replaceAllUsesWith(Call);
@@ -295,7 +343,9 @@ void InstrProfiling::lowerCoverageData(GlobalVariable *CoverageNamesVar) {
 
     Name->setLinkage(GlobalValue::PrivateLinkage);
     ReferencedNames.push_back(Name);
+    NC->dropAllReferences();
   }
+  CoverageNamesVar->eraseFromParent();
 }
 
 /// Get the name of a profiling variable for a particular function.
@@ -532,6 +582,9 @@ void InstrProfiling::emitNameData() {
   NamesSize = CompressedNameStr.size();
   NamesVar->setSection(getNameSection());
   UsedVars.push_back(NamesVar);
+
+  for (auto *NamePtr : ReferencedNames)
+    NamePtr->eraseFromParent();
 }
 
 void InstrProfiling::emitRegistration() {

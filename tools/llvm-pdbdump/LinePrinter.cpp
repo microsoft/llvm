@@ -42,8 +42,8 @@ bool IsItemExcluded(llvm::StringRef Item,
 
 using namespace llvm;
 
-LinePrinter::LinePrinter(int Indent, llvm::raw_ostream &Stream)
-    : OS(Stream), IndentSpaces(Indent), CurrentIndent(0) {
+LinePrinter::LinePrinter(int Indent, bool UseColor, llvm::raw_ostream &Stream)
+    : OS(Stream), IndentSpaces(Indent), CurrentIndent(0), UseColor(UseColor) {
   SetFilters(ExcludeTypeFilters, opts::pretty::ExcludeTypes.begin(),
              opts::pretty::ExcludeTypes.end());
   SetFilters(ExcludeSymbolFilters, opts::pretty::ExcludeSymbols.begin(),
@@ -83,16 +83,24 @@ bool LinePrinter::IsCompilandExcluded(llvm::StringRef CompilandName) {
                         ExcludeCompilandFilters);
 }
 
-WithColor::WithColor(LinePrinter &P, PDB_ColorItem C) : OS(P.OS) {
-  applyColor(C);
+WithColor::WithColor(LinePrinter &P, PDB_ColorItem C)
+    : OS(P.OS), UseColor(P.hasColor()) {
+  if (UseColor)
+    applyColor(C);
 }
 
-WithColor::~WithColor() { OS.resetColor(); }
+WithColor::~WithColor() {
+  if (UseColor)
+    OS.resetColor();
+}
 
 void WithColor::applyColor(PDB_ColorItem C) {
   switch (C) {
   case PDB_ColorItem::None:
     OS.resetColor();
+    return;
+  case PDB_ColorItem::Comment:
+    OS.changeColor(raw_ostream::GREEN, false);
     return;
   case PDB_ColorItem::Address:
     OS.changeColor(raw_ostream::YELLOW, /*bold=*/true);
@@ -113,6 +121,7 @@ void WithColor::applyColor(PDB_ColorItem C) {
   case PDB_ColorItem::Path:
     OS.changeColor(raw_ostream::CYAN, false);
     return;
+  case PDB_ColorItem::Padding:
   case PDB_ColorItem::SectionHeader:
     OS.changeColor(raw_ostream::RED, true);
     return;

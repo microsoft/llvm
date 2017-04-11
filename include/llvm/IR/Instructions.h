@@ -67,18 +67,21 @@ protected:
   AllocaInst *cloneImpl() const;
 
 public:
-  explicit AllocaInst(Type *Ty, Value *ArraySize = nullptr,
+  explicit AllocaInst(Type *Ty, unsigned AddrSpace,
+                      Value *ArraySize = nullptr,
                       const Twine &Name = "",
                       Instruction *InsertBefore = nullptr);
-  AllocaInst(Type *Ty, Value *ArraySize,
+  AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize,
              const Twine &Name, BasicBlock *InsertAtEnd);
 
-  AllocaInst(Type *Ty, const Twine &Name, Instruction *InsertBefore = nullptr);
-  AllocaInst(Type *Ty, const Twine &Name, BasicBlock *InsertAtEnd);
+  AllocaInst(Type *Ty, unsigned AddrSpace,
+             const Twine &Name, Instruction *InsertBefore = nullptr);
+  AllocaInst(Type *Ty, unsigned AddrSpace,
+             const Twine &Name, BasicBlock *InsertAtEnd);
 
-  AllocaInst(Type *Ty, Value *ArraySize, unsigned Align,
+  AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize, unsigned Align,
              const Twine &Name = "", Instruction *InsertBefore = nullptr);
-  AllocaInst(Type *Ty, Value *ArraySize, unsigned Align,
+  AllocaInst(Type *Ty, unsigned AddrSpace, Value *ArraySize, unsigned Align,
              const Twine &Name, BasicBlock *InsertAtEnd);
 
   // Out of line virtual method, so the vtable, etc. has a home.
@@ -958,6 +961,14 @@ public:
   inline op_iterator       idx_end()         { return op_end(); }
   inline const_op_iterator idx_end()   const { return op_end(); }
 
+  inline iterator_range<op_iterator> indices() {
+    return make_range(idx_begin(), idx_end());
+  }
+
+  inline iterator_range<const_op_iterator> indices() const {
+    return make_range(idx_begin(), idx_end());
+  }
+
   Value *getPointerOperand() {
     return getOperand(0);
   }
@@ -1354,7 +1365,7 @@ class CallInst : public Instruction,
                  public OperandBundleUser<CallInst, User::op_iterator> {
   friend class OperandBundleUser<CallInst, User::op_iterator>;
 
-  AttributeSet AttributeList; ///< parameter attributes for call
+  AttributeList Attrs; ///< parameter attributes for call
   FunctionType *FTy;
 
   CallInst(const CallInst &CI);
@@ -1633,11 +1644,11 @@ public:
 
   /// Return the parameter attributes for this call.
   ///
-  AttributeSet getAttributes() const { return AttributeList; }
+  AttributeList getAttributes() const { return Attrs; }
 
   /// Set the parameter attributes for this call.
   ///
-  void setAttributes(AttributeSet Attrs) { AttributeList = Attrs; }
+  void setAttributes(AttributeList A) { Attrs = A; }
 
   /// adds the attribute to the list of attributes.
   void addAttribute(unsigned i, Attribute::AttrKind Kind);
@@ -1700,26 +1711,26 @@ public:
 
   /// Extract the alignment for a call or parameter (0=unknown).
   unsigned getParamAlignment(unsigned i) const {
-    return AttributeList.getParamAlignment(i);
+    return Attrs.getParamAlignment(i);
   }
 
   /// Extract the number of dereferenceable bytes for a call or
   /// parameter (0=unknown).
   uint64_t getDereferenceableBytes(unsigned i) const {
-    return AttributeList.getDereferenceableBytes(i);
+    return Attrs.getDereferenceableBytes(i);
   }
 
   /// Extract the number of dereferenceable_or_null bytes for a call or
   /// parameter (0=unknown).
   uint64_t getDereferenceableOrNullBytes(unsigned i) const {
-    return AttributeList.getDereferenceableOrNullBytes(i);
+    return Attrs.getDereferenceableOrNullBytes(i);
   }
 
   /// @brief Determine if the parameter or return value is marked with NoAlias
   /// attribute.
   /// @param n The parameter to check. 1 is the first parameter, 0 is the return
   bool doesNotAlias(unsigned n) const {
-    return AttributeList.hasAttribute(n, Attribute::NoAlias);
+    return Attrs.hasAttribute(n, Attribute::NoAlias);
   }
 
   /// Return true if the call should not be treated as a call to a
@@ -1732,7 +1743,7 @@ public:
   /// Return true if the call should not be inlined.
   bool isNoInline() const { return hasFnAttr(Attribute::NoInline); }
   void setIsNoInline() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoInline);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoInline);
   }
 
   /// Return true if the call can return twice
@@ -1740,7 +1751,7 @@ public:
     return hasFnAttr(Attribute::ReturnsTwice);
   }
   void setCanReturnTwice() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::ReturnsTwice);
+    addAttribute(AttributeList::FunctionIndex, Attribute::ReturnsTwice);
   }
 
   /// Determine if the call does not access memory.
@@ -1748,7 +1759,7 @@ public:
     return hasFnAttr(Attribute::ReadNone);
   }
   void setDoesNotAccessMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone);
+    addAttribute(AttributeList::FunctionIndex, Attribute::ReadNone);
   }
 
   /// Determine if the call does not access or only reads memory.
@@ -1756,7 +1767,7 @@ public:
     return doesNotAccessMemory() || hasFnAttr(Attribute::ReadOnly);
   }
   void setOnlyReadsMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::ReadOnly);
+    addAttribute(AttributeList::FunctionIndex, Attribute::ReadOnly);
   }
 
   /// Determine if the call does not access or only writes memory.
@@ -1764,7 +1775,7 @@ public:
     return doesNotAccessMemory() || hasFnAttr(Attribute::WriteOnly);
   }
   void setDoesNotReadMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::WriteOnly);
+    addAttribute(AttributeList::FunctionIndex, Attribute::WriteOnly);
   }
 
   /// @brief Determine if the call can access memmory only using pointers based
@@ -1773,34 +1784,34 @@ public:
     return hasFnAttr(Attribute::ArgMemOnly);
   }
   void setOnlyAccessesArgMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::ArgMemOnly);
+    addAttribute(AttributeList::FunctionIndex, Attribute::ArgMemOnly);
   }
 
   /// Determine if the call cannot return.
   bool doesNotReturn() const { return hasFnAttr(Attribute::NoReturn); }
   void setDoesNotReturn() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoReturn);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoReturn);
   }
 
   /// Determine if the call cannot unwind.
   bool doesNotThrow() const { return hasFnAttr(Attribute::NoUnwind); }
   void setDoesNotThrow() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoUnwind);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoUnwind);
   }
 
   /// Determine if the call cannot be duplicated.
   bool cannotDuplicate() const {return hasFnAttr(Attribute::NoDuplicate); }
   void setCannotDuplicate() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoDuplicate);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoDuplicate);
   }
 
   /// Determine if the call is convergent
   bool isConvergent() const { return hasFnAttr(Attribute::Convergent); }
   void setConvergent() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::Convergent);
+    addAttribute(AttributeList::FunctionIndex, Attribute::Convergent);
   }
   void setNotConvergent() {
-    removeAttribute(AttributeSet::FunctionIndex, Attribute::Convergent);
+    removeAttribute(AttributeList::FunctionIndex, Attribute::Convergent);
   }
 
   /// Determine if the call returns a structure through first
@@ -1815,7 +1826,7 @@ public:
 
   /// Determine if any call argument is an aggregate passed by value.
   bool hasByValArgument() const {
-    return AttributeList.hasAttrSomewhere(Attribute::ByVal);
+    return Attrs.hasAttrSomewhere(Attribute::ByVal);
   }
 
   /// Return the function called, or null if this is an
@@ -1858,7 +1869,7 @@ public:
 
 private:
   template <typename AttrKind> bool hasFnAttrImpl(AttrKind Kind) const {
-    if (AttributeList.hasAttribute(AttributeSet::FunctionIndex, Kind))
+    if (Attrs.hasAttribute(AttributeList::FunctionIndex, Kind))
       return true;
 
     // Operand bundles override attributes on the called function, but don't
@@ -1867,7 +1878,8 @@ private:
       return false;
 
     if (const Function *F = getCalledFunction())
-      return F->getAttributes().hasAttribute(AttributeSet::FunctionIndex, Kind);
+      return F->getAttributes().hasAttribute(AttributeList::FunctionIndex,
+                                             Kind);
     return false;
   }
 
@@ -3084,25 +3096,33 @@ public:
   // -2
   static const unsigned DefaultPseudoIndex = static_cast<unsigned>(~0L-1);
 
-  template <class SwitchInstTy, class ConstantIntTy, class BasicBlockTy>
-  class CaseIteratorT {
+  template <class SwitchInstT, class ConstantIntT, class BasicBlockT>
+  class CaseIteratorT
+      : public iterator_facade_base<
+            CaseIteratorT<SwitchInstT, ConstantIntT, BasicBlockT>,
+            std::random_access_iterator_tag,
+            CaseIteratorT<SwitchInstT, ConstantIntT, BasicBlockT>> {
   protected:
-    SwitchInstTy *SI;
-    unsigned Index;
+    SwitchInstT *SI;
+    ptrdiff_t Index;
 
   public:
-    typedef CaseIteratorT<SwitchInstTy, ConstantIntTy, BasicBlockTy> Self;
+    typedef CaseIteratorT<SwitchInstT, ConstantIntT, BasicBlockT> Self;
+
+    /// Default constructed iterator is in an invalid state until assigned to
+    /// a case for a particular switch.
+    CaseIteratorT() : SI(nullptr) {}
 
     /// Initializes case iterator for given SwitchInst and for given
     /// case number.
-    CaseIteratorT(SwitchInstTy *SI, unsigned CaseNum) {
+    CaseIteratorT(SwitchInstT *SI, unsigned CaseNum) {
       this->SI = SI;
       Index = CaseNum;
     }
 
     /// Initializes case iterator for given SwitchInst and for given
     /// TerminatorInst's successor index.
-    static Self fromSuccessorIndex(SwitchInstTy *SI, unsigned SuccessorIndex) {
+    static Self fromSuccessorIndex(SwitchInstT *SI, unsigned SuccessorIndex) {
       assert(SuccessorIndex < SI->getNumSuccessors() &&
              "Successor index # out of range!");
       return SuccessorIndex != 0 ?
@@ -3111,15 +3131,16 @@ public:
     }
 
     /// Resolves case value for current case.
-    ConstantIntTy *getCaseValue() {
-      assert(Index < SI->getNumCases() && "Index out the number of cases.");
-      return reinterpret_cast<ConstantIntTy*>(SI->getOperand(2 + Index*2));
+    ConstantIntT *getCaseValue() {
+      assert((unsigned)Index < SI->getNumCases() &&
+             "Index out the number of cases.");
+      return reinterpret_cast<ConstantIntT *>(SI->getOperand(2 + Index * 2));
     }
 
     /// Resolves successor for current case.
-    BasicBlockTy *getCaseSuccessor() {
-      assert((Index < SI->getNumCases() ||
-              Index == DefaultPseudoIndex) &&
+    BasicBlockT *getCaseSuccessor() {
+      assert(((unsigned)Index < SI->getNumCases() ||
+              (unsigned)Index == DefaultPseudoIndex) &&
              "Index out the number of cases.");
       return SI->getSuccessor(getSuccessorIndex());
     }
@@ -3129,48 +3150,38 @@ public:
 
     /// Returns TerminatorInst's successor index for current case successor.
     unsigned getSuccessorIndex() const {
-      assert((Index == DefaultPseudoIndex || Index < SI->getNumCases()) &&
+      assert(((unsigned)Index == DefaultPseudoIndex ||
+              (unsigned)Index < SI->getNumCases()) &&
              "Index out the number of cases.");
-      return Index != DefaultPseudoIndex ? Index + 1 : 0;
+      return (unsigned)Index != DefaultPseudoIndex ? Index + 1 : 0;
     }
 
-    Self operator++() {
-      // Check index correctness after increment.
+    Self &operator+=(ptrdiff_t N) {
+      // Check index correctness after addition.
       // Note: Index == getNumCases() means end().
-      assert(Index+1 <= SI->getNumCases() && "Index out the number of cases.");
-      ++Index;
-      return *this;
-    }
-    Self operator++(int) {
-      Self tmp = *this;
-      ++(*this);
-      return tmp;
-    }
-    Self operator--() {
-      // Check index correctness after decrement.
-      // Note: Index == getNumCases() means end().
-      // Also allow "-1" iterator here. That will became valid after ++.
-      assert((Index == 0 || Index-1 <= SI->getNumCases()) &&
+      assert(Index + N >= 0 && (unsigned)(Index + N) <= SI->getNumCases() &&
              "Index out the number of cases.");
-      --Index;
+      Index += N;
       return *this;
     }
-    Self operator--(int) {
-      Self tmp = *this;
-      --(*this);
-      return tmp;
+    Self &operator-=(ptrdiff_t N) {
+      // Check index correctness after subtraction.
+      // Note: Index == getNumCases() means end().
+      assert(Index - N >= 0 && (unsigned)(Index - N) <= SI->getNumCases() &&
+             "Index out the number of cases.");
+      Index -= N;
+      return *this;
     }
     bool operator==(const Self& RHS) const {
-      assert(RHS.SI == SI && "Incompatible operators.");
-      return RHS.Index == Index;
+      assert(SI == RHS.SI && "Incompatible operators.");
+      return Index == RHS.Index;
     }
-    bool operator!=(const Self& RHS) const {
-      assert(RHS.SI == SI && "Incompatible operators.");
-      return RHS.Index != Index;
+    bool operator<(const Self& RHS) const {
+      assert(SI == RHS.SI && "Incompatible operators.");
+      return Index < RHS.Index;
     }
-    Self &operator*() {
-      return *this;
-    }
+    Self &operator*() { return *this; }
+    const Self &operator*() const { return *this; }
   };
 
   typedef CaseIteratorT<const SwitchInst, const ConstantInt, const BasicBlock>
@@ -3185,7 +3196,8 @@ public:
 
     /// Sets the new value for current case.
     void setValue(ConstantInt *V) {
-      assert(Index < SI->getNumCases() && "Index out the number of cases.");
+      assert((unsigned)Index < SI->getNumCases() &&
+             "Index out the number of cases.");
       SI->setOperand(2 + Index*2, reinterpret_cast<Value*>(V));
     }
 
@@ -3316,8 +3328,9 @@ public:
   /// index idx and above.
   /// Note:
   /// This action invalidates iterators for all cases following the one removed,
-  /// including the case_end() iterator.
-  void removeCase(CaseIt i);
+  /// including the case_end() iterator. It returns an iterator for the next
+  /// case.
+  CaseIt removeCase(CaseIt i);
 
   unsigned getNumSuccessors() const { return getNumOperands()/2; }
   BasicBlock *getSuccessor(unsigned idx) const {
@@ -3465,7 +3478,7 @@ class InvokeInst : public TerminatorInst,
                    public OperandBundleUser<InvokeInst, User::op_iterator> {
   friend class OperandBundleUser<InvokeInst, User::op_iterator>;
 
-  AttributeSet AttributeList;
+  AttributeList Attrs;
   FunctionType *FTy;
 
   InvokeInst(const InvokeInst &BI);
@@ -3669,11 +3682,11 @@ public:
 
   /// Return the parameter attributes for this invoke.
   ///
-  AttributeSet getAttributes() const { return AttributeList; }
+  AttributeList getAttributes() const { return Attrs; }
 
   /// Set the parameter attributes for this invoke.
   ///
-  void setAttributes(AttributeSet Attrs) { AttributeList = Attrs; }
+  void setAttributes(AttributeList A) { Attrs = A; }
 
   /// adds the attribute to the list of attributes.
   void addAttribute(unsigned i, Attribute::AttrKind Kind);
@@ -3737,26 +3750,26 @@ public:
 
   /// Extract the alignment for a call or parameter (0=unknown).
   unsigned getParamAlignment(unsigned i) const {
-    return AttributeList.getParamAlignment(i);
+    return Attrs.getParamAlignment(i);
   }
 
   /// Extract the number of dereferenceable bytes for a call or
   /// parameter (0=unknown).
   uint64_t getDereferenceableBytes(unsigned i) const {
-    return AttributeList.getDereferenceableBytes(i);
+    return Attrs.getDereferenceableBytes(i);
   }
 
   /// Extract the number of dereferenceable_or_null bytes for a call or
   /// parameter (0=unknown).
   uint64_t getDereferenceableOrNullBytes(unsigned i) const {
-    return AttributeList.getDereferenceableOrNullBytes(i);
+    return Attrs.getDereferenceableOrNullBytes(i);
   }
 
   /// @brief Determine if the parameter or return value is marked with NoAlias
   /// attribute.
   /// @param n The parameter to check. 1 is the first parameter, 0 is the return
   bool doesNotAlias(unsigned n) const {
-    return AttributeList.hasAttribute(n, Attribute::NoAlias);
+    return Attrs.hasAttribute(n, Attribute::NoAlias);
   }
 
   /// Return true if the call should not be treated as a call to a
@@ -3771,7 +3784,7 @@ public:
   /// Return true if the call should not be inlined.
   bool isNoInline() const { return hasFnAttr(Attribute::NoInline); }
   void setIsNoInline() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoInline);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoInline);
   }
 
   /// Determine if the call does not access memory.
@@ -3779,7 +3792,7 @@ public:
     return hasFnAttr(Attribute::ReadNone);
   }
   void setDoesNotAccessMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::ReadNone);
+    addAttribute(AttributeList::FunctionIndex, Attribute::ReadNone);
   }
 
   /// Determine if the call does not access or only reads memory.
@@ -3787,7 +3800,7 @@ public:
     return doesNotAccessMemory() || hasFnAttr(Attribute::ReadOnly);
   }
   void setOnlyReadsMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::ReadOnly);
+    addAttribute(AttributeList::FunctionIndex, Attribute::ReadOnly);
   }
 
   /// Determine if the call does not access or only writes memory.
@@ -3795,7 +3808,7 @@ public:
     return doesNotAccessMemory() || hasFnAttr(Attribute::WriteOnly);
   }
   void setDoesNotReadMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::WriteOnly);
+    addAttribute(AttributeList::FunctionIndex, Attribute::WriteOnly);
   }
 
   /// @brief Determine if the call access memmory only using it's pointer
@@ -3804,34 +3817,34 @@ public:
     return hasFnAttr(Attribute::ArgMemOnly);
   }
   void setOnlyAccessesArgMemory() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::ArgMemOnly);
+    addAttribute(AttributeList::FunctionIndex, Attribute::ArgMemOnly);
   }
 
   /// Determine if the call cannot return.
   bool doesNotReturn() const { return hasFnAttr(Attribute::NoReturn); }
   void setDoesNotReturn() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoReturn);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoReturn);
   }
 
   /// Determine if the call cannot unwind.
   bool doesNotThrow() const { return hasFnAttr(Attribute::NoUnwind); }
   void setDoesNotThrow() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoUnwind);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoUnwind);
   }
 
   /// Determine if the invoke cannot be duplicated.
   bool cannotDuplicate() const {return hasFnAttr(Attribute::NoDuplicate); }
   void setCannotDuplicate() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::NoDuplicate);
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoDuplicate);
   }
 
   /// Determine if the invoke is convergent
   bool isConvergent() const { return hasFnAttr(Attribute::Convergent); }
   void setConvergent() {
-    addAttribute(AttributeSet::FunctionIndex, Attribute::Convergent);
+    addAttribute(AttributeList::FunctionIndex, Attribute::Convergent);
   }
   void setNotConvergent() {
-    removeAttribute(AttributeSet::FunctionIndex, Attribute::Convergent);
+    removeAttribute(AttributeList::FunctionIndex, Attribute::Convergent);
   }
 
   /// Determine if the call returns a structure through first
@@ -3846,7 +3859,7 @@ public:
 
   /// Determine if any call argument is an aggregate passed by value.
   bool hasByValArgument() const {
-    return AttributeList.hasAttrSomewhere(Attribute::ByVal);
+    return Attrs.hasAttrSomewhere(Attribute::ByVal);
   }
 
   /// Return the function called, or null if this is an
@@ -3918,7 +3931,7 @@ private:
   void setSuccessorV(unsigned idx, BasicBlock *B) override;
 
   template <typename AttrKind> bool hasFnAttrImpl(AttrKind Kind) const {
-    if (AttributeList.hasAttribute(AttributeSet::FunctionIndex, Kind))
+    if (Attrs.hasAttribute(AttributeList::FunctionIndex, Kind))
       return true;
 
     // Operand bundles override attributes on the called function, but don't
@@ -3927,7 +3940,8 @@ private:
       return false;
 
     if (const Function *F = getCalledFunction())
-      return F->getAttributes().hasAttribute(AttributeSet::FunctionIndex, Kind);
+      return F->getAttributes().hasAttribute(AttributeList::FunctionIndex,
+                                             Kind);
     return false;
   }
 

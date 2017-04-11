@@ -4,6 +4,7 @@ set(LLVM_LINK_COMPONENTS
   Support
   DebugInfoCodeView
   DebugInfoMSF
+  DebugInfoPDB
   )
 
 add_llvm_tool(llvm-readobj
@@ -15,5 +16,6 @@ add_llvm_tool(llvm-readobj
   llvm-readobj.cpp
   MachODumper.cpp
   ObjDumper.cpp
+  WasmDumper.cpp
   Win64EHDumper.cpp
   )

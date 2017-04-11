@@ -11,34 +11,58 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ARM.h"
 #include "ARMBaseInstrInfo.h"
 #include "ARMBaseRegisterInfo.h"
 #include "ARMConstantPoolValue.h"
 #include "ARMFeatures.h"
 #include "ARMHazardRecognizer.h"
 #include "ARMMachineFunctionInfo.h"
+#include "ARMSubtarget.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
+#include "MCTargetDesc/ARMBaseInfo.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/LiveVariables.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/ScoreboardHazardRecognizer.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetSchedule.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/MC/MCAsmInfo.h"
-#include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/Support/BranchProbability.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetRegisterInfo.h"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <iterator>
+#include <new>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -301,7 +325,6 @@ bool ARMBaseInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   // Walk backwards from the end of the basic block until the branch is
   // analyzed or we give up.
   while (isPredicated(*I) || I->isTerminator() || I->isDebugValue()) {
-
     // Flag to be raised on unanalyzeable instructions. This is useful in cases
     // where we want to clean up on the end of the basic block before we bail
     // out.
@@ -375,7 +398,6 @@ bool ARMBaseInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   // analyzed this branch successfully.
   return false;
 }
-
 
 unsigned ARMBaseInstrInfo::removeBranch(MachineBasicBlock &MBB,
                                         int *BytesRemoved) const {
@@ -575,7 +597,7 @@ static bool isEligibleForITBlock(const MachineInstr *MI) {
 /// isPredicable - Return true if the specified instruction can be predicated.
 /// By default, this returns true for every instruction with a
 /// PredicateOperand.
-bool ARMBaseInstrInfo::isPredicable(MachineInstr &MI) const {
+bool ARMBaseInstrInfo::isPredicable(const MachineInstr &MI) const {
   if (!MI.isPredicable())
     return false;
 
@@ -585,7 +607,7 @@ bool ARMBaseInstrInfo::isPredicable(MachineInstr &MI) const {
   if (!isEligibleForITBlock(&MI))
     return false;
 
-  ARMFunctionInfo *AFI =
+  const ARMFunctionInfo *AFI =
       MI.getParent()->getParent()->getInfo<ARMFunctionInfo>();
 
   if (AFI->isThumb2Function()) {
@@ -600,7 +622,8 @@ bool ARMBaseInstrInfo::isPredicable(MachineInstr &MI) const {
 }
 
 namespace llvm {
-template <> bool IsCPSRDead<MachineInstr>(MachineInstr *MI) {
+
+template <> bool IsCPSRDead<MachineInstr>(const MachineInstr *MI) {
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI->getOperand(i);
     if (!MO.isReg() || MO.isUndef() || MO.isUse())
@@ -613,7 +636,8 @@ template <> bool IsCPSRDead<MachineInstr>(MachineInstr *MI) {
   // all definitions of CPSR are dead
   return true;
 }
-}
+
+} // end namespace llvm
 
 /// GetInstSize - Return the size of the specified MachineInstr.
 ///
@@ -1298,7 +1322,7 @@ void ARMBaseInstrInfo::expandMEMCPY(MachineBasicBlock::iterator MI) const {
 
   // Sort the scratch registers into ascending order.
   const TargetRegisterInfo &TRI = getRegisterInfo();
-  llvm::SmallVector<unsigned, 6> ScratchRegs;
+  SmallVector<unsigned, 6> ScratchRegs;
   for(unsigned I = 5; I < MI->getNumOperands(); ++I)
     ScratchRegs.push_back(MI->getOperand(I).getReg());
   std::sort(ScratchRegs.begin(), ScratchRegs.end(),
@@ -1315,7 +1339,6 @@ void ARMBaseInstrInfo::expandMEMCPY(MachineBasicBlock::iterator MI) const {
 
   BB->erase(MI);
 }
-
 
 bool ARMBaseInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
   if (MI.getOpcode() == TargetOpcode::LOAD_STACK_GUARD) {
@@ -1766,25 +1789,17 @@ isProfitableToIfCvt(MachineBasicBlock &MBB,
       }
     }
   }
-
-  // Attempt to estimate the relative costs of predication versus branching.
-  // Here we scale up each component of UnpredCost to avoid precision issue when
-  // scaling NumCycles by Probability.
-  const unsigned ScalingUpFactor = 1024;
-  unsigned UnpredCost = Probability.scale(NumCycles * ScalingUpFactor);
-  UnpredCost += ScalingUpFactor; // The branch itself
-  UnpredCost += Subtarget.getMispredictionPenalty() * ScalingUpFactor / 10;
-
-  return (NumCycles + ExtraPredCycles) * ScalingUpFactor <= UnpredCost;
+  return isProfitableToIfCvt(MBB, NumCycles, ExtraPredCycles,
+                             MBB, 0, 0, Probability);
 }
 
 bool ARMBaseInstrInfo::
-isProfitableToIfCvt(MachineBasicBlock &TMBB,
+isProfitableToIfCvt(MachineBasicBlock &,
                     unsigned TCycles, unsigned TExtra,
-                    MachineBasicBlock &FMBB,
+                    MachineBasicBlock &,
                     unsigned FCycles, unsigned FExtra,
                     BranchProbability Probability) const {
-  if (!TCycles || !FCycles)
+  if (!TCycles)
     return false;
 
   // Attempt to estimate the relative costs of predication versus branching.
@@ -1823,7 +1838,6 @@ ARMCC::CondCodes llvm::getInstrPredicate(const MachineInstr &MI,
   PredReg = MI.getOperand(PIdx+1).getReg();
   return (ARMCC::CondCodes)MI.getOperand(PIdx).getImm();
 }
-
 
 unsigned llvm::getMatchingCondBranchOpcode(unsigned Opc) {
   if (Opc == ARM::B)
@@ -2013,6 +2027,16 @@ static const AddSubFlagsOpcodePair AddSubFlagsOpcodeMap[] = {
   {ARM::RSBSri, ARM::RSBri},
   {ARM::RSBSrsi, ARM::RSBrsi},
   {ARM::RSBSrsr, ARM::RSBrsr},
+
+  {ARM::tADDSi3, ARM::tADDi3},
+  {ARM::tADDSi8, ARM::tADDi8},
+  {ARM::tADDSrr, ARM::tADDrr},
+  {ARM::tADCS, ARM::tADC},
+
+  {ARM::tSUBSi3, ARM::tSUBi3},
+  {ARM::tSUBSi8, ARM::tSUBi8},
+  {ARM::tSUBSrr, ARM::tSUBrr},
+  {ARM::tSBCS, ARM::tSBC},
 
   {ARM::t2ADDSri, ARM::t2ADDri},
   {ARM::t2ADDSrr, ARM::t2ADDrr},
@@ -2247,33 +2271,30 @@ bool llvm::rewriteARMFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
     unsigned NumBits = 0;
     unsigned Scale = 1;
     switch (AddrMode) {
-    case ARMII::AddrMode_i12: {
+    case ARMII::AddrMode_i12:
       ImmIdx = FrameRegIdx + 1;
       InstrOffs = MI.getOperand(ImmIdx).getImm();
       NumBits = 12;
       break;
-    }
-    case ARMII::AddrMode2: {
+    case ARMII::AddrMode2:
       ImmIdx = FrameRegIdx+2;
       InstrOffs = ARM_AM::getAM2Offset(MI.getOperand(ImmIdx).getImm());
       if (ARM_AM::getAM2Op(MI.getOperand(ImmIdx).getImm()) == ARM_AM::sub)
         InstrOffs *= -1;
       NumBits = 12;
       break;
-    }
-    case ARMII::AddrMode3: {
+    case ARMII::AddrMode3:
       ImmIdx = FrameRegIdx+2;
       InstrOffs = ARM_AM::getAM3Offset(MI.getOperand(ImmIdx).getImm());
       if (ARM_AM::getAM3Op(MI.getOperand(ImmIdx).getImm()) == ARM_AM::sub)
         InstrOffs *= -1;
       NumBits = 8;
       break;
-    }
     case ARMII::AddrMode4:
     case ARMII::AddrMode6:
       // Can't fold any offset even if it's zero.
       return false;
-    case ARMII::AddrMode5: {
+    case ARMII::AddrMode5:
       ImmIdx = FrameRegIdx+1;
       InstrOffs = ARM_AM::getAM5Offset(MI.getOperand(ImmIdx).getImm());
       if (ARM_AM::getAM5Op(MI.getOperand(ImmIdx).getImm()) == ARM_AM::sub)
@@ -2281,7 +2302,6 @@ bool llvm::rewriteARMFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
       NumBits = 8;
       Scale = 4;
       break;
-    }
     default:
       llvm_unreachable("Unsupported addressing mode!");
     }
@@ -2799,7 +2819,7 @@ bool ARMBaseInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
     switch (UseOpc) {
     default: break;
     case ARM::ADDrr:
-    case ARM::SUBrr: {
+    case ARM::SUBrr:
       if (UseOpc == ARM::SUBrr && Commute)
         return false;
 
@@ -2815,9 +2835,8 @@ bool ARMBaseInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
       SOImmValV1 = (uint32_t)ARM_AM::getSOImmTwoPartFirst(ImmVal);
       SOImmValV2 = (uint32_t)ARM_AM::getSOImmTwoPartSecond(ImmVal);
       break;
-    }
     case ARM::ORRrr:
-    case ARM::EORrr: {
+    case ARM::EORrr:
       if (!ARM_AM::isSOImmTwoPartVal(ImmVal))
         return false;
       SOImmValV1 = (uint32_t)ARM_AM::getSOImmTwoPartFirst(ImmVal);
@@ -2828,9 +2847,8 @@ bool ARMBaseInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
       case ARM::EORrr: NewUseOpc = ARM::EORri; break;
       }
       break;
-    }
     case ARM::t2ADDrr:
-    case ARM::t2SUBrr: {
+    case ARM::t2SUBrr:
       if (UseOpc == ARM::t2SUBrr && Commute)
         return false;
 
@@ -2846,9 +2864,8 @@ bool ARMBaseInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
       SOImmValV1 = (uint32_t)ARM_AM::getT2SOImmTwoPartFirst(ImmVal);
       SOImmValV2 = (uint32_t)ARM_AM::getT2SOImmTwoPartSecond(ImmVal);
       break;
-    }
     case ARM::t2ORRrr:
-    case ARM::t2EORrr: {
+    case ARM::t2EORrr:
       if (!ARM_AM::isT2SOImmTwoPartVal(ImmVal))
         return false;
       SOImmValV1 = (uint32_t)ARM_AM::getT2SOImmTwoPartFirst(ImmVal);
@@ -2859,7 +2876,6 @@ bool ARMBaseInstrInfo::FoldImmediate(MachineInstr &UseMI, MachineInstr &DefMI,
       case ARM::t2EORrr: NewUseOpc = ARM::t2EORri; break;
       }
       break;
-    }
     }
   }
   }
@@ -3485,7 +3501,7 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   case ARM::t2LDMDB:
   case ARM::t2LDMIA_UPD:
   case ARM::t2LDMDB_UPD:
-    LdmBypass = 1;
+    LdmBypass = true;
     DefCycle = getLDMDefCycle(ItinData, DefMCID, DefClass, DefIdx, DefAlign);
     break;
   }
@@ -3960,11 +3976,10 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     case ARM::t2LDRs:
     case ARM::t2LDRBs:
     case ARM::t2LDRHs:
-    case ARM::t2LDRSHs: {
+    case ARM::t2LDRSHs:
       // Thumb2 mode: lsl 0-3 only.
       Latency -= 2;
       break;
-    }
     }
   }
 
@@ -4294,6 +4309,7 @@ enum ARMExeDomain {
   ExeVFP = 1,
   ExeNEON = 2
 };
+
 //
 // Also see ARMInstrFormats.td and Domain* enums in ARMBaseInfo.h
 //
@@ -4578,7 +4594,6 @@ void ARMBaseInstrInfo::setExecutionDomain(MachineInstr &MI,
       break;
     }
   }
-
 }
 
 //===----------------------------------------------------------------------===//

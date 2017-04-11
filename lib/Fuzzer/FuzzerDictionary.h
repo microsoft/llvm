@@ -33,10 +33,12 @@ public:
   }
 
   bool operator==(const FixedWord<kMaxSize> &w) const {
+    ScopedDoingMyOwnMemOrStr scoped_doing_my_own_mem_os_str;
     return Size == w.Size && 0 == memcmp(Data, w.Data, Size);
   }
 
   bool operator<(const FixedWord<kMaxSize> &w) const {
+    ScopedDoingMyOwnMemOrStr scoped_doing_my_own_mem_os_str;
     if (Size != w.Size)
       return Size < w.Size;
     return memcmp(Data, w.Data, Size) < 0;
@@ -51,7 +53,7 @@ private:
   uint8_t Data[kMaxSize];
 };
 
-typedef FixedWord<27> Word; // 28 bytes.
+typedef FixedWord<64> Word;
 
 class DictionaryEntry {
  public:

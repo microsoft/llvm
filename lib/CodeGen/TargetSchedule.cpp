@@ -1,4 +1,4 @@
-//===-- llvm/Target/TargetSchedule.cpp - Sched Machine Model ----*- C++ -*-===//
+//===- llvm/Target/TargetSchedule.cpp - Sched Machine Model ---------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -12,12 +12,22 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/TargetSchedule.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCInstrItineraries.h"
+#include "llvm/MC/MCSchedule.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
 
 using namespace llvm;
 
@@ -37,13 +47,14 @@ bool TargetSchedModel::hasInstrItineraries() const {
 
 static unsigned gcd(unsigned Dividend, unsigned Divisor) {
   // Dividend and Divisor will be naturally swapped as needed.
-  while(Divisor) {
+  while (Divisor) {
     unsigned Rem = Dividend % Divisor;
     Dividend = Divisor;
     Divisor = Rem;
   };
   return Dividend;
 }
+
 static unsigned lcm(unsigned A, unsigned B) {
   unsigned LCM = (uint64_t(A) * B) / gcd(A, B);
   assert((LCM >= A && LCM >= B) && "LCM overflow");
@@ -73,6 +84,29 @@ void TargetSchedModel::init(const MCSchedModel &sm,
   }
 }
 
+/// Returns true only if instruction is specified as single issue.
+bool TargetSchedModel::mustBeginGroup(const MachineInstr *MI,
+                                     const MCSchedClassDesc *SC) const {
+  if (hasInstrSchedModel()) {
+    if (!SC)
+      SC = resolveSchedClass(MI);
+    if (SC->isValid())
+      return SC->BeginGroup;
+  }
+  return false;
+}
+
+bool TargetSchedModel::mustEndGroup(const MachineInstr *MI,
+                                     const MCSchedClassDesc *SC) const {
+  if (hasInstrSchedModel()) {
+    if (!SC)
+      SC = resolveSchedClass(MI);
+    if (SC->isValid())
+      return SC->EndGroup;
+  }
+  return false;
+}
+
 unsigned TargetSchedModel::getNumMicroOps(const MachineInstr *MI,
                                           const MCSchedClassDesc *SC) const {
   if (hasInstrItineraries()) {
@@ -100,7 +134,6 @@ static unsigned capLatency(int Cycles) {
 /// evaluation of predicates that depend on instruction operands or flags.
 const MCSchedClassDesc *TargetSchedModel::
 resolveSchedClass(const MachineInstr *MI) const {
-
   // Get the definition's scheduling class descriptor from this machine model.
   unsigned SchedClass = MI->getDesc().getSchedClass();
   const MCSchedClassDesc *SCDesc = SchedModel.getSchedClassDesc(SchedClass);

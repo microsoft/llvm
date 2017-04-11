@@ -116,6 +116,8 @@ private:
     case MVT::f32:
     case MVT::f64:
       return VT;
+    case MVT::f16:
+      return MVT::f32;
     case MVT::v16i8:
     case MVT::v8i16:
     case MVT::v4i32:
@@ -594,7 +596,7 @@ bool WebAssemblyFastISel::fastLowerArguments() {
 
   unsigned i = 0;
   for (auto const &Arg : F->args()) {
-    const AttributeSet &Attrs = F->getAttributes();
+    const AttributeList &Attrs = F->getAttributes();
     if (Attrs.hasAttribute(i+1, Attribute::ByVal) ||
         Attrs.hasAttribute(i+1, Attribute::SwiftSelf) ||
         Attrs.hasAttribute(i+1, Attribute::SwiftError) ||
@@ -744,7 +746,7 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
     if (ArgTy == MVT::INVALID_SIMPLE_VALUE_TYPE)
       return false;
 
-    const AttributeSet &Attrs = Call->getAttributes();
+    const AttributeList &Attrs = Call->getAttributes();
     if (Attrs.hasAttribute(i+1, Attribute::ByVal) ||
         Attrs.hasAttribute(i+1, Attribute::SwiftSelf) ||
         Attrs.hasAttribute(i+1, Attribute::SwiftError) ||

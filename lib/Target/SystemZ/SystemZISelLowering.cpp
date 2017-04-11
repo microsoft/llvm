@@ -194,6 +194,9 @@ SystemZTargetLowering::SystemZTargetLowering(const TargetMachine &TM,
       setOperationAction(ISD::UMUL_LOHI, VT, Custom);
 
       // Only z196 and above have native support for conversions to unsigned.
+      // On z10, promoting to i64 doesn't generate an inexact condition for
+      // values that are outside the i32 range but in the i64 range, so use
+      // the default expansion.
       if (!Subtarget.hasFPExtension())
         setOperationAction(ISD::FP_TO_UINT, VT, Expand);
     }
@@ -2789,8 +2792,9 @@ SDValue SystemZTargetLowering::lowerBITCAST(SDValue Op,
   // but we need this case for bitcasts that are created during lowering
   // and which are then lowered themselves.
   if (auto *LoadN = dyn_cast<LoadSDNode>(In))
-    return DAG.getLoad(ResVT, DL, LoadN->getChain(), LoadN->getBasePtr(),
-                       LoadN->getMemOperand());
+    if (ISD::isNormalLoad(LoadN))
+      return DAG.getLoad(ResVT, DL, LoadN->getChain(), LoadN->getBasePtr(),
+                         LoadN->getMemOperand());
 
   if (InVT == MVT::i32 && ResVT == MVT::f32) {
     SDValue In64;
@@ -3802,7 +3806,7 @@ namespace {
 struct GeneralShuffle {
   GeneralShuffle(EVT vt) : VT(vt) {}
   void addUndef();
-  void add(SDValue, unsigned);
+  bool add(SDValue, unsigned);
   SDValue getNode(SelectionDAG &, const SDLoc &);
 
   // The operands of the shuffle.
@@ -3828,8 +3832,10 @@ void GeneralShuffle::addUndef() {
 // Add an extra element to the shuffle, taking it from element Elem of Op.
 // A null Op indicates a vector input whose value will be calculated later;
 // there is at most one such input per shuffle and it always has the same
-// type as the result.
-void GeneralShuffle::add(SDValue Op, unsigned Elem) {
+// type as the result. Aborts and returns false if the source vector elements
+// of an EXTRACT_VECTOR_ELT are smaller than the destination elements. Per
+// LLVM they become implicitly extended, but this is rare and not optimized.
+bool GeneralShuffle::add(SDValue Op, unsigned Elem) {
   unsigned BytesPerElement = VT.getVectorElementType().getStoreSize();
 
   // The source vector can have wider elements than the result,
@@ -3837,8 +3843,12 @@ void GeneralShuffle::add(SDValue Op, unsigned Elem) {
   // We want the least significant part.
   EVT FromVT = Op.getNode() ? Op.getValueType() : VT;
   unsigned FromBytesPerElement = FromVT.getVectorElementType().getStoreSize();
-  assert(FromBytesPerElement >= BytesPerElement &&
-         "Invalid EXTRACT_VECTOR_ELT");
+
+  // Return false if the source elements are smaller than their destination
+  // elements.
+  if (FromBytesPerElement < BytesPerElement)
+    return false;
+
   unsigned Byte = ((Elem * FromBytesPerElement) % SystemZ::VectorBytes +
                    (FromBytesPerElement - BytesPerElement));
 
@@ -3856,13 +3866,13 @@ void GeneralShuffle::add(SDValue Op, unsigned Elem) {
         break;
       if (NewByte < 0) {
         addUndef();
-        return;
+        return true;
       }
       Op = Op.getOperand(unsigned(NewByte) / SystemZ::VectorBytes);
       Byte = unsigned(NewByte) % SystemZ::VectorBytes;
     } else if (Op.isUndef()) {
       addUndef();
-      return;
+      return true;
     } else
       break;
   }
@@ -3879,6 +3889,8 @@ void GeneralShuffle::add(SDValue Op, unsigned Elem) {
   unsigned Base = OpNo * SystemZ::VectorBytes + Byte;
   for (unsigned I = 0; I < BytesPerElement; ++I)
     Bytes.push_back(Base + I);
+
+  return true;
 }
 
 // Return SDNodes for the completed shuffle.
@@ -4110,12 +4122,14 @@ static SDValue tryBuildVectorShuffle(SelectionDAG &DAG,
     if (Op.getOpcode() == ISD::EXTRACT_VECTOR_ELT &&
         Op.getOperand(1).getOpcode() == ISD::Constant) {
       unsigned Elem = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
-      GS.add(Op.getOperand(0), Elem);
+      if (!GS.add(Op.getOperand(0), Elem))
+        return SDValue();
       FoundOne = true;
     } else if (Op.isUndef()) {
       GS.addUndef();
     } else {
-      GS.add(SDValue(), ResidueOps.size());
+      if (!GS.add(SDValue(), ResidueOps.size()))
+        return SDValue();
       ResidueOps.push_back(BVN->getOperand(I));
     }
   }
@@ -4354,9 +4368,9 @@ SDValue SystemZTargetLowering::lowerVECTOR_SHUFFLE(SDValue Op,
     int Elt = VSN->getMaskElt(I);
     if (Elt < 0)
       GS.addUndef();
-    else
-      GS.add(Op.getOperand(unsigned(Elt) / NumElements),
-             unsigned(Elt) % NumElements);
+    else if (!GS.add(Op.getOperand(unsigned(Elt) / NumElements),
+                     unsigned(Elt) % NumElements))
+      return SDValue();
   }
   return GS.getNode(DAG, SDLoc(VSN));
 }
@@ -4722,9 +4736,12 @@ const char *SystemZTargetLowering::getTargetNodeName(unsigned Opcode) const {
 }
 
 // Return true if VT is a vector whose elements are a whole number of bytes
-// in width.
-static bool canTreatAsByteVector(EVT VT) {
-  return VT.isVector() && VT.getScalarSizeInBits() % 8 == 0;
+// in width. Also check for presence of vector support.
+bool SystemZTargetLowering::canTreatAsByteVector(EVT VT) const {
+  if (!Subtarget.hasVector())
+    return false;
+
+  return VT.isVector() && VT.getScalarSizeInBits() % 8 == 0 && VT.isSimple();
 }
 
 // Try to simplify an EXTRACT_VECTOR_ELT from a vector of type VecVT
@@ -4986,6 +5003,10 @@ SDValue SystemZTargetLowering::combineSTORE(
 
 SDValue SystemZTargetLowering::combineEXTRACT_VECTOR_ELT(
     SDNode *N, DAGCombinerInfo &DCI) const {
+
+  if (!Subtarget.hasVector())
+    return SDValue();
+
   // Try to simplify a vector extraction.
   if (auto *IndexN = dyn_cast<ConstantSDNode>(N->getOperand(1))) {
     SDValue Op0 = N->getOperand(0);

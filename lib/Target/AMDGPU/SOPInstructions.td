@@ -438,6 +438,11 @@ let Defs = [SCC] in {
 def S_ABSDIFF_I32 : SOP2_32 <"s_absdiff_i32">;
 } // End Defs = [SCC]
 
+let SubtargetPredicate = isGFX9 in {
+  def S_PACK_LL_B32_B16 : SOP2_32<"s_pack_ll_b32_b16">;
+  def S_PACK_LH_B32_B16 : SOP2_32<"s_pack_lh_b32_b16">;
+  def S_PACK_HH_B32_B16 : SOP2_32<"s_pack_hh_b32_b16">;
+}
 
 //===----------------------------------------------------------------------===//
 // SOPK Instructions
@@ -792,6 +797,25 @@ def S_CBRANCH_EXECNZ : SOPP <
 >;
 } // End Uses = [EXEC]
 
+def S_CBRANCH_CDBGSYS : SOPP <
+  0x00000017, (ins sopp_brtarget:$simm16),
+  "s_cbranch_cdbgsys $simm16"
+>;
+
+def S_CBRANCH_CDBGSYS_AND_USER : SOPP <
+  0x0000001A, (ins sopp_brtarget:$simm16),
+  "s_cbranch_cdbgsys_and_user $simm16"
+>;
+
+def S_CBRANCH_CDBGSYS_OR_USER : SOPP <
+  0x00000019, (ins sopp_brtarget:$simm16),
+  "s_cbranch_cdbgsys_or_user $simm16"
+>;
+
+def S_CBRANCH_CDBGUSER : SOPP <
+  0x00000018, (ins sopp_brtarget:$simm16),
+  "s_cbranch_cdbguser $simm16"
+>;
 
 } // End isBranch = 1
 } // End isTerminator = 1
@@ -809,6 +833,7 @@ def S_BARRIER : SOPP <0x0000000a, (ins), "s_barrier",
 let mayLoad = 1, mayStore = 1, hasSideEffects = 1 in
 def S_WAITCNT : SOPP <0x0000000c, (ins WAIT_FLAG:$simm16), "s_waitcnt $simm16">;
 def S_SETHALT : SOPP <0x0000000d, (ins i16imm:$simm16), "s_sethalt $simm16">;
+def S_SETKILL : SOPP <0x0000000b, (ins i16imm:$simm16), "s_setkill $simm16">;
 
 // On SI the documentation says sleep for approximately 64 * low 2
 // bits, consistent with the reported maximum of 448. On VI the
@@ -1207,6 +1232,9 @@ def S_BFE_U64_vi           : SOP2_Real_vi <0x27, S_BFE_U64>;
 def S_BFE_I64_vi           : SOP2_Real_vi <0x28, S_BFE_I64>;
 def S_CBRANCH_G_FORK_vi    : SOP2_Real_vi <0x29, S_CBRANCH_G_FORK>;
 def S_ABSDIFF_I32_vi       : SOP2_Real_vi <0x2a, S_ABSDIFF_I32>;
+def S_PACK_LL_B32_B16_vi   : SOP2_Real_vi <0x32, S_PACK_LL_B32_B16>;
+def S_PACK_LH_B32_B16_vi   : SOP2_Real_vi <0x33, S_PACK_LH_B32_B16>;
+def S_PACK_HH_B32_B16_vi   : SOP2_Real_vi <0x34, S_PACK_HH_B32_B16>;
 
 def S_MOVK_I32_vi          : SOPK_Real_vi <0x00, S_MOVK_I32>;
 def S_CMOVK_I32_vi         : SOPK_Real_vi <0x01, S_CMOVK_I32>;

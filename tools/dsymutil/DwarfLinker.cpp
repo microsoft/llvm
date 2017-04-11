@@ -197,11 +197,8 @@ public:
 
   CompileUnit(DWARFUnit &OrigUnit, unsigned ID, bool CanUseODR,
               StringRef ClangModuleName)
-      : OrigUnit(OrigUnit), ID(ID), NewUnit(OrigUnit.getVersion(),
-                                            OrigUnit.getAddressByteSize(),
-                                            OrigUnit.getUnitDIE().getTag()),
-          LowPc(UINT64_MAX), HighPc(0), RangeAlloc(), Ranges(RangeAlloc),
-          ClangModuleName(ClangModuleName) {
+      : OrigUnit(OrigUnit), ID(ID), LowPc(UINT64_MAX), HighPc(0), RangeAlloc(),
+        Ranges(RangeAlloc), ClangModuleName(ClangModuleName) {
     Info.resize(OrigUnit.getNumDIEs());
 
     auto CUDie = OrigUnit.getUnitDIE(false);
@@ -219,8 +216,15 @@ public:
 
   unsigned getUniqueID() const { return ID; }
 
+  void createOutputDIE() {
+    NewUnit.emplace(OrigUnit.getVersion(), OrigUnit.getAddressByteSize(),
+                    OrigUnit.getUnitDIE().getTag());
+  }
+
   DIE *getOutputUnitDIE() const {
-    return &const_cast<DIEUnit &>(NewUnit).getUnitDie();
+    if (NewUnit)
+      return &const_cast<DIEUnit &>(*NewUnit).getUnitDie();
+    return nullptr;
   }
 
   bool hasODR() const { return HasODR; }
@@ -329,7 +333,7 @@ private:
   DWARFUnit &OrigUnit;
   unsigned ID;
   std::vector<DIEInfo> Info; ///< DIE info indexed by DIE index.
-  DIEUnit NewUnit;
+  Optional<DIEUnit> NewUnit;
 
   uint64_t StartOffset;
   uint64_t NextUnitOffset;
@@ -359,7 +363,7 @@ private:
   Optional<PatchLocation> UnitRangeAttribute;
   /// @}
 
-  /// \brief Location attributes that need to be transfered from th
+  /// \brief Location attributes that need to be transferred from the
   /// original debug_loc section to the liked one. They are stored
   /// along with the PC offset that is to be applied to their
   /// function's address.
@@ -397,7 +401,8 @@ uint64_t CompileUnit::computeNextUnitOffset() {
   // The root DIE might be null, meaning that the Unit had nothing to
   // contribute to the linked output. In that case, we will emit the
   // unit header without any actual DIE.
-  NextUnitOffset += NewUnit.getUnitDie().getSize();
+  if (NewUnit)
+    NextUnitOffset += NewUnit->getUnitDie().getSize();
   return NextUnitOffset;
 }
 
@@ -1079,7 +1084,7 @@ void DwarfStreamer::emitCIE(StringRef CIEBytes) {
 
 /// \brief Emit a FDE into the debug_frame section. \p FDEBytes
 /// contains the FDE data without the length, CIE offset and address
-/// which will be replaced with the paramter values.
+/// which will be replaced with the parameter values.
 void DwarfStreamer::emitFDE(uint32_t CIEOffset, uint32_t AddrSize,
                             uint32_t Address, StringRef FDEBytes) {
   MS->SwitchSection(MC->getObjectFileInfo()->getDwarfFrameSection());
@@ -3066,7 +3071,7 @@ void DwarfLinker::patchLineTableForUnit(CompileUnit &Unit,
   if (LineTable.Prologue.Version != 2 ||
       LineTable.Prologue.DefaultIsStmt != DWARF2_LINE_DEFAULT_IS_STMT ||
       LineTable.Prologue.OpcodeBase > 13)
-    reportWarning("line table paramters mismatch. Cannot emit.");
+    reportWarning("line table parameters mismatch. Cannot emit.");
   else {
     MCDwarfLineTableParams Params;
     Params.DWARF2LineOpcodeBase = LineTable.Prologue.OpcodeBase;
@@ -3357,12 +3362,13 @@ void DwarfLinker::DIECloner::cloneAllCompileUnits(
   for (auto &CurrentUnit : CompileUnits) {
     auto InputDIE = CurrentUnit->getOrigUnit().getUnitDIE();
     CurrentUnit->setStartOffset(Linker.OutputDebugInfoSize);
-    // Clonse the InputDIE into your Unit DIE in our compile unit since it
-    // already has a DIE inside of it.
-    if (!cloneDIE(InputDIE, *CurrentUnit, 0 /* PC offset */,
-                  11 /* Unit Header size */, 0,
-                  CurrentUnit->getOutputUnitDIE()))
-      continue;
+    if (CurrentUnit->getInfo(0).Keep) {
+      // Clone the InputDIE into your Unit DIE in our compile unit since it
+      // already has a DIE inside of it.
+      CurrentUnit->createOutputDIE();
+      cloneDIE(InputDIE, *CurrentUnit, 0 /* PC offset */,
+               11 /* Unit Header size */, 0, CurrentUnit->getOutputUnitDIE());
+    }
     Linker.OutputDebugInfoSize = CurrentUnit->computeNextUnitOffset();
     if (Linker.Options.NoOutput)
       continue;

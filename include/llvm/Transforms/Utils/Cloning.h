@@ -33,6 +33,7 @@ namespace llvm {
 
 class AllocaInst;
 class BasicBlock;
+class BlockFrequencyInfo;
 class CallInst;
 class CallGraph;
 class DominatorTree;
@@ -173,13 +174,17 @@ class InlineFunctionInfo {
 public:
   explicit InlineFunctionInfo(CallGraph *cg = nullptr,
                               std::function<AssumptionCache &(Function &)>
-                                  *GetAssumptionCache = nullptr)
-      : CG(cg), GetAssumptionCache(GetAssumptionCache) {}
+                                  *GetAssumptionCache = nullptr,
+                              BlockFrequencyInfo *CallerBFI = nullptr,
+                              BlockFrequencyInfo *CalleeBFI = nullptr)
+      : CG(cg), GetAssumptionCache(GetAssumptionCache), CallerBFI(CallerBFI),
+        CalleeBFI(CalleeBFI) {}
 
   /// CG - If non-null, InlineFunction will update the callgraph to reflect the
   /// changes it makes.
   CallGraph *CG;
   std::function<AssumptionCache &(Function &)> *GetAssumptionCache;
+  BlockFrequencyInfo *CallerBFI, *CalleeBFI;
 
   /// StaticAllocas - InlineFunction fills this in with all static allocas that
   /// get copied into the caller.
@@ -240,6 +245,16 @@ Loop *cloneLoopWithPreheader(BasicBlock *Before, BasicBlock *LoopDomBB,
 void remapInstructionsInBlocks(const SmallVectorImpl<BasicBlock *> &Blocks,
                                ValueToValueMapTy &VMap);
 
+/// Split edge between BB and PredBB and duplicate all non-Phi instructions
+/// from BB between its beginning and the StopAt instruction into the split
+/// block. Phi nodes are not duplicated, but their uses are handled correctly:
+/// we replace them with the uses of corresponding Phi inputs. ValueMapping
+/// is used to map the original instructions from BB to their newly-created
+/// copies. Returns the split block.
+BasicBlock *
+DuplicateInstructionsInSplitBetween(BasicBlock *BB, BasicBlock *PredBB,
+                                    Instruction *StopAt,
+                                    ValueToValueMapTy &ValueMapping);
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_UTILS_CLONING_H

@@ -291,6 +291,9 @@ namespace llvm {
   /// the target platform.
   extern char &XRayInstrumentationID;
 
+  /// This pass inserts FEntry calls
+  extern char &FEntryInserterID;
+
   /// \brief This pass implements the "patchable-function" attribute.
   extern char &PatchableFunctionID;
 
@@ -324,14 +327,6 @@ namespace llvm {
 
   /// ExpandISelPseudos - This pass expands pseudo-instructions.
   extern char &ExpandISelPseudosID;
-
-  /// createExecutionDependencyFixPass - This pass fixes execution time
-  /// problems with dependent instructions, such as switching execution
-  /// domains to match.
-  ///
-  /// The pass will examine instructions using and defining registers in RC.
-  ///
-  FunctionPass *createExecutionDependencyFixPass(const TargetRegisterClass *RC);
 
   /// UnpackMachineBundles - This pass unpack machine instruction bundles.
   extern char &UnpackMachineBundlesID;
@@ -404,6 +399,14 @@ namespace llvm {
 
   /// This pass frees the memory occupied by the MachineFunction.
   FunctionPass *createFreeMachineFunctionPass();
+
+  /// This pass combine basic blocks guarded by the same branch.
+  extern char &BranchCoalescingID;
+
+  /// This pass performs outlining on machine instructions directly before
+  /// printing assembly.
+  ModulePass *createMachineOutlinerPass();
+
 } // End llvm namespace
 
 /// Target machine pass initializer for passes with dependencies. Use with
@@ -420,7 +423,7 @@ namespace llvm {
   Registry.registerPass(*PI, true);                                            \
   return PI;                                                                   \
   }                                                                            \
-  LLVM_DEFINE_ONCE_FLAG(Initialize##passName##PassFlag);                       \
+  static llvm::once_flag Initialize##passName##PassFlag;                       \
   void llvm::initialize##passName##Pass(PassRegistry &Registry) {              \
     llvm::call_once(Initialize##passName##PassFlag,                            \
                     initialize##passName##PassOnce, std::ref(Registry));       \

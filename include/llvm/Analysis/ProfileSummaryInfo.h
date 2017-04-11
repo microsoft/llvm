@@ -49,16 +49,22 @@ private:
   void computeThresholds();
   // Count thresholds to answer isHotCount and isColdCount queries.
   Optional<uint64_t> HotCountThreshold, ColdCountThreshold;
-  bool extractProfTotalWeight(const Instruction *TI, uint64_t &TotalCount);
 
 public:
   ProfileSummaryInfo(Module &M) : M(M) {}
   ProfileSummaryInfo(ProfileSummaryInfo &&Arg)
       : M(Arg.M), Summary(std::move(Arg.Summary)) {}
+  /// Returns the profile count for \p CallInst.
+  static Optional<uint64_t> getProfileCount(const Instruction *CallInst,
+                                            BlockFrequencyInfo *BFI);
   /// \brief Returns true if \p F has hot function entry.
   bool isFunctionEntryHot(const Function *F);
+  /// Returns true if \p F has hot function entry or hot call edge.
+  bool isFunctionHotInCallGraph(const Function *F);
   /// \brief Returns true if \p F has cold function entry.
   bool isFunctionEntryCold(const Function *F);
+  /// Returns true if \p F has cold function entry or cold call edge.
+  bool isFunctionColdInCallGraph(const Function *F);
   /// \brief Returns true if \p F is a hot function.
   bool isHotCount(uint64_t C);
   /// \brief Returns true if count \p C is considered cold.

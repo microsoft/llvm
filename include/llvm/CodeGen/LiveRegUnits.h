@@ -17,6 +17,9 @@
 
 #include "llvm/ADT/BitVector.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/MC/LaneBitmask.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include <cstdint>
 
 namespace llvm {
 
@@ -25,12 +28,12 @@ class MachineBasicBlock;
 
 /// A set of register units used to track register liveness.
 class LiveRegUnits {
-  const TargetRegisterInfo *TRI;
+  const TargetRegisterInfo *TRI = nullptr;
   BitVector Units;
 
 public:
   /// Constructs a new empty LiveRegUnits set.
-  LiveRegUnits() : TRI(nullptr) {}
+  LiveRegUnits() = default;
 
   /// Constructs and initialize an empty LiveRegUnits set.
   LiveRegUnits(const TargetRegisterInfo &TRI) {
@@ -76,6 +79,10 @@ public:
   /// The regmask has the same format as the one in the RegMask machine operand.
   void removeRegsNotPreserved(const uint32_t *RegMask);
 
+  /// Adds register units not preserved by the regmask \p RegMask.
+  /// The regmask has the same format as the one in the RegMask machine operand.
+  void addRegsInMask(const uint32_t *RegMask);
+
   /// Returns true if no part of physical register \p Reg is live.
   bool available(unsigned Reg) const {
     for (MCRegUnitIterator Unit(Reg, TRI); Unit.isValid(); ++Unit) {
@@ -87,6 +94,11 @@ public:
 
   /// Updates liveness when stepping backwards over the instruction \p MI.
   void stepBackward(const MachineInstr &MI);
+
+  /// Mark all register units live during instruction \p MI.
+  /// This can be used to accumulate live/unoccupied registers over a range of
+  /// instructions.
+  void accumulateBackward(const MachineInstr &MI);
 
   /// Adds registers living out of block \p MBB.
   /// Live out registers are the union of the live-in registers of the successor
@@ -111,6 +123,6 @@ public:
   }
 };
 
-} // namespace llvm
+} // end namespace llvm
 
-#endif
+#endif // LLVM_CODEGEN_LIVEREGUNITS_H

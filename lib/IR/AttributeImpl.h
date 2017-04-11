@@ -16,10 +16,10 @@
 #ifndef LLVM_LIB_IR_ATTRIBUTEIMPL_H
 #define LLVM_LIB_IR_ATTRIBUTEIMPL_H
 
-#include "AttributeSetNode.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/AttributeSetNode.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/Support/TrailingObjects.h"
 #include <algorithm>
@@ -150,10 +150,10 @@ typedef std::pair<unsigned, AttributeSetNode *> IndexAttrPair;
 /// \class
 /// \brief This class represents a set of attributes that apply to the function,
 /// return type, and parameters.
-class AttributeSetImpl final
+class AttributeListImpl final
     : public FoldingSetNode,
-      private TrailingObjects<AttributeSetImpl, IndexAttrPair> {
-  friend class AttributeSet;
+      private TrailingObjects<AttributeListImpl, IndexAttrPair> {
+  friend class AttributeList;
   friend TrailingObjects;
 
 private:
@@ -171,47 +171,16 @@ private:
   }
 
 public:
-  AttributeSetImpl(LLVMContext &C,
-                   ArrayRef<std::pair<unsigned, AttributeSetNode *>> Slots)
-      : Context(C), NumSlots(Slots.size()), AvailableFunctionAttrs(0) {
-    static_assert(Attribute::EndAttrKinds <=
-                      sizeof(AvailableFunctionAttrs) * CHAR_BIT,
-                  "Too many attributes");
-
-#ifndef NDEBUG
-    if (Slots.size() >= 2) {
-      for (const std::pair<unsigned, AttributeSetNode *> *i = Slots.begin() + 1,
-                                                         *e = Slots.end();
-           i != e; ++i) {
-        assert((i-1)->first <= i->first && "Attribute set not ordered!");
-      }
-    }
-#endif
-    // There's memory after the node where we can store the entries in.
-    std::copy(Slots.begin(), Slots.end(), getTrailingObjects<IndexAttrPair>());
-
-    // Initialize AvailableFunctionAttrs summary bitset.
-    if (NumSlots > 0) {
-      static_assert(AttributeSet::FunctionIndex == ~0u,
-                    "FunctionIndex should be biggest possible index");
-      const std::pair<unsigned, AttributeSetNode *> &Last = Slots.back();
-      if (Last.first == AttributeSet::FunctionIndex) {
-        const AttributeSetNode *Node = Last.second;
-        for (Attribute I : *Node) {
-          if (!I.isStringAttribute())
-            AvailableFunctionAttrs |= ((uint64_t)1) << I.getKindAsEnum();
-        }
-      }
-    }
-  }
+  AttributeListImpl(LLVMContext &C,
+                    ArrayRef<std::pair<unsigned, AttributeSetNode *>> Slots);
 
   // AttributesSetImpt is uniqued, these should not be available.
-  AttributeSetImpl(const AttributeSetImpl &) = delete;
-  AttributeSetImpl &operator=(const AttributeSetImpl &) = delete;
+  AttributeListImpl(const AttributeListImpl &) = delete;
+  AttributeListImpl &operator=(const AttributeListImpl &) = delete;
 
   void operator delete(void *p) { ::operator delete(p); }
 
-  /// \brief Get the context that created this AttributeSetImpl.
+  /// \brief Get the context that created this AttributeListImpl.
   LLVMContext &getContext() { return Context; }
 
   /// \brief Return the number of slots used in this attribute list. This is
@@ -230,8 +199,8 @@ public:
   /// \brief Retrieve the attributes for the given "slot" in the AttrNode list.
   /// \p Slot is an index into the AttrNodes list, not the index of the return /
   /// parameter/ function which the attributes apply to.
-  AttributeSet getSlotAttributes(unsigned Slot) const {
-    return AttributeSet::get(Context, *getNode(Slot));
+  AttributeList getSlotAttributes(unsigned Slot) const {
+    return AttributeList::get(Context, *getNode(Slot));
   }
 
   /// \brief Retrieve the attribute set node for the given "slot" in the
@@ -250,16 +219,9 @@ public:
   iterator begin(unsigned Slot) const { return getSlotNode(Slot)->begin(); }
   iterator end(unsigned Slot) const { return getSlotNode(Slot)->end(); }
 
-  void Profile(FoldingSetNodeID &ID) const {
-    Profile(ID, makeArrayRef(getNode(0), getNumSlots()));
-  }
+  void Profile(FoldingSetNodeID &ID) const;
   static void Profile(FoldingSetNodeID &ID,
-                      ArrayRef<std::pair<unsigned, AttributeSetNode*>> Nodes) {
-    for (const auto &Node : Nodes) {
-      ID.AddInteger(Node.first);
-      ID.AddPointer(Node.second);
-    }
-  }
+                      ArrayRef<std::pair<unsigned, AttributeSetNode*>> Nodes);
 
   void dump() const;
 };

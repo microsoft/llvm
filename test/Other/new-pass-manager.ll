@@ -384,13 +384,6 @@
 ; CHECK-O0-NEXT: Finished llvm::Module pass manager run
 
 ; RUN: opt -disable-output -disable-verify -debug-pass-manager \
-; RUN:     -passes='lto<O2>' %s 2>&1 \
-; RUN:     | FileCheck %s --check-prefix=CHECK-LTO-O2
-; CHECK-LTO-O2: Starting llvm::Module pass manager run
-; CHECK-LTO-O2: Running pass: InstCombinePass
-; CHECK-LTO-O2: Running pass: SimplifyCFGPass
-
-; RUN: opt -disable-output -disable-verify -debug-pass-manager \
 ; RUN:     -passes='repeat<3>(no-op-module)' %s 2>&1 \
 ; RUN:     | FileCheck %s --check-prefix=CHECK-REPEAT-MODULE-PASS
 ; CHECK-REPEAT-MODULE-PASS: Starting llvm::Module pass manager run
@@ -459,12 +452,13 @@
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running pass: FunctionToLoopPassAdaptor
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: LoopAnalysis
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: DominatorTreeAnalysis
-; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}>
+; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: AssumptionAnalysis
+; CHECK-REPEAT-LOOP-PASS-NEXT: Invalidating all non-preserved analyses
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: AAManager
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: TargetLibraryAnalysis
-; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: AssumptionAnalysis
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: ScalarEvolutionAnalysis
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: TargetIRAnalysis
+; CHECK-REPEAT-LOOP-PASS-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}>
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Starting Loop pass manager run
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Running pass: RepeatedPass
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Starting Loop pass manager run
@@ -478,6 +472,7 @@
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Finished Loop pass manager run
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Finished Loop pass manager run
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Finished llvm::Function pass manager run
+; CHECK-REPEAT-LOOP-PASS-NEXT: Invalidating all non-preserved analyses
 ; CHECK-REPEAT-LOOP-PASS-NEXT: Finished llvm::Module pass manager run
 
 define void @foo(i1 %x, i8* %p1, i8* %p2) {

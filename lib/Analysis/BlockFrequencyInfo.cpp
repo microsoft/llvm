@@ -26,7 +26,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "block-freq"
 
-#ifndef NDEBUG
 static cl::opt<GVDAGType> ViewBlockFreqPropagationDAG(
     "view-block-freq-propagation-dags", cl::Hidden,
     cl::desc("Pop up a window to show a dag displaying how block "
@@ -55,7 +54,28 @@ cl::opt<unsigned>
                                 "is no less than the max frequency of the "
                                 "function multiplied by this percent."));
 
+// Command line option to turn on CFG dot dump after profile annotation.
+cl::opt<bool>
+    PGOViewCounts("pgo-view-counts", cl::init(false), cl::Hidden,
+                  cl::desc("A boolean option to show CFG dag with "
+                           "block profile counts and branch probabilities "
+                           "right after PGO profile annotation step. The "
+                           "profile counts are computed using branch "
+                           "probabilities from the runtime profile data and "
+                           "block frequency propagation algorithm. To view "
+                           "the raw counts from the profile, use option "
+                           "-pgo-view-raw-counts instead. To limit graph "
+                           "display to only one function, use filtering option "
+                           "-view-bfi-func-name."));
+
 namespace llvm {
+
+static GVDAGType getGVDT() {
+
+  if (PGOViewCounts)
+    return GVDT_Count;
+  return ViewBlockFreqPropagationDAG;
+}
 
 template <>
 struct GraphTraits<BlockFrequencyInfo *> {
@@ -89,8 +109,7 @@ struct DOTGraphTraits<BlockFrequencyInfo *> : public BFIDOTGTraitsBase {
   std::string getNodeLabel(const BasicBlock *Node,
                            const BlockFrequencyInfo *Graph) {
 
-    return BFIDOTGTraitsBase::getNodeLabel(Node, Graph,
-                                           ViewBlockFreqPropagationDAG);
+    return BFIDOTGTraitsBase::getNodeLabel(Node, Graph, getGVDT());
   }
 
   std::string getNodeAttributes(const BasicBlock *Node,
@@ -107,7 +126,6 @@ struct DOTGraphTraits<BlockFrequencyInfo *> : public BFIDOTGTraitsBase {
 };
 
 } // end namespace llvm
-#endif
 
 BlockFrequencyInfo::BlockFrequencyInfo() {}
 
@@ -147,13 +165,11 @@ void BlockFrequencyInfo::calculate(const Function &F,
   if (!BFI)
     BFI.reset(new ImplType);
   BFI->calculate(F, BPI, LI);
-#ifndef NDEBUG
   if (ViewBlockFreqPropagationDAG != GVDT_None &&
       (ViewBlockFreqFuncName.empty() ||
        F.getName().equals(ViewBlockFreqFuncName))) {
     view();
   }
-#endif
 }
 
 BlockFrequency BlockFrequencyInfo::getBlockFreq(const BasicBlock *BB) const {
@@ -205,13 +221,7 @@ void BlockFrequencyInfo::setBlockFreqAndScale(
 /// Pop up a ghostview window with the current block frequency propagation
 /// rendered using dot.
 void BlockFrequencyInfo::view() const {
-// This code is only for debugging.
-#ifndef NDEBUG
   ViewGraph(const_cast<BlockFrequencyInfo *>(this), "BlockFrequencyDAGs");
-#else
-  errs() << "BlockFrequencyInfo::view is only available in debug builds on "
-            "systems with Graphviz or gv!\n";
-#endif // NDEBUG
 }
 
 const Function *BlockFrequencyInfo::getFunction() const {

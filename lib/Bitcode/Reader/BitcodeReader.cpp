@@ -419,10 +419,10 @@ class BitcodeReader : public BitcodeReaderBase, public GVMaterializer {
 
   /// The set of attributes by index.  Index zero in the file is for null, and
   /// is thus not represented here.  As such all indices are off by one.
-  std::vector<AttributeSet> MAttributes;
+  std::vector<AttributeList> MAttributes;
 
   /// The set of attribute groups.
-  std::map<unsigned, AttributeSet> MAttributeGroups;
+  std::map<unsigned, AttributeList> MAttributeGroups;
 
   /// While parsing a function body, this is a list of the basic blocks for the
   /// function.
@@ -520,10 +520,10 @@ private:
     return FunctionBBs[ID];
   }
 
-  AttributeSet getAttributes(unsigned i) const {
+  AttributeList getAttributes(unsigned i) const {
     if (i-1 < MAttributes.size())
       return MAttributes[i-1];
-    return AttributeSet();
+    return AttributeList();
   }
 
   /// Read a value/type pair out of the specified record from slot 'Slot'.
@@ -971,6 +971,8 @@ static FastMathFlags getDecodedFastMathFlags(unsigned Val) {
     FMF.setNoSignedZeros();
   if (0 != (Val & FastMathFlags::AllowReciprocal))
     FMF.setAllowReciprocal();
+  if (0 != (Val & FastMathFlags::AllowContract))
+    FMF.setAllowContract(true);
   return FMF;
 }
 
@@ -1132,7 +1134,7 @@ Error BitcodeReader::parseAttributeBlock() {
 
   SmallVector<uint64_t, 64> Record;
 
-  SmallVector<AttributeSet, 8> Attrs;
+  SmallVector<AttributeList, 8> Attrs;
 
   // Read all the records.
   while (true) {
@@ -1162,10 +1164,10 @@ Error BitcodeReader::parseAttributeBlock() {
       for (unsigned i = 0, e = Record.size(); i != e; i += 2) {
         AttrBuilder B;
         decodeLLVMAttributesForBitcode(B, Record[i+1]);
-        Attrs.push_back(AttributeSet::get(Context, Record[i], B));
+        Attrs.push_back(AttributeList::get(Context, Record[i], B));
       }
 
-      MAttributes.push_back(AttributeSet::get(Context, Attrs));
+      MAttributes.push_back(AttributeList::get(Context, Attrs));
       Attrs.clear();
       break;
     }
@@ -1173,7 +1175,7 @@ Error BitcodeReader::parseAttributeBlock() {
       for (unsigned i = 0, e = Record.size(); i != e; ++i)
         Attrs.push_back(MAttributeGroups[Record[i]]);
 
-      MAttributes.push_back(AttributeSet::get(Context, Attrs));
+      MAttributes.push_back(AttributeList::get(Context, Attrs));
       Attrs.clear();
       break;
     }
@@ -1391,7 +1393,7 @@ Error BitcodeReader::parseAttributeGroupBlock() {
         }
       }
 
-      MAttributeGroups[GrpID] = AttributeSet::get(Context, Idx, B);
+      MAttributeGroups[GrpID] = AttributeList::get(Context, Idx, B);
       break;
     }
     }
@@ -1794,22 +1796,16 @@ Error BitcodeReader::parseValueSymbolTable(uint64_t Offset) {
         return Err;
       Value *V = ValOrErr.get();
 
-      auto *GO = dyn_cast<GlobalObject>(V);
-      if (!GO) {
-        // If this is an alias, need to get the actual Function object
-        // it aliases, in order to set up the DeferredFunctionInfo entry below.
-        auto *GA = dyn_cast<GlobalAlias>(V);
-        if (GA)
-          GO = GA->getBaseObject();
-        assert(GO);
-      }
+      auto *F = dyn_cast<Function>(V);
+      // Ignore function offsets emitted for aliases of functions in older
+      // versions of LLVM.
+      if (!F)
+        break;
 
       // Note that we subtract 1 here because the offset is relative to one word
       // before the start of the identification or module block, which was
       // historically always the start of the regular bitcode header.
       uint64_t FuncWordOffset = Record[1] - 1;
-      Function *F = dyn_cast<Function>(GO);
-      assert(F);
       uint64_t FuncBitOffset = FuncWordOffset * 32;
       DeferredFunctionInfo[F] = FuncBitOffset + FuncBitcodeOffsetDelta;
       // Set the LastFunctionBlockBit to point to the last function block.
@@ -3058,13 +3054,6 @@ Error BitcodeReader::parseModule(uint64_t ResumeBit,
       IndirectSymbolInits.push_back(std::make_pair(NewGA, Val));
       break;
     }
-    /// MODULE_CODE_PURGEVALS: [numvals]
-    case bitc::MODULE_CODE_PURGEVALS:
-      // Trim down the value list to the specified size.
-      if (Record.size() < 1 || Record[0] > ValueList.size())
-        return error("Invalid record");
-      ValueList.shrinkTo(Record[0]);
-      break;
     /// MODULE_CODE_VSTOFFSET: [offset]
     case bitc::MODULE_CODE_VSTOFFSET:
       if (Record.size() < 1)
@@ -3840,7 +3829,7 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
       if (Record.size() < 4)
         return error("Invalid record");
       unsigned OpNum = 0;
-      AttributeSet PAL = getAttributes(Record[OpNum++]);
+      AttributeList PAL = getAttributes(Record[OpNum++]);
       unsigned CCInfo = Record[OpNum++];
       BasicBlock *NormalBB = getBasicBlock(Record[OpNum++]);
       BasicBlock *UnwindBB = getBasicBlock(Record[OpNum++]);
@@ -4017,7 +4006,12 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
       }
       if (!Ty || !Size)
         return error("Invalid record");
-      AllocaInst *AI = new AllocaInst(Ty, Size, Align);
+
+      // FIXME: Make this an optional field.
+      const DataLayout &DL = TheModule->getDataLayout();
+      unsigned AS = DL.getAllocaAddrSpace();
+
+      AllocaInst *AI = new AllocaInst(Ty, AS, Size, Align);
       AI->setUsedWithInAlloca(InAlloca);
       AI->setSwiftError(SwiftError);
       I = AI;
@@ -4225,7 +4219,7 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
         return error("Invalid record");
 
       unsigned OpNum = 0;
-      AttributeSet PAL = getAttributes(Record[OpNum++]);
+      AttributeList PAL = getAttributes(Record[OpNum++]);
       unsigned CCInfo = Record[OpNum++];
 
       FastMathFlags FMF;
@@ -4753,33 +4747,13 @@ Error ModuleSummaryIndexBitcodeReader::parseModule(StringRef ModulePath) {
           // was historically always the start of the regular bitcode header.
           VSTOffset = Record[0] - 1;
           break;
-        // GLOBALVAR: [pointer type, isconst, initid,
-        //             linkage, alignment, section, visibility, threadlocal,
-        //             unnamed_addr, externally_initialized, dllstorageclass,
-        //             comdat]
-        case bitc::MODULE_CODE_GLOBALVAR: {
-          if (Record.size() < 6)
-            return error("Invalid record");
-          uint64_t RawLinkage = Record[3];
-          GlobalValue::LinkageTypes Linkage = getDecodedLinkage(RawLinkage);
-          ValueIdToLinkageMap[ValueId++] = Linkage;
-          break;
-        }
-        // FUNCTION:  [type, callingconv, isproto, linkage, paramattr,
-        //             alignment, section, visibility, gc, unnamed_addr,
-        //             prologuedata, dllstorageclass, comdat, prefixdata]
-        case bitc::MODULE_CODE_FUNCTION: {
-          if (Record.size() < 8)
-            return error("Invalid record");
-          uint64_t RawLinkage = Record[3];
-          GlobalValue::LinkageTypes Linkage = getDecodedLinkage(RawLinkage);
-          ValueIdToLinkageMap[ValueId++] = Linkage;
-          break;
-        }
-        // ALIAS: [alias type, addrspace, aliasee val#, linkage, visibility,
-        // dllstorageclass]
+        // GLOBALVAR: [pointer type, isconst,     initid,       linkage, ...]
+        // FUNCTION:  [type,         callingconv, isproto,      linkage, ...]
+        // ALIAS:     [alias type,   addrspace,   aliasee val#, linkage, ...]
+        case bitc::MODULE_CODE_GLOBALVAR:
+        case bitc::MODULE_CODE_FUNCTION:
         case bitc::MODULE_CODE_ALIAS: {
-          if (Record.size() < 6)
+          if (Record.size() <= 3)
             return error("Invalid record");
           uint64_t RawLinkage = Record[3];
           GlobalValue::LinkageTypes Linkage = getDecodedLinkage(RawLinkage);
@@ -4846,8 +4820,17 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(
   // Keep around the last seen summary to be used when we see an optional
   // "OriginalName" attachement.
   GlobalValueSummary *LastSeenSummary = nullptr;
+  GlobalValue::GUID LastSeenGUID = 0;
   bool Combined = false;
+
+  // We can expect to see any number of type ID information records before
+  // each function summary records; these variables store the information
+  // collected so far so that it can be used to create the summary object.
   std::vector<GlobalValue::GUID> PendingTypeTests;
+  std::vector<FunctionSummary::VFuncId> PendingTypeTestAssumeVCalls,
+      PendingTypeCheckedLoadVCalls;
+  std::vector<FunctionSummary::ConstVCall> PendingTypeTestAssumeConstVCalls,
+      PendingTypeCheckedLoadConstVCalls;
 
   while (true) {
     BitstreamEntry Entry = Stream.advanceSkippingSubblocks();
@@ -4914,8 +4897,15 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(
           IsOldProfileFormat, HasProfile);
       auto FS = llvm::make_unique<FunctionSummary>(
           Flags, InstCount, std::move(Refs), std::move(Calls),
-          std::move(PendingTypeTests));
+          std::move(PendingTypeTests), std::move(PendingTypeTestAssumeVCalls),
+          std::move(PendingTypeCheckedLoadVCalls),
+          std::move(PendingTypeTestAssumeConstVCalls),
+          std::move(PendingTypeCheckedLoadConstVCalls));
       PendingTypeTests.clear();
+      PendingTypeTestAssumeVCalls.clear();
+      PendingTypeCheckedLoadVCalls.clear();
+      PendingTypeTestAssumeConstVCalls.clear();
+      PendingTypeCheckedLoadConstVCalls.clear();
       auto GUID = getGUIDFromValueId(ValueID);
       FS->setModulePath(TheIndex.addModulePath(ModulePath, 0)->first());
       FS->setOriginalName(GUID.second);
@@ -4989,9 +4979,17 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(
       GlobalValue::GUID GUID = getGUIDFromValueId(ValueID).first;
       auto FS = llvm::make_unique<FunctionSummary>(
           Flags, InstCount, std::move(Refs), std::move(Edges),
-          std::move(PendingTypeTests));
+          std::move(PendingTypeTests), std::move(PendingTypeTestAssumeVCalls),
+          std::move(PendingTypeCheckedLoadVCalls),
+          std::move(PendingTypeTestAssumeConstVCalls),
+          std::move(PendingTypeCheckedLoadConstVCalls));
       PendingTypeTests.clear();
+      PendingTypeTestAssumeVCalls.clear();
+      PendingTypeCheckedLoadVCalls.clear();
+      PendingTypeTestAssumeConstVCalls.clear();
+      PendingTypeCheckedLoadConstVCalls.clear();
       LastSeenSummary = FS.get();
+      LastSeenGUID = GUID;
       FS->setModulePath(ModuleIdMap[ModuleId]);
       TheIndex.addGlobalValueSummary(GUID, std::move(FS));
       Combined = true;
@@ -5018,6 +5016,7 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(
       AS->setAliasee(AliaseeInModule);
 
       GlobalValue::GUID GUID = getGUIDFromValueId(ValueID).first;
+      LastSeenGUID = GUID;
       TheIndex.addGlobalValueSummary(GUID, std::move(AS));
       Combined = true;
       break;
@@ -5034,6 +5033,7 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(
       LastSeenSummary = FS.get();
       FS->setModulePath(ModuleIdMap[ModuleId]);
       GlobalValue::GUID GUID = getGUIDFromValueId(ValueID).first;
+      LastSeenGUID = GUID;
       TheIndex.addGlobalValueSummary(GUID, std::move(FS));
       Combined = true;
       break;
@@ -5044,14 +5044,38 @@ Error ModuleSummaryIndexBitcodeReader::parseEntireSummary(
       if (!LastSeenSummary)
         return error("Name attachment that does not follow a combined record");
       LastSeenSummary->setOriginalName(OriginalName);
+      TheIndex.addOriginalName(LastSeenGUID, OriginalName);
       // Reset the LastSeenSummary
       LastSeenSummary = nullptr;
+      LastSeenGUID = 0;
       break;
     }
     case bitc::FS_TYPE_TESTS: {
       assert(PendingTypeTests.empty());
       PendingTypeTests.insert(PendingTypeTests.end(), Record.begin(),
                               Record.end());
+      break;
+    }
+    case bitc::FS_TYPE_TEST_ASSUME_VCALLS: {
+      assert(PendingTypeTestAssumeVCalls.empty());
+      for (unsigned I = 0; I != Record.size(); I += 2)
+        PendingTypeTestAssumeVCalls.push_back({Record[I], Record[I+1]});
+      break;
+    }
+    case bitc::FS_TYPE_CHECKED_LOAD_VCALLS: {
+      assert(PendingTypeCheckedLoadVCalls.empty());
+      for (unsigned I = 0; I != Record.size(); I += 2)
+        PendingTypeCheckedLoadVCalls.push_back({Record[I], Record[I+1]});
+      break;
+    }
+    case bitc::FS_TYPE_TEST_ASSUME_CONST_VCALL: {
+      PendingTypeTestAssumeConstVCalls.push_back(
+          {{Record[0], Record[1]}, {Record.begin() + 2, Record.end()}});
+      break;
+    }
+    case bitc::FS_TYPE_CHECKED_LOAD_CONST_VCALL: {
+      PendingTypeCheckedLoadConstVCalls.push_back(
+          {{Record[0], Record[1]}, {Record.begin() + 2, Record.end()}});
       break;
     }
     }

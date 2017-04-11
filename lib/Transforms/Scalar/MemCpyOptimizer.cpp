@@ -330,49 +330,33 @@ void MemsetRanges::addRange(int64_t Start, int64_t Size, Value *Ptr,
 
 namespace {
 
-  class MemCpyOptLegacyPass : public FunctionPass {
-    MemCpyOptPass Impl;
+class MemCpyOptLegacyPass : public FunctionPass {
+  MemCpyOptPass Impl;
 
-  public:
-    static char ID; // Pass identification, replacement for typeid
+public:
+  static char ID; // Pass identification, replacement for typeid
 
-    MemCpyOptLegacyPass() : FunctionPass(ID) {
-      initializeMemCpyOptLegacyPassPass(*PassRegistry::getPassRegistry());
-    }
+  MemCpyOptLegacyPass() : FunctionPass(ID) {
+    initializeMemCpyOptLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
 
-    bool runOnFunction(Function &F) override;
+  bool runOnFunction(Function &F) override;
 
-  private:
-    // This transformation requires dominator postdominator info
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.setPreservesCFG();
-      AU.addRequired<AssumptionCacheTracker>();
-      AU.addRequired<DominatorTreeWrapperPass>();
-      AU.addRequired<MemoryDependenceWrapperPass>();
-      AU.addRequired<AAResultsWrapperPass>();
-      AU.addRequired<TargetLibraryInfoWrapperPass>();
-      AU.addPreserved<GlobalsAAWrapperPass>();
-      AU.addPreserved<MemoryDependenceWrapperPass>();
-    }
+private:
+  // This transformation requires dominator postdominator info
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesCFG();
+    AU.addRequired<AssumptionCacheTracker>();
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<MemoryDependenceWrapperPass>();
+    AU.addRequired<AAResultsWrapperPass>();
+    AU.addRequired<TargetLibraryInfoWrapperPass>();
+    AU.addPreserved<GlobalsAAWrapperPass>();
+    AU.addPreserved<MemoryDependenceWrapperPass>();
+  }
+};
 
-    // Helper functions
-    bool processStore(StoreInst *SI, BasicBlock::iterator &BBI);
-    bool processMemSet(MemSetInst *SI, BasicBlock::iterator &BBI);
-    bool processMemCpy(MemCpyInst *M);
-    bool processMemMove(MemMoveInst *M);
-    bool performCallSlotOptzn(Instruction *cpy, Value *cpyDst, Value *cpySrc,
-                              uint64_t cpyLen, unsigned cpyAlign, CallInst *C);
-    bool processMemCpyMemCpyDependence(MemCpyInst *M, MemCpyInst *MDep);
-    bool processMemSetMemCpyDependence(MemCpyInst *M, MemSetInst *MDep);
-    bool performMemCpyToMemSetOptzn(MemCpyInst *M, MemSetInst *MDep);
-    bool processByValArgument(CallSite CS, unsigned ArgNo);
-    Instruction *tryMergingIntoMemset(Instruction *I, Value *StartPtr,
-                                      Value *ByteVal);
-
-    bool iterateOnFunction(Function &F);
-  };
-
-  char MemCpyOptLegacyPass::ID = 0;
+char MemCpyOptLegacyPass::ID = 0;
 
 } // end anonymous namespace
 
@@ -948,6 +932,17 @@ bool MemCpyOptPass::performCallSlotOptzn(Instruction *cpy, Value *cpyDest,
   if (MR != MRI_NoModRef)
     return false;
 
+  // We can't create address space casts here because we don't know if they're
+  // safe for the target.
+  if (cpySrc->getType()->getPointerAddressSpace() !=
+      cpyDest->getType()->getPointerAddressSpace())
+    return false;
+  for (unsigned i = 0; i < CS.arg_size(); ++i)
+    if (CS.getArgument(i)->stripPointerCasts() == cpySrc &&
+        cpySrc->getType()->getPointerAddressSpace() !=
+        CS.getArgument(i)->getType()->getPointerAddressSpace())
+      return false;
+
   // All the checks have passed, so do the transformation.
   bool changedArgument = false;
   for (unsigned i = 0; i < CS.arg_size(); ++i)
@@ -1274,7 +1269,7 @@ bool MemCpyOptPass::processMemCpy(MemCpyInst *M) {
 bool MemCpyOptPass::processMemMove(MemMoveInst *M) {
   AliasAnalysis &AA = LookupAliasAnalysis();
 
-  if (!TLI->has(LibFunc::memmove))
+  if (!TLI->has(LibFunc_memmove))
     return false;
 
   // See if the pointers alias.
@@ -1338,6 +1333,11 @@ bool MemCpyOptPass::processByValArgument(CallSite CS, unsigned ArgNo) {
   if (MDep->getAlignment() < ByValAlign &&
       getOrEnforceKnownAlignment(MDep->getSource(), ByValAlign, DL,
                                  CS.getInstruction(), &AC, &DT) < ByValAlign)
+    return false;
+
+  // The address space of the memcpy source must match the byval argument
+  if (MDep->getSource()->getType()->getPointerAddressSpace() !=
+      ByValArg->getType()->getPointerAddressSpace())
     return false;
 
   // Verify that the copied-from memory doesn't change in between the memcpy and
@@ -1449,7 +1449,7 @@ bool MemCpyOptPass::runImpl(
   // If we don't have at least memset and memcpy, there is little point of doing
   // anything here.  These are required by a freestanding implementation, so if
   // even they are disabled, there is no point in trying hard.
-  if (!TLI->has(LibFunc::memset) || !TLI->has(LibFunc::memcpy))
+  if (!TLI->has(LibFunc_memset) || !TLI->has(LibFunc_memcpy))
     return false;
 
   while (true) {

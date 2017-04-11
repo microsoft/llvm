@@ -82,18 +82,24 @@ static cl::opt<bool>
 EnableExpensiveCombines("expensive-combines",
                         cl::desc("Enable expensive instruction combines"));
 
+static cl::opt<unsigned>
+MaxArraySize("instcombine-maxarray-size", cl::init(1024),
+             cl::desc("Maximum array size considered when doing a combine"));
+
 Value *InstCombiner::EmitGEPOffset(User *GEP) {
   return llvm::EmitGEPOffset(Builder, DL, GEP);
 }
 
 /// Return true if it is desirable to convert an integer computation from a
 /// given bit width to a new bit width.
-/// We don't want to convert from a legal to an illegal type for example or from
-/// a smaller to a larger illegal type.
-bool InstCombiner::ShouldChangeType(unsigned FromWidth,
+/// We don't want to convert from a legal to an illegal type or from a smaller
+/// to a larger illegal type. A width of '1' is always treated as a legal type
+/// because i1 is a fundamental type in IR, and there are many specialized
+/// optimizations for i1 types.
+bool InstCombiner::shouldChangeType(unsigned FromWidth,
                                     unsigned ToWidth) const {
-  bool FromLegal = DL.isLegalInteger(FromWidth);
-  bool ToLegal = DL.isLegalInteger(ToWidth);
+  bool FromLegal = FromWidth == 1 || DL.isLegalInteger(FromWidth);
+  bool ToLegal = ToWidth == 1 || DL.isLegalInteger(ToWidth);
 
   // If this is a legal integer from type, and the result would be an illegal
   // type, don't do the transformation.
@@ -109,14 +115,16 @@ bool InstCombiner::ShouldChangeType(unsigned FromWidth,
 }
 
 /// Return true if it is desirable to convert a computation from 'From' to 'To'.
-/// We don't want to convert from a legal to an illegal type for example or from
-/// a smaller to a larger illegal type.
-bool InstCombiner::ShouldChangeType(Type *From, Type *To) const {
+/// We don't want to convert from a legal to an illegal type or from a smaller
+/// to a larger illegal type. i1 is always treated as a legal type because it is
+/// a fundamental type in IR, and there are many specialized optimizations for
+/// i1 types.
+bool InstCombiner::shouldChangeType(Type *From, Type *To) const {
   assert(From->isIntegerTy() && To->isIntegerTy());
 
   unsigned FromWidth = From->getPrimitiveSizeInBits();
   unsigned ToWidth = To->getPrimitiveSizeInBits();
-  return ShouldChangeType(FromWidth, ToWidth);
+  return shouldChangeType(FromWidth, ToWidth);
 }
 
 // Return true, if No Signed Wrap should be maintained for I.
@@ -564,13 +572,11 @@ static Value *tryFactorization(InstCombiner::BuilderTy *Builder,
         if (isa<OverflowingBinaryOperator>(&I))
           HasNSW = I.hasNoSignedWrap();
 
-        if (BinaryOperator *Op0 = dyn_cast<BinaryOperator>(LHS))
-          if (isa<OverflowingBinaryOperator>(Op0))
-            HasNSW &= Op0->hasNoSignedWrap();
+        if (auto *LOBO = dyn_cast<OverflowingBinaryOperator>(LHS))
+          HasNSW &= LOBO->hasNoSignedWrap();
 
-        if (BinaryOperator *Op1 = dyn_cast<BinaryOperator>(RHS))
-          if (isa<OverflowingBinaryOperator>(Op1))
-            HasNSW &= Op1->hasNoSignedWrap();
+        if (auto *ROBO = dyn_cast<OverflowingBinaryOperator>(RHS))
+          HasNSW &= ROBO->hasNoSignedWrap();
 
         // We can propagate 'nsw' if we know that
         //  %Y = mul nsw i16 %X, C
@@ -902,7 +908,11 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
       // Beware of ConstantExpr:  it may eventually evaluate to getNullValue,
       // even if currently isNullValue gives false.
       Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i));
-      if (InC && !isa<ConstantExpr>(InC))
+      // For vector constants, we cannot use isNullValue to fold into
+      // FalseVInPred versus TrueVInPred. When we have individual nonzero
+      // elements in the vector, we will incorrectly fold InC to
+      // `TrueVInPred`.
+      if (InC && !isa<ConstantExpr>(InC) && isa<ConstantInt>(InC))
         InV = InC->isNullValue() ? FalseVInPred : TrueVInPred;
       else
         InV = Builder->CreateSelect(PN->getIncomingValue(i),
@@ -927,11 +937,15 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
     Constant *C = cast<Constant>(I.getOperand(1));
     for (unsigned i = 0; i != NumPHIValues; ++i) {
       Value *InV = nullptr;
-      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i)))
+      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i))) {
         InV = ConstantExpr::get(I.getOpcode(), InC, C);
-      else
+      } else {
         InV = Builder->CreateBinOp(cast<BinaryOperator>(I).getOpcode(),
                                    PN->getIncomingValue(i), C, "phitmp");
+        auto *FPInst = dyn_cast<Instruction>(InV);
+        if (FPInst && isa<FPMathOperator>(FPInst))
+          FPInst->copyFastMathFlags(&I);
+      }
       NewPN->addIncoming(InV, PN->getIncomingBlock(i));
     }
   } else {
@@ -957,7 +971,7 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
   return replaceInstUsesWith(I, NewPN);
 }
 
-Instruction *InstCombiner::foldOpWithConstantIntoOperand(Instruction &I) {
+Instruction *InstCombiner::foldOpWithConstantIntoOperand(BinaryOperator &I) {
   assert(isa<Constant>(I.getOperand(1)) && "Unexpected operand type");
 
   if (auto *Sel = dyn_cast<SelectInst>(I.getOperand(0))) {
@@ -1315,22 +1329,19 @@ Value *InstCombiner::SimplifyVectorOp(BinaryOperator &Inst) {
   assert(cast<VectorType>(LHS->getType())->getNumElements() == VWidth);
   assert(cast<VectorType>(RHS->getType())->getNumElements() == VWidth);
 
-  // If both arguments of binary operation are shuffles, which use the same
-  // mask and shuffle within a single vector, it is worthwhile to move the
-  // shuffle after binary operation:
+  // If both arguments of the binary operation are shuffles that use the same
+  // mask and shuffle within a single vector, move the shuffle after the binop:
   //   Op(shuffle(v1, m), shuffle(v2, m)) -> shuffle(Op(v1, v2), m)
-  if (isa<ShuffleVectorInst>(LHS) && isa<ShuffleVectorInst>(RHS)) {
-    ShuffleVectorInst *LShuf = cast<ShuffleVectorInst>(LHS);
-    ShuffleVectorInst *RShuf = cast<ShuffleVectorInst>(RHS);
-    if (isa<UndefValue>(LShuf->getOperand(1)) &&
-        isa<UndefValue>(RShuf->getOperand(1)) &&
-        LShuf->getOperand(0)->getType() == RShuf->getOperand(0)->getType() &&
-        LShuf->getMask() == RShuf->getMask()) {
-      Value *NewBO = CreateBinOpAsGiven(Inst, LShuf->getOperand(0),
-          RShuf->getOperand(0), Builder);
-      return Builder->CreateShuffleVector(NewBO,
-          UndefValue::get(NewBO->getType()), LShuf->getMask());
-    }
+  auto *LShuf = dyn_cast<ShuffleVectorInst>(LHS);
+  auto *RShuf = dyn_cast<ShuffleVectorInst>(RHS);
+  if (LShuf && RShuf && LShuf->getMask() == RShuf->getMask() &&
+      isa<UndefValue>(LShuf->getOperand(1)) &&
+      isa<UndefValue>(RShuf->getOperand(1)) &&
+      LShuf->getOperand(0)->getType() == RShuf->getOperand(0)->getType()) {
+    Value *NewBO = CreateBinOpAsGiven(Inst, LShuf->getOperand(0),
+                                      RShuf->getOperand(0), Builder);
+    return Builder->CreateShuffleVector(
+        NewBO, UndefValue::get(NewBO->getType()), LShuf->getMask());
   }
 
   // If one argument is a shuffle within one vector, the other is a constant,
@@ -1648,13 +1659,13 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
     }
   }
 
+  // We do not handle pointer-vector geps here.
+  if (GEP.getType()->isVectorTy())
+    return nullptr;
+
   // Handle gep(bitcast x) and gep(gep x, 0, 0, 0).
   Value *StrippedPtr = PtrOp->stripPointerCasts();
-  PointerType *StrippedPtrTy = dyn_cast<PointerType>(StrippedPtr->getType());
-
-  // We do not handle pointer-vector geps here.
-  if (!StrippedPtrTy)
-    return nullptr;
+  PointerType *StrippedPtrTy = cast<PointerType>(StrippedPtr->getType());
 
   if (StrippedPtr != PtrOp) {
     bool HasZeroPointerIndex = false;
@@ -2928,8 +2939,8 @@ bool InstCombiner::run() {
         Result->takeName(I);
 
         // Push the new instruction and any users onto the worklist.
-        Worklist.Add(Result);
         Worklist.AddUsersToWorkList(*Result);
+        Worklist.Add(Result);
 
         // Insert the new instruction into the basic block...
         BasicBlock *InstParent = I->getParent();
@@ -2952,8 +2963,8 @@ bool InstCombiner::run() {
         if (isInstructionTriviallyDead(I, &TLI)) {
           eraseInstFromFunction(*I);
         } else {
-          Worklist.Add(I);
           Worklist.AddUsersToWorkList(*I);
+          Worklist.Add(I);
         }
       }
       MadeIRChange = true;
@@ -3016,12 +3027,11 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
         }
 
       // See if we can constant fold its operands.
-      for (User::op_iterator i = Inst->op_begin(), e = Inst->op_end(); i != e;
-           ++i) {
-        if (!isa<ConstantVector>(i) && !isa<ConstantExpr>(i))
+      for (Use &U : Inst->operands()) {
+        if (!isa<ConstantVector>(U) && !isa<ConstantExpr>(U))
           continue;
 
-        auto *C = cast<Constant>(i);
+        auto *C = cast<Constant>(U);
         Constant *&FoldRes = FoldedConstants[C];
         if (!FoldRes)
           FoldRes = ConstantFoldConstant(C, DL, TLI);
@@ -3029,7 +3039,10 @@ static bool AddReachableCodeToWorklist(BasicBlock *BB, const DataLayout &DL,
           FoldRes = C;
 
         if (FoldRes != C) {
-          *i = FoldRes;
+          DEBUG(dbgs() << "IC: ConstFold operand of: " << *Inst
+                       << "\n    Old = " << *C
+                       << "\n    New = " << *FoldRes << '\n');
+          U = FoldRes;
           MadeIRChange = true;
         }
       }
@@ -3146,6 +3159,7 @@ combineInstructionsOverFunction(Function &F, InstCombineWorklist &Worklist,
 
     InstCombiner IC(Worklist, &Builder, F.optForMinSize(), ExpensiveCombines,
                     AA, AC, TLI, DT, DL, LI);
+    IC.MaxArraySizeForCombine = MaxArraySize;
     Changed |= IC.run();
 
     if (!Changed)
