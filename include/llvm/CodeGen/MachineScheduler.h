@@ -32,7 +32,7 @@
 //
 // ScheduleDAGInstrs *<Target>PassConfig::
 // createMachineScheduler(MachineSchedContext *C) {
-//   return new ScheduleDAGMI(C, CustomStrategy(C));
+//   return new ScheduleDAGMILive(C, CustomStrategy(C));
 // }
 //
 // The DAG builder can also be customized in a sense by adding DAG mutations
@@ -104,10 +104,15 @@ extern cl::opt<bool> ForceBottomUp;
 
 class LiveIntervals;
 class MachineDominatorTree;
+class MachineFunction;
+class MachineInstr;
 class MachineLoopInfo;
 class RegisterClassInfo;
 class SchedDFSResult;
 class ScheduleHazardRecognizer;
+class TargetInstrInfo;
+class TargetPassConfig;
+class TargetRegisterInfo;
 
 /// MachineSchedContext provides enough context from the MachineScheduler pass
 /// for the target to instantiate a scheduler.
@@ -129,10 +134,10 @@ struct MachineSchedContext {
 /// schedulers.
 class MachineSchedRegistry : public MachinePassRegistryNode {
 public:
-  typedef ScheduleDAGInstrs *(*ScheduleDAGCtor)(MachineSchedContext *);
+  using ScheduleDAGCtor = ScheduleDAGInstrs *(*)(MachineSchedContext *);
 
   // RegisterPassParser requires a (misnamed) FunctionPassCtor type.
-  typedef ScheduleDAGCtor FunctionPassCtor;
+  using FunctionPassCtor = ScheduleDAGCtor;
 
   static MachinePassRegistry Registry;
 
@@ -198,7 +203,7 @@ public:
                           MachineBasicBlock::iterator End,
                           unsigned NumRegionInstrs) {}
 
-  virtual void dumpPolicy() {}
+  virtual void dumpPolicy() const {}
 
   /// Check if pressure tracking is needed before building the DAG and
   /// initializing this strategy. Called after initPolicy.
@@ -209,8 +214,19 @@ public:
   /// This has to be enabled in combination with shouldTrackPressure().
   virtual bool shouldTrackLaneMasks() const { return false; }
 
+  // If this method returns true, handling of the scheduling regions
+  // themselves (in case of a scheduling boundary in MBB) will be done
+  // beginning with the topmost region of MBB.
+  virtual bool doMBBSchedRegionsTopDown() const { return false; }
+
   /// Initialize the strategy after building the DAG for a new region.
   virtual void initialize(ScheduleDAGMI *DAG) = 0;
+
+  /// Tell the strategy that MBB is about to be processed.
+  virtual void enterMBB(MachineBasicBlock *MBB) {};
+
+  /// Tell the strategy that current MBB is done.
+  virtual void leaveMBB() {};
 
   /// Notify this strategy that all roots have been released (including those
   /// that depend on EntrySU or ExitSU).
@@ -279,6 +295,13 @@ public:
   // Provide a vtable anchor
   ~ScheduleDAGMI() override;
 
+  /// If this method returns true, handling of the scheduling regions
+  /// themselves (in case of a scheduling boundary in MBB) will be done
+  /// beginning with the topmost region of MBB.
+  bool doMBBSchedRegionsTopDown() const override {
+    return SchedImpl->doMBBSchedRegionsTopDown();
+  }
+
   // Returns LiveIntervals instance for use in DAG mutators and such.
   LiveIntervals *getLIS() const { return LIS; }
 
@@ -320,6 +343,9 @@ public:
   /// Implement ScheduleDAGInstrs interface for scheduling a sequence of
   /// reorderable instructions.
   void schedule() override;
+
+  void startBlock(MachineBasicBlock *bb) override;
+  void finishBlock() override;
 
   /// Change the position of an instruction within the basic block and update
   /// live ranges and region boundary iterators.
@@ -527,7 +553,7 @@ public:
 
   unsigned size() const { return Queue.size(); }
 
-  typedef std::vector<SUnit*>::iterator iterator;
+  using iterator = std::vector<SUnit*>::iterator;
 
   iterator begin() { return Queue.begin(); }
 
@@ -550,7 +576,7 @@ public:
     return Queue.begin() + idx;
   }
 
-  void dump();
+  void dump() const;
 };
 
 /// Summarize the unscheduled region.
@@ -751,7 +777,7 @@ public:
   SUnit *pickOnlyChoice();
 
 #ifndef NDEBUG
-  void dumpScheduledState();
+  void dumpScheduledState() const;
 #endif
 };
 
@@ -885,7 +911,7 @@ public:
                   MachineBasicBlock::iterator End,
                   unsigned NumRegionInstrs) override;
 
-  void dumpPolicy() override;
+  void dumpPolicy() const override;
 
   bool shouldTrackPressure() const override {
     return RegionPolicy.ShouldTrackPressure;

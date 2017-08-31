@@ -8,8 +8,6 @@
 ; RUN: not llvm-modextract -b -n 2 -o - %t 2>&1 | FileCheck --check-prefix=ERROR %s
 ; RUN: llvm-dis -o - %t0.bc | FileCheck --check-prefix=M0 %s
 ; RUN: llvm-dis -o - %t1.bc | FileCheck --check-prefix=M1 %s
-; RUN: llvm-dis -o - %t0.thinlink.bc | FileCheck --check-prefix=NODEBUG %s
-; RUN: llvm-dis -o - %t1.thinlink.bc | FileCheck --check-prefix=NODEBUG %s
 ; RUN: llvm-bcanalyzer -dump %t0.bc | FileCheck --check-prefix=BCA0 %s
 ; RUN: llvm-bcanalyzer -dump %t1.bc | FileCheck --check-prefix=BCA1 %s
 
@@ -25,6 +23,9 @@
 ; ERROR: llvm-modextract: error: module index out of range; bitcode file contains 2 module(s)
 
 ; BCA0: <GLOBALVAL_SUMMARY_BLOCK
+; BCA1: <FULL_LTO_GLOBALVAL_SUMMARY_BLOCK
+; 16 = not eligible to import
+; BCA1: <PERMODULE_GLOBALVAR_INIT_REFS {{.*}} op1=16
 ; BCA1-NOT: <GLOBALVAL_SUMMARY_BLOCK
 
 $g = comdat any
@@ -41,11 +42,3 @@ define i8* @f() {
 
 ; M1: !0 = !{i32 0, !"typeid"}
 !0 = !{i32 0, !"typeid"}
-
-; M0: !llvm.dbg.cu
-; M1-NOT: !llvm.dbg.cu
-; NODEBUG-NOT: !llvm.dbg.cu
-!llvm.dbg.cu = !{}
-
-!1 = !{i32 2, !"Debug Info Version", i32 3}
-!llvm.module.flags = !{!1}

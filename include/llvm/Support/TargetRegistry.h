@@ -20,10 +20,10 @@
 #define LLVM_SUPPORT_TARGETREGISTRY_H
 
 #include "llvm-c/Disassembler.h"
-#include "llvm/ADT/iterator_range.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
@@ -54,6 +54,7 @@ class MCSymbolizer;
 class MCTargetAsmParser;
 class MCTargetOptions;
 class MCTargetStreamer;
+class raw_ostream;
 class raw_pwrite_stream;
 class TargetMachine;
 class TargetOptions;
@@ -96,75 +97,72 @@ class Target {
 public:
   friend struct TargetRegistry;
 
-  typedef bool (*ArchMatchFnTy)(Triple::ArchType Arch);
+  using ArchMatchFnTy = bool (*)(Triple::ArchType Arch);
 
-  typedef MCAsmInfo *(*MCAsmInfoCtorFnTy)(const MCRegisterInfo &MRI,
-                                          const Triple &TT);
-  typedef void (*MCAdjustCodeGenOptsFnTy)(const Triple &TT, Reloc::Model RM,
-                                          CodeModel::Model &CM);
-
-  typedef MCInstrInfo *(*MCInstrInfoCtorFnTy)(void);
-  typedef MCInstrAnalysis *(*MCInstrAnalysisCtorFnTy)(const MCInstrInfo *Info);
-  typedef MCRegisterInfo *(*MCRegInfoCtorFnTy)(const Triple &TT);
-  typedef MCSubtargetInfo *(*MCSubtargetInfoCtorFnTy)(const Triple &TT,
-                                                      StringRef CPU,
-                                                      StringRef Features);
-  typedef TargetMachine *(*TargetMachineCtorTy)(
-      const Target &T, const Triple &TT, StringRef CPU, StringRef Features,
-      const TargetOptions &Options, Optional<Reloc::Model> RM,
-      CodeModel::Model CM, CodeGenOpt::Level OL);
+  using MCAsmInfoCtorFnTy = MCAsmInfo *(*)(const MCRegisterInfo &MRI,
+                                           const Triple &TT);
+  using MCInstrInfoCtorFnTy = MCInstrInfo *(*)();
+  using MCInstrAnalysisCtorFnTy = MCInstrAnalysis *(*)(const MCInstrInfo *Info);
+  using MCRegInfoCtorFnTy = MCRegisterInfo *(*)(const Triple &TT);
+  using MCSubtargetInfoCtorFnTy = MCSubtargetInfo *(*)(const Triple &TT,
+                                                       StringRef CPU,
+                                                       StringRef Features);
+  using TargetMachineCtorTy = TargetMachine
+      *(*)(const Target &T, const Triple &TT, StringRef CPU, StringRef Features,
+           const TargetOptions &Options, Optional<Reloc::Model> RM,
+           Optional<CodeModel::Model> CM, CodeGenOpt::Level OL, bool JIT);
   // If it weren't for layering issues (this header is in llvm/Support, but
   // depends on MC?) this should take the Streamer by value rather than rvalue
   // reference.
-  typedef AsmPrinter *(*AsmPrinterCtorTy)(
+  using AsmPrinterCtorTy = AsmPrinter *(*)(
       TargetMachine &TM, std::unique_ptr<MCStreamer> &&Streamer);
-  typedef MCAsmBackend *(*MCAsmBackendCtorTy)(const Target &T,
-                                              const MCRegisterInfo &MRI,
-                                              const Triple &TT, StringRef CPU,
-                                              const MCTargetOptions &Options);
-  typedef MCTargetAsmParser *(*MCAsmParserCtorTy)(
+  using MCAsmBackendCtorTy = MCAsmBackend *(*)(const Target &T,
+                                               const MCRegisterInfo &MRI,
+                                               const Triple &TT, StringRef CPU,
+                                               const MCTargetOptions &Options);
+  using MCAsmParserCtorTy = MCTargetAsmParser *(*)(
       const MCSubtargetInfo &STI, MCAsmParser &P, const MCInstrInfo &MII,
       const MCTargetOptions &Options);
-  typedef MCDisassembler *(*MCDisassemblerCtorTy)(const Target &T,
-                                                  const MCSubtargetInfo &STI,
-                                                  MCContext &Ctx);
-  typedef MCInstPrinter *(*MCInstPrinterCtorTy)(const Triple &T,
-                                                unsigned SyntaxVariant,
-                                                const MCAsmInfo &MAI,
-                                                const MCInstrInfo &MII,
-                                                const MCRegisterInfo &MRI);
-  typedef MCCodeEmitter *(*MCCodeEmitterCtorTy)(const MCInstrInfo &II,
-                                                const MCRegisterInfo &MRI,
-                                                MCContext &Ctx);
-  typedef MCStreamer *(*ELFStreamerCtorTy)(const Triple &T, MCContext &Ctx,
-                                           MCAsmBackend &TAB,
-                                           raw_pwrite_stream &OS,
-                                           MCCodeEmitter *Emitter,
-                                           bool RelaxAll);
-  typedef MCStreamer *(*MachOStreamerCtorTy)(MCContext &Ctx, MCAsmBackend &TAB,
-                                             raw_pwrite_stream &OS,
-                                             MCCodeEmitter *Emitter,
-                                             bool RelaxAll,
-                                             bool DWARFMustBeAtTheEnd);
-  typedef MCStreamer *(*COFFStreamerCtorTy)(MCContext &Ctx, MCAsmBackend &TAB,
-                                            raw_pwrite_stream &OS,
-                                            MCCodeEmitter *Emitter,
-                                            bool RelaxAll,
-                                            bool IncrementalLinkerCompatible);
-  typedef MCStreamer *(*WasmStreamerCtorTy)(const Triple &T, MCContext &Ctx,
+  using MCDisassemblerCtorTy = MCDisassembler *(*)(const Target &T,
+                                                   const MCSubtargetInfo &STI,
+                                                   MCContext &Ctx);
+  using MCInstPrinterCtorTy = MCInstPrinter *(*)(const Triple &T,
+                                                 unsigned SyntaxVariant,
+                                                 const MCAsmInfo &MAI,
+                                                 const MCInstrInfo &MII,
+                                                 const MCRegisterInfo &MRI);
+  using MCCodeEmitterCtorTy = MCCodeEmitter *(*)(const MCInstrInfo &II,
+                                                 const MCRegisterInfo &MRI,
+                                                 MCContext &Ctx);
+  using ELFStreamerCtorTy = MCStreamer *(*)(const Triple &T, MCContext &Ctx,
                                             MCAsmBackend &TAB,
                                             raw_pwrite_stream &OS,
                                             MCCodeEmitter *Emitter,
                                             bool RelaxAll);
-  typedef MCTargetStreamer *(*NullTargetStreamerCtorTy)(MCStreamer &S);
-  typedef MCTargetStreamer *(*AsmTargetStreamerCtorTy)(
+  using MachOStreamerCtorTy = MCStreamer *(*)(MCContext &Ctx, MCAsmBackend &TAB,
+                                              raw_pwrite_stream &OS,
+                                              MCCodeEmitter *Emitter,
+                                              bool RelaxAll,
+                                              bool DWARFMustBeAtTheEnd);
+  using COFFStreamerCtorTy = MCStreamer *(*)(MCContext &Ctx, MCAsmBackend &TAB,
+                                             raw_pwrite_stream &OS,
+                                             MCCodeEmitter *Emitter,
+                                             bool RelaxAll,
+                                             bool IncrementalLinkerCompatible);
+  using WasmStreamerCtorTy = MCStreamer *(*)(const Triple &T, MCContext &Ctx,
+                                             MCAsmBackend &TAB,
+                                             raw_pwrite_stream &OS,
+                                             MCCodeEmitter *Emitter,
+                                             bool RelaxAll);
+  using NullTargetStreamerCtorTy = MCTargetStreamer *(*)(MCStreamer &S);
+  using AsmTargetStreamerCtorTy = MCTargetStreamer *(*)(
       MCStreamer &S, formatted_raw_ostream &OS, MCInstPrinter *InstPrint,
       bool IsVerboseAsm);
-  typedef MCTargetStreamer *(*ObjectTargetStreamerCtorTy)(
+  using ObjectTargetStreamerCtorTy = MCTargetStreamer *(*)(
       MCStreamer &S, const MCSubtargetInfo &STI);
-  typedef MCRelocationInfo *(*MCRelocationInfoCtorTy)(const Triple &TT,
-                                                      MCContext &Ctx);
-  typedef MCSymbolizer *(*MCSymbolizerCtorTy)(
+  using MCRelocationInfoCtorTy = MCRelocationInfo *(*)(const Triple &TT,
+                                                       MCContext &Ctx);
+  using MCSymbolizerCtorTy = MCSymbolizer *(*)(
       const Triple &TT, LLVMOpInfoCallback GetOpInfo,
       LLVMSymbolLookupCallback SymbolLookUp, void *DisInfo, MCContext *Ctx,
       std::unique_ptr<MCRelocationInfo> &&RelInfo);
@@ -189,8 +187,6 @@ private:
   /// MCAsmInfoCtorFn - Constructor function for this target's MCAsmInfo, if
   /// registered.
   MCAsmInfoCtorFnTy MCAsmInfoCtorFn;
-
-  MCAdjustCodeGenOptsFnTy MCAdjustCodeGenOptsFn;
 
   /// MCInstrInfoCtorFn - Constructor function for this target's MCInstrInfo,
   /// if registered.
@@ -311,12 +307,6 @@ public:
     return MCAsmInfoCtorFn(MRI, Triple(TheTriple));
   }
 
-  void adjustCodeGenOpts(const Triple &TT, Reloc::Model RM,
-                         CodeModel::Model &CM) const {
-    if (MCAdjustCodeGenOptsFn)
-      MCAdjustCodeGenOptsFn(TT, RM, CM);
-  }
-
   /// createMCInstrInfo - Create a MCInstrInfo implementation.
   ///
   MCInstrInfo *createMCInstrInfo() const {
@@ -364,15 +354,17 @@ public:
   /// feature set; it should always be provided. Generally this should be
   /// either the target triple from the module, or the target triple of the
   /// host if that does not exist.
-  TargetMachine *
-  createTargetMachine(StringRef TT, StringRef CPU, StringRef Features,
-                      const TargetOptions &Options, Optional<Reloc::Model> RM,
-                      CodeModel::Model CM = CodeModel::Default,
-                      CodeGenOpt::Level OL = CodeGenOpt::Default) const {
+  TargetMachine *createTargetMachine(StringRef TT, StringRef CPU,
+                                     StringRef Features,
+                                     const TargetOptions &Options,
+                                     Optional<Reloc::Model> RM,
+                                     Optional<CodeModel::Model> CM = None,
+                                     CodeGenOpt::Level OL = CodeGenOpt::Default,
+                                     bool JIT = false) const {
     if (!TargetMachineCtorFn)
       return nullptr;
     return TargetMachineCtorFn(*this, Triple(TT), CPU, Features, Options, RM,
-                               CM, OL);
+                               CM, OL, JIT);
   }
 
   /// createMCAsmBackend - Create a target specific assembly parser.
@@ -598,7 +590,7 @@ struct TargetRegistry {
 
   /// printRegisteredTargetsForVersion - Print the registered targets
   /// appropriately for inclusion in a tool's version output.
-  static void printRegisteredTargetsForVersion();
+  static void printRegisteredTargetsForVersion(raw_ostream &OS);
 
   /// @name Registry Access
   /// @{
@@ -660,11 +652,6 @@ struct TargetRegistry {
   /// @param Fn - A function to construct a MCAsmInfo for the target.
   static void RegisterMCAsmInfo(Target &T, Target::MCAsmInfoCtorFnTy Fn) {
     T.MCAsmInfoCtorFn = Fn;
-  }
-
-  static void registerMCAdjustCodeGenOpts(Target &T,
-                                          Target::MCAdjustCodeGenOptsFnTy Fn) {
-    T.MCAdjustCodeGenOptsFn = Fn;
   }
 
   /// RegisterMCInstrInfo - Register a MCInstrInfo implementation for the
@@ -928,12 +915,6 @@ struct RegisterMCAsmInfoFn {
   }
 };
 
-struct RegisterMCAdjustCodeGenOptsFn {
-  RegisterMCAdjustCodeGenOptsFn(Target &T, Target::MCAdjustCodeGenOptsFnTy Fn) {
-    TargetRegistry::registerMCAdjustCodeGenOpts(T, Fn);
-  }
-};
-
 /// RegisterMCInstrInfo - Helper template for registering a target instruction
 /// info implementation.  This invokes the static "Create" method on the class
 /// to actually do the construction.  Usage:
@@ -1079,12 +1060,11 @@ template <class TargetMachineImpl> struct RegisterTargetMachine {
   }
 
 private:
-  static TargetMachine *Allocator(const Target &T, const Triple &TT,
-                                  StringRef CPU, StringRef FS,
-                                  const TargetOptions &Options,
-                                  Optional<Reloc::Model> RM,
-                                  CodeModel::Model CM, CodeGenOpt::Level OL) {
-    return new TargetMachineImpl(T, TT, CPU, FS, Options, RM, CM, OL);
+  static TargetMachine *
+  Allocator(const Target &T, const Triple &TT, StringRef CPU, StringRef FS,
+            const TargetOptions &Options, Optional<Reloc::Model> RM,
+            Optional<CodeModel::Model> CM, CodeGenOpt::Level OL, bool JIT) {
+    return new TargetMachineImpl(T, TT, CPU, FS, Options, RM, CM, OL, JIT);
   }
 };
 

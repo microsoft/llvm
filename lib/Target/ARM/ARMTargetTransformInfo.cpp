@@ -15,6 +15,24 @@ using namespace llvm;
 
 #define DEBUG_TYPE "armtti"
 
+bool ARMTTIImpl::areInlineCompatible(const Function *Caller,
+                                     const Function *Callee) const {
+  const TargetMachine &TM = getTLI()->getTargetMachine();
+  const FeatureBitset &CallerBits =
+      TM.getSubtargetImpl(*Caller)->getFeatureBits();
+  const FeatureBitset &CalleeBits =
+      TM.getSubtargetImpl(*Callee)->getFeatureBits();
+
+  // To inline a callee, all features not in the whitelist must match exactly.
+  bool MatchExact = (CallerBits & ~InlineFeatureWhitelist) ==
+                    (CalleeBits & ~InlineFeatureWhitelist);
+  // For features in the whitelist, the callee's features must be a subset of
+  // the callers'.
+  bool MatchSubset = ((CallerBits & CalleeBits) & InlineFeatureWhitelist) ==
+                     (CalleeBits & InlineFeatureWhitelist);
+  return MatchExact && MatchSubset;
+}
+
 int ARMTTIImpl::getIntImmCost(const APInt &Imm, Type *Ty) {
   assert(Ty->isIntegerTy());
 
@@ -92,7 +110,8 @@ int ARMTTIImpl::getIntImmCost(unsigned Opcode, unsigned Idx, const APInt &Imm,
 }
 
 
-int ARMTTIImpl::getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src) {
+int ARMTTIImpl::getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
+                                 const Instruction *I) {
   int ISD = TLI->InstructionOpcodeToISD(Opcode);
   assert(ISD && "Invalid opcode");
 
@@ -310,7 +329,8 @@ int ARMTTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
   return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
 }
 
-int ARMTTIImpl::getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy) {
+int ARMTTIImpl::getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy,
+                                   const Instruction *I) {
 
   int ISD = TLI->InstructionOpcodeToISD(Opcode);
   // On NEON a a vector select gets lowered to vbsl.
@@ -335,7 +355,7 @@ int ARMTTIImpl::getCmpSelInstrCost(unsigned Opcode, Type *ValTy, Type *CondTy) {
     return LT.first;
   }
 
-  return BaseT::getCmpSelInstrCost(Opcode, ValTy, CondTy);
+  return BaseT::getCmpSelInstrCost(Opcode, ValTy, CondTy, I);
 }
 
 int ARMTTIImpl::getAddressComputationCost(Type *Ty, ScalarEvolution *SE,
@@ -504,7 +524,7 @@ int ARMTTIImpl::getArithmeticInstrCost(
 }
 
 int ARMTTIImpl::getMemoryOpCost(unsigned Opcode, Type *Src, unsigned Alignment,
-                                unsigned AddressSpace) {
+                                unsigned AddressSpace, const Instruction *I) {
   std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, Src);
 
   if (Src->isVectorTy() && Alignment != 16 &&
@@ -541,4 +561,49 @@ int ARMTTIImpl::getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy,
 
   return BaseT::getInterleavedMemoryOpCost(Opcode, VecTy, Factor, Indices,
                                            Alignment, AddressSpace);
+}
+
+void ARMTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
+                                         TTI::UnrollingPreferences &UP) {
+  // Only currently enable these preferences for M-Class cores.
+  if (!ST->isMClass())
+    return BasicTTIImplBase::getUnrollingPreferences(L, SE, UP);
+
+  // Only enable on Thumb-2 targets for simple loops.
+  if (!ST->isThumb2() || L->getNumBlocks() != 1)
+    return;
+
+  // Disable loop unrolling for Oz and Os.
+  UP.OptSizeThreshold = 0;
+  UP.PartialOptSizeThreshold = 0;
+  BasicBlock *BB = L->getLoopLatch();
+  if (BB->getParent()->optForSize())
+    return;
+
+  // Scan the loop: don't unroll loops with calls as this could prevent
+  // inlining.
+  unsigned Cost = 0;
+  for (auto &I : *BB) {
+    if (isa<CallInst>(I) || isa<InvokeInst>(I)) {
+      ImmutableCallSite CS(&I);
+      if (const Function *F = CS.getCalledFunction()) {
+        if (!isLoweredToCall(F))
+          continue;
+      }
+      return;
+    }
+    SmallVector<const Value*, 4> Operands(I.value_op_begin(),
+                                          I.value_op_end());
+    Cost += getUserCost(&I, Operands);
+  }
+
+  UP.Partial = true;
+  UP.Runtime = true;
+  UP.UnrollRemainder = true;
+  UP.DefaultUnrollRuntimeCount = 4;
+
+  // Force unrolling small loops can be very useful because of the branch
+  // taken cost of the backedge.
+  if (Cost < 12)
+    UP.Force = true;
 }

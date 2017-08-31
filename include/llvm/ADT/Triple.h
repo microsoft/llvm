@@ -50,6 +50,7 @@ public:
     armeb,          // ARM (big endian): armeb
     aarch64,        // AArch64 (little endian): aarch64
     aarch64_be,     // AArch64 (big endian): aarch64_be
+    arc,            // ARC: Synopsys ARC
     avr,            // AVR: Atmel AVR microcontroller
     bpfel,          // eBPF or extended BPF or 64-bit BPF (little endian)
     bpfeb,          // eBPF or extended BPF or 64-bit BPF (big endian)
@@ -59,6 +60,7 @@ public:
     mips64,         // MIPS64: mips64
     mips64el,       // MIPS64EL: mips64el
     msp430,         // MSP430: msp430
+    nios2,          // NIOSII: nios2
     ppc,            // PPC: powerpc
     ppc64,          // PPC64: powerpc64, ppu
     ppc64le,        // PPC64LE: powerpc64le
@@ -99,6 +101,7 @@ public:
   enum SubArchType {
     NoSubArch,
 
+    ARMSubArch_v8_3a,
     ARMSubArch_v8_2a,
     ARMSubArch_v8_1a,
     ARMSubArch_v8,
@@ -140,11 +143,13 @@ public:
     Myriad,
     AMD,
     Mesa,
-    LastVendorType = Mesa
+    SUSE,
+    LastVendorType = SUSE
   };
   enum OSType {
     UnknownOS,
 
+    Ananas,
     CloudABI,
     Darwin,
     DragonFly,
@@ -164,7 +169,6 @@ public:
     RTEMS,
     NaCl,       // Native Client
     CNK,        // BG/P Compute-Node Kernel
-    Bitrig,
     AIX,
     CUDA,       // NVIDIA CUDA
     NVCL,       // NVIDIA OpenCL
@@ -237,7 +241,9 @@ public:
 
   /// Default constructor is the same as an empty string and leaves all
   /// triple fields unknown.
-  Triple() : Data(), Arch(), Vendor(), OS(), Environment(), ObjectFormat() {}
+  Triple()
+      : Data(), Arch(), SubArch(), Vendor(), OS(), Environment(),
+        ObjectFormat() {}
 
   explicit Triple(const Twine &Str);
   Triple(const Twine &ArchStr, const Twine &VendorStr, const Twine &OSStr);
@@ -249,6 +255,10 @@ public:
            Vendor == Other.Vendor && OS == Other.OS &&
            Environment == Other.Environment &&
            ObjectFormat == Other.ObjectFormat;
+  }
+
+  bool operator!=(const Triple &Other) const {
+    return !(*this == Other);
   }
 
   /// @}
@@ -480,10 +490,6 @@ public:
     return getOS() == Triple::Solaris;
   }
 
-  bool isOSBitrig() const {
-    return getOS() == Triple::Bitrig;
-  }
-
   bool isOSIAMCU() const {
     return getOS() == Triple::ELFIAMCU;
   }
@@ -497,6 +503,11 @@ public:
 
   bool isOSContiki() const {
     return getOS() == Triple::Contiki;
+  }
+
+  /// Tests whether the OS is Haiku.
+  bool isOSHaiku() const {
+    return getOS() == Triple::Haiku;
   }
 
   /// Checks if the environment could be MSVC.
@@ -625,6 +636,16 @@ public:
     return getArch() == Triple::nvptx || getArch() == Triple::nvptx64;
   }
 
+  /// Tests whether the target is Thumb (little and big endian).
+  bool isThumb() const {
+    return getArch() == Triple::thumb || getArch() == Triple::thumbeb;
+  }
+
+  /// Tests whether the target is ARM (little and big endian).
+  bool isARM() const {
+    return getArch() == Triple::arm || getArch() == Triple::armeb;
+  }
+
   /// Tests wether the target supports comdat
   bool supportsCOMDAT() const { return !isOSBinFormatMachO(); }
 
@@ -720,6 +741,12 @@ public:
   ///
   /// \returns true if the triple is little endian, false otherwise.
   bool isLittleEndian() const;
+
+  /// Test whether target triples are compatible.
+  bool isCompatibleWith(const Triple &Other) const;
+
+  /// Merge target triples.
+  std::string merge(const Triple &Other) const;
 
   /// @}
   /// @name Static helpers for IDs.

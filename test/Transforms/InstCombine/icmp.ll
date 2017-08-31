@@ -13,6 +13,16 @@ define i32 @test1(i32 %X) {
   ret i32 %b
 }
 
+define <2 x i32> @test1vec(<2 x i32> %X) {
+; CHECK-LABEL: @test1vec(
+; CHECK-NEXT:    [[X_LOBIT:%.*]] = lshr <2 x i32> [[X:%.*]], <i32 31, i32 31>
+; CHECK-NEXT:    ret <2 x i32> [[X_LOBIT]]
+;
+  %a = icmp slt <2 x i32> %X, zeroinitializer
+  %b = zext <2 x i1> %a to <2 x i32>
+  ret <2 x i32> %b
+}
+
 define i32 @test2(i32 %X) {
 ; CHECK-LABEL: @test2(
 ; CHECK-NEXT:    [[X_LOBIT:%.*]] = lshr i32 %X, 31
@@ -22,6 +32,17 @@ define i32 @test2(i32 %X) {
   %a = icmp ult i32 %X, -2147483648
   %b = zext i1 %a to i32
   ret i32 %b
+}
+
+define <2 x i32> @test2vec(<2 x i32> %X) {
+; CHECK-LABEL: @test2vec(
+; CHECK-NEXT:    [[X_LOBIT:%.*]] = lshr <2 x i32> [[X:%.*]], <i32 31, i32 31>
+; CHECK-NEXT:    [[X_LOBIT_NOT:%.*]] = xor <2 x i32> [[X_LOBIT]], <i32 1, i32 1>
+; CHECK-NEXT:    ret <2 x i32> [[X_LOBIT_NOT]]
+;
+  %a = icmp ult <2 x i32> %X, <i32 -2147483648, i32 -2147483648>
+  %b = zext <2 x i1> %a to <2 x i32>
+  ret <2 x i32> %b
 }
 
 define i32 @test3(i32 %X) {
@@ -695,6 +716,21 @@ define i1 @test48(i32 %X, i32 %Y, i32 %Z) {
   ret i1 %C
 }
 
+; The above transform only works for equality predicates.
+
+define i1 @PR32949(i32 %X, i32 %Y, i32 %Z) {
+; CHECK-LABEL: @PR32949(
+; CHECK-NEXT:    [[A:%.*]] = sdiv exact i32 %X, %Z
+; CHECK-NEXT:    [[B:%.*]] = sdiv exact i32 %Y, %Z
+; CHECK-NEXT:    [[C:%.*]] = icmp sgt i32 [[A]], [[B]]
+; CHECK-NEXT:    ret i1 [[C]]
+;
+  %A = sdiv exact i32 %X, %Z
+  %B = sdiv exact i32 %Y, %Z
+  %C = icmp sgt i32 %A, %B
+  ret i1 %C
+}
+
 ; PR8469
 define <2 x i1> @test49(<2 x i32> %tmp3) {
 ; CHECK-LABEL: @test49(
@@ -741,6 +777,22 @@ define i1 @test52(i32 %x1) {
   %cmp = icmp eq i32 %conv, 127
   %tmp2 = lshr i32 %x1, 16
   %tmp3 = trunc i32 %tmp2 to i8
+  %cmp15 = icmp eq i8 %tmp3, 76
+
+  %A = and i1 %cmp, %cmp15
+  ret i1 %A
+}
+
+define i1 @test52b(i128 %x1) {
+; CHECK-LABEL: @test52b(
+; CHECK-NEXT:    [[TMP1:%.*]] = and i128 [[X1:%.*]], 16711935
+; CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i128 [[TMP1]], 4980863
+; CHECK-NEXT:    ret i1 [[TMP2]]
+;
+  %conv = and i128 %x1, 255
+  %cmp = icmp eq i128 %conv, 127
+  %tmp2 = lshr i128 %x1, 16
+  %tmp3 = trunc i128 %tmp2 to i8
   %cmp15 = icmp eq i8 %tmp3, 76
 
   %A = and i1 %cmp, %cmp15
@@ -1121,19 +1173,6 @@ define i1 @test68(i32 %x) {
   %and = and i32 %x, 127
   %cmp = icmp sgt i32 %and, 30
   ret i1 %cmp
-}
-
-; PR14708
-define i1 @test69(i32 %c) {
-; CHECK-LABEL: @test69(
-; CHECK-NEXT:    [[TMP1:%.*]] = or i32 %c, 32
-; CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i32 [[TMP1]], 97
-; CHECK-NEXT:    ret i1 [[TMP2]]
-;
-  %1 = icmp eq i32 %c, 97
-  %2 = icmp eq i32 %c, 65
-  %3 = or i1 %1, %2
-  ret i1 %3
 }
 
 ; PR15940
@@ -2421,8 +2460,8 @@ define i32 @f7(i32 %a, i32 %b) {
 ; CHECK-LABEL: @f7(
 ; CHECK-NEXT:    [[CMP_UNSHIFTED:%.*]] = xor i32 %a, %b
 ; CHECK-NEXT:    [[CMP_MASK:%.*]] = and i32 [[CMP_UNSHIFTED]], 511
-; CHECK-NEXT:    [[CMP:%.*]] = icmp ne i32 [[CMP:%.*]].mask, 0
-; CHECK-NEXT:    [[S:%.*]] = select i1 [[CMP]], i32 10000, i32 0
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32 [[CMP_MASK]], 0
+; CHECK-NEXT:    [[S:%.*]] = select i1 [[CMP]], i32 0, i32 10000
 ; CHECK-NEXT:    ret i32 [[S]]
 ;
   %sext = shl i32 %a, 23
@@ -2893,3 +2932,119 @@ define i1 @cmp_ult_rhs_dec(float %x, i32 %y) {
   %cmp = icmp ult i32 %conv, %dec
   ret i1 %cmp
 }
+
+define i1 @eq_add_constants(i32 %x, i32 %y) {
+; CHECK-LABEL: @eq_add_constants(
+; CHECK-NEXT:    [[C:%.*]] = icmp eq i32 %x, %y
+; CHECK-NEXT:    ret i1 [[C]]
+;
+  %A = add i32 %x, 5
+  %B = add i32 %y, 5
+  %C = icmp eq i32 %A, %B
+  ret i1 %C
+}
+
+define i1 @eq_mul_constants(i32 %x, i32 %y) {
+; CHECK-LABEL: @eq_mul_constants(
+; CHECK-NEXT:    [[C:%.*]] = icmp eq i32 %x, %y
+; CHECK-NEXT:    ret i1 [[C]]
+;
+  %A = mul i32 %x, 5
+  %B = mul i32 %y, 5
+  %C = icmp eq i32 %A, %B
+  ret i1 %C
+}
+
+define <2 x i1> @eq_mul_constants_splat(<2 x i32> %x, <2 x i32> %y) {
+; CHECK-LABEL: @eq_mul_constants_splat(
+; CHECK-NEXT:    [[C:%.*]] = icmp ne <2 x i32> %x, %y
+; CHECK-NEXT:    ret <2 x i1> [[C]]
+;
+  %A = mul <2 x i32> %x, <i32 5, i32 5>
+  %B = mul <2 x i32> %y, <i32 5, i32 5>
+  %C = icmp ne <2 x i32> %A, %B
+  ret <2 x i1> %C
+}
+
+; If the multiply constant has any trailing zero bits, we get something completely different.
+; We mask off the high bits of each input and then convert:
+; (X&Z) == (Y&Z) -> (X^Y) & Z == 0
+
+define i1 @eq_mul_constants_with_tz(i32 %x, i32 %y) {
+; CHECK-LABEL: @eq_mul_constants_with_tz(
+; CHECK-NEXT:    [[TMP1:%.*]] = xor i32 %x, %y
+; CHECK-NEXT:    [[TMP2:%.*]] = and i32 [[TMP1]], 1073741823
+; CHECK-NEXT:    [[C:%.*]] = icmp ne i32 [[TMP2]], 0
+; CHECK-NEXT:    ret i1 [[C]]
+;
+  %A = mul i32 %x, 12
+  %B = mul i32 %y, 12
+  %C = icmp ne i32 %A, %B
+  ret i1 %C
+}
+
+define <2 x i1> @eq_mul_constants_with_tz_splat(<2 x i32> %x, <2 x i32> %y) {
+; CHECK-LABEL: @eq_mul_constants_with_tz_splat(
+; CHECK-NEXT:    [[TMP1:%.*]] = xor <2 x i32> %x, %y
+; CHECK-NEXT:    [[TMP2:%.*]] = and <2 x i32> [[TMP1]], <i32 1073741823, i32 1073741823>
+; CHECK-NEXT:    [[C:%.*]] = icmp eq <2 x i32> [[TMP2]], zeroinitializer
+; CHECK-NEXT:    ret <2 x i1> [[C]]
+;
+  %A = mul <2 x i32> %x, <i32 12, i32 12>
+  %B = mul <2 x i32> %y, <i32 12, i32 12>
+  %C = icmp eq <2 x i32> %A, %B
+  ret <2 x i1> %C
+}
+
+declare i32 @llvm.bswap.i32(i32)
+
+define i1 @bswap_ne(i32 %x, i32 %y) {
+; CHECK-LABEL: @bswap_ne(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp ne i32 %x, %y
+; CHECK-NEXT:    ret i1 [[CMP]]
+;
+  %swapx = call i32 @llvm.bswap.i32(i32 %x)
+  %swapy = call i32 @llvm.bswap.i32(i32 %y)
+  %cmp = icmp ne i32 %swapx, %swapy
+  ret i1 %cmp
+}
+
+declare <8 x i16> @llvm.bswap.v8i16(<8 x i16>)
+
+define <8 x i1> @bswap_vec_eq(<8 x i16> %x, <8 x i16> %y) {
+; CHECK-LABEL: @bswap_vec_eq(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq <8 x i16> %x, %y
+; CHECK-NEXT:    ret <8 x i1> [[CMP]]
+;
+  %swapx = call <8 x i16> @llvm.bswap.v8i16(<8 x i16> %x)
+  %swapy = call <8 x i16> @llvm.bswap.v8i16(<8 x i16> %y)
+  %cmp = icmp eq <8 x i16> %swapx, %swapy
+  ret <8 x i1> %cmp
+}
+
+declare i64 @llvm.bitreverse.i64(i64)
+
+define i1 @bitreverse_eq(i64 %x, i64 %y) {
+; CHECK-LABEL: @bitreverse_eq(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i64 %x, %y
+; CHECK-NEXT:    ret i1 [[CMP]]
+;
+  %revx = call i64 @llvm.bitreverse.i64(i64 %x)
+  %revy = call i64 @llvm.bitreverse.i64(i64 %y)
+  %cmp = icmp eq i64 %revx, %revy
+  ret i1 %cmp
+}
+
+declare <8 x i16> @llvm.bitreverse.v8i16(<8 x i16>)
+
+define <8 x i1> @bitreverse_vec_ne(<8 x i16> %x, <8 x i16> %y) {
+; CHECK-LABEL: @bitreverse_vec_ne(
+; CHECK-NEXT:    [[CMP:%.*]] = icmp ne <8 x i16> %x, %y
+; CHECK-NEXT:    ret <8 x i1> [[CMP]]
+;
+  %revx = call <8 x i16> @llvm.bitreverse.v8i16(<8 x i16> %x)
+  %revy = call <8 x i16> @llvm.bitreverse.v8i16(<8 x i16> %y)
+  %cmp = icmp ne <8 x i16> %revx, %revy
+  ret <8 x i1> %cmp
+}
+

@@ -3,16 +3,13 @@
 ; GCN-LABEL: {{^}}lower_control_flow_unreachable_terminator:
 ; GCN: v_cmp_eq_u32
 ; GCN: s_and_saveexec_b64
-; GCN: s_xor_b64
 ; GCN: ; mask branch [[RET:BB[0-9]+_[0-9]+]]
 
 ; GCN-NEXT: BB{{[0-9]+_[0-9]+}}: ; %unreachable
 ; GCN: ds_write_b32
 ; GCN: ; divergent unreachable
-; GCN: s_waitcnt
 
 ; GCN-NEXT: [[RET]]: ; %UnifiedReturnBlock
-; GCN-NEXT: s_or_b64 exec, exec
 ; GCN: s_endpgm
 
 define amdgpu_kernel void @lower_control_flow_unreachable_terminator() #0 {
@@ -32,16 +29,13 @@ ret:
 ; GCN-LABEL: {{^}}lower_control_flow_unreachable_terminator_swap_block_order:
 ; GCN: v_cmp_ne_u32
 ; GCN: s_and_saveexec_b64
-; GCN: s_xor_b64
 ; GCN: ; mask branch [[RETURN:BB[0-9]+_[0-9]+]]
 
 ; GCN-NEXT: {{^BB[0-9]+_[0-9]+}}: ; %unreachable
 ; GCN: ds_write_b32
 ; GCN: ; divergent unreachable
-; GCN: s_waitcnt
 
 ; GCN: [[RETURN]]:
-; GCN-NEXT: s_or_b64 exec, exec
 ; GCN-NEXT: s_endpgm
 define amdgpu_kernel void @lower_control_flow_unreachable_terminator_swap_block_order() #0 {
 bb:
@@ -66,7 +60,6 @@ unreachable:
 
 ; GCN: [[UNREACHABLE]]:
 ; GCN: ds_write_b32
-; GCN: s_waitcnt
 define amdgpu_kernel void @uniform_lower_control_flow_unreachable_terminator(i32 %arg0) #0 {
 bb:
   %tmp63 = icmp eq i32 %arg0, 32

@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <iterator>
 #include <map>
+#include <queue>
 #include <set>
 #include <string>
 #include <tuple>
@@ -98,7 +99,7 @@ void CodeGenSubRegIndex::updateComponents(CodeGenRegBank &RegBank) {
     SmallVector<CodeGenSubRegIndex*, 8> IdxParts;
     for (unsigned i = 0, e = Parts.size(); i != e; ++i)
       IdxParts.push_back(RegBank.getSubRegIdx(Parts[i]));
-    RegBank.addConcatSubRegIndex(IdxParts, this);
+    setConcatenationOf(IdxParts);
   }
 }
 
@@ -117,6 +118,36 @@ LaneBitmask CodeGenSubRegIndex::computeLaneMask() const {
   assert(M.any() && "Missing lane mask, sub-register cycle?");
   LaneMask = M;
   return LaneMask;
+}
+
+void CodeGenSubRegIndex::setConcatenationOf(
+    ArrayRef<CodeGenSubRegIndex*> Parts) {
+  if (ConcatenationOf.empty())
+    ConcatenationOf.assign(Parts.begin(), Parts.end());
+  else
+    assert(std::equal(Parts.begin(), Parts.end(),
+                      ConcatenationOf.begin()) && "parts consistent");
+}
+
+void CodeGenSubRegIndex::computeConcatTransitiveClosure() {
+  for (SmallVectorImpl<CodeGenSubRegIndex*>::iterator
+       I = ConcatenationOf.begin(); I != ConcatenationOf.end(); /*empty*/) {
+    CodeGenSubRegIndex *SubIdx = *I;
+    SubIdx->computeConcatTransitiveClosure();
+#ifndef NDEBUG
+    for (CodeGenSubRegIndex *SRI : SubIdx->ConcatenationOf)
+      assert(SRI->ConcatenationOf.empty() && "No transitive closure?");
+#endif
+
+    if (SubIdx->ConcatenationOf.empty()) {
+      ++I;
+    } else {
+      I = ConcatenationOf.erase(I);
+      I = ConcatenationOf.insert(I, SubIdx->ConcatenationOf.begin(),
+                                 SubIdx->ConcatenationOf.end());
+      I += SubIdx->ConcatenationOf.size();
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -369,7 +400,8 @@ CodeGenRegister::computeSubRegs(CodeGenRegBank &RegBank) {
       Parts.push_back(getSubRegIndex(SR->ExplicitSubRegs[j]));
 
     // Offer this as an existing spelling for the concatenation of Parts.
-    RegBank.addConcatSubRegIndex(Parts, ExplicitSubRegIndices[i]);
+    CodeGenSubRegIndex &Idx = *ExplicitSubRegIndices[i];
+    Idx.setConcatenationOf(Parts);
   }
 
   // Initialize RegUnitList. Because getSubRegs is called recursively, this
@@ -430,14 +462,21 @@ CodeGenRegister::computeSubRegs(CodeGenRegBank &RegBank) {
 // sub-register relationships that would force a DAG.
 //
 void CodeGenRegister::computeSecondarySubRegs(CodeGenRegBank &RegBank) {
-  // Collect new sub-registers first, add them later.
   SmallVector<SubRegMap::value_type, 8> NewSubRegs;
+
+  std::queue<std::pair<CodeGenSubRegIndex*,CodeGenRegister*>> SubRegQueue;
+  for (std::pair<CodeGenSubRegIndex*,CodeGenRegister*> P : SubRegs)
+    SubRegQueue.push(P);
 
   // Look at the leading super-registers of each sub-register. Those are the
   // candidates for new sub-registers, assuming they are fully contained in
   // this register.
-  for (SubRegMap::iterator I = SubRegs.begin(), E = SubRegs.end(); I != E; ++I){
-    const CodeGenRegister *SubReg = I->second;
+  while (!SubRegQueue.empty()) {
+    CodeGenSubRegIndex *SubRegIdx;
+    const CodeGenRegister *SubReg;
+    std::tie(SubRegIdx, SubReg) = SubRegQueue.front();
+    SubRegQueue.pop();
+
     const CodeGenRegister::SuperRegList &Leads = SubReg->LeadingSuperRegs;
     for (unsigned i = 0, e = Leads.size(); i != e; ++i) {
       CodeGenRegister *Cand = const_cast<CodeGenRegister*>(Leads[i]);
@@ -445,41 +484,47 @@ void CodeGenRegister::computeSecondarySubRegs(CodeGenRegBank &RegBank) {
       if (Cand == this || getSubRegIndex(Cand))
         continue;
       // Check if each component of Cand is already a sub-register.
-      // We know that the first component is I->second, and is present with the
-      // name I->first.
-      SmallVector<CodeGenSubRegIndex*, 8> Parts(1, I->first);
       assert(!Cand->ExplicitSubRegs.empty() &&
              "Super-register has no sub-registers");
-      for (unsigned j = 1, e = Cand->ExplicitSubRegs.size(); j != e; ++j) {
-        if (CodeGenSubRegIndex *Idx = getSubRegIndex(Cand->ExplicitSubRegs[j]))
-          Parts.push_back(Idx);
-        else {
+      if (Cand->ExplicitSubRegs.size() == 1)
+        continue;
+      SmallVector<CodeGenSubRegIndex*, 8> Parts;
+      // We know that the first component is (SubRegIdx,SubReg). However we
+      // may still need to split it into smaller subregister parts.
+      assert(Cand->ExplicitSubRegs[0] == SubReg && "LeadingSuperRegs correct");
+      assert(getSubRegIndex(SubReg) == SubRegIdx && "LeadingSuperRegs correct");
+      for (CodeGenRegister *SubReg : Cand->ExplicitSubRegs) {
+        if (CodeGenSubRegIndex *SubRegIdx = getSubRegIndex(SubReg)) {
+          if (SubRegIdx->ConcatenationOf.empty()) {
+            Parts.push_back(SubRegIdx);
+          } else
+            for (CodeGenSubRegIndex *SubIdx : SubRegIdx->ConcatenationOf)
+              Parts.push_back(SubIdx);
+        } else {
           // Sub-register doesn't exist.
           Parts.clear();
           break;
         }
       }
-      // If some Cand sub-register is not part of this register, or if Cand only
-      // has one sub-register, there is nothing to do.
-      if (Parts.size() <= 1)
+      // There is nothing to do if some Cand sub-register is not part of this
+      // register.
+      if (Parts.empty())
         continue;
 
       // Each part of Cand is a sub-register of this. Make the full Cand also
       // a sub-register with a concatenated sub-register index.
-      CodeGenSubRegIndex *Concat= RegBank.getConcatSubRegIndex(Parts);
-      NewSubRegs.push_back(std::make_pair(Concat, Cand));
+      CodeGenSubRegIndex *Concat = RegBank.getConcatSubRegIndex(Parts);
+      std::pair<CodeGenSubRegIndex*,CodeGenRegister*> NewSubReg =
+          std::make_pair(Concat, Cand);
+
+      if (!SubRegs.insert(NewSubReg).second)
+        continue;
+
+      // We inserted a new subregister.
+      NewSubRegs.push_back(NewSubReg);
+      SubRegQueue.push(NewSubReg);
+      SubReg2Idx.insert(std::make_pair(Cand, Concat));
     }
-  }
-
-  // Now add all the new sub-registers.
-  for (unsigned i = 0, e = NewSubRegs.size(); i != e; ++i) {
-    // Don't add Cand if another sub-register is already using the index.
-    if (!SubRegs.insert(NewSubRegs[i]).second)
-      continue;
-
-    CodeGenSubRegIndex *NewIdx = NewSubRegs[i].first;
-    CodeGenRegister *NewSubReg = NewSubRegs[i].second;
-    SubReg2Idx.insert(std::make_pair(NewSubReg, NewIdx));
   }
 
   // Create sub-register index composition maps for the synthesized indices.
@@ -679,11 +724,6 @@ CodeGenRegisterClass::CodeGenRegisterClass(CodeGenRegBank &RegBank, Record *R)
     Name(R->getName()),
     TopoSigs(RegBank.getNumTopoSigs()),
     EnumValue(-1) {
-  // Rename anonymous register classes.
-  if (R->getName().size() > 9 && R->getName()[9] == '.') {
-    static unsigned AnonCounter = 0;
-    R->setName("AnonRegClass_" + utostr(AnonCounter++));
-  }
 
   std::vector<Record*> TypeList = R->getValueAsListOfDefs("RegTypes");
   for (unsigned i = 0, e = TypeList.size(); i != e; ++i) {
@@ -867,7 +907,7 @@ std::string CodeGenRegisterClass::getQualifiedName() const {
   if (Namespace.empty())
     return getName();
   else
-    return Namespace + "::" + getName();
+    return (Namespace + "::" + getName()).str();
 }
 
 // Compute sub-classes of all register classes.
@@ -918,6 +958,84 @@ void CodeGenRegisterClass::computeSubClasses(CodeGenRegBank &RegBank) {
   for (auto &RC : RegClasses)
     if (!RC.getDef())
       RC.inheritProperties(RegBank);
+}
+
+Optional<std::pair<CodeGenRegisterClass *, CodeGenRegisterClass *>>
+CodeGenRegisterClass::getMatchingSubClassWithSubRegs(
+    CodeGenRegBank &RegBank, const CodeGenSubRegIndex *SubIdx) const {
+  auto SizeOrder = [](const CodeGenRegisterClass *A,
+                      const CodeGenRegisterClass *B) {
+    return A->getMembers().size() > B->getMembers().size();
+  };
+
+  auto &RegClasses = RegBank.getRegClasses();
+
+  // Find all the subclasses of this one that fully support the sub-register
+  // index and order them by size. BiggestSuperRC should always be first.
+  CodeGenRegisterClass *BiggestSuperRegRC = getSubClassWithSubReg(SubIdx);
+  if (!BiggestSuperRegRC)
+    return None;
+  BitVector SuperRegRCsBV = BiggestSuperRegRC->getSubClasses();
+  std::vector<CodeGenRegisterClass *> SuperRegRCs;
+  for (auto &RC : RegClasses)
+    if (SuperRegRCsBV[RC.EnumValue])
+      SuperRegRCs.emplace_back(&RC);
+  std::sort(SuperRegRCs.begin(), SuperRegRCs.end(), SizeOrder);
+  assert(SuperRegRCs.front() == BiggestSuperRegRC && "Biggest class wasn't first");
+
+  // Find all the subreg classes and order them by size too.
+  std::vector<std::pair<CodeGenRegisterClass *, BitVector>> SuperRegClasses;
+  for (auto &RC: RegClasses) {
+    BitVector SuperRegClassesBV(RegClasses.size());
+    RC.getSuperRegClasses(SubIdx, SuperRegClassesBV);
+    if (SuperRegClassesBV.any())
+      SuperRegClasses.push_back(std::make_pair(&RC, SuperRegClassesBV));
+  }
+  std::sort(SuperRegClasses.begin(), SuperRegClasses.end(),
+            [&](const std::pair<CodeGenRegisterClass *, BitVector> &A,
+                const std::pair<CodeGenRegisterClass *, BitVector> &B) {
+              return SizeOrder(A.first, B.first);
+            });
+
+  // Find the biggest subclass and subreg class such that R:subidx is in the
+  // subreg class for all R in subclass.
+  //
+  // For example:
+  // All registers in X86's GR64 have a sub_32bit subregister but no class
+  // exists that contains all the 32-bit subregisters because GR64 contains RIP
+  // but GR32 does not contain EIP. Instead, we constrain SuperRegRC to
+  // GR32_with_sub_8bit (which is identical to GR32_with_sub_32bit) and then,
+  // having excluded RIP, we are able to find a SubRegRC (GR32).
+  CodeGenRegisterClass *ChosenSuperRegClass = nullptr;
+  CodeGenRegisterClass *SubRegRC = nullptr;
+  for (auto *SuperRegRC : SuperRegRCs) {
+    for (const auto &SuperRegClassPair : SuperRegClasses) {
+      const BitVector &SuperRegClassBV = SuperRegClassPair.second;
+      if (SuperRegClassBV[SuperRegRC->EnumValue]) {
+        SubRegRC = SuperRegClassPair.first;
+        ChosenSuperRegClass = SuperRegRC;
+
+        // If SubRegRC is bigger than SuperRegRC then there are members of
+        // SubRegRC that don't have super registers via SubIdx. Keep looking to
+        // find a better fit and fall back on this one if there isn't one.
+        //
+        // This is intended to prevent X86 from making odd choices such as
+        // picking LOW32_ADDR_ACCESS_RBP instead of GR32 in the example above.
+        // LOW32_ADDR_ACCESS_RBP is a valid choice but contains registers that
+        // aren't subregisters of SuperRegRC whereas GR32 has a direct 1:1
+        // mapping.
+        if (SuperRegRC->getMembers().size() >= SubRegRC->getMembers().size())
+          return std::make_pair(ChosenSuperRegClass, SubRegRC);
+      }
+    }
+
+    // If we found a fit but it wasn't quite ideal because SubRegRC had excess
+    // registers, then we're done.
+    if (ChosenSuperRegClass)
+      return std::make_pair(ChosenSuperRegClass, SubRegRC);
+  }
+
+  return None;
 }
 
 void CodeGenRegisterClass::getSuperRegClasses(const CodeGenSubRegIndex *SubIdx,
@@ -996,6 +1114,16 @@ CodeGenRegBank::CodeGenRegBank(RecordKeeper &Records) {
   // This will create Composite entries for all inferred sub-register indices.
   for (auto &Reg : Registers)
     Reg.computeSubRegs(*this);
+
+  // Compute transitive closure of subregister index ConcatenationOf vectors
+  // and initialize ConcatIdx map.
+  for (CodeGenSubRegIndex &SRI : SubRegIndices) {
+    SRI.computeConcatTransitiveClosure();
+    if (!SRI.ConcatenationOf.empty())
+      ConcatIdx.insert(std::make_pair(
+          SmallVector<CodeGenSubRegIndex*,8>(SRI.ConcatenationOf.begin(),
+                                             SRI.ConcatenationOf.end()), &SRI));
+  }
 
   // Infer even more sub-registers by combining leading super-registers.
   for (auto &Reg : Registers)
@@ -1110,6 +1238,11 @@ CodeGenRegBank::getCompositeSubRegIndex(CodeGenSubRegIndex *A,
 CodeGenSubRegIndex *CodeGenRegBank::
 getConcatSubRegIndex(const SmallVector<CodeGenSubRegIndex *, 8> &Parts) {
   assert(Parts.size() > 1 && "Need two parts to concatenate");
+#ifndef NDEBUG
+  for (CodeGenSubRegIndex *Idx : Parts) {
+    assert(Idx->ConcatenationOf.empty() && "No transitive closure?");
+  }
+#endif
 
   // Look for an existing entry.
   CodeGenSubRegIndex *&Idx = ConcatIdx[Parts];
@@ -1135,6 +1268,7 @@ getConcatSubRegIndex(const SmallVector<CodeGenSubRegIndex *, 8> &Parts) {
   Idx = createSubRegIndex(Name, Parts.front()->getNamespace());
   Idx->Size = Size;
   Idx->Offset = isContinuous ? Parts.front()->Offset : -1;
+  Idx->ConcatenationOf.assign(Parts.begin(), Parts.end());
   return Idx;
 }
 
@@ -1195,12 +1329,12 @@ void CodeGenRegBank::computeSubRegLaneMasks() {
   CoveringLanes = LaneBitmask::getAll();
   for (auto &Idx : SubRegIndices) {
     if (Idx.getComposites().empty()) {
-      if (Bit > 32) {
+      if (Bit > LaneBitmask::BitWidth) {
         PrintFatalError(
           Twine("Ran out of lanemask bits to represent subregister ")
           + Idx.getName());
       }
-      Idx.LaneMask = LaneBitmask(1 << Bit);
+      Idx.LaneMask = LaneBitmask::getLane(Bit);
       ++Bit;
     } else {
       Idx.LaneMask = LaneBitmask::getNone();
@@ -1222,12 +1356,10 @@ void CodeGenRegBank::computeSubRegLaneMasks() {
       // Moving from a class with no subregisters we just had a single lane:
       // The subregister must be a leaf subregister and only occupies 1 bit.
       // Move the bit from the class without subregisters into that position.
-      static_assert(sizeof(Idx.LaneMask.getAsInteger()) == 4,
-                    "Change Log2_32 to a proper one");
-      unsigned DstBit = Log2_32(Idx.LaneMask.getAsInteger());
-      assert(Idx.LaneMask == LaneBitmask(1 << DstBit) &&
+      unsigned DstBit = Idx.LaneMask.getHighestLane();
+      assert(Idx.LaneMask == LaneBitmask::getLane(DstBit) &&
              "Must be a leaf subregister");
-      MaskRolPair MaskRol = { LaneBitmask(1), (uint8_t)DstBit };
+      MaskRolPair MaskRol = { LaneBitmask::getLane(0), (uint8_t)DstBit };
       LaneTransforms.push_back(MaskRol);
     } else {
       // Go through all leaf subregisters and find the ones that compose with
@@ -1241,7 +1373,7 @@ void CodeGenRegBank::computeSubRegLaneMasks() {
           continue;
         // Replicate the behaviour from the lane mask generation loop above.
         unsigned SrcBit = NextBit;
-        LaneBitmask SrcMask = LaneBitmask(1 << SrcBit);
+        LaneBitmask SrcMask = LaneBitmask::getLane(SrcBit);
         if (NextBit < LaneBitmask::BitWidth-1)
           ++NextBit;
         assert(Idx2.LaneMask == SrcMask);
@@ -1255,9 +1387,7 @@ void CodeGenRegBank::computeSubRegLaneMasks() {
         assert(Composite->getComposites().empty());
 
         // Create Mask+Rotate operation and merge with existing ops if possible.
-        static_assert(sizeof(Composite->LaneMask.getAsInteger()) == 4,
-                      "Change Log2_32 to a proper one");
-        unsigned DstBit = Log2_32(Composite->LaneMask.getAsInteger());
+        unsigned DstBit = Composite->LaneMask.getHighestLane();
         int Shift = DstBit - SrcBit;
         uint8_t RotateLeft = Shift >= 0 ? (uint8_t)Shift
                                         : LaneBitmask::BitWidth + Shift;
@@ -1313,7 +1443,7 @@ void CodeGenRegBank::computeSubRegLaneMasks() {
     // For classes without any subregisters set LaneMask to 1 instead of 0.
     // This makes it easier for client code to handle classes uniformly.
     if (LaneMask.none())
-      LaneMask = LaneBitmask(1);
+      LaneMask = LaneBitmask::getLane(0);
 
     RegClass.LaneMask = LaneMask;
   }

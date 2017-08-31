@@ -24,6 +24,11 @@ bool canCoerceMustAliasedValueToLoad(Value *StoredVal, Type *LoadTy,
   if (DL.getTypeSizeInBits(StoredVal->getType()) < DL.getTypeSizeInBits(LoadTy))
     return false;
 
+  // Don't coerce non-integral pointers to integers or vice versa.
+  if (DL.isNonIntegralPointerType(StoredVal->getType()) !=
+      DL.isNonIntegralPointerType(LoadTy))
+    return false;
+
   return true;
 }
 
@@ -46,25 +51,24 @@ static T *coerceAvailableValueToLoadTypeHelper(T *StoredVal, Type *LoadedTy,
   // If the store and reload are the same size, we can always reuse it.
   if (StoredValSize == LoadedValSize) {
     // Pointer to Pointer -> use bitcast.
-    if (StoredValTy->getScalarType()->isPointerTy() &&
-        LoadedTy->getScalarType()->isPointerTy()) {
+    if (StoredValTy->isPtrOrPtrVectorTy() && LoadedTy->isPtrOrPtrVectorTy()) {
       StoredVal = Helper.CreateBitCast(StoredVal, LoadedTy);
     } else {
       // Convert source pointers to integers, which can be bitcast.
-      if (StoredValTy->getScalarType()->isPointerTy()) {
+      if (StoredValTy->isPtrOrPtrVectorTy()) {
         StoredValTy = DL.getIntPtrType(StoredValTy);
         StoredVal = Helper.CreatePtrToInt(StoredVal, StoredValTy);
       }
 
       Type *TypeToCastTo = LoadedTy;
-      if (TypeToCastTo->getScalarType()->isPointerTy())
+      if (TypeToCastTo->isPtrOrPtrVectorTy())
         TypeToCastTo = DL.getIntPtrType(TypeToCastTo);
 
       if (StoredValTy != TypeToCastTo)
         StoredVal = Helper.CreateBitCast(StoredVal, TypeToCastTo);
 
       // Cast to pointer if the load needs a pointer type.
-      if (LoadedTy->getScalarType()->isPointerTy())
+      if (LoadedTy->isPtrOrPtrVectorTy())
         StoredVal = Helper.CreateIntToPtr(StoredVal, LoadedTy);
     }
 
@@ -81,7 +85,7 @@ static T *coerceAvailableValueToLoadTypeHelper(T *StoredVal, Type *LoadedTy,
          "canCoerceMustAliasedValueToLoad fail");
 
   // Convert source pointers to integers, which can be manipulated.
-  if (StoredValTy->getScalarType()->isPointerTy()) {
+  if (StoredValTy->isPtrOrPtrVectorTy()) {
     StoredValTy = DL.getIntPtrType(StoredValTy);
     StoredVal = Helper.CreatePtrToInt(StoredVal, StoredValTy);
   }
@@ -107,7 +111,7 @@ static T *coerceAvailableValueToLoadTypeHelper(T *StoredVal, Type *LoadedTy,
 
   if (LoadedTy != NewIntTy) {
     // If the result is a pointer, inttoptr.
-    if (LoadedTy->getScalarType()->isPointerTy())
+    if (LoadedTy->isPtrOrPtrVectorTy())
       StoredVal = Helper.CreateIntToPtr(StoredVal, LoadedTy);
     else
       // Otherwise, bitcast.
@@ -298,11 +302,20 @@ static T *getStoreValueForLoadHelper(T *SrcVal, unsigned Offset, Type *LoadTy,
                                      const DataLayout &DL) {
   LLVMContext &Ctx = SrcVal->getType()->getContext();
 
+  // If two pointers are in the same address space, they have the same size,
+  // so we don't need to do any truncation, etc. This avoids introducing
+  // ptrtoint instructions for pointers that may be non-integral.
+  if (SrcVal->getType()->isPointerTy() && LoadTy->isPointerTy() &&
+      cast<PointerType>(SrcVal->getType())->getAddressSpace() ==
+          cast<PointerType>(LoadTy)->getAddressSpace()) {
+    return SrcVal;
+  }
+
   uint64_t StoreSize = (DL.getTypeSizeInBits(SrcVal->getType()) + 7) / 8;
   uint64_t LoadSize = (DL.getTypeSizeInBits(LoadTy) + 7) / 8;
   // Compute which bits of the stored value are being used by the load.  Convert
   // to an integer type to start with.
-  if (SrcVal->getType()->getScalarType()->isPointerTy())
+  if (SrcVal->getType()->isPtrOrPtrVectorTy())
     SrcVal = Helper.CreatePtrToInt(SrcVal, DL.getIntPtrType(SrcVal->getType()));
   if (!SrcVal->getType()->isIntegerTy())
     SrcVal = Helper.CreateBitCast(SrcVal, IntegerType::get(Ctx, StoreSize * 8));

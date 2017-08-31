@@ -16,7 +16,8 @@ include "BPFInstrFormats.td"
 // Instruction Operands and Patterns
 
 // These are target-independent nodes, but have target-specific formats.
-def SDT_BPFCallSeqStart : SDCallSeqStart<[SDTCisVT<0, iPTR>]>;
+def SDT_BPFCallSeqStart : SDCallSeqStart<[SDTCisVT<0, iPTR>,
+                                          SDTCisVT<1, iPTR>]>;
 def SDT_BPFCallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, iPTR>, SDTCisVT<1, iPTR>]>;
 def SDT_BPFCall         : SDTypeProfile<0, -1, [SDTCisVT<0, iPTR>]>;
 def SDT_BPFSetFlag      : SDTypeProfile<0, 3, [SDTCisSameAs<0, 1>]>;
@@ -50,7 +51,7 @@ def u64imm   : Operand<i64> {
   let PrintMethod = "printImm64Operand";
 }
 
-def i64immSExt32 : PatLeaf<(imm),
+def i64immSExt32 : PatLeaf<(i64 imm),
                 [{return isInt<32>(N->getSExtValue()); }]>;
 
 // Addressing modes.
@@ -66,18 +67,26 @@ def MEMri : Operand<i64> {
 }
 
 // Conditional code predicates - used for pattern matching for jump instructions
-def BPF_CC_EQ  : PatLeaf<(imm),
+def BPF_CC_EQ  : PatLeaf<(i64 imm),
                          [{return (N->getZExtValue() == ISD::SETEQ);}]>;
-def BPF_CC_NE  : PatLeaf<(imm),
+def BPF_CC_NE  : PatLeaf<(i64 imm),
                          [{return (N->getZExtValue() == ISD::SETNE);}]>;
-def BPF_CC_GE  : PatLeaf<(imm),
+def BPF_CC_GE  : PatLeaf<(i64 imm),
                          [{return (N->getZExtValue() == ISD::SETGE);}]>;
-def BPF_CC_GT  : PatLeaf<(imm),
+def BPF_CC_GT  : PatLeaf<(i64 imm),
                          [{return (N->getZExtValue() == ISD::SETGT);}]>;
-def BPF_CC_GTU : PatLeaf<(imm),
+def BPF_CC_GTU : PatLeaf<(i64 imm),
                          [{return (N->getZExtValue() == ISD::SETUGT);}]>;
-def BPF_CC_GEU : PatLeaf<(imm),
+def BPF_CC_GEU : PatLeaf<(i64 imm),
                          [{return (N->getZExtValue() == ISD::SETUGE);}]>;
+def BPF_CC_LE  : PatLeaf<(i64 imm),
+                         [{return (N->getZExtValue() == ISD::SETLE);}]>;
+def BPF_CC_LT  : PatLeaf<(i64 imm),
+                         [{return (N->getZExtValue() == ISD::SETLT);}]>;
+def BPF_CC_LTU : PatLeaf<(i64 imm),
+                         [{return (N->getZExtValue() == ISD::SETULT);}]>;
+def BPF_CC_LEU : PatLeaf<(i64 imm),
+                         [{return (N->getZExtValue() == ISD::SETULE);}]>;
 
 // jump instructions
 class JMP_RR<bits<4> Opc, string OpcodeStr, PatLeaf Cond>
@@ -135,6 +144,10 @@ defm JUGE : J<0x3, ">=", BPF_CC_GEU>;
 defm JNE  : J<0x5, "!=",  BPF_CC_NE>;
 defm JSGT : J<0x6, "s>", BPF_CC_GT>;
 defm JSGE : J<0x7, "s>=", BPF_CC_GE>;
+defm JULT : J<0xa, "<", BPF_CC_LTU>;
+defm JULE : J<0xb, "<=", BPF_CC_LEU>;
+defm JSLT : J<0xc, "s<", BPF_CC_LT>;
+defm JSLE : J<0xd, "s<=", BPF_CC_LE>;
 }
 
 // ALU instructions
@@ -445,9 +458,9 @@ let isReturn = 1, isTerminator = 1, hasDelaySlot=0, isBarrier = 1,
 
 // ADJCALLSTACKDOWN/UP pseudo insns
 let Defs = [R11], Uses = [R11] in {
-def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i64imm:$amt),
-                              "#ADJCALLSTACKDOWN $amt",
-                              [(BPFcallseq_start timm:$amt)]>;
+def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i64imm:$amt1, i64imm:$amt2),
+                              "#ADJCALLSTACKDOWN $amt1 $amt2",
+                              [(BPFcallseq_start timm:$amt1, timm:$amt2)]>;
 def ADJCALLSTACKUP   : Pseudo<(outs), (ins i64imm:$amt1, i64imm:$amt2),
                               "#ADJCALLSTACKUP $amt1 $amt2",
                               [(BPFcallseq_end timm:$amt1, timm:$amt2)]>;
@@ -459,6 +472,11 @@ let usesCustomInserter = 1 in {
                       "# Select PSEUDO $dst = $lhs $imm $rhs ? $src : $src2",
                       [(set i64:$dst,
                        (BPFselectcc i64:$lhs, i64:$rhs, (i64 imm:$imm), i64:$src, i64:$src2))]>;
+  def Select_Ri : Pseudo<(outs GPR:$dst),
+                      (ins GPR:$lhs, i64imm:$rhs, i64imm:$imm, GPR:$src, GPR:$src2),
+                      "# Select PSEUDO $dst = $lhs $imm $rhs ? $src : $src2",
+                      [(set i64:$dst,
+                       (BPFselectcc i64:$lhs, (i64 imm:$rhs), (i64 imm:$imm), i64:$src, i64:$src2))]>;
 }
 
 // load 64-bit global addr into register

@@ -119,7 +119,6 @@ using namespace llvm;
 
 STATISTIC(NumFunctionsMerged, "Number of functions merged");
 STATISTIC(NumThunksWritten, "Number of thunks generated");
-STATISTIC(NumAliasesWritten, "Number of aliases generated");
 STATISTIC(NumDoubleWeak, "Number of new functions created");
 
 static cl::opt<unsigned> NumFunctionsForSanityCheck(
@@ -179,8 +178,7 @@ class MergeFunctions : public ModulePass {
 public:
   static char ID;
   MergeFunctions()
-    : ModulePass(ID), FnTree(FunctionNodeCmp(&GlobalNumbers)), FNodesInTree(),
-      HasGlobalAliases(false) {
+    : ModulePass(ID), FnTree(FunctionNodeCmp(&GlobalNumbers)), FNodesInTree() {
     initializeMergeFunctionsPass(*PassRegistry::getPassRegistry());
   }
 
@@ -207,11 +205,13 @@ private:
 
   /// A work queue of functions that may have been modified and should be
   /// analyzed again.
-  std::vector<WeakVH> Deferred;
+  std::vector<WeakTrackingVH> Deferred;
 
   /// Checks the rules of order relation introduced among functions set.
   /// Returns true, if sanity check has been passed, and false if failed.
-  bool doSanityCheck(std::vector<WeakVH> &Worklist);
+#ifndef NDEBUG
+  bool doSanityCheck(std::vector<WeakTrackingVH> &Worklist);
+#endif
 
   /// Insert a ComparableFunction into the FnTree, or merge it away if it's
   /// equal to one that's already present.
@@ -234,9 +234,6 @@ private:
   /// again.
   void mergeTwoFunctions(Function *F, Function *G);
 
-  /// Replace G with a thunk or an alias to F. Deletes G.
-  void writeThunkOrAlias(Function *F, Function *G);
-
   /// Fill PDIUnrelatedWL with instructions from the entry block that are
   /// unrelated to parameter related debug info.
   void filterInstsUnrelatedToPDI(BasicBlock *GEntryBlock,
@@ -254,9 +251,6 @@ private:
   /// delete G.
   void writeThunk(Function *F, Function *G);
 
-  /// Replace G with an alias to F. Deletes G.
-  void writeAlias(Function *F, Function *G);
-
   /// Replace function F with function G in the function tree.
   void replaceFunctionInTree(const FunctionNode &FN, Function *G);
 
@@ -269,9 +263,6 @@ private:
   // dangling iterators into FnTree. The invariant that preserves this is that
   // there is exactly one mapping F -> FN for each FunctionNode FN in FnTree.
   ValueMap<Function*, FnTreeType::iterator> FNodesInTree;
-
-  /// Whether or not the target supports global aliases.
-  bool HasGlobalAliases;
 };
 
 } // end anonymous namespace
@@ -283,7 +274,8 @@ ModulePass *llvm::createMergeFunctionsPass() {
   return new MergeFunctions();
 }
 
-bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
+#ifndef NDEBUG
+bool MergeFunctions::doSanityCheck(std::vector<WeakTrackingVH> &Worklist) {
   if (const unsigned Max = NumFunctionsForSanityCheck) {
     unsigned TripleNumber = 0;
     bool Valid = true;
@@ -291,10 +283,12 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
     dbgs() << "MERGEFUNC-SANITY: Started for first " << Max << " functions.\n";
 
     unsigned i = 0;
-    for (std::vector<WeakVH>::iterator I = Worklist.begin(), E = Worklist.end();
+    for (std::vector<WeakTrackingVH>::iterator I = Worklist.begin(),
+                                               E = Worklist.end();
          I != E && i < Max; ++I, ++i) {
       unsigned j = i;
-      for (std::vector<WeakVH>::iterator J = I; J != E && j < Max; ++J, ++j) {
+      for (std::vector<WeakTrackingVH>::iterator J = I; J != E && j < Max;
+           ++J, ++j) {
         Function *F1 = cast<Function>(*I);
         Function *F2 = cast<Function>(*J);
         int Res1 = FunctionComparator(F1, F2, &GlobalNumbers).compare();
@@ -312,7 +306,7 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
           continue;
 
         unsigned k = j;
-        for (std::vector<WeakVH>::iterator K = J; K != E && k < Max;
+        for (std::vector<WeakTrackingVH>::iterator K = J; K != E && k < Max;
              ++k, ++K, ++TripleNumber) {
           if (K == J)
             continue;
@@ -351,6 +345,7 @@ bool MergeFunctions::doSanityCheck(std::vector<WeakVH> &Worklist) {
   }
   return true;
 }
+#endif
 
 bool MergeFunctions::runOnModule(Module &M) {
   if (skipModule(M))
@@ -381,12 +376,12 @@ bool MergeFunctions::runOnModule(Module &M) {
     // consider merging it. Otherwise it is dropped and never considered again.
     if ((I != S && std::prev(I)->first == I->first) ||
         (std::next(I) != IE && std::next(I)->first == I->first) ) {
-      Deferred.push_back(WeakVH(I->second));
+      Deferred.push_back(WeakTrackingVH(I->second));
     }
   }
   
   do {
-    std::vector<WeakVH> Worklist;
+    std::vector<WeakTrackingVH> Worklist;
     Deferred.swap(Worklist);
 
     DEBUG(doSanityCheck(Worklist));
@@ -395,7 +390,7 @@ bool MergeFunctions::runOnModule(Module &M) {
     DEBUG(dbgs() << "size of worklist: " << Worklist.size() << '\n');
 
     // Insert functions and merge them.
-    for (WeakVH &I : Worklist) {
+    for (WeakTrackingVH &I : Worklist) {
       if (!I)
         continue;
       Function *F = cast<Function>(I);
@@ -432,36 +427,20 @@ void MergeFunctions::replaceDirectCallers(Function *Old, Function *New) {
       // Transferring other attributes may help other optimizations, but that
       // should be done uniformly and not in this ad-hoc way.
       auto &Context = New->getContext();
-      auto NewFuncAttrs = New->getAttributes();
-      auto CallSiteAttrs = CS.getAttributes();
-
-      CallSiteAttrs = CallSiteAttrs.addAttributes(
-          Context, AttributeList::ReturnIndex, NewFuncAttrs.getRetAttributes());
-
-      for (unsigned argIdx = 0; argIdx < CS.arg_size(); argIdx++) {
-        if (AttributeSetNode *Attrs = NewFuncAttrs.getParamAttributes(argIdx))
-          CallSiteAttrs = CallSiteAttrs.addAttributes(Context, argIdx, Attrs);
-      }
-
-      CS.setAttributes(CallSiteAttrs);
+      auto NewPAL = New->getAttributes();
+      SmallVector<AttributeSet, 4> NewArgAttrs;
+      for (unsigned argIdx = 0; argIdx < CS.arg_size(); argIdx++)
+        NewArgAttrs.push_back(NewPAL.getParamAttributes(argIdx));
+      // Don't transfer attributes from the function to the callee. Function
+      // attributes typically aren't relevant to the calling convention or ABI.
+      CS.setAttributes(AttributeList::get(Context, /*FnAttrs=*/AttributeSet(),
+                                          NewPAL.getRetAttributes(),
+                                          NewArgAttrs));
 
       remove(CS.getInstruction()->getParent()->getParent());
       U->set(BitcastNew);
     }
   }
-}
-
-// Replace G with an alias to F if possible, or else a thunk to F. Deletes G.
-void MergeFunctions::writeThunkOrAlias(Function *F, Function *G) {
-  if (HasGlobalAliases && G->hasGlobalUnnamedAddr()) {
-    if (G->hasExternalLinkage() || G->hasLocalLinkage() ||
-        G->hasWeakLinkage()) {
-      writeAlias(F, G);
-      return;
-    }
-  }
-
-  writeThunk(F, G);
 }
 
 // Helper for writeThunk,
@@ -731,20 +710,6 @@ void MergeFunctions::writeThunk(Function *F, Function *G) {
   ++NumThunksWritten;
 }
 
-// Replace G with an alias to F and delete G.
-void MergeFunctions::writeAlias(Function *F, Function *G) {
-  auto *GA = GlobalAlias::create(G->getLinkage(), "", F);
-  F->setAlignment(std::max(F->getAlignment(), G->getAlignment()));
-  GA->takeName(G);
-  GA->setVisibility(G->getVisibility());
-  removeUsers(G);
-  G->replaceAllUsesWith(GA);
-  G->eraseFromParent();
-
-  DEBUG(dbgs() << "writeAlias: " << GA->getName() << '\n');
-  ++NumAliasesWritten;
-}
-
 // Merge two equivalent functions. Upon completion, Function G is deleted.
 void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
   if (F->isInterposable()) {
@@ -760,19 +725,14 @@ void MergeFunctions::mergeTwoFunctions(Function *F, Function *G) {
 
     unsigned MaxAlignment = std::max(G->getAlignment(), H->getAlignment());
 
-    if (HasGlobalAliases) {
-      writeAlias(F, G);
-      writeAlias(F, H);
-    } else {
-      writeThunk(F, G);
-      writeThunk(F, H);
-    }
+    writeThunk(F, G);
+    writeThunk(F, H);
 
     F->setAlignment(MaxAlignment);
     F->setLinkage(GlobalValue::PrivateLinkage);
     ++NumDoubleWeak;
   } else {
-    writeThunkOrAlias(F, G);
+    writeThunk(F, G);
   }
 
   ++NumFunctionsMerged;

@@ -70,6 +70,12 @@ def AMDGPUElseBreakOp : SDTypeProfile<1, 2,
   [SDTCisVT<0, i64>, SDTCisVT<1, i64>, SDTCisVT<2, i64>]
 >;
 
+def AMDGPUAddeSubeOp : SDTypeProfile<2, 3,
+  [SDTCisSameAs<0, 2>, SDTCisSameAs<0, 3>, SDTCisVT<0, i32>, SDTCisVT<1, i1>, SDTCisVT<4, i1>]
+>;
+
+def SDT_AMDGPUTCRET : SDTypeProfile<0, 2, [SDTCisPtrTy<0>]>;
+
 //===----------------------------------------------------------------------===//
 // AMDGPU DAG Nodes
 //
@@ -77,6 +83,31 @@ def AMDGPUElseBreakOp : SDTypeProfile<1, 2,
 def AMDGPUif : SDNode<"AMDGPUISD::IF", AMDGPUIfOp, [SDNPHasChain]>;
 def AMDGPUelse : SDNode<"AMDGPUISD::ELSE", AMDGPUElseOp, [SDNPHasChain]>;
 def AMDGPUloop : SDNode<"AMDGPUISD::LOOP", AMDGPULoopOp, [SDNPHasChain]>;
+
+def callseq_start : SDNode<"ISD::CALLSEQ_START",
+  SDCallSeqStart<[ SDTCisVT<0, i32>, SDTCisVT<1, i32> ]>,
+  [SDNPHasChain, SDNPOutGlue]
+>;
+
+def callseq_end : SDNode<"ISD::CALLSEQ_END",
+ SDCallSeqEnd<[ SDTCisVT<0, i32>, SDTCisVT<1, i32> ]>,
+  [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]
+>;
+
+def AMDGPUcall : SDNode<"AMDGPUISD::CALL",
+  SDTypeProfile<0, -1, [SDTCisPtrTy<0>]>,
+  [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
+  SDNPVariadic]
+>;
+
+def AMDGPUtc_return: SDNode<"AMDGPUISD::TC_RETURN", SDT_AMDGPUTCRET,
+  [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]
+>;
+
+def AMDGPUtrap : SDNode<"AMDGPUISD::TRAP",
+  SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>,
+    [SDNPHasChain, SDNPVariadic, SDNPSideEffect, SDNPInGlue]
+>;
 
 def AMDGPUconstdata_ptr : SDNode<
   "AMDGPUISD::CONST_DATA_PTR", SDTypeProfile <1, 1, [SDTCisVT<0, iPTR>,
@@ -173,6 +204,12 @@ def AMDGPUcarry : SDNode<"AMDGPUISD::CARRY", SDTIntBinOp, []>;
 
 // out = (src1 > src0) ? 1 : 0
 def AMDGPUborrow : SDNode<"AMDGPUISD::BORROW", SDTIntBinOp, []>;
+
+// TODO: remove AMDGPUadde/AMDGPUsube when ADDCARRY/SUBCARRY get their own
+// nodes in TargetSelectionDAG.td.
+def AMDGPUadde : SDNode<"ISD::ADDCARRY", AMDGPUAddeSubeOp, []>;
+
+def AMDGPUsube : SDNode<"ISD::SUBCARRY", AMDGPUAddeSubeOp, []>;
 
 def AMDGPUSetCCOp : SDTypeProfile<1, 3, [        // setcc
   SDTCisVT<0, i64>, SDTCisSameAs<1, 2>, SDTCisVT<3, OtherVT>
@@ -294,6 +331,15 @@ def AMDGPUumed3 : SDNode<"AMDGPUISD::UMED3", AMDGPUDTIntTernaryOp,
 
 def AMDGPUfmed3 : SDNode<"AMDGPUISD::FMED3", SDTFPTernaryOp, []>;
 
+def AMDGPUinit_exec : SDNode<"AMDGPUISD::INIT_EXEC",
+                      SDTypeProfile<0, 1, [SDTCisInt<0>]>,
+                      [SDNPHasChain, SDNPInGlue]>;
+
+def AMDGPUinit_exec_from_input : SDNode<"AMDGPUISD::INIT_EXEC_FROM_INPUT",
+                                 SDTypeProfile<0, 2,
+                                 [SDTCisInt<0>, SDTCisInt<1>]>,
+                                 [SDNPHasChain, SDNPInGlue]>;
+
 def AMDGPUsendmsg : SDNode<"AMDGPUISD::SENDMSG",
                     SDTypeProfile<0, 1, [SDTCisInt<0>]>,
                     [SDNPHasChain, SDNPInGlue]>;
@@ -366,6 +412,6 @@ def AMDGPUendpgm : SDNode<"AMDGPUISD::ENDPGM", SDTNone,
 def AMDGPUreturn_to_epilog : SDNode<"AMDGPUISD::RETURN_TO_EPILOG", SDTNone,
     [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
-def AMDGPUret_flag : SDNode<"AMDGPUISD::RET_FLAG", SDTNone,
+def AMDGPUret_flag : SDNode<"AMDGPUISD::RET_FLAG", SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>,
   [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]
 >;

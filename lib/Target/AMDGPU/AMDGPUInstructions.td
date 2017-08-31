@@ -42,13 +42,26 @@ class AMDGPUShaderInst <dag outs, dag ins, string asm = "",
   field bits<32> Inst = 0xffffffff;
 }
 
-def FP16Denormals : Predicate<"Subtarget.hasFP16Denormals()">;
-def FP32Denormals : Predicate<"Subtarget.hasFP32Denormals()">;
-def FP64Denormals : Predicate<"Subtarget.hasFP64Denormals()">;
+def FP16Denormals : Predicate<"Subtarget->hasFP16Denormals()">;
+def FP32Denormals : Predicate<"Subtarget->hasFP32Denormals()">;
+def FP64Denormals : Predicate<"Subtarget->hasFP64Denormals()">;
+def NoFP16Denormals : Predicate<"!Subtarget->hasFP16Denormals()">;
+def NoFP32Denormals : Predicate<"!Subtarget->hasFP32Denormals()">;
+def NoFP64Denormals : Predicate<"!Subtarget->hasFP64Denormals()">;
 def UnsafeFPMath : Predicate<"TM.Options.UnsafeFPMath">;
 
 def InstFlag : OperandWithDefaultOps <i32, (ops (i32 0))>;
 def ADDRIndirect : ComplexPattern<iPTR, 2, "SelectADDRIndirect", [], []>;
+
+def u16ImmTarget : AsmOperandClass {
+  let Name = "U16Imm";
+  let RenderMethod = "addImmOperands";
+}
+
+def s16ImmTarget : AsmOperandClass {
+  let Name = "S16Imm";
+  let RenderMethod = "addImmOperands";
+}
 
 let OperandType = "OPERAND_IMMEDIATE" in {
 
@@ -58,6 +71,12 @@ def u32imm : Operand<i32> {
 
 def u16imm : Operand<i16> {
   let PrintMethod = "printU16ImmOperand";
+  let ParserMatchClass = u16ImmTarget;
+}
+
+def s16imm : Operand<i16> {
+  let PrintMethod = "printU16ImmOperand";
+  let ParserMatchClass = s16ImmTarget;
 }
 
 def u8imm : Operand<i8> {
@@ -231,6 +250,7 @@ class GlobalLoad <SDPatternOperator op> : GlobalMemOp <
 >;
 
 def global_load : GlobalLoad <load>;
+def global_atomic_load : GlobalLoad<atomic_load>;
 
 // Global address space stores
 class GlobalStore <SDPatternOperator op> : GlobalMemOp <
@@ -685,14 +705,16 @@ def cvt_flr_i32_f32 : PatFrag <
   [{ (void)N; return TM.Options.NoNaNsFPMath; }]
 >;
 
-class IMad24Pat<Instruction Inst> : Pat <
+class IMad24Pat<Instruction Inst, bit HasClamp = 0> : Pat <
   (add (AMDGPUmul_i24 i32:$src0, i32:$src1), i32:$src2),
-  (Inst $src0, $src1, $src2)
+  !if(HasClamp, (Inst $src0, $src1, $src2, (i1 0)),
+                (Inst $src0, $src1, $src2))
 >;
 
-class UMad24Pat<Instruction Inst> : Pat <
+class UMad24Pat<Instruction Inst, bit HasClamp = 0> : Pat <
   (add (AMDGPUmul_u24 i32:$src0, i32:$src1), i32:$src2),
-  (Inst $src0, $src1, $src2)
+  !if(HasClamp, (Inst $src0, $src1, $src2, (i1 0)),
+                (Inst $src0, $src1, $src2))
 >;
 
 class RcpPat<Instruction RcpInst, ValueType vt> : Pat <

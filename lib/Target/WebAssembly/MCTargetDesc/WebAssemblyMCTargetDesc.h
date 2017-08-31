@@ -15,9 +15,9 @@
 #ifndef LLVM_LIB_TARGET_WEBASSEMBLY_MCTARGETDESC_WEBASSEMBLYMCTARGETDESC_H
 #define LLVM_LIB_TARGET_WEBASSEMBLY_MCTARGETDESC_WEBASSEMBLYMCTARGETDESC_H
 
+#include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/DataTypes.h"
-#include "llvm/Support/Wasm.h"
 
 namespace llvm {
 
@@ -35,8 +35,7 @@ class raw_pwrite_stream;
 Target &getTheWebAssemblyTarget32();
 Target &getTheWebAssemblyTarget64();
 
-MCCodeEmitter *createWebAssemblyMCCodeEmitter(const MCInstrInfo &MCII,
-                                              MCContext &Ctx);
+MCCodeEmitter *createWebAssemblyMCCodeEmitter(const MCInstrInfo &MCII);
 
 MCAsmBackend *createWebAssemblyAsmBackend(const Triple &TT);
 
@@ -129,6 +128,7 @@ inline unsigned GetDefaultP2Align(unsigned Opcode) {
   case WebAssembly::LOAD32_S_I64:
   case WebAssembly::LOAD32_U_I64:
   case WebAssembly::STORE32_I64:
+  case WebAssembly::ATOMIC_LOAD_I32:
     return 2;
   case WebAssembly::LOAD_I64:
   case WebAssembly::LOAD_F64:

@@ -10,9 +10,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "FuzzerCorpus.h"
+#include "FuzzerIO.h"
 #include "FuzzerInterface.h"
 #include "FuzzerInternal.h"
-#include "FuzzerIO.h"
 #include "FuzzerMutate.h"
 #include "FuzzerRandom.h"
 #include "FuzzerShmem.h"
@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -149,7 +150,7 @@ static bool ParseOneFlag(const char *Param) {
         int Val = MyStol(Str);
         *FlagDescriptions[F].IntFlag = Val;
         if (Flags.verbosity >= 2)
-          Printf("Flag: %s %d\n", Name, Val);;
+          Printf("Flag: %s %d\n", Name, Val);
         return true;
       } else if (FlagDescriptions[F].UIntFlag) {
         unsigned int Val = std::stoul(Str);
@@ -186,7 +187,11 @@ static void ParseFlags(const std::vector<std::string> &Args) {
   }
   Inputs = new std::vector<std::string>;
   for (size_t A = 1; A < Args.size(); A++) {
-    if (ParseOneFlag(Args[A].c_str())) continue;
+    if (ParseOneFlag(Args[A].c_str())) {
+      if (Flags.ignore_remaining_args)
+        break;
+      continue;
+    }
     Inputs->push_back(Args[A]);
   }
 }
@@ -265,7 +270,7 @@ int RunOneTest(Fuzzer *F, const char *InputFilePath, size_t MaxLen) {
   Unit U = FileToVector(InputFilePath);
   if (MaxLen && MaxLen < U.size())
     U.resize(MaxLen);
-  F->RunOne(U.data(), U.size());
+  F->ExecuteCallback(U.data(), U.size());
   F->TryDetectingAMemoryLeak(U.data(), U.size(), true);
   return 0;
 }
@@ -289,6 +294,66 @@ static std::string GetDedupTokenFromFile(const std::string &Path) {
   return S.substr(Beg, End - Beg);
 }
 
+int CleanseCrashInput(const std::vector<std::string> &Args,
+                       const FuzzingOptions &Options) {
+  if (Inputs->size() != 1 || !Flags.exact_artifact_path) {
+    Printf("ERROR: -cleanse_crash should be given one input file and"
+          " -exact_artifact_path\n");
+    exit(1);
+  }
+  std::string InputFilePath = Inputs->at(0);
+  std::string OutputFilePath = Flags.exact_artifact_path;
+  std::string BaseCmd =
+      CloneArgsWithoutX(Args, "cleanse_crash", "cleanse_crash");
+
+  auto InputPos = BaseCmd.find(" " + InputFilePath + " ");
+  assert(InputPos != std::string::npos);
+  BaseCmd.erase(InputPos, InputFilePath.size() + 1);
+
+  auto LogFilePath = DirPlusFile(
+      TmpDir(), "libFuzzerTemp." + std::to_string(GetPid()) + ".txt");
+  auto TmpFilePath = DirPlusFile(
+      TmpDir(), "libFuzzerTemp." + std::to_string(GetPid()) + ".repro");
+  auto LogFileRedirect = " > " + LogFilePath + " 2>&1 ";
+
+  auto Cmd = BaseCmd + " " + TmpFilePath + LogFileRedirect;
+
+  std::string CurrentFilePath = InputFilePath;
+  auto U = FileToVector(CurrentFilePath);
+  size_t Size = U.size();
+
+  const std::vector<uint8_t> ReplacementBytes = {' ', 0xff};
+  for (int NumAttempts = 0; NumAttempts < 5; NumAttempts++) {
+    bool Changed = false;
+    for (size_t Idx = 0; Idx < Size; Idx++) {
+      Printf("CLEANSE[%d]: Trying to replace byte %zd of %zd\n", NumAttempts,
+             Idx, Size);
+      uint8_t OriginalByte = U[Idx];
+      if (ReplacementBytes.end() != std::find(ReplacementBytes.begin(),
+                                              ReplacementBytes.end(),
+                                              OriginalByte))
+        continue;
+      for (auto NewByte : ReplacementBytes) {
+        U[Idx] = NewByte;
+        WriteToFile(U, TmpFilePath);
+        auto ExitCode = ExecuteCommand(Cmd);
+        RemoveFile(TmpFilePath);
+        if (!ExitCode) {
+          U[Idx] = OriginalByte;
+        } else {
+          Changed = true;
+          Printf("CLEANSE: Replaced byte %zd with 0x%x\n", Idx, NewByte);
+          WriteToFile(U, OutputFilePath);
+          break;
+        }
+      }
+    }
+    if (!Changed) break;
+  }
+  RemoveFile(LogFilePath);
+  return 0;
+}
+
 int MinimizeCrashInput(const std::vector<std::string> &Args,
                        const FuzzingOptions &Options) {
   if (Inputs->size() != 1) {
@@ -296,16 +361,17 @@ int MinimizeCrashInput(const std::vector<std::string> &Args,
     exit(1);
   }
   std::string InputFilePath = Inputs->at(0);
-  std::string BaseCmd =
-      CloneArgsWithoutX(Args, "minimize_crash", "exact_artifact_path");
-  auto InputPos = BaseCmd.find(" " + InputFilePath + " ");
+  auto BaseCmd = SplitBefore(
+      "-ignore_remaining_args=1",
+      CloneArgsWithoutX(Args, "minimize_crash", "exact_artifact_path"));
+  auto InputPos = BaseCmd.first.find(" " + InputFilePath + " ");
   assert(InputPos != std::string::npos);
-  BaseCmd.erase(InputPos, InputFilePath.size() + 1);
+  BaseCmd.first.erase(InputPos, InputFilePath.size() + 1);
   if (Flags.runs <= 0 && Flags.max_total_time == 0) {
     Printf("INFO: you need to specify -runs=N or "
            "-max_total_time=N with -minimize_crash=1\n"
            "INFO: defaulting to -max_total_time=600\n");
-    BaseCmd += " -max_total_time=600";
+    BaseCmd.first += " -max_total_time=600";
   }
 
   auto LogFilePath = DirPlusFile(
@@ -318,7 +384,8 @@ int MinimizeCrashInput(const std::vector<std::string> &Args,
     Printf("CRASH_MIN: minimizing crash input: '%s' (%zd bytes)\n",
            CurrentFilePath.c_str(), U.size());
 
-    auto Cmd = BaseCmd + " " + CurrentFilePath + LogFileRedirect;
+    auto Cmd = BaseCmd.first + " " + CurrentFilePath + LogFileRedirect + " " +
+               BaseCmd.second;
 
     Printf("CRASH_MIN: executing: %s\n", Cmd.c_str());
     int ExitCode = ExecuteCommand(Cmd);
@@ -381,7 +448,6 @@ int MinimizeCrashInputInternalStep(Fuzzer *F, InputCorpus *Corpus) {
     Printf("INFO: The input is small enough, exiting\n");
     exit(0);
   }
-  Corpus->AddToCorpus(U, 0);
   F->SetMaxInputLen(U.size());
   F->SetMaxMutationLen(U.size() - 1);
   F->MinimizeCrashLoop(U);
@@ -493,13 +559,11 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
     return RunInMultipleProcesses(Args, Flags.workers, Flags.jobs);
 
   const size_t kMaxSaneLen = 1 << 20;
-  const size_t kMinDefaultLen = 64;
+  const size_t kMinDefaultLen = 4096;
   FuzzingOptions Options;
   Options.Verbosity = Flags.verbosity;
   Options.MaxLen = Flags.max_len;
   Options.ExperimentalLenControl = Flags.experimental_len_control;
-  if (Flags.experimental_len_control && Flags.max_len == 64)
-    Options.MaxLen = 1 << 20;
   Options.UnitTimeoutSec = Flags.timeout;
   Options.ErrorExitCode = Flags.error_exitcode;
   Options.TimeoutExitCode = Flags.timeout_exitcode;
@@ -512,11 +576,11 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
   Options.UseCmp = Flags.use_cmp;
   Options.UseValueProfile = Flags.use_value_profile;
   Options.Shrink = Flags.shrink;
+  Options.ReduceInputs = Flags.reduce_inputs;
   Options.ShuffleAtStartUp = Flags.shuffle;
   Options.PreferSmall = Flags.prefer_small;
   Options.ReloadIntervalSec = Flags.reload;
   Options.OnlyASCII = Flags.only_ascii;
-  Options.OutputCSV = Flags.output_csv;
   Options.DetectLeaks = Flags.detect_leaks;
   Options.TraceMalloc = Flags.trace_malloc;
   Options.RssLimitMb = Flags.rss_limit_mb;
@@ -577,11 +641,16 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
   Options.HandleXfsz = Flags.handle_xfsz;
   SetSignalHandler(Options);
 
+  std::atexit(Fuzzer::StaticExitCallback);
+
   if (Flags.minimize_crash)
     return MinimizeCrashInput(Args, Options);
 
   if (Flags.minimize_crash_internal_step)
     return MinimizeCrashInputInternalStep(F, Corpus);
+
+  if (Flags.cleanse_crash)
+    return CleanseCrashInput(Args, Options);
 
   if (auto Name = Flags.run_equivalence_server) {
     SMR.Destroy(Name);
@@ -594,7 +663,8 @@ int FuzzerDriver(int *argc, char ***argv, UserCallback Callback) {
       SMR.WaitClient();
       size_t Size = SMR.ReadByteArraySize();
       SMR.WriteByteArray(nullptr, 0);
-      F->RunOne(SMR.GetByteArray(), Size);
+      const Unit tmp(SMR.GetByteArray(), SMR.GetByteArray() + Size);
+      F->ExecuteCallback(tmp.data(), tmp.size());
       SMR.PostServer();
     }
     return 0;

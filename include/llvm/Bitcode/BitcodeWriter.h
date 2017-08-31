@@ -15,6 +15,7 @@
 #define LLVM_BITCODE_BITCODEWRITER_H
 
 #include "llvm/IR/ModuleSummaryIndex.h"
+#include "llvm/MC/StringTableBuilder.h"
 #include <string>
 
 namespace llvm {
@@ -26,11 +27,40 @@ namespace llvm {
     SmallVectorImpl<char> &Buffer;
     std::unique_ptr<BitstreamWriter> Stream;
 
+    StringTableBuilder StrtabBuilder{StringTableBuilder::RAW};
+
+    // Owns any strings created by the irsymtab writer until we create the
+    // string table.
+    BumpPtrAllocator Alloc;
+
+    bool WroteStrtab = false, WroteSymtab = false;
+
+    void writeBlob(unsigned Block, unsigned Record, StringRef Blob);
+
+    std::vector<Module *> Mods;
+
    public:
     /// Create a BitcodeWriter that writes to Buffer.
     BitcodeWriter(SmallVectorImpl<char> &Buffer);
 
     ~BitcodeWriter();
+
+    /// Attempt to write a symbol table to the bitcode file. This must be called
+    /// at most once after all modules have been written.
+    ///
+    /// A reader does not require a symbol table to interpret a bitcode file;
+    /// the symbol table is needed only to improve link-time performance. So
+    /// this function may decide not to write a symbol table. It may so decide
+    /// if, for example, the target is unregistered or the IR is malformed.
+    void writeSymtab();
+
+    /// Write the bitcode file's string table. This must be called exactly once
+    /// after all modules and the optional symbol table have been written.
+    void writeStrtab();
+
+    /// Copy the string table for another module into this bitcode file. This
+    /// should be called after copying the module itself into the bitcode file.
+    void copyStrtab(StringRef Strtab);
 
     /// Write the specified module to the buffer specified at construction time.
     ///
@@ -53,6 +83,20 @@ namespace llvm {
     void writeModule(const Module *M, bool ShouldPreserveUseListOrder = false,
                      const ModuleSummaryIndex *Index = nullptr,
                      bool GenerateHash = false, ModuleHash *ModHash = nullptr);
+
+    /// Write the specified thin link bitcode file (i.e., the minimized bitcode
+    /// file) to the buffer specified at construction time. The thin link
+    /// bitcode file is used for thin link, and it only contains the necessary
+    /// information for thin link.
+    ///
+    /// ModHash is for use in ThinLTO incremental build, generated while the
+    /// IR bitcode file writing.
+    void writeThinLinkBitcode(const Module *M, const ModuleSummaryIndex &Index,
+                              const ModuleHash &ModHash);
+
+    void writeIndex(
+        const ModuleSummaryIndex *Index,
+        const std::map<std::string, GVSummaryMapTy> *ModuleToSummariesForIndex);
   };
 
   /// \brief Write the specified module to the specified raw output stream.
@@ -81,6 +125,17 @@ namespace llvm {
                           const ModuleSummaryIndex *Index = nullptr,
                           bool GenerateHash = false,
                           ModuleHash *ModHash = nullptr);
+
+  /// Write the specified thin link bitcode file (i.e., the minimized bitcode
+  /// file) to the given raw output stream, where it will be written in a new
+  /// bitcode block. The thin link bitcode file is used for thin link, and it
+  /// only contains the necessary information for thin link.
+  ///
+  /// ModHash is for use in ThinLTO incremental build, generated while the IR
+  /// bitcode file writing.
+  void WriteThinLinkBitcodeToFile(const Module *M, raw_ostream &Out,
+                                  const ModuleSummaryIndex &Index,
+                                  const ModuleHash &ModHash);
 
   /// Write the specified module summary index to the given raw output stream,
   /// where it will be written in a new bitcode block. This is used when

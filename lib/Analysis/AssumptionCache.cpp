@@ -29,15 +29,16 @@ static cl::opt<bool>
                           cl::desc("Enable verification of assumption cache"),
                           cl::init(false));
 
-SmallVector<WeakVH, 1> &AssumptionCache::getOrInsertAffectedValues(Value *V) {
+SmallVector<WeakTrackingVH, 1> &
+AssumptionCache::getOrInsertAffectedValues(Value *V) {
   // Try using find_as first to avoid creating extra value handles just for the
   // purpose of doing the lookup.
   auto AVI = AffectedValues.find_as(V);
   if (AVI != AffectedValues.end())
     return AVI->second;
 
-  auto AVIP = AffectedValues.insert({
-      AffectedValueCallbackVH(V, this), SmallVector<WeakVH, 1>()});
+  auto AVIP = AffectedValues.insert(
+      {AffectedValueCallbackVH(V, this), SmallVector<WeakTrackingVH, 1>()});
   return AVIP.first->second;
 }
 
@@ -83,18 +84,11 @@ void AssumptionCache::updateAffectedValues(CallInst *CI) {
         Value *B;
         ConstantInt *C;
         // (A & B) or (A | B) or (A ^ B).
-        if (match(V,
-                  m_CombineOr(m_And(m_Value(A), m_Value(B)),
-                    m_CombineOr(m_Or(m_Value(A), m_Value(B)),
-                                m_Xor(m_Value(A), m_Value(B)))))) {
+        if (match(V, m_BitwiseLogic(m_Value(A), m_Value(B)))) {
           AddAffected(A);
           AddAffected(B);
         // (A << C) or (A >>_s C) or (A >>_u C) where C is some constant.
-        } else if (match(V,
-                         m_CombineOr(m_Shl(m_Value(A), m_ConstantInt(C)),
-                           m_CombineOr(m_LShr(m_Value(A), m_ConstantInt(C)),
-                                       m_AShr(m_Value(A),
-                                              m_ConstantInt(C)))))) {
+        } else if (match(V, m_Shift(m_Value(A), m_ConstantInt(C)))) {
           AddAffected(A);
         }
       };

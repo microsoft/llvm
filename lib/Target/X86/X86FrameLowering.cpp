@@ -29,8 +29,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Target/TargetOptions.h"
 #include <cstdlib>
 
 using namespace llvm;
@@ -748,17 +748,7 @@ void X86FrameLowering::emitStackProbeCall(MachineFunction &MF,
   else
     CallOp = X86::CALLpcrel32;
 
-  const char *Symbol;
-  if (Is64Bit) {
-    if (STI.isTargetCygMing()) {
-      Symbol = "___chkstk_ms";
-    } else {
-      Symbol = "__chkstk";
-    }
-  } else if (STI.isTargetCygMing())
-    Symbol = "_alloca";
-  else
-    Symbol = "_chkstk";
+  StringRef Symbol = STI.getTargetLowering()->getStackProbeSymbolName(MF);
 
   MachineInstrBuilder CI;
   MachineBasicBlock::iterator ExpansionMBBI = std::prev(MBBI);
@@ -769,10 +759,11 @@ void X86FrameLowering::emitStackProbeCall(MachineFunction &MF,
     // For the large code model, we have to call through a register. Use R11,
     // as it is scratch in all supported calling conventions.
     BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::R11)
-        .addExternalSymbol(Symbol);
+        .addExternalSymbol(MF.createExternalSymbolName(Symbol));
     CI = BuildMI(MBB, MBBI, DL, TII.get(CallOp)).addReg(X86::R11);
   } else {
-    CI = BuildMI(MBB, MBBI, DL, TII.get(CallOp)).addExternalSymbol(Symbol);
+    CI = BuildMI(MBB, MBBI, DL, TII.get(CallOp))
+        .addExternalSymbol(MF.createExternalSymbolName(Symbol));
   }
 
   unsigned AX = Is64Bit ? X86::RAX : X86::EAX;
@@ -783,13 +774,16 @@ void X86FrameLowering::emitStackProbeCall(MachineFunction &MF,
       .addReg(SP, RegState::Define | RegState::Implicit)
       .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
 
-  if (Is64Bit) {
+  if (STI.isTargetWin64() || !STI.isOSWindows()) {
+    // MSVC x32's _chkstk and cygwin/mingw's _alloca adjust %esp themselves.
     // MSVC x64's __chkstk and cygwin/mingw's ___chkstk_ms do not adjust %rsp
-    // themselves. It also does not clobber %rax so we can reuse it when
+    // themselves. They also does not clobber %rax so we can reuse it when
     // adjusting %rsp.
-    BuildMI(MBB, MBBI, DL, TII.get(X86::SUB64rr), X86::RSP)
-        .addReg(X86::RSP)
-        .addReg(X86::RAX);
+    // All other platforms do not specify a particular ABI for the stack probe
+    // function, so we arbitrarily define it to not adjust %esp/%rsp itself.
+    BuildMI(MBB, MBBI, DL, TII.get(getSUBrrOpcode(Is64Bit)), SP)
+        .addReg(SP)
+        .addReg(AX);
   }
 
   if (InProlog) {
@@ -978,7 +972,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     X86FI->setCalleeSavedFrameSize(
       X86FI->getCalleeSavedFrameSize() - TailCallReturnAddrDelta);
 
-  bool UseStackProbe = (STI.isOSWindows() && !STI.isTargetMachO());
+  bool UseStackProbe = !STI.getTargetLowering()->getStackProbeSymbolName(MF).empty();
 
   // The default stack probe size is 4096 if the function has no stackprobesize
   // attribute.
@@ -1007,6 +1001,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       !TRI->needsStackRealignment(MF) &&
       !MFI.hasVarSizedObjects() &&             // No dynamic alloca.
       !MFI.adjustsStack() &&                   // No calls.
+      !UseStackProbe &&                        // No stack probes.
       !IsWin64CC &&                            // Win64 has no Red Zone
       !MFI.hasCopyImplyingStackAdjustment() && // Don't push and pop.
       !MF.shouldSplitStack()) {                // Regular stack
@@ -1062,6 +1057,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   }
 
   if (HasFP) {
+    assert(MF.getRegInfo().isReserved(MachineFramePtr) && "FP reserved");
+
     // Calculate required stack adjustment.
     uint64_t FrameSize = StackSize - SlotSize;
     // If required, include space for extra hidden slot for stashing base pointer.
@@ -1123,13 +1120,6 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
         BuildCFI(MBB, MBBI, DL, MCCFIInstruction::createDefCfaRegister(
                                     nullptr, DwarfFramePtr));
       }
-    }
-
-    // Mark the FramePtr as live-in in every block. Don't do this again for
-    // funclet prologues.
-    if (!IsFunclet) {
-      for (MachineBasicBlock &EveryMBB : MF)
-        EveryMBB.addLiveIn(MachineFramePtr);
     }
   } else {
     assert(!IsFunclet && "funclets without FPs not yet implemented");
@@ -1197,6 +1187,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   if (IsWin64Prologue && !IsFunclet && TRI->needsStackRealignment(MF))
     AlignedNumBytes = alignTo(AlignedNumBytes, MaxAlign);
   if (AlignedNumBytes >= StackProbeSize && UseStackProbe) {
+    assert(!X86FI->getUsesRedZone() &&
+           "The Red Zone is not accounted for in stack probes");
+
     // Check whether EAX is livein for this block.
     bool isEAXAlive = isEAXLiveIn(MBB);
 
@@ -1698,21 +1691,18 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
   }
 }
 
-// NOTE: this only has a subset of the full frame index logic. In
-// particular, the FI < 0 and AfterFPPop logic is handled in
-// X86RegisterInfo::eliminateFrameIndex, but not here. Possibly
-// (probably?) it should be moved into here.
 int X86FrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
                                              unsigned &FrameReg) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
 
+  bool IsFixed = MFI.isFixedObjectIndex(FI);
   // We can't calculate offset from frame pointer if the stack is realigned,
   // so enforce usage of stack/base pointer.  The base pointer is used when we
   // have dynamic allocas in addition to dynamic realignment.
   if (TRI->hasBasePointer(MF))
-    FrameReg = TRI->getBaseRegister();
+    FrameReg = IsFixed ? TRI->getFramePtr() : TRI->getBaseRegister();
   else if (TRI->needsStackRealignment(MF))
-    FrameReg = TRI->getStackRegister();
+    FrameReg = IsFixed ? TRI->getFramePtr() : TRI->getStackRegister();
   else
     FrameReg = TRI->getFrameRegister(MF);
 
@@ -1786,6 +1776,14 @@ int X86FrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
   return Offset + FPDelta;
 }
 
+int X86FrameLowering::getFrameIndexReferenceSP(const MachineFunction &MF,
+                                               int FI, unsigned &FrameReg,
+                                               int Adjustment) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  FrameReg = TRI->getStackRegister();
+  return MFI.getObjectOffset(FI) - getOffsetOfLocalArea() + Adjustment;
+}
+
 int
 X86FrameLowering::getFrameIndexReferencePreferSP(const MachineFunction &MF,
                                                  int FI, unsigned &FrameReg,
@@ -1842,9 +1840,6 @@ X86FrameLowering::getFrameIndexReferencePreferSP(const MachineFunction &MF,
   assert(MF.getInfo<X86MachineFunctionInfo>()->getTCReturnAddrDelta() >= 0 &&
          "we don't handle this case!");
 
-  // Fill in FrameReg output argument.
-  FrameReg = TRI->getStackRegister();
-
   // This is how the math works out:
   //
   //  %rsp grows (i.e. gets lower) left to right. Each box below is
@@ -1869,12 +1864,8 @@ X86FrameLowering::getFrameIndexReferencePreferSP(const MachineFunction &MF,
   // (C - E) == (C - A) - (B - A) + (B - E)
   //            { Using [1], [2] and [3] above }
   //         == getObjectOffset - LocalAreaOffset + StackSize
-  //
 
-  // Get the Offset from the StackPointer
-  int Offset = MFI.getObjectOffset(FI) - getOffsetOfLocalArea();
-
-  return Offset + StackSize;
+  return getFrameIndexReferenceSP(MF, FI, FrameReg, StackSize);
 }
 
 bool X86FrameLowering::assignCalleeSavedSpillSlots(
@@ -1926,14 +1917,15 @@ bool X86FrameLowering::assignCalleeSavedSpillSlots(
       continue;
 
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+    unsigned Size = TRI->getSpillSize(*RC);
+    unsigned Align = TRI->getSpillAlignment(*RC);
     // ensure alignment
-    SpillSlotOffset -= std::abs(SpillSlotOffset) % RC->getAlignment();
+    SpillSlotOffset -= std::abs(SpillSlotOffset) % Align;
     // spill into slot
-    SpillSlotOffset -= RC->getSize();
-    int SlotIndex =
-        MFI.CreateFixedSpillStackObject(RC->getSize(), SpillSlotOffset);
+    SpillSlotOffset -= Size;
+    int SlotIndex = MFI.CreateFixedSpillStackObject(Size, SpillSlotOffset);
     CSI[i - 1].setFrameIdx(SlotIndex);
-    MFI.ensureMaxAlignment(RC->getAlignment());
+    MFI.ensureMaxAlignment(Align);
   }
 
   return true;
@@ -2007,7 +1999,7 @@ bool X86FrameLowering::spillCalleeSavedRegisters(
 
 bool X86FrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
                                                MachineBasicBlock::iterator MI,
-                                        const std::vector<CalleeSavedInfo> &CSI,
+                                          std::vector<CalleeSavedInfo> &CSI,
                                           const TargetRegisterInfo *TRI) const {
   if (CSI.empty())
     return false;
@@ -2626,8 +2618,8 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
   unsigned Opcode = I->getOpcode();
   bool isDestroy = Opcode == TII.getCallFrameDestroyOpcode();
   DebugLoc DL = I->getDebugLoc();
-  uint64_t Amount = !reserveCallFrame ? I->getOperand(0).getImm() : 0;
-  uint64_t InternalAmt = (isDestroy || Amount) ? I->getOperand(1).getImm() : 0;
+  uint64_t Amount = !reserveCallFrame ? TII.getFrameSize(*I) : 0;
+  uint64_t InternalAmt = (isDestroy || Amount) ? TII.getFrameAdjustment(*I) : 0;
   I = MBB.erase(I);
   auto InsertPos = skipDebugInstructionsForward(I, MBB.end());
 
@@ -2991,6 +2983,10 @@ unsigned X86FrameLowering::getWinEHParentFrameOffset(const MachineFunction &MF) 
 
 void X86FrameLowering::processFunctionBeforeFrameFinalized(
     MachineFunction &MF, RegScavenger *RS) const {
+  // Mark the function as not having WinCFI. We will set it back to true in
+  // emitPrologue if it gets called and emits CFI.
+  MF.setHasWinCFI(false);
+
   // If this function isn't doing Win64-style C++ EH, we don't need to do
   // anything.
   const Function *Fn = MF.getFunction();

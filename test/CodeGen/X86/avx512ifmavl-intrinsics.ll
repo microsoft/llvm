@@ -14,8 +14,8 @@ define <2 x i64>@test_int_x86_avx512_mask_vpmadd52h_uq_128(<2 x i64> %x0, <2 x i
 ; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm4 {%k1}
 ; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm0 {%k1}
-; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm4, %xmm0
+; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm2, %xmm3, %xmm1
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm1, %xmm0
 ; CHECK-NEXT:    retq
@@ -40,10 +40,10 @@ define <4 x i64>@test_int_x86_avx512_mask_vpmadd52h_uq_256(<4 x i64> %x0, <4 x i
 ; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm3
 ; CHECK-NEXT:    vmovdqa %ymm0, %ymm4
 ; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm4 {%k1}
-; CHECK-NEXT:    vpxor %ymm2, %ymm2, %ymm2
+; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm0 {%k1}
-; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm4, %ymm0
+; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm2, %ymm3, %ymm1
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm1, %ymm0
 ; CHECK-NEXT:    retq
@@ -70,8 +70,8 @@ define <2 x i64>@test_int_x86_avx512_maskz_vpmadd52h_uq_128(<2 x i64> %x0, <2 x 
 ; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm4 {%k1} {z}
 ; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm0 {%k1} {z}
-; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm4, %xmm0
+; CHECK-NEXT:    vpmadd52huq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm2, %xmm3, %xmm1
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm1, %xmm0
 ; CHECK-NEXT:    retq
@@ -96,10 +96,10 @@ define <4 x i64>@test_int_x86_avx512_maskz_vpmadd52h_uq_256(<4 x i64> %x0, <4 x 
 ; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm3
 ; CHECK-NEXT:    vmovdqa %ymm0, %ymm4
 ; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm4 {%k1} {z}
-; CHECK-NEXT:    vpxor %ymm2, %ymm2, %ymm2
+; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm0 {%k1} {z}
-; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm4, %ymm0
+; CHECK-NEXT:    vpmadd52huq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm2, %ymm3, %ymm1
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm1, %ymm0
 ; CHECK-NEXT:    retq
@@ -126,8 +126,8 @@ define <2 x i64>@test_int_x86_avx512_mask_vpmadd52l_uq_128(<2 x i64> %x0, <2 x i
 ; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm4 {%k1}
 ; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm0 {%k1}
-; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm4, %xmm0
+; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm2, %xmm3, %xmm1
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm1, %xmm0
 ; CHECK-NEXT:    retq
@@ -152,10 +152,10 @@ define <4 x i64>@test_int_x86_avx512_mask_vpmadd52l_uq_256(<4 x i64> %x0, <4 x i
 ; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm3
 ; CHECK-NEXT:    vmovdqa %ymm0, %ymm4
 ; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm4 {%k1}
-; CHECK-NEXT:    vpxor %ymm2, %ymm2, %ymm2
+; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm0 {%k1}
-; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm4, %ymm0
+; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm2, %ymm3, %ymm1
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm1, %ymm0
 ; CHECK-NEXT:    retq
@@ -182,8 +182,8 @@ define <2 x i64>@test_int_x86_avx512_maskz_vpmadd52l_uq_128(<2 x i64> %x0, <2 x 
 ; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm4 {%k1} {z}
 ; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm0 {%k1} {z}
-; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm4, %xmm0
+; CHECK-NEXT:    vpmadd52luq %xmm2, %xmm1, %xmm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %xmm2, %xmm3, %xmm1
 ; CHECK-NEXT:    vpaddq %xmm0, %xmm1, %xmm0
 ; CHECK-NEXT:    retq
@@ -208,10 +208,10 @@ define <4 x i64>@test_int_x86_avx512_maskz_vpmadd52l_uq_256(<4 x i64> %x0, <4 x 
 ; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm3
 ; CHECK-NEXT:    vmovdqa %ymm0, %ymm4
 ; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm4 {%k1} {z}
-; CHECK-NEXT:    vpxor %ymm2, %ymm2, %ymm2
+; CHECK-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm0 {%k1} {z}
-; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm4, %ymm0
+; CHECK-NEXT:    vpmadd52luq %ymm2, %ymm1, %ymm2 {%k1} {z}
 ; CHECK-NEXT:    vpaddq %ymm2, %ymm3, %ymm1
 ; CHECK-NEXT:    vpaddq %ymm0, %ymm1, %ymm0
 ; CHECK-NEXT:    retq

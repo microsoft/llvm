@@ -24,6 +24,7 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCWinEH.h"
 #include "llvm/Support/SMLoc.h"
+#include "llvm/Support/TargetParser.h"
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -44,12 +45,11 @@ class MCInstPrinter;
 class MCSection;
 class MCStreamer;
 class MCSymbolRefExpr;
-class MCSymbolWasm;
 class MCSubtargetInfo;
 class raw_ostream;
 class Twine;
 
-typedef std::pair<MCSection *, const MCExpr *> MCSectionSubPair;
+using MCSectionSubPair = std::pair<MCSection *, const MCExpr *>;
 
 /// Target specific streamer interface. This is used so that targets can
 /// implement support for target specific assembly directives.
@@ -125,9 +125,10 @@ public:
   virtual void emitIntTextAttribute(unsigned Attribute, unsigned IntValue,
                                     StringRef StringValue = "");
   virtual void emitFPU(unsigned FPU);
-  virtual void emitArch(unsigned Arch);
+  virtual void emitArch(ARM::ArchKind Arch);
   virtual void emitArchExtension(unsigned ArchExt);
-  virtual void emitObjectArch(unsigned Arch);
+  virtual void emitObjectArch(ARM::ArchKind Arch);
+  void emitTargetAttributes(const MCSubtargetInfo &STI);
   virtual void finishAttributeSection();
   virtual void emitInst(uint32_t Inst, char Suffix = '\0');
 
@@ -796,6 +797,7 @@ public:
   virtual void EmitCFIRelOffset(int64_t Register, int64_t Offset);
   virtual void EmitCFIAdjustCfaOffset(int64_t Adjustment);
   virtual void EmitCFIEscape(StringRef Values);
+  virtual void EmitCFIReturnColumn(int64_t Register);
   virtual void EmitCFIGnuArgsSize(int64_t Size);
   virtual void EmitCFISignalFrame();
   virtual void EmitCFIUndefined(int64_t Register);
@@ -836,7 +838,9 @@ public:
   }
 
   /// \brief Emit the given \p Instruction into the current section.
-  virtual void EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI);
+  /// PrintSchedInfo == true then schedul comment should be added to output
+  virtual void EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI,
+                               bool PrintSchedInfo = false);
 
   /// \brief Set the bundle alignment mode from now on in the section.
   /// The argument is the power of 2 to which the alignment is set. The

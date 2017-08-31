@@ -1,7 +1,7 @@
-; RUN: llc -march=amdgcn -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=MOVREL %s
-; RUN: llc -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=MOVREL %s
-; RUN: llc -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -amdgpu-vgpr-index-mode -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=IDXMODE %s
-; RUN: llc -march=amdgcn -mcpu=gfx900 -mattr=-flat-for-global -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=IDXMODE %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=tahiti -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=MOVREL %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=MOVREL %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -amdgpu-vgpr-index-mode -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=IDXMODE %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=gfx900 -mattr=-flat-for-global -verify-machineinstrs < %s | FileCheck -check-prefix=GCN -check-prefix=IDXMODE %s
 
 ; Tests for indirect addressing on SI, which is implemented using dynamic
 ; indexing of vectors.
@@ -120,8 +120,7 @@ entry:
 ; FIXME: The waitcnt for the argument load can go after the loop
 ; IDXMODE: s_set_gpr_idx_on 0, src0
 ; GCN: s_mov_b64 s{{\[[0-9]+:[0-9]+\]}}, exec
-; GCN: s_waitcnt lgkmcnt(0)
-
+; GCN: [[LOOPBB:BB[0-9]+_[0-9]+]]:
 ; GCN: v_readfirstlane_b32 [[READLANE:s[0-9]+]], v{{[0-9]+}}
 
 ; MOVREL: s_add_i32 m0, [[READLANE]], 0xfffffe0
@@ -250,8 +249,6 @@ entry:
 ; GCN-DAG: v_mov_b32_e32 [[VEC_ELT3:v[0-9]+]], 4{{$}}
 
 ; GCN: s_mov_b64 [[SAVEEXEC:s\[[0-9]+:[0-9]+\]]], exec
-; GCN: s_waitcnt lgkmcnt(0)
-
 ; GCN: [[LOOPBB:BB[0-9]+_[0-9]+]]:
 ; GCN: v_readfirstlane_b32 [[READLANE:s[0-9]+]]
 
@@ -290,7 +287,6 @@ entry:
 ; IDXMODE: s_set_gpr_idx_on 0, dst
 
 ; GCN: s_mov_b64 [[SAVEEXEC:s\[[0-9]+:[0-9]+\]]], exec
-; GCN: s_waitcnt lgkmcnt(0)
 
 ; The offset depends on the register that holds the first element of the vector.
 ; GCN: v_readfirstlane_b32 [[READLANE:s[0-9]+]]
@@ -321,7 +317,7 @@ entry:
 
 ; FIXME: Why is vector copied in between?
 
-; GCN-DAG: {{buffer|flat}}_load_dword [[IDX0:v[0-9]+]]
+; GCN-DAG: {{buffer|flat|global}}_load_dword [[IDX0:v[0-9]+]]
 ; GCN-DAG: s_mov_b32 [[S_ELT1:s[0-9]+]], 9
 ; GCN-DAG: s_mov_b32 [[S_ELT0:s[0-9]+]], 7
 ; GCN-DAG: v_mov_b32_e32 [[VEC_ELT0:v[0-9]+]], [[S_ELT0]]
@@ -330,9 +326,9 @@ entry:
 ; IDXMODE: s_set_gpr_idx_on 0, src0
 
 ; GCN: s_mov_b64 [[MASK:s\[[0-9]+:[0-9]+\]]], exec
-; GCN: s_waitcnt vmcnt(0)
 
 ; GCN: [[LOOP0:BB[0-9]+_[0-9]+]]:
+; GCN-NEXT: s_waitcnt vmcnt(0)
 ; GCN-NEXT: v_readfirstlane_b32 [[READLANE:s[0-9]+]], [[IDX0]]
 ; GCN: v_cmp_eq_u32_e32 vcc, [[READLANE]], [[IDX0]]
 
@@ -383,7 +379,7 @@ entry:
   %idx0 = load volatile i32, i32 addrspace(1)* %gep
   %idx1 = add i32 %idx0, 1
   %val0 = extractelement <4 x i32> <i32 7, i32 9, i32 11, i32 13>, i32 %idx0
-  %live.out.reg = call i32 asm sideeffect "s_mov_b32 $0, 17", "={SGPR4}" ()
+  %live.out.reg = call i32 asm sideeffect "s_mov_b32 $0, 17", "={s4}" ()
   %val1 = extractelement <4 x i32> <i32 7, i32 9, i32 11, i32 13>, i32 %idx1
   store volatile i32 %val0, i32 addrspace(1)* %out0
   store volatile i32 %val1, i32 addrspace(1)* %out0
@@ -400,7 +396,7 @@ bb2:
 
 ; GCN-LABEL: {{^}}insert_vgpr_offset_multiple_in_block:
 ; GCN-DAG: s_load_dwordx4 s{{\[}}[[S_ELT0:[0-9]+]]:[[S_ELT3:[0-9]+]]{{\]}}
-; GCN-DAG: {{buffer|flat}}_load_dword [[IDX0:v[0-9]+]]
+; GCN-DAG: {{buffer|flat|global}}_load_dword [[IDX0:v[0-9]+]]
 ; GCN-DAG: v_mov_b32 [[INS0:v[0-9]+]], 62
 
 ; GCN-DAG: v_mov_b32_e32 v[[VEC_ELT3:[0-9]+]], s[[S_ELT3]]
@@ -411,6 +407,7 @@ bb2:
 ; IDXMODE: s_set_gpr_idx_on 0, dst
 
 ; GCN: [[LOOP0:BB[0-9]+_[0-9]+]]:
+; GCN-NEXT: s_waitcnt vmcnt(0)
 ; GCN-NEXT: v_readfirstlane_b32 [[READLANE:s[0-9]+]], [[IDX0]]
 ; GCN: v_cmp_eq_u32_e32 vcc, [[READLANE]], [[IDX0]]
 

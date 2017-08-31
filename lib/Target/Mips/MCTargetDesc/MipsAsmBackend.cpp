@@ -12,8 +12,8 @@
 //===----------------------------------------------------------------------===//
 //
 
-#include "MCTargetDesc/MipsFixupKinds.h"
 #include "MCTargetDesc/MipsAsmBackend.h"
+#include "MCTargetDesc/MipsFixupKinds.h"
 #include "MCTargetDesc/MipsMCExpr.h"
 #include "MCTargetDesc/MipsMCTargetDesc.h"
 #include "llvm/MC/MCAsmBackend.h"
@@ -235,10 +235,12 @@ static unsigned calculateMMLEIndex(unsigned i) {
 /// ApplyFixup - Apply the \p Value for given \p Fixup into the provided
 /// data fragment, at the offset specified by the fixup and following the
 /// fixup kind as appropriate.
-void MipsAsmBackend::applyFixup(const MCFixup &Fixup, char *Data,
-                                unsigned DataSize, uint64_t Value, bool IsPCRel,
-                                MCContext &Ctx) const {
+void MipsAsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
+                                const MCValue &Target,
+                                MutableArrayRef<char> Data, uint64_t Value,
+                                bool IsResolved) const {
   MCFixupKind Kind = Fixup.getKind();
+  MCContext &Ctx = Asm.getContext();
   Value = adjustFixupValue(Fixup, Value, Ctx);
 
   if (!Value)
@@ -366,6 +368,7 @@ getFixupKindInfo(MCFixupKind Kind) const {
     { "fixup_MICROMIPS_TLS_LDM",         0,     16,   0 },
     { "fixup_MICROMIPS_TLS_DTPREL_HI16", 0,     16,   0 },
     { "fixup_MICROMIPS_TLS_DTPREL_LO16", 0,     16,   0 },
+    { "fixup_MICROMIPS_GOTTPREL",        0,     16,   0 },
     { "fixup_MICROMIPS_TLS_TPREL_HI16",  0,     16,   0 },
     { "fixup_MICROMIPS_TLS_TPREL_LO16",  0,     16,   0 },
     { "fixup_Mips_SUB",                  0,     64,   0 },
@@ -437,6 +440,7 @@ getFixupKindInfo(MCFixupKind Kind) const {
     { "fixup_MICROMIPS_TLS_LDM",         16,     16,   0 },
     { "fixup_MICROMIPS_TLS_DTPREL_HI16", 16,     16,   0 },
     { "fixup_MICROMIPS_TLS_DTPREL_LO16", 16,     16,   0 },
+    { "fixup_MICROMIPS_GOTTPREL",        16,     16,   0 },
     { "fixup_MICROMIPS_TLS_TPREL_HI16",  16,     16,   0 },
     { "fixup_MICROMIPS_TLS_TPREL_LO16",  16,     16,   0 },
     { "fixup_Mips_SUB",                   0,     64,   0 },

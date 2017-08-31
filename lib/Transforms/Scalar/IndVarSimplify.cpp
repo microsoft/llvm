@@ -86,6 +86,10 @@ static cl::opt<bool> UsePostIncrementRanges(
   cl::desc("Use post increment control-dependent ranges in IndVarSimplify"),
   cl::init(true));
 
+static cl::opt<bool>
+DisableLFTR("disable-lftr", cl::Hidden, cl::init(false),
+            cl::desc("Disable Linear Function Test Replace optimization"));
+
 namespace {
 struct RewritePhi;
 
@@ -97,7 +101,7 @@ class IndVarSimplify {
   TargetLibraryInfo *TLI;
   const TargetTransformInfo *TTI;
 
-  SmallVector<WeakVH, 16> DeadInsts;
+  SmallVector<WeakTrackingVH, 16> DeadInsts;
   bool Changed = false;
 
   bool isValidRewrite(Value *FromVal, Value *ToVal);
@@ -415,8 +419,8 @@ void IndVarSimplify::handleFloatingPointIV(Loop *L, PHINode *PN) {
                                       Compare->getName());
 
   // In the following deletions, PN may become dead and may be deleted.
-  // Use a WeakVH to observe whether this happens.
-  WeakVH WeakPH = PN;
+  // Use a WeakTrackingVH to observe whether this happens.
+  WeakTrackingVH WeakPH = PN;
 
   // Delete the old floating point exit comparison.  The branch starts using the
   // new comparison.
@@ -451,7 +455,7 @@ void IndVarSimplify::rewriteNonIntegerIVs(Loop *L) {
   //
   BasicBlock *Header = L->getHeader();
 
-  SmallVector<WeakVH, 8> PHIs;
+  SmallVector<WeakTrackingVH, 8> PHIs;
   for (BasicBlock::iterator I = Header->begin();
        PHINode *PN = dyn_cast<PHINode>(I); ++I)
     PHIs.push_back(PN);
@@ -901,7 +905,7 @@ class WidenIV {
   PHINode *WidePhi;
   Instruction *WideInc;
   const SCEV *WideIncExpr;
-  SmallVectorImpl<WeakVH> &DeadInsts;
+  SmallVectorImpl<WeakTrackingVH> &DeadInsts;
 
   SmallPtrSet<Instruction *,16> Widened;
   SmallVector<NarrowIVDefUse, 8> NarrowIVUsers;
@@ -941,20 +945,13 @@ class WidenIV {
   }
 
 public:
-  WidenIV(const WideIVInfo &WI, LoopInfo *LInfo,
-          ScalarEvolution *SEv, DominatorTree *DTree,
-          SmallVectorImpl<WeakVH> &DI, bool HasGuards) :
-    OrigPhi(WI.NarrowIV),
-    WideType(WI.WidestNativeType),
-    LI(LInfo),
-    L(LI->getLoopFor(OrigPhi->getParent())),
-    SE(SEv),
-    DT(DTree),
-    HasGuards(HasGuards),
-    WidePhi(nullptr),
-    WideInc(nullptr),
-    WideIncExpr(nullptr),
-    DeadInsts(DI) {
+  WidenIV(const WideIVInfo &WI, LoopInfo *LInfo, ScalarEvolution *SEv,
+          DominatorTree *DTree, SmallVectorImpl<WeakTrackingVH> &DI,
+          bool HasGuards)
+      : OrigPhi(WI.NarrowIV), WideType(WI.WidestNativeType), LI(LInfo),
+        L(LI->getLoopFor(OrigPhi->getParent())), SE(SEv), DT(DTree),
+        HasGuards(HasGuards), WidePhi(nullptr), WideInc(nullptr),
+        WideIncExpr(nullptr), DeadInsts(DI) {
     assert(L->getHeader() == OrigPhi->getParent() && "Phi must be an IV");
     ExtendKindMap[OrigPhi] = WI.IsSigned ? SignExtended : ZeroExtended;
   }
@@ -1830,6 +1827,7 @@ static PHINode *getLoopPhiForCounter(Value *IncV, Loop *L, DominatorTree *DT) {
     // An IV counter must preserve its type.
     if (IncI->getNumOperands() == 2)
       break;
+    LLVM_FALLTHROUGH;
   default:
     return nullptr;
   }
@@ -2419,7 +2417,8 @@ bool IndVarSimplify::run(Loop *L) {
 
   // If we have a trip count expression, rewrite the loop's exit condition
   // using it.  We can currently only handle loops with a single exit.
-  if (canExpandBackedgeTakenCount(L, SE, Rewriter) && needsLFTR(L, DT)) {
+  if (!DisableLFTR && canExpandBackedgeTakenCount(L, SE, Rewriter) &&
+      needsLFTR(L, DT)) {
     PHINode *IndVar = FindLoopCounter(L, BackedgeTakenCount, SE, DT);
     if (IndVar) {
       // Check preconditions for proper SCEVExpander operation. SCEV does not

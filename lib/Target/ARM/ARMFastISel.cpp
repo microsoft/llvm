@@ -26,8 +26,8 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/FastISel.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
@@ -250,8 +250,7 @@ bool ARMFastISel::DefinesOptionalPredicate(MachineInstr *MI, bool *CPSR) {
     return false;
 
   // Look to see if our OptionalDef is defining CPSR or CCR.
-  for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
-    const MachineOperand &MO = MI->getOperand(i);
+  for (const MachineOperand &MO : MI->operands()) {
     if (!MO.isReg() || !MO.isDef()) continue;
     if (MO.getReg() == ARM::CPSR)
       *CPSR = true;
@@ -267,8 +266,8 @@ bool ARMFastISel::isARMNEONPred(const MachineInstr *MI) {
        AFI->isThumb2Function())
     return MI->isPredicable();
 
-  for (unsigned i = 0, e = MCID.getNumOperands(); i != e; ++i)
-    if (MCID.OpInfo[i].isPredicate())
+  for (const MCOperandInfo &opInfo : MCID.operands())
+    if (opInfo.isPredicate())
       return true;
 
   return false;
@@ -1333,6 +1332,8 @@ bool ARMFastISel::SelectIndirectBr(const Instruction *I) {
   if (AddrReg == 0) return false;
 
   unsigned Opc = isThumb2 ? ARM::tBRIND : ARM::BX;
+  assert(isThumb2 || Subtarget->hasV4TOps());
+
   AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
                           TII.get(Opc)).addReg(AddrReg));
 
@@ -1702,7 +1703,8 @@ bool ARMFastISel::SelectDiv(const Instruction *I, bool isSigned) {
   // If we have integer div support we should have selected this automagically.
   // In case we have a real miss go ahead and return false and we'll pick
   // it up later.
-  if (Subtarget->hasDivide()) return false;
+  if (Subtarget->hasDivideInThumbMode())
+    return false;
 
   // Otherwise emit a libcall.
   RTLIB::Libcall LC = RTLIB::UNKNOWN_LIBCALL;
@@ -1846,7 +1848,7 @@ CCAssignFn *ARMFastISel::CCAssignFnForCall(CallingConv::ID CC,
                                            bool isVarArg) {
   switch (CC) {
   default:
-    llvm_unreachable("Unsupported calling convention");
+    report_fatal_error("Unsupported calling convention");
   case CallingConv::Fast:
     if (Subtarget->hasVFP2() && !isVarArg) {
       if (!Subtarget->isAAPCS_ABI())
@@ -1880,7 +1882,7 @@ CCAssignFn *ARMFastISel::CCAssignFnForCall(CallingConv::ID CC,
     return (Return ? RetCC_ARM_APCS: CC_ARM_APCS);
   case CallingConv::GHC:
     if (Return)
-      llvm_unreachable("Can't return in GHC call convention");
+      report_fatal_error("Can't return in GHC call convention");
     else
       return CC_ARM_APCS_GHC;
   }
@@ -1948,7 +1950,7 @@ bool ARMFastISel::ProcessCallArgs(SmallVectorImpl<Value*> &Args,
   unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
   AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
                           TII.get(AdjStackDown))
-                  .addImm(NumBytes));
+                  .addImm(NumBytes).addImm(0));
 
   // Process the args.
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
@@ -1971,7 +1973,7 @@ bool ARMFastISel::ProcessCallArgs(SmallVectorImpl<Value*> &Args,
         break;
       }
       case CCValAssign::AExt:
-        // Intentional fall-through.  Handle AExt and ZExt.
+      // Intentional fall-through.  Handle AExt and ZExt.
       case CCValAssign::ZExt: {
         MVT DestVT = VA.getLocVT();
         Arg = ARMEmitIntExt(ArgVT, Arg, DestVT, /*isZExt*/true);
@@ -2000,6 +2002,7 @@ bool ARMFastISel::ProcessCallArgs(SmallVectorImpl<Value*> &Args,
       assert(VA.getLocVT() == MVT::f64 &&
              "Custom lowering for v2f64 args not available");
 
+      // FIXME: ArgLocs[++i] may extend beyond ArgLocs.size()
       CCValAssign &NextVA = ArgLocs[++i];
 
       assert(VA.isRegLoc() && NextVA.isRegLoc() &&
@@ -2167,12 +2170,11 @@ bool ARMFastISel::SelectRet(const Instruction *I) {
     RetRegs.push_back(VA.getLocReg());
   }
 
-  unsigned RetOpc = isThumb2 ? ARM::tBX_RET : ARM::BX_RET;
   MachineInstrBuilder MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-                                    TII.get(RetOpc));
+                                    TII.get(Subtarget->getReturnOpcode()));
   AddOptionalDefs(MIB);
-  for (unsigned i = 0, e = RetRegs.size(); i != e; ++i)
-    MIB.addReg(RetRegs[i], RegState::Implicit);
+  for (unsigned R : RetRegs)
+    MIB.addReg(R, RegState::Implicit);
   return true;
 }
 
@@ -2232,8 +2234,7 @@ bool ARMFastISel::ARMEmitLibcall(const Instruction *I, RTLIB::Libcall Call) {
   ArgRegs.reserve(I->getNumOperands());
   ArgVTs.reserve(I->getNumOperands());
   ArgFlags.reserve(I->getNumOperands());
-  for (unsigned i = 0; i < I->getNumOperands(); ++i) {
-    Value *Op = I->getOperand(i);
+  for (Value *Op :  I->operands()) {
     unsigned Arg = getRegForValue(Op);
     if (Arg == 0) return false;
 
@@ -2277,8 +2278,8 @@ bool ARMFastISel::ARMEmitLibcall(const Instruction *I, RTLIB::Libcall Call) {
     MIB.addExternalSymbol(TLI.getLibcallName(Call));
 
   // Add implicit physical register uses to the call.
-  for (unsigned i = 0, e = RegArgs.size(); i != e; ++i)
-    MIB.addReg(RegArgs[i], RegState::Implicit);
+  for (unsigned R : RegArgs)
+    MIB.addReg(R, RegState::Implicit);
 
   // Add a register mask with the call-preserved registers.
   // Proper defs for return values will be added by setPhysRegsDeadExcept().
@@ -2351,19 +2352,19 @@ bool ARMFastISel::SelectCall(const Instruction *I,
       break;
 
     ISD::ArgFlagsTy Flags;
-    unsigned AttrInd = i - CS.arg_begin() + 1;
-    if (CS.paramHasAttr(AttrInd, Attribute::SExt))
+    unsigned ArgIdx = i - CS.arg_begin();
+    if (CS.paramHasAttr(ArgIdx, Attribute::SExt))
       Flags.setSExt();
-    if (CS.paramHasAttr(AttrInd, Attribute::ZExt))
+    if (CS.paramHasAttr(ArgIdx, Attribute::ZExt))
       Flags.setZExt();
 
     // FIXME: Only handle *easy* calls for now.
-    if (CS.paramHasAttr(AttrInd, Attribute::InReg) ||
-        CS.paramHasAttr(AttrInd, Attribute::StructRet) ||
-        CS.paramHasAttr(AttrInd, Attribute::SwiftSelf) ||
-        CS.paramHasAttr(AttrInd, Attribute::SwiftError) ||
-        CS.paramHasAttr(AttrInd, Attribute::Nest) ||
-        CS.paramHasAttr(AttrInd, Attribute::ByVal))
+    if (CS.paramHasAttr(ArgIdx, Attribute::InReg) ||
+        CS.paramHasAttr(ArgIdx, Attribute::StructRet) ||
+        CS.paramHasAttr(ArgIdx, Attribute::SwiftSelf) ||
+        CS.paramHasAttr(ArgIdx, Attribute::SwiftError) ||
+        CS.paramHasAttr(ArgIdx, Attribute::Nest) ||
+        CS.paramHasAttr(ArgIdx, Attribute::ByVal))
       return false;
 
     Type *ArgTy = (*i)->getType();
@@ -2422,8 +2423,8 @@ bool ARMFastISel::SelectCall(const Instruction *I,
     MIB.addExternalSymbol(IntrMemName, 0);
 
   // Add implicit physical register uses to the call.
-  for (unsigned i = 0, e = RegArgs.size(); i != e; ++i)
-    MIB.addReg(RegArgs[i], RegState::Implicit);
+  for (unsigned R : RegArgs)
+    MIB.addReg(R, RegState::Implicit);
 
   // Add a register mask with the call-preserved registers.
   // Proper defs for return values will be added by setPhysRegsDeadExcept().
@@ -2931,13 +2932,12 @@ bool ARMFastISel::tryToFoldLoadIntoMI(MachineInstr *MI, unsigned OpNo,
 
   bool Found = false;
   bool isZExt;
-  for (unsigned i = 0, e = array_lengthof(FoldableLoadExtends);
-       i != e; ++i) {
-    if (FoldableLoadExtends[i].Opc[isThumb2] == MI->getOpcode() &&
-        (uint64_t)FoldableLoadExtends[i].ExpectedImm == Imm &&
-        MVT((MVT::SimpleValueType)FoldableLoadExtends[i].ExpectedVT) == VT) {
+  for (const FoldableLoadExtendsStruct &FLE : FoldableLoadExtends) {
+    if (FLE.Opc[isThumb2] == MI->getOpcode() &&
+        (uint64_t)FLE.ExpectedImm == Imm &&
+        MVT((MVT::SimpleValueType)FLE.ExpectedVT) == VT) {
       Found = true;
-      isZExt = FoldableLoadExtends[i].isZExt;
+      isZExt = FLE.isZExt;
     }
   }
   if (!Found) return false;
@@ -3024,20 +3024,18 @@ bool ARMFastISel::fastLowerArguments() {
 
   // Only handle simple cases. i.e. Up to 4 i8/i16/i32 scalar arguments
   // which are passed in r0 - r3.
-  unsigned Idx = 1;
-  for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
-       I != E; ++I, ++Idx) {
-    if (Idx > 4)
+  for (const Argument &Arg : F->args()) {
+    if (Arg.getArgNo() >= 4)
       return false;
 
-    if (F->getAttributes().hasAttribute(Idx, Attribute::InReg) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::StructRet) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::SwiftSelf) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::SwiftError) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::ByVal))
+    if (Arg.hasAttribute(Attribute::InReg) ||
+        Arg.hasAttribute(Attribute::StructRet) ||
+        Arg.hasAttribute(Attribute::SwiftSelf) ||
+        Arg.hasAttribute(Attribute::SwiftError) ||
+        Arg.hasAttribute(Attribute::ByVal))
       return false;
 
-    Type *ArgTy = I->getType();
+    Type *ArgTy = Arg.getType();
     if (ArgTy->isStructTy() || ArgTy->isArrayTy() || ArgTy->isVectorTy())
       return false;
 
@@ -3058,10 +3056,9 @@ bool ARMFastISel::fastLowerArguments() {
   };
 
   const TargetRegisterClass *RC = &ARM::rGPRRegClass;
-  Idx = 0;
-  for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
-       I != E; ++I, ++Idx) {
-    unsigned SrcReg = GPRArgRegs[Idx];
+  for (const Argument &Arg : F->args()) {
+    unsigned ArgNo = Arg.getArgNo();
+    unsigned SrcReg = GPRArgRegs[ArgNo];
     unsigned DstReg = FuncInfo.MF->addLiveIn(SrcReg, RC);
     // FIXME: Unfortunately it's necessary to emit a copy from the livein copy.
     // Without this, EmitLiveInCopies may eliminate the livein if its only
@@ -3070,7 +3067,7 @@ bool ARMFastISel::fastLowerArguments() {
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
             TII.get(TargetOpcode::COPY),
             ResultReg).addReg(DstReg, getKillRegState(true));
-    updateValueMap(&*I, ResultReg);
+    updateValueMap(&Arg, ResultReg);
   }
 
   return true;

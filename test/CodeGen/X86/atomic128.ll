@@ -165,13 +165,10 @@ define void @fetch_and_min(i128* %p, i128 %bits) {
 ; CHECK-NEXT:    cmpq %rax, %rsi
 ; CHECK-NEXT:    movq %r8, %rcx
 ; CHECK-NEXT:    sbbq %rdx, %rcx
-; CHECK-NEXT:    setge %cl
-; CHECK-NEXT:    andb $1, %cl
-; CHECK-NEXT:    movq %rsi, %rbx
-; CHECK-NEXT:    cmovneq %rax, %rbx
-; CHECK-NEXT:    testb %cl, %cl
 ; CHECK-NEXT:    movq %r8, %rcx
-; CHECK-NEXT:    cmovneq %rdx, %rcx
+; CHECK-NEXT:    cmovgeq %rdx, %rcx
+; CHECK-NEXT:    movq %rsi, %rbx
+; CHECK-NEXT:    cmovgeq %rax, %rbx
 ; CHECK-NEXT:    lock cmpxchg16b (%rdi)
 ; CHECK-NEXT:    jne LBB5_1
 ; CHECK-NEXT:  ## BB#2: ## %atomicrmw.end
@@ -201,13 +198,10 @@ define void @fetch_and_max(i128* %p, i128 %bits) {
 ; CHECK-NEXT:    cmpq %rsi, %rax
 ; CHECK-NEXT:    movq %rdx, %rcx
 ; CHECK-NEXT:    sbbq %r8, %rcx
-; CHECK-NEXT:    setge %cl
-; CHECK-NEXT:    andb $1, %cl
-; CHECK-NEXT:    movq %rsi, %rbx
-; CHECK-NEXT:    cmovneq %rax, %rbx
-; CHECK-NEXT:    testb %cl, %cl
 ; CHECK-NEXT:    movq %r8, %rcx
-; CHECK-NEXT:    cmovneq %rdx, %rcx
+; CHECK-NEXT:    cmovgeq %rdx, %rcx
+; CHECK-NEXT:    movq %rsi, %rbx
+; CHECK-NEXT:    cmovgeq %rax, %rbx
 ; CHECK-NEXT:    lock cmpxchg16b (%rdi)
 ; CHECK-NEXT:    jne LBB6_1
 ; CHECK-NEXT:  ## BB#2: ## %atomicrmw.end
@@ -237,13 +231,10 @@ define void @fetch_and_umin(i128* %p, i128 %bits) {
 ; CHECK-NEXT:    cmpq %rax, %rsi
 ; CHECK-NEXT:    movq %r8, %rcx
 ; CHECK-NEXT:    sbbq %rdx, %rcx
-; CHECK-NEXT:    setae %cl
-; CHECK-NEXT:    andb $1, %cl
-; CHECK-NEXT:    movq %rsi, %rbx
-; CHECK-NEXT:    cmovneq %rax, %rbx
-; CHECK-NEXT:    testb %cl, %cl
 ; CHECK-NEXT:    movq %r8, %rcx
-; CHECK-NEXT:    cmovneq %rdx, %rcx
+; CHECK-NEXT:    cmovaeq %rdx, %rcx
+; CHECK-NEXT:    movq %rsi, %rbx
+; CHECK-NEXT:    cmovaeq %rax, %rbx
 ; CHECK-NEXT:    lock cmpxchg16b (%rdi)
 ; CHECK-NEXT:    jne LBB7_1
 ; CHECK-NEXT:  ## BB#2: ## %atomicrmw.end
@@ -273,13 +264,10 @@ define void @fetch_and_umax(i128* %p, i128 %bits) {
 ; CHECK-NEXT:    cmpq %rax, %rsi
 ; CHECK-NEXT:    movq %r8, %rcx
 ; CHECK-NEXT:    sbbq %rdx, %rcx
-; CHECK-NEXT:    setb %cl
-; CHECK-NEXT:    andb $1, %cl
-; CHECK-NEXT:    movq %rsi, %rbx
-; CHECK-NEXT:    cmovneq %rax, %rbx
-; CHECK-NEXT:    testb %cl, %cl
 ; CHECK-NEXT:    movq %r8, %rcx
-; CHECK-NEXT:    cmovneq %rdx, %rcx
+; CHECK-NEXT:    cmovbq %rdx, %rcx
+; CHECK-NEXT:    movq %rsi, %rbx
+; CHECK-NEXT:    cmovbq %rax, %rbx
 ; CHECK-NEXT:    lock cmpxchg16b (%rdi)
 ; CHECK-NEXT:    jne LBB8_1
 ; CHECK-NEXT:  ## BB#2: ## %atomicrmw.end

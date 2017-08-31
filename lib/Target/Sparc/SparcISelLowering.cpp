@@ -30,6 +30,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBits.h"
 using namespace llvm;
 
 
@@ -691,9 +692,9 @@ SparcTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 }
 
 static bool hasReturnsTwiceAttr(SelectionDAG &DAG, SDValue Callee,
-                                     ImmutableCallSite *CS) {
+                                ImmutableCallSite CS) {
   if (CS)
-    return CS->hasFnAttr(Attribute::ReturnsTwice);
+    return CS.hasFnAttr(Attribute::ReturnsTwice);
 
   const Function *CalleeFn = nullptr;
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
@@ -772,8 +773,7 @@ SparcTargetLowering::LowerCall_32(TargetLowering::CallLoweringInfo &CLI,
     }
   }
 
-  Chain = DAG.getCALLSEQ_START(Chain, DAG.getIntPtrConstant(ArgsSize, dl, true),
-                               dl);
+  Chain = DAG.getCALLSEQ_START(Chain, ArgsSize, 0, dl);
 
   SmallVector<std::pair<unsigned, SDValue>, 8> RegsToPass;
   SmallVector<SDValue, 8> MemOpChains;
@@ -1164,8 +1164,7 @@ SparcTargetLowering::LowerCall_64(TargetLowering::CallLoweringInfo &CLI,
   // Adjust the stack pointer to make room for the arguments.
   // FIXME: Use hasReservedCallFrame to avoid %sp adjustments around all calls
   // with more than 6 arguments.
-  Chain = DAG.getCALLSEQ_START(Chain, DAG.getIntPtrConstant(ArgsSize, DL, true),
-                               DL);
+  Chain = DAG.getCALLSEQ_START(Chain, ArgsSize, 0, DL);
 
   // Collect the set of registers to pass to the function and their values.
   // This will be emitted as a sequence of CopyToReg nodes glued to the call
@@ -1335,7 +1334,7 @@ SparcTargetLowering::LowerCall_64(TargetLowering::CallLoweringInfo &CLI,
 
   // Set inreg flag manually for codegen generated library calls that
   // return float.
-  if (CLI.Ins.size() == 1 && CLI.Ins[0].VT == MVT::f32 && CLI.CS == nullptr)
+  if (CLI.Ins.size() == 1 && CLI.Ins[0].VT == MVT::f32 && !CLI.CS)
     CLI.Ins[0].Flags.setInReg();
 
   RVInfo.AnalyzeCallResult(CLI.Ins, RetCC_Sparc64);
@@ -1690,6 +1689,19 @@ SparcTargetLowering::SparcTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::MULHS,     MVT::i32, Expand);
   setOperationAction(ISD::MUL,       MVT::i32, Expand);
 
+  if (Subtarget->useSoftMulDiv()) {
+    // .umul works for both signed and unsigned
+    setOperationAction(ISD::SMUL_LOHI, MVT::i32, Expand);
+    setOperationAction(ISD::UMUL_LOHI, MVT::i32, Expand);
+    setLibcallName(RTLIB::MUL_I32, ".umul");
+
+    setOperationAction(ISD::SDIV, MVT::i32, Expand);
+    setLibcallName(RTLIB::SDIV_I32, ".div");
+
+    setOperationAction(ISD::UDIV, MVT::i32, Expand);
+    setLibcallName(RTLIB::UDIV_I32, ".udiv");
+  }
+
   if (Subtarget->is64Bit()) {
     setOperationAction(ISD::UMUL_LOHI, MVT::i64, Expand);
     setOperationAction(ISD::SMUL_LOHI, MVT::i64, Expand);
@@ -1816,9 +1828,7 @@ SparcTargetLowering::SparcTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::FSQRT, MVT::f32, Promote);
   }
 
-  if (Subtarget->replaceFMULS()) {
-    // Promote FMULS to FMULD instructions instead as
-    // the former instructions generate errata on LEON processors.
+  if (Subtarget->hasNoFMULS()) {
     setOperationAction(ISD::FMUL, MVT::f32, Promote);
   }
 
@@ -1875,25 +1885,24 @@ EVT SparcTargetLowering::getSetCCResultType(const DataLayout &, LLVMContext &,
 /// combiner.
 void SparcTargetLowering::computeKnownBitsForTargetNode
                                 (const SDValue Op,
-                                 APInt &KnownZero,
-                                 APInt &KnownOne,
+                                 KnownBits &Known,
                                  const APInt &DemandedElts,
                                  const SelectionDAG &DAG,
                                  unsigned Depth) const {
-  APInt KnownZero2, KnownOne2;
-  KnownZero = KnownOne = APInt(KnownZero.getBitWidth(), 0);
+  KnownBits Known2;
+  Known.resetAll();
 
   switch (Op.getOpcode()) {
   default: break;
   case SPISD::SELECT_ICC:
   case SPISD::SELECT_XCC:
   case SPISD::SELECT_FCC:
-    DAG.computeKnownBits(Op.getOperand(1), KnownZero, KnownOne, Depth+1);
-    DAG.computeKnownBits(Op.getOperand(0), KnownZero2, KnownOne2, Depth+1);
+    DAG.computeKnownBits(Op.getOperand(1), Known, Depth+1);
+    DAG.computeKnownBits(Op.getOperand(0), Known2, Depth+1);
 
     // Only known if known in both the LHS and RHS.
-    KnownOne &= KnownOne2;
-    KnownZero &= KnownZero2;
+    Known.One &= Known2.One;
+    Known.Zero &= Known2.Zero;
     break;
   }
 }
@@ -2058,7 +2067,7 @@ SDValue SparcTargetLowering::LowerGlobalTLSAddress(SDValue Op,
     SDValue Chain = DAG.getEntryNode();
     SDValue InFlag;
 
-    Chain = DAG.getCALLSEQ_START(Chain, DAG.getIntPtrConstant(1, DL, true), DL);
+    Chain = DAG.getCALLSEQ_START(Chain, 1, 0, DL);
     Chain = DAG.getCopyToReg(Chain, DL, SP::O0, Argument, InFlag);
     InFlag = Chain.getValue(1);
     SDValue Callee = DAG.getTargetExternalSymbol("__tls_get_addr", PtrVT);
@@ -3234,6 +3243,7 @@ SparcTargetLowering::emitEHSjLjSetJmp(MachineInstr &MI,
                                       MachineBasicBlock *MBB) const {
   DebugLoc DL = MI.getDebugLoc();
   const TargetInstrInfo *TII = Subtarget->getInstrInfo();
+  const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
 
   MachineFunction *MF = MBB->getParent();
   MachineRegisterInfo &MRI = MF->getRegInfo();
@@ -3245,7 +3255,8 @@ SparcTargetLowering::emitEHSjLjSetJmp(MachineInstr &MI,
 
   unsigned DstReg = MI.getOperand(0).getReg();
   const TargetRegisterClass *RC = MRI.getRegClass(DstReg);
-  assert(RC->hasType(MVT::i32) && "Invalid destination!");
+  assert(TRI->isTypeLegalForClass(*RC, MVT::i32) && "Invalid destination!");
+  (void)TRI;
   unsigned mainDstReg = MRI.createVirtualRegister(RC);
   unsigned restoreDstReg = MRI.createVirtualRegister(RC);
 
@@ -3384,7 +3395,10 @@ SparcTargetLowering::getConstraintType(StringRef Constraint) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     default:  break;
-    case 'r': return C_RegisterClass;
+    case 'r':
+    case 'f':
+    case 'e':
+      return C_RegisterClass;
     case 'I': // SIMM13
       return C_Other;
     }
@@ -3463,6 +3477,24 @@ SparcTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
         return std::make_pair(0U, &SP::IntPairRegClass);
       else
         return std::make_pair(0U, &SP::IntRegsRegClass);
+    case 'f':
+      if (VT == MVT::f32)
+        return std::make_pair(0U, &SP::FPRegsRegClass);
+      else if (VT == MVT::f64)
+        return std::make_pair(0U, &SP::LowDFPRegsRegClass);
+      else if (VT == MVT::f128)
+        return std::make_pair(0U, &SP::LowQFPRegsRegClass);
+      llvm_unreachable("Unknown ValueType for f-register-type!");
+      break;
+    case 'e':
+      if (VT == MVT::f32)
+        return std::make_pair(0U, &SP::FPRegsRegClass);
+      else if (VT == MVT::f64)
+        return std::make_pair(0U, &SP::DFPRegsRegClass);
+      else if (VT == MVT::f128)
+        return std::make_pair(0U, &SP::QFPRegsRegClass);
+      llvm_unreachable("Unknown ValueType for e-register-type!");
+      break;
     }
   } else if (!Constraint.empty() && Constraint.size() <= 5
               && Constraint[0] == '{' && *(Constraint.end()-1) == '}') {

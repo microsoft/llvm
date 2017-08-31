@@ -38,7 +38,6 @@ class BranchInst;
 class CallInst;
 class DbgValueInst;
 class ExtractElementInst;
-class ExtractValueInst;
 class FCmpInst;
 class FPExtInst;
 class FPToSIInst;
@@ -53,7 +52,6 @@ class IntToPtrInst;
 class IndirectBrInst;
 class InvokeInst;
 class InsertElementInst;
-class InsertValueInst;
 class Instruction;
 class LoadInst;
 class MachineBasicBlock;
@@ -219,11 +217,12 @@ private:
     CaseBlock(ISD::CondCode cc, const Value *cmplhs, const Value *cmprhs,
               const Value *cmpmiddle, MachineBasicBlock *truebb,
               MachineBasicBlock *falsebb, MachineBasicBlock *me,
+              SDLoc dl,
               BranchProbability trueprob = BranchProbability::getUnknown(),
               BranchProbability falseprob = BranchProbability::getUnknown())
         : CC(cc), CmpLHS(cmplhs), CmpMHS(cmpmiddle), CmpRHS(cmprhs),
-          TrueBB(truebb), FalseBB(falsebb), ThisBB(me), TrueProb(trueprob),
-          FalseProb(falseprob) {}
+          TrueBB(truebb), FalseBB(falsebb), ThisBB(me), DL(dl),
+          TrueProb(trueprob), FalseProb(falseprob) {}
 
     // CC - the condition code to use for the case block's setcc node
     ISD::CondCode CC;
@@ -238,6 +237,10 @@ private:
 
     // ThisBB - the block into which to emit the code for the setcc and branches
     MachineBasicBlock *ThisBB;
+
+    /// The debug location of the instruction this CaseBlock was
+    /// produced from.
+    SDLoc DL;
 
     // TrueProb/FalseProb - branch weights.
     BranchProbability TrueProb, FalseProb;
@@ -304,10 +307,13 @@ private:
     BranchProbability DefaultProb;
   };
 
-  /// Check whether a range of clusters is dense enough for a jump table.
-  bool isDense(const CaseClusterVector &Clusters,
-               const SmallVectorImpl<unsigned> &TotalCases,
-               unsigned First, unsigned Last, unsigned MinDensity) const;
+  /// Return the range of value in [First..Last].
+  uint64_t getJumpTableRange(const CaseClusterVector &Clusters, unsigned First,
+                             unsigned Last) const;
+
+  /// Return the number of cases in [First..Last].
+  uint64_t getJumpTableNumCases(const SmallVectorImpl<unsigned> &TotalCases,
+                                unsigned First, unsigned Last) const;
 
   /// Build a jump table cluster from Clusters[First..Last]. Returns false if it
   /// decides it's not a good idea.
@@ -318,14 +324,6 @@ private:
   /// Find clusters of cases suitable for jump table lowering.
   void findJumpTables(CaseClusterVector &Clusters, const SwitchInst *SI,
                       MachineBasicBlock *DefaultMBB);
-
-  /// Check whether the range [Low,High] fits in a machine word.
-  bool rangeFitsInWord(const APInt &Low, const APInt &High);
-
-  /// Check whether these clusters are suitable for lowering with bit tests based
-  /// on the number of destinations, comparison metric, and range.
-  bool isSuitableForBitTests(unsigned NumDests, unsigned NumCmps,
-                             const APInt &Low, const APInt &High);
 
   /// Build a bit test cluster from Clusters[First..Last]. Returns false if it
   /// decides it's not a good idea.
@@ -609,11 +607,11 @@ public:
   SelectionDAGBuilder(SelectionDAG &dag, FunctionLoweringInfo &funcinfo,
                       CodeGenOpt::Level ol)
     : CurInst(nullptr), SDNodeOrder(LowestSDNodeOrder), TM(dag.getTarget()),
-      DAG(dag), FuncInfo(funcinfo),
+      DAG(dag), DL(nullptr), AA(nullptr), FuncInfo(funcinfo),
       HasTailCall(false) {
   }
 
-  void init(GCFunctionInfo *gfi, AliasAnalysis &aa,
+  void init(GCFunctionInfo *gfi, AliasAnalysis *AA,
             const TargetLibraryInfo *li);
 
   /// Clear out the current SelectionDAG and the associated state and prepare
@@ -777,6 +775,11 @@ public:
                                         bool VarArgDisallowed,
                                         bool ForceVoidReturnTy);
 
+  /// Returns the type of FrameIndex and TargetFrameIndex nodes.
+  MVT getFrameIndexTy() {
+    return DAG.getTargetLoweringInfo().getFrameIndexTy(DAG.getDataLayout());
+  }
+
 private:
   // Terminator instructions.
   void visitRet(const ReturnInst &I);
@@ -859,8 +862,8 @@ private:
   void visitInsertElement(const User &I);
   void visitShuffleVector(const User &I);
 
-  void visitExtractValue(const ExtractValueInst &I);
-  void visitInsertValue(const InsertValueInst &I);
+  void visitExtractValue(const User &I);
+  void visitInsertValue(const User &I);
   void visitLandingPad(const LandingPadInst &I);
 
   void visitGetElementPtr(const User &I);
@@ -895,7 +898,7 @@ private:
   void visitInlineAsm(ImmutableCallSite CS);
   const char *visitIntrinsicCall(const CallInst &I, unsigned Intrinsic);
   void visitTargetIntrinsic(const CallInst &I, unsigned Intrinsic);
-  void visitConstrainedFPIntrinsic(const CallInst &I, unsigned Intrinsic);
+  void visitConstrainedFPIntrinsic(const ConstrainedFPIntrinsic &FPI);
 
   void visitVAStart(const CallInst &I);
   void visitVAArg(const VAArgInst &I);
@@ -908,6 +911,8 @@ private:
   // These two are implemented in StatepointLowering.cpp
   void visitGCRelocate(const GCRelocateInst &I);
   void visitGCResult(const GCResultInst &I);
+
+  void visitVectorReduce(const CallInst &I, unsigned Intrinsic);
 
   void visitUserOp1(const Instruction &I) {
     llvm_unreachable("UserOp1 should not exist at instruction selection time!");
@@ -923,13 +928,12 @@ private:
 
   void emitInlineAsmError(ImmutableCallSite CS, const Twine &Message);
 
-  /// EmitFuncArgumentDbgValue - If V is an function argument then create
-  /// corresponding DBG_VALUE machine instruction for it now. At the end of
-  /// instruction selection, they will be inserted to the entry BB.
+  /// If V is an function argument then create corresponding DBG_VALUE machine
+  /// instruction for it now. At the end of instruction selection, they will be
+  /// inserted to the entry BB.
   bool EmitFuncArgumentDbgValue(const Value *V, DILocalVariable *Variable,
                                 DIExpression *Expr, DILocation *DL,
-                                int64_t Offset, bool IsIndirect,
-                                const SDValue &N);
+                                bool IsDbgDeclare, const SDValue &N);
 
   /// Return the next block after MBB, or nullptr if there is none.
   MachineBasicBlock *NextBlock(MachineBasicBlock *MBB);
@@ -940,8 +944,8 @@ private:
 
   /// Return the appropriate SDDbgValue based on N.
   SDDbgValue *getDbgValue(SDValue N, DILocalVariable *Variable,
-                          DIExpression *Expr, int64_t Offset,
-                          const DebugLoc &dl, unsigned DbgSDNodeOrder);
+                          DIExpression *Expr, const DebugLoc &dl,
+                          unsigned DbgSDNodeOrder);
 };
 
 /// RegsForValue - This struct represents the registers (physical or virtual)
@@ -973,18 +977,28 @@ struct RegsForValue {
   /// expanded value requires multiple registers.
   SmallVector<unsigned, 4> Regs;
 
+  /// This list holds the number of registers for each value.
+  SmallVector<unsigned, 4> RegCount;
+
+  /// Records if this value needs to be treated in an ABI dependant manner,
+  /// different to normal type legalization.
+  bool IsABIMangled;
+
   RegsForValue();
 
-  RegsForValue(const SmallVector<unsigned, 4> &regs, MVT regvt, EVT valuevt);
+  RegsForValue(const SmallVector<unsigned, 4> &regs, MVT regvt, EVT valuevt,
+               bool IsABIMangledValue = false);
 
   RegsForValue(LLVMContext &Context, const TargetLowering &TLI,
-               const DataLayout &DL, unsigned Reg, Type *Ty);
+               const DataLayout &DL, unsigned Reg, Type *Ty,
+               bool IsABIMangledValue = false);
 
   /// Add the specified values to this one.
   void append(const RegsForValue &RHS) {
     ValueVTs.append(RHS.ValueVTs.begin(), RHS.ValueVTs.end());
     RegVTs.append(RHS.RegVTs.begin(), RHS.RegVTs.end());
     Regs.append(RHS.Regs.begin(), RHS.Regs.end());
+    RegCount.push_back(RHS.Regs.size());
   }
 
   /// Emit a series of CopyFromReg nodes that copies from this value and returns

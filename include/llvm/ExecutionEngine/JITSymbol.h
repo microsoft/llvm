@@ -1,4 +1,4 @@
-//===----------- JITSymbol.h - JIT symbol abstraction -----------*- C++ -*-===//
+//===- JITSymbol.h - JIT symbol abstraction ---------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -21,35 +21,51 @@
 #include <functional>
 #include <string>
 
+#include "llvm/Support/Error.h"
+
 namespace llvm {
 
 class GlobalValue;
 
 namespace object {
-  class BasicSymbolRef;
+
+class BasicSymbolRef;
+
 } // end namespace object
 
 /// @brief Represents an address in the target process's address space.
-typedef uint64_t JITTargetAddress;
+using JITTargetAddress = uint64_t;
 
 /// @brief Flags for symbols in the JIT.
 class JITSymbolFlags {
 public:
-  typedef uint8_t UnderlyingType;
+  using UnderlyingType = uint8_t;
+  using TargetFlagsType = uint64_t;
 
   enum FlagNames : UnderlyingType {
     None = 0,
-    Weak = 1U << 0,
-    Common = 1U << 1,
-    Absolute = 1U << 2,
-    Exported = 1U << 3
+    HasError = 1U << 0,
+    Weak = 1U << 1,
+    Common = 1U << 2,
+    Absolute = 1U << 3,
+    Exported = 1U << 4
   };
 
   /// @brief Default-construct a JITSymbolFlags instance.
-  JITSymbolFlags() : Flags(None) {}
+  JITSymbolFlags() = default;
 
   /// @brief Construct a JITSymbolFlags instance from the given flags.
   JITSymbolFlags(FlagNames Flags) : Flags(Flags) {}
+
+  /// @brief Construct a JITSymbolFlags instance from the given flags and target
+  ///        flags.
+  JITSymbolFlags(FlagNames Flags, TargetFlagsType TargetFlags)
+    : Flags(Flags), TargetFlags(TargetFlags) {}
+
+  /// @brief Return true if there was an error retrieving this symbol.
+  bool hasError() const {
+    return (Flags & HasError) == HasError;
+  }
 
   /// @brief Returns true is the Weak flag is set.
   bool isWeak() const {
@@ -70,7 +86,11 @@ public:
     return (Flags & Exported) == Exported;
   }
 
+  /// @brief Implicitly convert to the underlying flags type.
   operator UnderlyingType&() { return Flags; }
+
+  /// @brief Return a reference to the target-specific flags.
+  TargetFlagsType& getTargetFlags() { return TargetFlags; }
 
   /// Construct a JITSymbolFlags value based on the flags of the given global
   /// value.
@@ -81,15 +101,34 @@ public:
   static JITSymbolFlags fromObjectSymbol(const object::BasicSymbolRef &Symbol);
 
 private:
-  UnderlyingType Flags;
+  UnderlyingType Flags = None;
+  TargetFlagsType TargetFlags = 0;
+};
+
+/// @brief ARM-specific JIT symbol flags.
+/// FIXME: This should be moved into a target-specific header.
+class ARMJITSymbolFlags {
+public:
+  ARMJITSymbolFlags() = default;
+
+  enum FlagNames {
+    None = 0,
+    Thumb = 1 << 0
+  };
+
+  operator JITSymbolFlags::TargetFlagsType&() { return Flags; }
+
+  static ARMJITSymbolFlags fromObjectSymbol(
+                                           const object::BasicSymbolRef &Symbol);
+private:
+  JITSymbolFlags::TargetFlagsType Flags = 0;
 };
 
 /// @brief Represents a symbol that has been evaluated to an address already.
 class JITEvaluatedSymbol {
 public:
   /// @brief Create a 'null' symbol.
-  JITEvaluatedSymbol(std::nullptr_t)
-      : Address(0) {}
+  JITEvaluatedSymbol(std::nullptr_t) {}
 
   /// @brief Create a symbol for the given address and flags.
   JITEvaluatedSymbol(JITTargetAddress Address, JITSymbolFlags Flags)
@@ -105,19 +144,24 @@ public:
   JITSymbolFlags getFlags() const { return Flags; }
 
 private:
-  JITTargetAddress Address;
+  JITTargetAddress Address = 0;
   JITSymbolFlags Flags;
 };
 
 /// @brief Represents a symbol in the JIT.
 class JITSymbol {
 public:
-  typedef std::function<JITTargetAddress()> GetAddressFtor;
+  using GetAddressFtor = std::function<Expected<JITTargetAddress>()>;
 
-  /// @brief Create a 'null' symbol that represents failure to find a symbol
-  ///        definition.
+  /// @brief Create a 'null' symbol, used to represent a "symbol not found"
+  ///        result from a successful (non-erroneous) lookup.
   JITSymbol(std::nullptr_t)
       : CachedAddr(0) {}
+
+  /// @brief Create a JITSymbol representing an error in the symbol lookup
+  ///        process (e.g. a network failure during a remote lookup).
+  JITSymbol(Error Err)
+    : Err(std::move(Err)), Flags(JITSymbolFlags::HasError) {}
 
   /// @brief Create a symbol for a definition with a known address.
   JITSymbol(JITTargetAddress Addr, JITSymbolFlags Flags)
@@ -139,16 +183,57 @@ public:
   JITSymbol(GetAddressFtor GetAddress, JITSymbolFlags Flags)
       : GetAddress(std::move(GetAddress)), CachedAddr(0), Flags(Flags) {}
 
+  JITSymbol(const JITSymbol&) = delete;
+  JITSymbol& operator=(const JITSymbol&) = delete;
+
+  JITSymbol(JITSymbol &&Other)
+    : GetAddress(std::move(Other.GetAddress)), Flags(std::move(Other.Flags)) {
+    if (Flags.hasError())
+      Err = std::move(Other.Err);
+    else
+      CachedAddr = std::move(Other.CachedAddr);
+  }
+
+  JITSymbol& operator=(JITSymbol &&Other) {
+    GetAddress = std::move(Other.GetAddress);
+    Flags = std::move(Other.Flags);
+    if (Flags.hasError())
+      Err = std::move(Other.Err);
+    else
+      CachedAddr = std::move(Other.CachedAddr);
+    return *this;
+  }
+
+  ~JITSymbol() {
+    if (Flags.hasError())
+      Err.~Error();
+    else
+      CachedAddr.~JITTargetAddress();
+  }
+
   /// @brief Returns true if the symbol exists, false otherwise.
-  explicit operator bool() const { return CachedAddr || GetAddress; }
+  explicit operator bool() const {
+    return !Flags.hasError() && (CachedAddr || GetAddress);
+  }
+
+  /// @brief Move the error field value out of this JITSymbol.
+  Error takeError() {
+    if (Flags.hasError())
+      return std::move(Err);
+    return Error::success();
+  }
 
   /// @brief Get the address of the symbol in the target address space. Returns
   ///        '0' if the symbol does not exist.
-  JITTargetAddress getAddress() {
+  Expected<JITTargetAddress> getAddress() {
+    assert(!Flags.hasError() && "getAddress called on error value");
     if (GetAddress) {
-      CachedAddr = GetAddress();
-      assert(CachedAddr && "Symbol could not be materialized.");
-      GetAddress = nullptr;
+      if (auto CachedAddrOrErr = GetAddress()) {
+        GetAddress = nullptr;
+        CachedAddr = *CachedAddrOrErr;
+        assert(CachedAddr && "Symbol could not be materialized.");
+      } else
+        return CachedAddrOrErr.takeError();
     }
     return CachedAddr;
   }
@@ -157,7 +242,10 @@ public:
 
 private:
   GetAddressFtor GetAddress;
-  JITTargetAddress CachedAddr;
+  union {
+    JITTargetAddress CachedAddr;
+    Error Err;
+  };
   JITSymbolFlags Flags;
 };
 

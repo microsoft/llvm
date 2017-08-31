@@ -15,6 +15,7 @@
 #include "TargetRegisterAllocInfo.h"
 
 #include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tiled-conflicts"
 
@@ -996,27 +997,28 @@ ConflictGraph::AddConflictEdges
       }
    }
 
-   if (instruction->isCall()) {
-      DEBUG(
-         llvm::SparseBitVector<>::iterator d, l;
+   DEBUG({
+      if (instruction->isCall()) {
          llvm::dbgs() << "++++++ CALL instruction:\n";
          instruction->dump();
 
          llvm::dbgs() << "\ndefinitionBitVector = { ";
-         for (d = definitionBitVector->begin(); d != definitionBitVector->end(); ++d)
+         for (llvm::SparseBitVector<>::iterator d = definitionBitVector->begin();
+              d != definitionBitVector->end(); ++d)
          {
             llvm::dbgs() << *d << ", ";
          }
          llvm::dbgs() << "}\n";
 
          llvm::dbgs() << "liveBitVector = { ";
-         for (l = liveBitVector->begin(); l != liveBitVector->end(); ++l)
+         for (llvm::SparseBitVector<>::iterator l = liveBitVector->begin();
+              l != liveBitVector->end(); ++l)
          {
             llvm::dbgs() << *l << ", ";
          }
          llvm::dbgs() << "}\n";
-      );
-   }
+      }
+   });
 
    // Loop through definition live ranges and currently live live ranges and
    // create conflicts as appropriate.

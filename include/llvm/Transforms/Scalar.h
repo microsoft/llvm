@@ -184,7 +184,7 @@ Pass *createLoopInstSimplifyPass();
 //
 Pass *createLoopUnrollPass(int OptLevel = 2, int Threshold = -1, int Count = -1,
                            int AllowPartial = -1, int Runtime = -1,
-                           int UpperBound = -1);
+                           int UpperBound = -1, int AllowPeeling = -1);
 // Create an unrolling pass for full unrolling that uses exact trip count only.
 Pass *createSimpleLoopUnrollPass(int OptLevel = 2);
 
@@ -356,6 +356,13 @@ FunctionPass *createGVNHoistPass();
 
 //===----------------------------------------------------------------------===//
 //
+// GVNSink - This pass uses an "inverted" value numbering to decide the
+// similarity of expressions and sinks similar expressions into successors.
+//
+FunctionPass *createGVNSinkPass();
+
+//===----------------------------------------------------------------------===//
+//
 // MergedLoadStoreMotion - This pass merges loads and stores in diamonds. Loads
 // are hoisted into the header, while stores sink into the footer.
 //
@@ -477,12 +484,6 @@ FunctionPass *createSpeculativeExecutionPass();
 // Same as createSpeculativeExecutionPass, but does nothing unless
 // TargetTransformInfo::hasBranchDivergence() is true.
 FunctionPass *createSpeculativeExecutionIfHasBranchDivergencePass();
-
-//===----------------------------------------------------------------------===//
-//
-// LoadCombine - Combine loads into bigger loads.
-//
-BasicBlockPass *createLoadCombinePass();
 
 //===----------------------------------------------------------------------===//
 //

@@ -97,7 +97,7 @@ private:
   // [begin, end) for each module
   std::vector<std::pair<size_t, size_t>> ModuleSymIndices;
 
-  StringRef SourceFileName, COFFLinkerOpts;
+  StringRef TargetTriple, SourceFileName, COFFLinkerOpts;
   std::vector<StringRef> ComdatTable;
 
 public:
@@ -126,6 +126,8 @@ public:
     using irsymtab::Symbol::getCommonSize;
     using irsymtab::Symbol::getCommonAlignment;
     using irsymtab::Symbol::getCOFFWeakExternalFallback;
+    using irsymtab::Symbol::getSectionName;
+    using irsymtab::Symbol::isExecutable;
   };
 
   /// A range over the symbols in this InputFile.
@@ -136,6 +138,9 @@ public:
 
   /// Returns the path to the InputFile.
   StringRef getName() const;
+
+  /// Returns the input file's target triple.
+  StringRef getTargetTriple() const { return TargetTriple; }
 
   /// Returns the source file path specified at compile time.
   StringRef getSourceFileName() const { return SourceFileName; }
@@ -277,6 +282,16 @@ private:
     bool HasModule = false;
     std::unique_ptr<Module> CombinedModule;
     std::unique_ptr<IRMover> Mover;
+
+    // This stores the information about a regular LTO module that we have added
+    // to the link. It will either be linked immediately (for modules without
+    // summaries) or after summary-based dead stripping (for modules with
+    // summaries).
+    struct AddedModule {
+      std::unique_ptr<Module> M;
+      std::vector<GlobalValue *> Keep;
+    };
+    std::vector<AddedModule> ModsWithSummaries;
   } RegularLTO;
 
   struct ThinLTOState {
@@ -299,9 +314,10 @@ private:
     /// The unmangled name of the global.
     std::string IRName;
 
-    /// Keep track if the symbol is visible outside of ThinLTO (i.e. in
-    /// either a regular object or the regular LTO partition).
-    bool VisibleOutsideThinLTO = false;
+    /// Keep track if the symbol is visible outside of a module with a summary
+    /// (i.e. in either a regular object or a regular LTO module without a
+    /// summary).
+    bool VisibleOutsideSummary = false;
 
     bool UnnamedAddr = true;
 
@@ -335,8 +351,9 @@ private:
   // Global mapping from mangled symbol names to resolutions.
   StringMap<GlobalResolution> GlobalResolutions;
 
-  void addSymbolToGlobalRes(const InputFile::Symbol &Sym, SymbolResolution Res,
-                            unsigned Partition);
+  void addModuleToGlobalRes(ArrayRef<InputFile::Symbol> Syms,
+                            ArrayRef<SymbolResolution> Res, unsigned Partition,
+                            bool InSummary);
 
   // These functions take a range of symbol resolutions [ResI, ResE) and consume
   // the resolutions used by a single input module by incrementing ResI. After
@@ -344,10 +361,13 @@ private:
   // the remaining modules in the InputFile.
   Error addModule(InputFile &Input, unsigned ModI,
                   const SymbolResolution *&ResI, const SymbolResolution *ResE);
-  Error addRegularLTO(BitcodeModule BM,
-                      ArrayRef<InputFile::Symbol> Syms,
-                      const SymbolResolution *&ResI,
-                      const SymbolResolution *ResE);
+
+  Expected<RegularLTOState::AddedModule>
+  addRegularLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
+                const SymbolResolution *&ResI, const SymbolResolution *ResE);
+  Error linkRegularLTO(RegularLTOState::AddedModule Mod,
+                       bool LivenessFromIndex);
+
   Error addThinLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
                    const SymbolResolution *&ResI, const SymbolResolution *ResE);
 
@@ -362,8 +382,9 @@ private:
 /// each global symbol based on its internal resolution of that symbol.
 struct SymbolResolution {
   SymbolResolution()
-      : Prevailing(0), FinalDefinitionInLinkageUnit(0), VisibleToRegularObj(0) {
-  }
+      : Prevailing(0), FinalDefinitionInLinkageUnit(0), VisibleToRegularObj(0),
+        LinkerRedefined(0) {}
+
   /// The linker has chosen this definition of the symbol.
   unsigned Prevailing : 1;
 
@@ -373,6 +394,10 @@ struct SymbolResolution {
 
   /// The definition of this symbol is visible outside of the LTO unit.
   unsigned VisibleToRegularObj : 1;
+
+  /// Linker redefined version of the symbol which appeared in -wrap or -defsym
+  /// linker option.
+  unsigned LinkerRedefined : 1;
 };
 
 } // namespace lto

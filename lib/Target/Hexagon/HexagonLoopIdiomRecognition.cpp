@@ -1,4 +1,4 @@
-//===--- HexagonLoopIdiomRecognition.cpp ----------------------------------===//
+//===- HexagonLoopIdiomRecognition.cpp ------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -9,27 +9,66 @@
 
 #define DEBUG_TYPE "hexagon-lir"
 
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
+#include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/User.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBits.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-
 #include <algorithm>
 #include <array>
+#include <cassert>
+#include <cstdint>
+#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <iterator>
+#include <map>
+#include <set>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -58,22 +97,30 @@ cl::opt<bool> HexagonVolatileMemcpy("disable-hexagon-volatile-memcpy",
   cl::Hidden, cl::init(false),
   cl::desc("Enable Hexagon-specific memcpy for volatile destination."));
 
+static cl::opt<unsigned> SimplifyLimit("hlir-simplify-limit", cl::init(10000),
+  cl::Hidden, cl::desc("Maximum number of simplification steps in HLIR"));
+
 static const char *HexagonVolatileMemcpyName
   = "hexagon_memcpy_forward_vp4cp4n2";
 
 
 namespace llvm {
+
   void initializeHexagonLoopIdiomRecognizePass(PassRegistry&);
   Pass *createHexagonLoopIdiomPass();
-}
+
+} // end namespace llvm
 
 namespace {
+
   class HexagonLoopIdiomRecognize : public LoopPass {
   public:
     static char ID;
+
     explicit HexagonLoopIdiomRecognize() : LoopPass(ID) {
       initializeHexagonLoopIdiomRecognizePass(*PassRegistry::getPassRegistry());
     }
+
     StringRef getPassName() const override {
       return "Recognize Hexagon-specific loop idioms";
     }
@@ -112,7 +159,91 @@ namespace {
     ScalarEvolution *SE;
     bool HasMemcpy, HasMemmove;
   };
-}
+
+  struct Simplifier {
+    using Rule = std::function<Value * (Instruction *, LLVMContext &)>;
+
+    void addRule(const Rule &R) { Rules.push_back(R); }
+
+  private:
+    struct WorkListType {
+      WorkListType() = default;
+
+      void push_back(Value* V) {
+        // Do not push back duplicates.
+        if (!S.count(V)) { Q.push_back(V); S.insert(V); }
+      }
+
+      Value *pop_front_val() {
+        Value *V = Q.front(); Q.pop_front(); S.erase(V);
+        return V;
+      }
+
+      bool empty() const { return Q.empty(); }
+
+    private:
+      std::deque<Value*> Q;
+      std::set<Value*> S;
+    };
+
+    using ValueSetType = std::set<Value *>;
+
+    std::vector<Rule> Rules;
+
+  public:
+    struct Context {
+      using ValueMapType = DenseMap<Value *, Value *>;
+
+      Value *Root;
+      ValueSetType Used;    // The set of all cloned values used by Root.
+      ValueSetType Clones;  // The set of all cloned values.
+      LLVMContext &Ctx;
+
+      Context(Instruction *Exp)
+        : Ctx(Exp->getParent()->getParent()->getContext()) {
+        initialize(Exp);
+      }
+
+      ~Context() { cleanup(); }
+
+      void print(raw_ostream &OS, const Value *V) const;
+      Value *materialize(BasicBlock *B, BasicBlock::iterator At);
+
+    private:
+      friend struct Simplifier;
+
+      void initialize(Instruction *Exp);
+      void cleanup();
+
+      template <typename FuncT> void traverse(Value *V, FuncT F);
+      void record(Value *V);
+      void use(Value *V);
+      void unuse(Value *V);
+
+      bool equal(const Instruction *I, const Instruction *J) const;
+      Value *find(Value *Tree, Value *Sub) const;
+      Value *subst(Value *Tree, Value *OldV, Value *NewV);
+      void replace(Value *OldV, Value *NewV);
+      void link(Instruction *I, BasicBlock *B, BasicBlock::iterator At);
+    };
+
+    Value *simplify(Context &C);
+  };
+
+  struct PE {
+    PE(const Simplifier::Context &c, Value *v = nullptr) : C(c), V(v) {}
+
+    const Simplifier::Context &C;
+    const Value *V;
+  };
+
+  raw_ostream &operator<< (raw_ostream &OS, const PE &P) LLVM_ATTRIBUTE_USED;
+  raw_ostream &operator<< (raw_ostream &OS, const PE &P) {
+    P.C.print(OS, P.V ? P.V : P.C.Root);
+    return OS;
+  }
+
+} // end anonymous namespace
 
 char HexagonLoopIdiomRecognize::ID = 0;
 
@@ -127,88 +258,6 @@ INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(HexagonLoopIdiomRecognize, "hexagon-loop-idiom",
     "Recognize Hexagon-specific loop idioms", false, false)
-
-
-namespace {
-  struct Simplifier {
-    typedef std::function<Value* (Instruction*, LLVMContext&)> Rule;
-
-    void addRule(const Rule &R) { Rules.push_back(R); }
-
-  private:
-    struct WorkListType {
-      WorkListType() = default;
-
-      void push_back(Value* V) {
-        // Do not push back duplicates.
-        if (!S.count(V)) { Q.push_back(V); S.insert(V); }
-      }
-      Value *pop_front_val() {
-        Value *V = Q.front(); Q.pop_front(); S.erase(V);
-        return V;
-      }
-      bool empty() const { return Q.empty(); }
-
-    private:
-      std::deque<Value*> Q;
-      std::set<Value*> S;
-    };
-
-    typedef std::set<Value*> ValueSetType;
-    std::vector<Rule> Rules;
-
-  public:
-    struct Context {
-      typedef DenseMap<Value*,Value*> ValueMapType;
-
-      Value *Root;
-      ValueSetType Used;    // The set of all cloned values used by Root.
-      ValueSetType Clones;  // The set of all cloned values.
-      LLVMContext &Ctx;
-
-      Context(Instruction *Exp)
-        : Ctx(Exp->getParent()->getParent()->getContext()) {
-        initialize(Exp);
-      }
-      ~Context() { cleanup(); }
-      void print(raw_ostream &OS, const Value *V) const;
-
-      Value *materialize(BasicBlock *B, BasicBlock::iterator At);
-
-    private:
-      void initialize(Instruction *Exp);
-      void cleanup();
-
-      template <typename FuncT> void traverse(Value *V, FuncT F);
-      void record(Value *V);
-      void use(Value *V);
-      void unuse(Value *V);
-
-      bool equal(const Instruction *I, const Instruction *J) const;
-      Value *find(Value *Tree, Value *Sub) const;
-      Value *subst(Value *Tree, Value *OldV, Value *NewV);
-      void replace(Value *OldV, Value *NewV);
-      void link(Instruction *I, BasicBlock *B, BasicBlock::iterator At);
-
-      friend struct Simplifier;
-    };
-
-    Value *simplify(Context &C);
-  };
-
-  struct PE {
-    PE(const Simplifier::Context &c, Value *v = nullptr) : C(c), V(v) {}
-    const Simplifier::Context &C;
-    const Value *V;
-  };
-
-  raw_ostream &operator<< (raw_ostream &OS, const PE &P) LLVM_ATTRIBUTE_USED;
-  raw_ostream &operator<< (raw_ostream &OS, const PE &P) {
-    P.C.print(OS, P.V ? P.V : P.C.Root);
-    return OS;
-  }
-}
-
 
 template <typename FuncT>
 void Simplifier::Context::traverse(Value *V, FuncT F) {
@@ -225,7 +274,6 @@ void Simplifier::Context::traverse(Value *V, FuncT F) {
       Q.push_back(Op);
   }
 }
-
 
 void Simplifier::Context::print(raw_ostream &OS, const Value *V) const {
   const auto *U = dyn_cast<const Instruction>(V);
@@ -252,7 +300,6 @@ void Simplifier::Context::print(raw_ostream &OS, const Value *V) const {
   if (N != 0)
     OS << ')';
 }
-
 
 void Simplifier::Context::initialize(Instruction *Exp) {
   // Perform a deep clone of the expression, set Root to the root
@@ -293,7 +340,6 @@ void Simplifier::Context::initialize(Instruction *Exp) {
   use(Root);
 }
 
-
 void Simplifier::Context::record(Value *V) {
   auto Record = [this](Instruction *U) -> bool {
     Clones.insert(U);
@@ -302,7 +348,6 @@ void Simplifier::Context::record(Value *V) {
   traverse(V, Record);
 }
 
-
 void Simplifier::Context::use(Value *V) {
   auto Use = [this](Instruction *U) -> bool {
     Used.insert(U);
@@ -310,7 +355,6 @@ void Simplifier::Context::use(Value *V) {
   };
   traverse(V, Use);
 }
-
 
 void Simplifier::Context::unuse(Value *V) {
   if (!isa<Instruction>(V) || cast<Instruction>(V)->getParent() != nullptr)
@@ -324,7 +368,6 @@ void Simplifier::Context::unuse(Value *V) {
   };
   traverse(V, Unuse);
 }
-
 
 Value *Simplifier::Context::subst(Value *Tree, Value *OldV, Value *NewV) {
   if (Tree == OldV)
@@ -351,7 +394,6 @@ Value *Simplifier::Context::subst(Value *Tree, Value *OldV, Value *NewV) {
   }
   return Tree;
 }
-
 
 void Simplifier::Context::replace(Value *OldV, Value *NewV) {
   if (Root == OldV) {
@@ -387,7 +429,6 @@ void Simplifier::Context::replace(Value *OldV, Value *NewV) {
   use(Root);
 }
 
-
 void Simplifier::Context::cleanup() {
   for (Value *V : Clones) {
     Instruction *U = cast<Instruction>(V);
@@ -398,10 +439,9 @@ void Simplifier::Context::cleanup() {
   for (Value *V : Clones) {
     Instruction *U = cast<Instruction>(V);
     if (!U->getParent())
-      delete U;
+      U->deleteValue();
   }
 }
-
 
 bool Simplifier::Context::equal(const Instruction *I,
                                 const Instruction *J) const {
@@ -427,7 +467,6 @@ bool Simplifier::Context::equal(const Instruction *I,
   return true;
 }
 
-
 Value *Simplifier::Context::find(Value *Tree, Value *Sub) const {
   Instruction *SubI = dyn_cast<Instruction>(Sub);
   WorkListType Q;
@@ -449,7 +488,6 @@ Value *Simplifier::Context::find(Value *Tree, Value *Sub) const {
   return nullptr;
 }
 
-
 void Simplifier::Context::link(Instruction *I, BasicBlock *B,
       BasicBlock::iterator At) {
   if (I->getParent())
@@ -463,7 +501,6 @@ void Simplifier::Context::link(Instruction *I, BasicBlock *B,
   B->getInstList().insert(At, I);
 }
 
-
 Value *Simplifier::Context::materialize(BasicBlock *B,
       BasicBlock::iterator At) {
   if (Instruction *RootI = dyn_cast<Instruction>(Root))
@@ -471,12 +508,11 @@ Value *Simplifier::Context::materialize(BasicBlock *B,
   return Root;
 }
 
-
 Value *Simplifier::simplify(Context &C) {
   WorkListType Q;
   Q.push_back(C.Root);
   unsigned Count = 0;
-  const unsigned Limit = 100000;
+  const unsigned Limit = SimplifyLimit;
 
   while (!Q.empty()) {
     if (Count++ >= Limit)
@@ -500,10 +536,8 @@ Value *Simplifier::simplify(Context &C) {
         Q.push_back(Op);
     }
   }
-  assert(Count < Limit && "Infinite loop in HLIR/simplify?");
-  return C.Root;
+  return Count < Limit ? C.Root : nullptr;
 }
-
 
 //===----------------------------------------------------------------------===//
 //
@@ -512,6 +546,7 @@ Value *Simplifier::simplify(Context &C) {
 //===----------------------------------------------------------------------===//
 
 namespace {
+
   class PolynomialMultiplyRecognize {
   public:
     explicit PolynomialMultiplyRecognize(Loop *loop, const DataLayout &dl,
@@ -520,13 +555,15 @@ namespace {
       : CurLoop(loop), DL(dl), DT(dt), TLI(tli), SE(se) {}
 
     bool recognize();
+
   private:
-    typedef SetVector<Value*> ValueSeq;
+    using ValueSeq = SetVector<Value *>;
 
     IntegerType *getPmpyType() const {
       LLVMContext &Ctx = CurLoop->getHeader()->getParent()->getContext();
       return IntegerType::get(Ctx, 32);
     }
+
     bool isPromotableTo(Value *V, IntegerType *Ty);
     void promoteTo(Instruction *In, IntegerType *DestTy, BasicBlock *LoopB);
     bool promoteTypes(BasicBlock *LoopB, BasicBlock *ExitB);
@@ -545,12 +582,17 @@ namespace {
     void cleanupLoopBody(BasicBlock *LoopB);
 
     struct ParsedValues {
-      ParsedValues() : M(nullptr), P(nullptr), Q(nullptr), R(nullptr),
-          X(nullptr), Res(nullptr), IterCount(0), Left(false), Inv(false) {}
-      Value *M, *P, *Q, *R, *X;
-      Instruction *Res;
-      unsigned IterCount;
-      bool Left, Inv;
+      ParsedValues() = default;
+
+      Value *M = nullptr;
+      Value *P = nullptr;
+      Value *Q = nullptr;
+      Value *R = nullptr;
+      Value *X = nullptr;
+      Instruction *Res = nullptr;
+      unsigned IterCount = 0;
+      bool Left = false;
+      bool Inv = false;
     };
 
     bool matchLeftShift(SelectInst *SelI, Value *CIV, ParsedValues &PV);
@@ -569,8 +611,8 @@ namespace {
     const TargetLibraryInfo &TLI;
     ScalarEvolution &SE;
   };
-}
 
+} // end anonymous namespace
 
 Value *PolynomialMultiplyRecognize::getCountIV(BasicBlock *BB) {
   pred_iterator PI = pred_begin(BB), PE = pred_end(BB);
@@ -604,7 +646,6 @@ Value *PolynomialMultiplyRecognize::getCountIV(BasicBlock *BB) {
   return nullptr;
 }
 
-
 static void replaceAllUsesOfWithIn(Value *I, Value *J, BasicBlock *BB) {
   for (auto UI = I->user_begin(), UE = I->user_end(); UI != UE;) {
     Use &TheUse = UI.getUse();
@@ -614,7 +655,6 @@ static void replaceAllUsesOfWithIn(Value *I, Value *J, BasicBlock *BB) {
         II->replaceUsesOfWith(I, J);
   }
 }
-
 
 bool PolynomialMultiplyRecognize::matchLeftShift(SelectInst *SelI,
       Value *CIV, ParsedValues &PV) {
@@ -731,7 +771,6 @@ bool PolynomialMultiplyRecognize::matchLeftShift(SelectInst *SelI,
   return true;
 }
 
-
 bool PolynomialMultiplyRecognize::matchRightShift(SelectInst *SelI,
       ParsedValues &PV) {
   // Match the following:
@@ -807,11 +846,11 @@ bool PolynomialMultiplyRecognize::matchRightShift(SelectInst *SelI,
   return true;
 }
 
-
 bool PolynomialMultiplyRecognize::scanSelect(SelectInst *SelI,
       BasicBlock *LoopB, BasicBlock *PrehB, Value *CIV, ParsedValues &PV,
       bool PreScan) {
   using namespace PatternMatch;
+
   // The basic pattern for R = P.Q is:
   // for i = 0..31
   //   R = phi (0, R')
@@ -914,7 +953,6 @@ bool PolynomialMultiplyRecognize::scanSelect(SelectInst *SelI,
   return false;
 }
 
-
 bool PolynomialMultiplyRecognize::isPromotableTo(Value *Val,
       IntegerType *DestTy) {
   IntegerType *T = dyn_cast<IntegerType>(Val->getType());
@@ -951,7 +989,6 @@ bool PolynomialMultiplyRecognize::isPromotableTo(Value *Val,
   }
   return false;
 }
-
 
 void PolynomialMultiplyRecognize::promoteTo(Instruction *In,
       IntegerType *DestTy, BasicBlock *LoopB) {
@@ -993,7 +1030,6 @@ void PolynomialMultiplyRecognize::promoteTo(Instruction *In,
         In->setOperand(i, ConstantInt::get(DestTy, CI->getZExtValue()));
   }
 }
-
 
 bool PolynomialMultiplyRecognize::promoteTypes(BasicBlock *LoopB,
       BasicBlock *ExitB) {
@@ -1058,7 +1094,6 @@ bool PolynomialMultiplyRecognize::promoteTypes(BasicBlock *LoopB,
   return true;
 }
 
-
 bool PolynomialMultiplyRecognize::findCycle(Value *Out, Value *In,
       ValueSeq &Cycle) {
   // Out = ..., In, ...
@@ -1090,7 +1125,6 @@ bool PolynomialMultiplyRecognize::findCycle(Value *Out, Value *In,
   }
   return !Cycle.empty();
 }
-
 
 void PolynomialMultiplyRecognize::classifyCycle(Instruction *DivI,
       ValueSeq &Cycle, ValueSeq &Early, ValueSeq &Late) {
@@ -1127,7 +1161,6 @@ void PolynomialMultiplyRecognize::classifyCycle(Instruction *DivI,
   for (; I < N; ++I)
     First.insert(Cycle[I]);
 }
-
 
 bool PolynomialMultiplyRecognize::classifyInst(Instruction *UseI,
       ValueSeq &Early, ValueSeq &Late) {
@@ -1181,7 +1214,6 @@ bool PolynomialMultiplyRecognize::classifyInst(Instruction *UseI,
   return true;
 }
 
-
 bool PolynomialMultiplyRecognize::commutesWithShift(Instruction *I) {
   switch (I->getOpcode()) {
     case Instruction::And:
@@ -1199,19 +1231,16 @@ bool PolynomialMultiplyRecognize::commutesWithShift(Instruction *I) {
   return true;
 }
 
-
 bool PolynomialMultiplyRecognize::highBitsAreZero(Value *V,
       unsigned IterCount) {
   auto *T = dyn_cast<IntegerType>(V->getType());
   if (!T)
     return false;
 
-  unsigned BW = T->getBitWidth();
-  APInt K0(BW, 0), K1(BW, 0);
-  computeKnownBits(V, K0, K1, DL);
-  return K0.countLeadingOnes() >= IterCount;
+  KnownBits Known(T->getBitWidth());
+  computeKnownBits(V, Known, DL);
+  return Known.countMinLeadingZeros() >= IterCount;
 }
-
 
 bool PolynomialMultiplyRecognize::keepsHighBitsZero(Value *V,
       unsigned IterCount) {
@@ -1237,14 +1266,12 @@ bool PolynomialMultiplyRecognize::keepsHighBitsZero(Value *V,
   return false;
 }
 
-
 bool PolynomialMultiplyRecognize::isOperandShifted(Instruction *I, Value *Op) {
   unsigned Opc = I->getOpcode();
   if (Opc == Instruction::Shl || Opc == Instruction::LShr)
     return Op != I->getOperand(1);
   return true;
 }
-
 
 bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
       BasicBlock *ExitB, unsigned IterCount) {
@@ -1261,6 +1288,7 @@ bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
   // Find all value cycles that contain logical right shifts by 1.
   for (Instruction &I : *LoopB) {
     using namespace PatternMatch;
+
     Value *V = nullptr;
     if (!match(&I, m_LShr(m_Value(V), m_One())))
       continue;
@@ -1301,7 +1329,7 @@ bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
     }
   }
 
-  if (Users.size() == 0)
+  if (Users.empty())
     return false;
 
   // Verify that high bits remain zero.
@@ -1329,7 +1357,9 @@ bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
   // Finally, the work can be done. Unshift each user.
   IRBuilder<> IRB(LoopB);
   std::map<Value*,Value*> ShiftMap;
-  typedef std::map<std::pair<Value*,Type*>,Value*> CastMapType;
+
+  using CastMapType = std::map<std::pair<Value *, Type *>, Value *>;
+
   CastMapType CastMap;
 
   auto upcast = [] (CastMapType &CM, IRBuilder<> &IRB, Value *V,
@@ -1343,9 +1373,11 @@ bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
   };
 
   for (auto I = LoopB->begin(), E = LoopB->end(); I != E; ++I) {
+    using namespace PatternMatch;
+
     if (isa<PHINode>(I) || !Users.count(&*I))
       continue;
-    using namespace PatternMatch;
+
     // Match lshr x, 1.
     Value *V = nullptr;
     if (match(&*I, m_LShr(m_Value(V), m_One()))) {
@@ -1417,10 +1449,9 @@ bool PolynomialMultiplyRecognize::convertShiftsToLeft(BasicBlock *LoopB,
   return true;
 }
 
-
 void PolynomialMultiplyRecognize::cleanupLoopBody(BasicBlock *LoopB) {
   for (auto &I : *LoopB)
-    if (Value *SV = SimplifyInstruction(&I, DL, &TLI, &DT))
+    if (Value *SV = SimplifyInstruction(&I, {DL, &TLI, &DT}))
       I.replaceAllUsesWith(SV);
 
   for (auto I = LoopB->begin(), N = I; I != LoopB->end(); I = N) {
@@ -1428,7 +1459,6 @@ void PolynomialMultiplyRecognize::cleanupLoopBody(BasicBlock *LoopB) {
     RecursivelyDeleteTriviallyDeadInstructions(&*I, &TLI);
   }
 }
-
 
 unsigned PolynomialMultiplyRecognize::getInverseMxN(unsigned QP) {
   // Arrays of coefficients of Q and the inverse, C.
@@ -1473,7 +1503,6 @@ unsigned PolynomialMultiplyRecognize::getInverseMxN(unsigned QP) {
   return QV;
 }
 
-
 Value *PolynomialMultiplyRecognize::generate(BasicBlock::iterator At,
       ParsedValues &PV) {
   IRBuilder<> B(&*At);
@@ -1514,7 +1543,6 @@ Value *PolynomialMultiplyRecognize::generate(BasicBlock::iterator At,
 
   return R;
 }
-
 
 void PolynomialMultiplyRecognize::setupSimplifier() {
   Simp.addRule(
@@ -1668,7 +1696,6 @@ void PolynomialMultiplyRecognize::setupSimplifier() {
     });
 }
 
-
 bool PolynomialMultiplyRecognize::recognize() {
   DEBUG(dbgs() << "Starting PolynomialMultiplyRecognize on loop\n"
                << *CurLoop << '\n');
@@ -1742,7 +1769,8 @@ bool PolynomialMultiplyRecognize::recognize() {
     // wide as the target's pmpy instruction.
     if (!promoteTypes(LoopB, ExitB))
       return false;
-    convertShiftsToLeft(LoopB, ExitB, IterCount);
+    if (!convertShiftsToLeft(LoopB, ExitB, IterCount))
+      return false;
     cleanupLoopBody(LoopB);
   }
 
@@ -1786,7 +1814,6 @@ bool PolynomialMultiplyRecognize::recognize() {
   return true;
 }
 
-
 unsigned HexagonLoopIdiomRecognize::getStoreSizeInBytes(StoreInst *SI) {
   uint64_t SizeInBits = DL->getTypeSizeInBits(SI->getValueOperand()->getType());
   assert(((SizeInBits & 7) || (SizeInBits >> 32) == 0) &&
@@ -1794,13 +1821,11 @@ unsigned HexagonLoopIdiomRecognize::getStoreSizeInBytes(StoreInst *SI) {
   return (unsigned)SizeInBits >> 3;
 }
 
-
 int HexagonLoopIdiomRecognize::getSCEVStride(const SCEVAddRecExpr *S) {
   if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(S->getOperand(1)))
     return SC->getAPInt().getSExtValue();
   return 0;
 }
-
 
 bool HexagonLoopIdiomRecognize::isLegalStore(Loop *CurLoop, StoreInst *SI) {
   // Allow volatile stores if HexagonVolatileMemcpy is enabled.
@@ -1852,7 +1877,6 @@ bool HexagonLoopIdiomRecognize::isLegalStore(Loop *CurLoop, StoreInst *SI) {
   return true;
 }
 
-
 /// mayLoopAccessLocation - Return true if the specified loop might access the
 /// specified pointer location, which is a loop-strided access.  The 'Access'
 /// argument specifies what the verboten forms of access are (read or write).
@@ -1885,7 +1909,6 @@ mayLoopAccessLocation(Value *Ptr, ModRefInfo Access, Loop *L,
   return false;
 }
 
-
 void HexagonLoopIdiomRecognize::collectStores(Loop *CurLoop, BasicBlock *BB,
       SmallVectorImpl<StoreInst*> &Stores) {
   Stores.clear();
@@ -1894,7 +1917,6 @@ void HexagonLoopIdiomRecognize::collectStores(Loop *CurLoop, BasicBlock *BB,
       if (isLegalStore(CurLoop, SI))
         Stores.push_back(SI);
 }
-
 
 bool HexagonLoopIdiomRecognize::processCopyingStore(Loop *CurLoop,
       StoreInst *SI, const SCEV *BECount) {
@@ -1995,7 +2017,7 @@ CleanupAndExit:
 
     if (DisableMemmoveIdiom || !HasMemmove)
       goto CleanupAndExit;
-    bool IsNested = CurLoop->getParentLoop() != 0;
+    bool IsNested = CurLoop->getParentLoop() != nullptr;
     if (IsNested && OnlyNonNestedMemmove)
       goto CleanupAndExit;
   }
@@ -2044,7 +2066,7 @@ CleanupAndExit:
                                SCEV::FlagNUW);
   Value *NumBytes = Expander.expandCodeFor(NumBytesS, IntPtrTy, ExpPt);
   if (Instruction *In = dyn_cast<Instruction>(NumBytes))
-    if (Value *Simp = SimplifyInstruction(In, *DL, TLI, DT))
+    if (Value *Simp = SimplifyInstruction(In, {*DL, TLI, DT}))
       NumBytes = Simp;
 
   CallInst *NewCall;
@@ -2095,9 +2117,10 @@ CleanupAndExit:
     Value *CmpA = Builder.CreateICmpULT(LowA, HighA);
     Value *Cond = CmpA;
 
-    // Check for distance between pointers.
-    Value *Dist = Builder.CreateSub(HighA, LowA);
-    Value *CmpD = Builder.CreateICmpSLT(NumBytes, Dist);
+    // Check for distance between pointers. Since the case LowA < HighA
+    // is checked for above, assume LowA >= HighA.
+    Value *Dist = Builder.CreateSub(LowA, HighA);
+    Value *CmpD = Builder.CreateICmpSLE(NumBytes, Dist);
     Value *CmpEither = Builder.CreateOr(Cond, CmpD);
     Cond = CmpEither;
 
@@ -2146,8 +2169,7 @@ CleanupAndExit:
       Type *VoidTy = Type::getVoidTy(Ctx);
       Module *M = Func->getParent();
       Constant *CF = M->getOrInsertFunction(HexagonVolatileMemcpyName, VoidTy,
-                                            Int32PtrTy, Int32PtrTy, Int32Ty,
-                                            nullptr);
+                                            Int32PtrTy, Int32PtrTy, Int32Ty);
       Function *Fn = cast<Function>(CF);
       Fn->setLinkage(Function::ExternalLinkage);
 
@@ -2157,7 +2179,7 @@ CleanupAndExit:
       Value *NumWords = Expander.expandCodeFor(NumWordsS, Int32Ty,
                                                MemmoveB->getTerminator());
       if (Instruction *In = dyn_cast<Instruction>(NumWords))
-        if (Value *Simp = SimplifyInstruction(In, *DL, TLI, DT))
+        if (Value *Simp = SimplifyInstruction(In, {*DL, TLI, DT}))
           NumWords = Simp;
 
       Value *Op0 = (StoreBasePtr->getType() == Int32PtrTy)
@@ -2188,7 +2210,6 @@ CleanupAndExit:
 
   return true;
 }
-
 
 // \brief Check if the instructions in Insts, together with their dependencies
 // cover the loop in the sense that the loop could be safely eliminated once
@@ -2268,7 +2289,6 @@ bool HexagonLoopIdiomRecognize::runOnLoopBlock(Loop *CurLoop, BasicBlock *BB,
   return MadeChange;
 }
 
-
 bool HexagonLoopIdiomRecognize::runOnCountableLoop(Loop *L) {
   PolynomialMultiplyRecognize PMR(L, *DL, *DT, *TLI, *SE);
   if (PMR.recognize())
@@ -2297,7 +2317,6 @@ bool HexagonLoopIdiomRecognize::runOnCountableLoop(Loop *L) {
 
   return Changed;
 }
-
 
 bool HexagonLoopIdiomRecognize::runOnLoop(Loop *L, LPPassManager &LPM) {
   const Module &M = *L->getHeader()->getParent()->getParent();
@@ -2332,8 +2351,6 @@ bool HexagonLoopIdiomRecognize::runOnLoop(Loop *L, LPPassManager &LPM) {
   return false;
 }
 
-
 Pass *llvm::createHexagonLoopIdiomPass() {
   return new HexagonLoopIdiomRecognize();
 }
-

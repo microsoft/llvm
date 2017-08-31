@@ -20,7 +20,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/IPO.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
@@ -30,6 +29,7 @@
 #include "llvm/IR/TypeFinder.h"
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/Pass.h"
+#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 
@@ -324,10 +324,9 @@ bool StripDeadDebugInfo::runOnModule(Module &M) {
   }
 
   std::set<DICompileUnit *> LiveCUs;
-  // Any CU referenced from a function is live.
-  for (Function &F : M.functions()) {
-    DISubprogram *SP = F.getSubprogram();
-    if (SP && SP->getUnit())
+  // Any CU referenced from a subprogram is live.
+  for (DISubprogram *SP : F.subprograms()) {
+    if (SP->getUnit())
       LiveCUs.insert(SP->getUnit());
   }
 

@@ -27,6 +27,7 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
@@ -239,7 +240,7 @@ static bool CleanupConstantGlobalUsers(Value *V, Constant *Init,
   // we delete a constant array, we may also be holding pointer to one of its
   // elements (or an element of one of its elements if we're dealing with an
   // array of arrays) in the worklist.
-  SmallVector<WeakVH, 8> WorkList(V->user_begin(), V->user_end());
+  SmallVector<WeakTrackingVH, 8> WorkList(V->user_begin(), V->user_end());
   while (!WorkList.empty()) {
     Value *UV = WorkList.pop_back_val();
     if (!UV)
@@ -402,11 +403,8 @@ static bool IsUserOfGlobalSafeForSRA(User *U, GlobalValue *GV) {
     }
   }
 
-  for (User *UU : U->users())
-    if (!isSafeSROAElementUse(UU))
-      return false;
-
-  return true;
+  return llvm::all_of(U->users(),
+                      [](User *UU) { return isSafeSROAElementUse(UU); });
 }
 
 /// Look at all uses of the global and decide whether it is safe for us to
@@ -417,6 +415,24 @@ static bool GlobalUsersSafeToSRA(GlobalValue *GV) {
       return false;
 
   return true;
+}
+
+/// Copy over the debug info for a variable to its SRA replacements.
+static void transferSRADebugInfo(GlobalVariable *GV, GlobalVariable *NGV,
+                                 uint64_t FragmentOffsetInBits,
+                                 uint64_t FragmentSizeInBits,
+                                 unsigned NumElements) {
+  SmallVector<DIGlobalVariableExpression *, 1> GVs;
+  GV->getDebugInfo(GVs);
+  for (auto *GVE : GVs) {
+    DIVariable *Var = GVE->getVariable();
+    DIExpression *Expr = GVE->getExpression();
+    if (NumElements > 1)
+      Expr = DIExpression::createFragmentExpression(Expr, FragmentOffsetInBits,
+                                                    FragmentSizeInBits);
+    auto *NGVE = DIGlobalVariableExpression::get(GVE->getContext(), Var, Expr);
+    NGV->addDebugInfo(NGVE);
+  }
 }
 
 
@@ -443,9 +459,11 @@ static GlobalVariable *SRAGlobal(GlobalVariable *GV, const DataLayout &DL) {
     StartAlignment = DL.getABITypeAlignment(GV->getType());
 
   if (StructType *STy = dyn_cast<StructType>(Ty)) {
-    NewGlobals.reserve(STy->getNumElements());
+    uint64_t FragmentOffset = 0;
+    unsigned NumElements = STy->getNumElements();
+    NewGlobals.reserve(NumElements);
     const StructLayout &Layout = *DL.getStructLayout(STy);
-    for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
+    for (unsigned i = 0, e = NumElements; i != e; ++i) {
       Constant *In = Init->getAggregateElement(i);
       assert(In && "Couldn't get element of initializer?");
       GlobalVariable *NGV = new GlobalVariable(STy->getElementType(i), false,
@@ -465,15 +483,22 @@ static GlobalVariable *SRAGlobal(GlobalVariable *GV, const DataLayout &DL) {
       unsigned NewAlign = (unsigned)MinAlign(StartAlignment, FieldOffset);
       if (NewAlign > DL.getABITypeAlignment(STy->getElementType(i)))
         NGV->setAlignment(NewAlign);
+
+      // Copy over the debug info for the variable.
+      FragmentOffset = alignTo(FragmentOffset, NewAlign);
+      uint64_t Size = DL.getTypeSizeInBits(NGV->getValueType());
+      transferSRADebugInfo(GV, NGV, FragmentOffset, Size, NumElements);
+      FragmentOffset += Size;
     }
   } else if (SequentialType *STy = dyn_cast<SequentialType>(Ty)) {
     unsigned NumElements = STy->getNumElements();
     if (NumElements > 16 && GV->hasNUsesOrMore(16))
       return nullptr; // It's not worth it.
     NewGlobals.reserve(NumElements);
-
-    uint64_t EltSize = DL.getTypeAllocSize(STy->getElementType());
-    unsigned EltAlign = DL.getABITypeAlignment(STy->getElementType());
+    auto ElTy = STy->getElementType();
+    uint64_t EltSize = DL.getTypeAllocSize(ElTy);
+    unsigned EltAlign = DL.getABITypeAlignment(ElTy);
+    uint64_t FragmentSizeInBits = DL.getTypeSizeInBits(ElTy);
     for (unsigned i = 0, e = NumElements; i != e; ++i) {
       Constant *In = Init->getAggregateElement(i);
       assert(In && "Couldn't get element of initializer?");
@@ -494,6 +519,8 @@ static GlobalVariable *SRAGlobal(GlobalVariable *GV, const DataLayout &DL) {
       unsigned NewAlign = (unsigned)MinAlign(StartAlignment, EltSize*i);
       if (NewAlign > EltAlign)
         NGV->setAlignment(NewAlign);
+      transferSRADebugInfo(GV, NGV, FragmentSizeInBits * i, FragmentSizeInBits,
+                           NumElements);
     }
   }
 
@@ -837,7 +864,7 @@ OptimizeGlobalAddressOfMalloc(GlobalVariable *GV, CallInst *CI, Type *AllocTy,
     if (StoreInst *SI = dyn_cast<StoreInst>(GV->user_back())) {
       // The global is initialized when the store to it occurs.
       new StoreInst(ConstantInt::getTrue(GV->getContext()), InitBool, false, 0,
-                    SI->getOrdering(), SI->getSynchScope(), SI);
+                    SI->getOrdering(), SI->getSyncScopeID(), SI);
       SI->eraseFromParent();
       continue;
     }
@@ -854,7 +881,7 @@ OptimizeGlobalAddressOfMalloc(GlobalVariable *GV, CallInst *CI, Type *AllocTy,
       // Replace the cmp X, 0 with a use of the bool value.
       // Sink the load to where the compare was, if atomic rules allow us to.
       Value *LV = new LoadInst(InitBool, InitBool->getName()+".val", false, 0,
-                               LI->getOrdering(), LI->getSynchScope(),
+                               LI->getOrdering(), LI->getSyncScopeID(),
                                LI->isUnordered() ? (Instruction*)ICI : LI);
       InitBoolUsed = true;
       switch (ICI->getPredicate()) {
@@ -1605,7 +1632,7 @@ static bool TryToShrinkGlobalToBoolean(GlobalVariable *GV, Constant *OtherVal) {
           assert(LI->getOperand(0) == GV && "Not a copy!");
           // Insert a new load, to preserve the saved value.
           StoreVal = new LoadInst(NewGV, LI->getName()+".b", false, 0,
-                                  LI->getOrdering(), LI->getSynchScope(), LI);
+                                  LI->getOrdering(), LI->getSyncScopeID(), LI);
         } else {
           assert((isa<CastInst>(StoredVal) || isa<SelectInst>(StoredVal)) &&
                  "This is not a form that we understand!");
@@ -1614,12 +1641,12 @@ static bool TryToShrinkGlobalToBoolean(GlobalVariable *GV, Constant *OtherVal) {
         }
       }
       new StoreInst(StoreVal, NewGV, false, 0,
-                    SI->getOrdering(), SI->getSynchScope(), SI);
+                    SI->getOrdering(), SI->getSyncScopeID(), SI);
     } else {
       // Change the load into a load of bool then a select.
       LoadInst *LI = cast<LoadInst>(UI);
       LoadInst *NLI = new LoadInst(NewGV, LI->getName()+".b", false, 0,
-                                   LI->getOrdering(), LI->getSynchScope(), LI);
+                                   LI->getOrdering(), LI->getSyncScopeID(), LI);
       Value *NSI;
       if (IsOneZero)
         NSI = new ZExtInst(NLI, LI->getType(), "", LI);
@@ -1792,7 +1819,9 @@ static void makeAllConstantUsesInstructions(Constant *C) {
       NewU->insertBefore(UI);
       UI->replaceUsesOfWith(U, NewU);
     }
-    U->dropAllReferences();
+    // We've replaced all the uses, so destroy the constant. (destroyConstant
+    // will update value handles and metadata.)
+    U->destroyConstant();
   }
 }
 
@@ -1979,16 +2008,11 @@ static void ChangeCalleesToFastCall(Function *F) {
   }
 }
 
-static AttributeList StripNest(LLVMContext &C, const AttributeList &Attrs) {
-  for (unsigned i = 0, e = Attrs.getNumSlots(); i != e; ++i) {
-    unsigned Index = Attrs.getSlotIndex(i);
-    if (!Attrs.getSlotAttributes(i).hasAttribute(Index, Attribute::Nest))
-      continue;
-
-    // There can be only one.
-    return Attrs.removeAttribute(C, Index, Attribute::Nest);
-  }
-
+static AttributeList StripNest(LLVMContext &C, AttributeList Attrs) {
+  // There can be at most one attribute set with a nest attribute.
+  unsigned NestIndex;
+  if (Attrs.hasAttrSomewhere(Attribute::Nest, &NestIndex))
+    return Attrs.removeAttribute(C, NestIndex, Attribute::Nest);
   return Attrs;
 }
 
@@ -2027,6 +2051,24 @@ OptimizeFunctions(Module &M, TargetLibraryInfo *TLI,
     if (deleteIfDead(*F, NotDiscardableComdats)) {
       Changed = true;
       continue;
+    }
+
+    // LLVM's definition of dominance allows instructions that are cyclic
+    // in unreachable blocks, e.g.:
+    // %pat = select i1 %condition, @global, i16* %pat
+    // because any instruction dominates an instruction in a block that's
+    // not reachable from entry.
+    // So, remove unreachable blocks from the function, because a) there's
+    // no point in analyzing them and b) GlobalOpt should otherwise grow
+    // some more complicated logic to break these cycles.
+    // Removing unreachable blocks might invalidate the dominator so we
+    // recalculate it.
+    if (!F->isDeclaration()) {
+      if (removeUnreachableBlocks(*F)) {
+        auto &DT = LookupDomTree(*F);
+        DT.recalculate(*F);
+        Changed = true;
+      }
     }
 
     Changed |= processGlobal(*F, TLI, LookupDomTree);

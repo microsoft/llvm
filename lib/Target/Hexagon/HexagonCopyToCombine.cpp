@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 #include "HexagonInstrInfo.h"
 #include "HexagonSubtarget.h"
-#include "llvm/PassSupport.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -22,6 +21,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/PassSupport.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -253,7 +253,8 @@ static bool isUnsafeToMoveAcross(MachineInstr &MI, unsigned UseReg,
                                  const TargetRegisterInfo *TRI) {
   return (UseReg && (MI.modifiesRegister(UseReg, TRI))) ||
          MI.modifiesRegister(DestReg, TRI) || MI.readsRegister(DestReg, TRI) ||
-         MI.hasUnmodeledSideEffects() || MI.isInlineAsm() || MI.isDebugValue();
+         MI.hasUnmodeledSideEffects() || MI.isInlineAsm() ||
+         MI.isMetaInstruction();
 }
 
 static unsigned UseReg(const MachineOperand& MO) {
@@ -460,6 +461,8 @@ HexagonCopyToCombine::findPotentialNewifiableTFRs(MachineBasicBlock &BB) {
 }
 
 bool HexagonCopyToCombine::runOnMachineFunction(MachineFunction &MF) {
+  if (skipFunction(*MF.getFunction()))
+    return false;
 
   if (IsCombinesDisabled) return false;
 

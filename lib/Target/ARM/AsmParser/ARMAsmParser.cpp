@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARMFeatures.h"
+#include "Utils/ARMBaseInfo.h"
 #include "MCTargetDesc/ARMAddressingModes.h"
 #include "MCTargetDesc/ARMBaseInfo.h"
 #include "MCTargetDesc/ARMMCExpr.h"
@@ -17,6 +18,8 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
@@ -39,10 +42,8 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/ARMEHABI.h"
-#include "llvm/Support/COFF.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ELF.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetParser.h"
@@ -66,6 +67,9 @@ static cl::opt<ImplicitItModeTy> ImplicitItMode(
                           "Accept in ARM, reject in Thumb"),
                clEnumValN(ImplicitItModeTy::ThumbOnly, "thumb",
                           "Warn in ARM, emit implicit ITs in Thumb")));
+
+static cl::opt<bool> AddBuildAttributes("arm-add-build-attributes",
+                                        cl::init(false));
 
 class ARMOperand;
 
@@ -258,6 +262,11 @@ class ARMAsmParser : public MCTargetAsmParser {
     assert(ITState.CurPosition == 1);
     ITState.CurPosition = ~0U;
     return;
+  }
+
+  // Return the low-subreg of a given Q register.
+  unsigned getDRegFromQReg(unsigned QReg) const {
+    return MRI->getSubReg(QReg, ARM::dsub_0);
   }
 
   // Get the encoding of the IT mask, as it will appear in an IT instruction.
@@ -539,6 +548,10 @@ public:
 
     // Initialize the set of available features.
     setAvailableFeatures(ComputeAvailableFeatures(STI.getFeatureBits()));
+
+    // Add build attributes based on the selected target.
+    if (AddBuildAttributes)
+      getTargetStreamer().emitTargetAttributes(STI);
 
     // Not in an ITBlock to start with.
     ITState.CurPosition = ~0U;
@@ -1019,6 +1032,15 @@ public:
             ARM_AM::getSOImmVal(-Value) != -1);
   }
   bool isT2SOImm() const {
+    // If we have an immediate that's not a constant, treat it as an expression
+    // needing a fixup.
+    if (isImm() && !isa<MCConstantExpr>(getImm())) {
+      // We want to avoid matching :upper16: and :lower16: as we want these
+      // expressions to match in isImm0_65535Expr()
+      const ARMMCExpr *ARM16Expr = dyn_cast<ARMMCExpr>(getImm());
+      return (!ARM16Expr || (ARM16Expr->getKind() != ARMMCExpr::VK_ARM_HI16 &&
+                             ARM16Expr->getKind() != ARMMCExpr::VK_ARM_LO16));
+    }
     if (!isImm()) return false;
     const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
     if (!CE) return false;
@@ -3317,25 +3339,7 @@ ARMAsmParser::parseITCondCode(OperandVector &Operands) {
   const AsmToken &Tok = Parser.getTok();
   if (!Tok.is(AsmToken::Identifier))
     return MatchOperand_NoMatch;
-  unsigned CC = StringSwitch<unsigned>(Tok.getString().lower())
-    .Case("eq", ARMCC::EQ)
-    .Case("ne", ARMCC::NE)
-    .Case("hs", ARMCC::HS)
-    .Case("cs", ARMCC::HS)
-    .Case("lo", ARMCC::LO)
-    .Case("cc", ARMCC::LO)
-    .Case("mi", ARMCC::MI)
-    .Case("pl", ARMCC::PL)
-    .Case("vs", ARMCC::VS)
-    .Case("vc", ARMCC::VC)
-    .Case("hi", ARMCC::HI)
-    .Case("ls", ARMCC::LS)
-    .Case("ge", ARMCC::GE)
-    .Case("lt", ARMCC::LT)
-    .Case("gt", ARMCC::GT)
-    .Case("le", ARMCC::LE)
-    .Case("al", ARMCC::AL)
-    .Default(~0U);
+  unsigned CC = ARMCondCodeFromString(Tok.getString());
   if (CC == ~0U)
     return MatchOperand_NoMatch;
   Parser.Lex(); // Eat the token.
@@ -3442,29 +3446,6 @@ static unsigned getNextRegister(unsigned Reg) {
   case ARM::R10: return ARM::R11; case ARM::R11: return ARM::R12;
   case ARM::R12: return ARM::SP;  case ARM::SP:  return ARM::LR;
   case ARM::LR:  return ARM::PC;  case ARM::PC:  return ARM::R0;
-  }
-}
-
-// Return the low-subreg of a given Q register.
-static unsigned getDRegFromQReg(unsigned QReg) {
-  switch (QReg) {
-  default: llvm_unreachable("expected a Q register!");
-  case ARM::Q0:  return ARM::D0;
-  case ARM::Q1:  return ARM::D2;
-  case ARM::Q2:  return ARM::D4;
-  case ARM::Q3:  return ARM::D6;
-  case ARM::Q4:  return ARM::D8;
-  case ARM::Q5:  return ARM::D10;
-  case ARM::Q6:  return ARM::D12;
-  case ARM::Q7:  return ARM::D14;
-  case ARM::Q8:  return ARM::D16;
-  case ARM::Q9:  return ARM::D18;
-  case ARM::Q10: return ARM::D20;
-  case ARM::Q11: return ARM::D22;
-  case ARM::Q12: return ARM::D24;
-  case ARM::Q13: return ARM::D26;
-  case ARM::Q14: return ARM::D28;
-  case ARM::Q15: return ARM::D30;
   }
 }
 
@@ -4073,81 +4054,14 @@ ARMAsmParser::parseMSRMaskOperand(OperandVector &Operands) {
   StringRef Mask = Tok.getString();
 
   if (isMClass()) {
-    // See ARMv6-M 10.1.1
-    std::string Name = Mask.lower();
-    unsigned FlagsVal = StringSwitch<unsigned>(Name)
-      // Note: in the documentation:
-      //  ARM deprecates using MSR APSR without a _<bits> qualifier as an alias
-      //  for MSR APSR_nzcvq.
-      // but we do make it an alias here.  This is so to get the "mask encoding"
-      // bits correct on MSR APSR writes.
-      //
-      // FIXME: Note the 0xc00 "mask encoding" bits version of the registers
-      // should really only be allowed when writing a special register.  Note
-      // they get dropped in the MRS instruction reading a special register as
-      // the SYSm field is only 8 bits.
-      .Case("apsr", 0x800)
-      .Case("apsr_nzcvq", 0x800)
-      .Case("apsr_g", 0x400)
-      .Case("apsr_nzcvqg", 0xc00)
-      .Case("iapsr", 0x801)
-      .Case("iapsr_nzcvq", 0x801)
-      .Case("iapsr_g", 0x401)
-      .Case("iapsr_nzcvqg", 0xc01)
-      .Case("eapsr", 0x802)
-      .Case("eapsr_nzcvq", 0x802)
-      .Case("eapsr_g", 0x402)
-      .Case("eapsr_nzcvqg", 0xc02)
-      .Case("xpsr", 0x803)
-      .Case("xpsr_nzcvq", 0x803)
-      .Case("xpsr_g", 0x403)
-      .Case("xpsr_nzcvqg", 0xc03)
-      .Case("ipsr", 0x805)
-      .Case("epsr", 0x806)
-      .Case("iepsr", 0x807)
-      .Case("msp", 0x808)
-      .Case("psp", 0x809)
-      .Case("primask", 0x810)
-      .Case("basepri", 0x811)
-      .Case("basepri_max", 0x812)
-      .Case("faultmask", 0x813)
-      .Case("control", 0x814)
-      .Case("msplim", 0x80a)
-      .Case("psplim", 0x80b)
-      .Case("msp_ns", 0x888)
-      .Case("psp_ns", 0x889)
-      .Case("msplim_ns", 0x88a)
-      .Case("psplim_ns", 0x88b)
-      .Case("primask_ns", 0x890)
-      .Case("basepri_ns", 0x891)
-      .Case("basepri_max_ns", 0x892)
-      .Case("faultmask_ns", 0x893)
-      .Case("control_ns", 0x894)
-      .Case("sp_ns", 0x898)
-      .Default(~0U);
-
-    if (FlagsVal == ~0U)
+    auto TheReg = ARMSysReg::lookupMClassSysRegByName(Mask.lower());
+    if (!TheReg || !TheReg->hasRequiredFeatures(getSTI().getFeatureBits()))
       return MatchOperand_NoMatch;
 
-    if (!hasDSP() && (FlagsVal & 0x400))
-      // The _g and _nzcvqg versions are only valid if the DSP extension is
-      // available.
-      return MatchOperand_NoMatch;
-
-    if (!hasV7Ops() && FlagsVal >= 0x811 && FlagsVal <= 0x813)
-      // basepri, basepri_max and faultmask only valid for V7m.
-      return MatchOperand_NoMatch;
-
-    if (!has8MSecExt() && (FlagsVal == 0x80a || FlagsVal == 0x80b ||
-                             (FlagsVal > 0x814 && FlagsVal < 0xc00)))
-      return MatchOperand_NoMatch;
-
-    if (!hasV8MMainline() && (FlagsVal == 0x88a || FlagsVal == 0x88b ||
-                              (FlagsVal > 0x890 && FlagsVal <= 0x893)))
-      return MatchOperand_NoMatch;
+    unsigned SYSmvalue = TheReg->Encoding & 0xFFF;
 
     Parser.Lex(); // Eat identifier token.
-    Operands.push_back(ARMOperand::CreateMSRMask(FlagsVal, S));
+    Operands.push_back(ARMOperand::CreateMSRMask(SYSmvalue, S));
     return MatchOperand_Success;
   }
 
@@ -4225,46 +4139,10 @@ ARMAsmParser::parseBankedRegOperand(OperandVector &Operands) {
     return MatchOperand_NoMatch;
   StringRef RegName = Tok.getString();
 
-  // The values here come from B9.2.3 of the ARM ARM, where bits 4-0 are SysM
-  // and bit 5 is R.
-  unsigned Encoding = StringSwitch<unsigned>(RegName.lower())
-                          .Case("r8_usr", 0x00)
-                          .Case("r9_usr", 0x01)
-                          .Case("r10_usr", 0x02)
-                          .Case("r11_usr", 0x03)
-                          .Case("r12_usr", 0x04)
-                          .Case("sp_usr", 0x05)
-                          .Case("lr_usr", 0x06)
-                          .Case("r8_fiq", 0x08)
-                          .Case("r9_fiq", 0x09)
-                          .Case("r10_fiq", 0x0a)
-                          .Case("r11_fiq", 0x0b)
-                          .Case("r12_fiq", 0x0c)
-                          .Case("sp_fiq", 0x0d)
-                          .Case("lr_fiq", 0x0e)
-                          .Case("lr_irq", 0x10)
-                          .Case("sp_irq", 0x11)
-                          .Case("lr_svc", 0x12)
-                          .Case("sp_svc", 0x13)
-                          .Case("lr_abt", 0x14)
-                          .Case("sp_abt", 0x15)
-                          .Case("lr_und", 0x16)
-                          .Case("sp_und", 0x17)
-                          .Case("lr_mon", 0x1c)
-                          .Case("sp_mon", 0x1d)
-                          .Case("elr_hyp", 0x1e)
-                          .Case("sp_hyp", 0x1f)
-                          .Case("spsr_fiq", 0x2e)
-                          .Case("spsr_irq", 0x30)
-                          .Case("spsr_svc", 0x32)
-                          .Case("spsr_abt", 0x34)
-                          .Case("spsr_und", 0x36)
-                          .Case("spsr_mon", 0x3c)
-                          .Case("spsr_hyp", 0x3e)
-                          .Default(~0U);
-
-  if (Encoding == ~0U)
+  auto TheReg = ARMBankedReg::lookupBankedRegByName(RegName.lower());
+  if (!TheReg)
     return MatchOperand_NoMatch;
+  unsigned Encoding = TheReg->Encoding;
 
   Parser.Lex(); // Eat identifier token.
   Operands.push_back(ARMOperand::CreateBankedReg(Encoding, S));
@@ -5233,6 +5111,7 @@ bool ARMAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
 
     // Fall though for the Identifier case that is not a register or a
     // special name.
+    LLVM_FALLTHROUGH;
   }
   case AsmToken::LParen:  // parenthesized expressions like (_strcmp-4)
   case AsmToken::Integer: // things like 1f and 2b as a branch targets
@@ -5433,7 +5312,8 @@ StringRef ARMAsmParser::splitMnemonic(StringRef Mnemonic,
       Mnemonic == "vcvtm" || Mnemonic == "vrinta" || Mnemonic == "vrintn" ||
       Mnemonic == "vrintp" || Mnemonic == "vrintm" || Mnemonic == "hvc" ||
       Mnemonic.startswith("vsel") || Mnemonic == "vins" || Mnemonic == "vmovx" ||
-      Mnemonic == "bxns"  || Mnemonic == "blxns")
+      Mnemonic == "bxns"  || Mnemonic == "blxns" ||
+      Mnemonic == "vudot" || Mnemonic == "vsdot")
     return Mnemonic;
 
   // First, split out any predication code. Ignore mnemonics we know aren't
@@ -5442,25 +5322,7 @@ StringRef ARMAsmParser::splitMnemonic(StringRef Mnemonic,
       Mnemonic != "muls" && Mnemonic != "smlals" && Mnemonic != "smulls" &&
       Mnemonic != "umlals" && Mnemonic != "umulls" && Mnemonic != "lsls" &&
       Mnemonic != "sbcs" && Mnemonic != "rscs") {
-    unsigned CC = StringSwitch<unsigned>(Mnemonic.substr(Mnemonic.size()-2))
-      .Case("eq", ARMCC::EQ)
-      .Case("ne", ARMCC::NE)
-      .Case("hs", ARMCC::HS)
-      .Case("cs", ARMCC::HS)
-      .Case("lo", ARMCC::LO)
-      .Case("cc", ARMCC::LO)
-      .Case("mi", ARMCC::MI)
-      .Case("pl", ARMCC::PL)
-      .Case("vs", ARMCC::VS)
-      .Case("vc", ARMCC::VC)
-      .Case("hi", ARMCC::HI)
-      .Case("ls", ARMCC::LS)
-      .Case("ge", ARMCC::GE)
-      .Case("lt", ARMCC::LT)
-      .Case("gt", ARMCC::GT)
-      .Case("le", ARMCC::LE)
-      .Case("al", ARMCC::AL)
-      .Default(~0U);
+    unsigned CC = ARMCondCodeFromString(Mnemonic.substr(Mnemonic.size()-2));
     if (CC != ~0U) {
       Mnemonic = Mnemonic.slice(0, Mnemonic.size() - 2);
       PredicationCode = CC;
@@ -5539,7 +5401,8 @@ void ARMAsmParser::getMnemonicAcceptInfo(StringRef Mnemonic, StringRef FullInst,
       Mnemonic.startswith("aes") || Mnemonic == "hvc" || Mnemonic == "setpan" ||
       Mnemonic.startswith("sha1") || Mnemonic.startswith("sha256") ||
       (FullInst.startswith("vmull") && FullInst.endswith(".p64")) ||
-      Mnemonic == "vmovx" || Mnemonic == "vins") {
+      Mnemonic == "vmovx" || Mnemonic == "vins" ||
+      Mnemonic == "vudot" || Mnemonic == "vsdot") {
     // These mnemonics are never predicable
     CanAcceptPredicationCode = false;
   } else if (!isThumb()) {
@@ -6844,6 +6707,17 @@ static unsigned getRealVLDOpcode(unsigned Opc, unsigned &Spacing) {
 bool ARMAsmParser::processInstruction(MCInst &Inst,
                                       const OperandVector &Operands,
                                       MCStreamer &Out) {
+  // Check if we have the wide qualifier, because if it's present we
+  // must avoid selecting a 16-bit thumb instruction.
+  bool HasWideQualifier = false;
+  for (auto &Op : Operands) {
+    ARMOperand &ARMOp = static_cast<ARMOperand&>(*Op);
+    if (ARMOp.isToken() && ARMOp.getToken() == ".w") {
+      HasWideQualifier = true;
+      break;
+    }
+  }
+
   switch (Inst.getOpcode()) {
   // Alias for alternate form of 'ldr{,b}t Rt, [Rn], #imm' instruction.
   case ARM::LDRT_POST:
@@ -6923,8 +6797,7 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     // Select the narrow version if the immediate will fit.
     if (Inst.getOperand(1).getImm() > 0 &&
         Inst.getOperand(1).getImm() <= 0xff &&
-        !(static_cast<ARMOperand &>(*Operands[2]).isToken() &&
-          static_cast<ARMOperand &>(*Operands[2]).getToken() == ".w"))
+        !HasWideQualifier)
       Inst.setOpcode(ARM::tLDRpci);
     else
       Inst.setOpcode(ARM::t2LDRpci);
@@ -6955,10 +6828,9 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     else if (Inst.getOpcode() == ARM::t2LDRConstPool)
       TmpInst.setOpcode(ARM::t2LDRpci);
     const ARMOperand &PoolOperand =
-      (static_cast<ARMOperand &>(*Operands[2]).isToken() &&
-       static_cast<ARMOperand &>(*Operands[2]).getToken() == ".w") ?
-      static_cast<ARMOperand &>(*Operands[4]) :
-      static_cast<ARMOperand &>(*Operands[3]);
+      (HasWideQualifier ?
+       static_cast<ARMOperand &>(*Operands[4]) :
+       static_cast<ARMOperand &>(*Operands[3]));
     const MCExpr *SubExprVal = PoolOperand.getConstantPoolImm();
     // If SubExprVal is a constant we may be able to use a MOV
     if (isa<MCConstantExpr>(SubExprVal) &&
@@ -8101,8 +7973,7 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     if (isARMLowRegister(Inst.getOperand(0).getReg()) &&
         isARMLowRegister(Inst.getOperand(1).getReg()) &&
         Inst.getOperand(5).getReg() == (inITBlock() ? 0 : ARM::CPSR) &&
-        !(static_cast<ARMOperand &>(*Operands[3]).isToken() &&
-          static_cast<ARMOperand &>(*Operands[3]).getToken() == ".w")) {
+        !HasWideQualifier) {
       unsigned NewOpc;
       switch (Inst.getOpcode()) {
       default: llvm_unreachable("unexpected opcode");
@@ -8136,7 +8007,8 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
         isARMLowRegister(Inst.getOperand(1).getReg()) &&
         isARMLowRegister(Inst.getOperand(2).getReg()) &&
         Inst.getOperand(0).getReg() == Inst.getOperand(1).getReg() &&
-        inITBlock() == (Inst.getOpcode() == ARM::t2MOVsr))
+        inITBlock() == (Inst.getOpcode() == ARM::t2MOVsr) &&
+        !HasWideQualifier)
       isNarrow = true;
     MCInst TmpInst;
     unsigned newOpc;
@@ -8170,7 +8042,8 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     bool isNarrow = false;
     if (isARMLowRegister(Inst.getOperand(0).getReg()) &&
         isARMLowRegister(Inst.getOperand(1).getReg()) &&
-        inITBlock() == (Inst.getOpcode() == ARM::t2MOVsi))
+        inITBlock() == (Inst.getOpcode() == ARM::t2MOVsi) &&
+        !HasWideQualifier)
       isNarrow = true;
     MCInst TmpInst;
     unsigned newOpc;
@@ -8397,11 +8270,10 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     // wide encoding wasn't explicit.
     if (Inst.getOperand(0).getReg() != Inst.getOperand(1).getReg() ||
         !isARMLowRegister(Inst.getOperand(0).getReg()) ||
-        (unsigned)Inst.getOperand(2).getImm() > 255 ||
-        ((!inITBlock() && Inst.getOperand(5).getReg() != ARM::CPSR) ||
-         (inITBlock() && Inst.getOperand(5).getReg() != 0)) ||
-        (static_cast<ARMOperand &>(*Operands[3]).isToken() &&
-         static_cast<ARMOperand &>(*Operands[3]).getToken() == ".w"))
+        (Inst.getOperand(2).isImm() &&
+         (unsigned)Inst.getOperand(2).getImm() > 255) ||
+        Inst.getOperand(5).getReg() != (inITBlock() ? 0 : ARM::CPSR) ||
+        HasWideQualifier)
       break;
     MCInst TmpInst;
     TmpInst.setOpcode(Inst.getOpcode() == ARM::t2ADDri ?
@@ -8430,8 +8302,7 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     }
     if (!Transform ||
         Inst.getOperand(5).getReg() != 0 ||
-        (static_cast<ARMOperand &>(*Operands[3]).isToken() &&
-         static_cast<ARMOperand &>(*Operands[3]).getToken() == ".w"))
+        HasWideQualifier)
       break;
     MCInst TmpInst;
     TmpInst.setOpcode(ARM::tADDhirr);
@@ -8549,12 +8420,10 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     // If we can use the 16-bit encoding and the user didn't explicitly
     // request the 32-bit variant, transform it here.
     if (isARMLowRegister(Inst.getOperand(0).getReg()) &&
-        (unsigned)Inst.getOperand(1).getImm() <= 255 &&
-        ((!inITBlock() && Inst.getOperand(2).getImm() == ARMCC::AL &&
-          Inst.getOperand(4).getReg() == ARM::CPSR) ||
-         (inITBlock() && Inst.getOperand(4).getReg() == 0)) &&
-        (!static_cast<ARMOperand &>(*Operands[2]).isToken() ||
-         static_cast<ARMOperand &>(*Operands[2]).getToken() != ".w")) {
+        (Inst.getOperand(1).isImm() &&
+         (unsigned)Inst.getOperand(1).getImm() <= 255) &&
+        Inst.getOperand(4).getReg() == (inITBlock() ? 0 : ARM::CPSR) &&
+        !HasWideQualifier) {
       // The operands aren't in the same order for tMOVi8...
       MCInst TmpInst;
       TmpInst.setOpcode(ARM::tMOVi8);
@@ -8575,8 +8444,7 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
         isARMLowRegister(Inst.getOperand(1).getReg()) &&
         Inst.getOperand(2).getImm() == ARMCC::AL &&
         Inst.getOperand(4).getReg() == ARM::CPSR &&
-        (!static_cast<ARMOperand &>(*Operands[2]).isToken() ||
-         static_cast<ARMOperand &>(*Operands[2]).getToken() != ".w")) {
+        !HasWideQualifier) {
       // The operands aren't the same for tMOV[S]r... (no cc_out)
       MCInst TmpInst;
       TmpInst.setOpcode(Inst.getOperand(4).getReg() ? ARM::tMOVSr : ARM::tMOVr);
@@ -8598,8 +8466,7 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     if (isARMLowRegister(Inst.getOperand(0).getReg()) &&
         isARMLowRegister(Inst.getOperand(1).getReg()) &&
         Inst.getOperand(2).getImm() == 0 &&
-        (!static_cast<ARMOperand &>(*Operands[2]).isToken() ||
-         static_cast<ARMOperand &>(*Operands[2]).getToken() != ".w")) {
+        !HasWideQualifier) {
       unsigned NewOpc;
       switch (Inst.getOpcode()) {
       default: llvm_unreachable("Illegal opcode!");
@@ -8698,11 +8565,8 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
     if ((isARMLowRegister(Inst.getOperand(1).getReg()) &&
          isARMLowRegister(Inst.getOperand(2).getReg())) &&
         Inst.getOperand(0).getReg() == Inst.getOperand(1).getReg() &&
-        ((!inITBlock() && Inst.getOperand(5).getReg() == ARM::CPSR) ||
-         (inITBlock() && Inst.getOperand(5).getReg() != ARM::CPSR)) &&
-        (!static_cast<ARMOperand &>(*Operands[3]).isToken() ||
-         !static_cast<ARMOperand &>(*Operands[3]).getToken().equals_lower(
-             ".w"))) {
+        Inst.getOperand(5).getReg() == (inITBlock() ? 0 : ARM::CPSR) &&
+        !HasWideQualifier) {
       unsigned NewOpc;
       switch (Inst.getOpcode()) {
         default: llvm_unreachable("unexpected opcode");
@@ -8738,11 +8602,8 @@ bool ARMAsmParser::processInstruction(MCInst &Inst,
          isARMLowRegister(Inst.getOperand(2).getReg())) &&
         (Inst.getOperand(0).getReg() == Inst.getOperand(1).getReg() ||
          Inst.getOperand(0).getReg() == Inst.getOperand(2).getReg()) &&
-        ((!inITBlock() && Inst.getOperand(5).getReg() == ARM::CPSR) ||
-         (inITBlock() && Inst.getOperand(5).getReg() != ARM::CPSR)) &&
-        (!static_cast<ARMOperand &>(*Operands[3]).isToken() ||
-         !static_cast<ARMOperand &>(*Operands[3]).getToken().equals_lower(
-             ".w"))) {
+        Inst.getOperand(5).getReg() == (inITBlock() ? 0 : ARM::CPSR) &&
+        !HasWideQualifier) {
       unsigned NewOpc;
       switch (Inst.getOpcode()) {
         default: llvm_unreachable("unexpected opcode");
@@ -8978,6 +8839,8 @@ unsigned ARMAsmParser::MatchInstruction(OperandVector &Operands, MCInst &Inst,
   return PlainMatchResult;
 }
 
+std::string ARMMnemonicSpellCheck(StringRef S, uint64_t FBS);
+
 static const char *getSubtargetFeatureName(uint64_t Val);
 bool ARMAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                            OperandVector &Operands,
@@ -9071,9 +8934,13 @@ bool ARMAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
     return Error(ErrorLoc, "invalid operand for instruction");
   }
-  case Match_MnemonicFail:
-    return Error(IDLoc, "invalid instruction",
+  case Match_MnemonicFail: {
+    uint64_t FBS = ComputeAvailableFeatures(getSTI().getFeatureBits());
+    std::string Suggestion = ARMMnemonicSpellCheck(
+      ((ARMOperand &)*Operands[0]).getToken(), FBS);
+    return Error(IDLoc, "invalid instruction" + Suggestion,
                  ((ARMOperand &)*Operands[0]).getLocRange());
+  }
   case Match_RequiresNotITBlock:
     return Error(IDLoc, "flag setting instruction only valid outside IT block");
   case Match_RequiresITBlock:
@@ -9464,9 +9331,9 @@ void ARMAsmParser::FixModeAfterArchChange(bool WasThumb, SMLoc Loc) {
 ///  ::= .arch token
 bool ARMAsmParser::parseDirectiveArch(SMLoc L) {
   StringRef Arch = getParser().parseStringToEndOfStatement().trim();
-  unsigned ID = ARM::parseArch(Arch);
+  ARM::ArchKind ID = ARM::parseArch(Arch);
 
-  if (ID == ARM::AK_INVALID)
+  if (ID == ARM::ArchKind::INVALID)
     return Error(L, "Unknown arch name");
 
   bool WasThumb = isThumb();
@@ -10114,9 +9981,9 @@ bool ARMAsmParser::parseDirectiveObjectArch(SMLoc L) {
   SMLoc ArchLoc = Parser.getTok().getLoc();
   Lex();
 
-  unsigned ID = ARM::parseArch(Arch);
+  ARM::ArchKind ID = ARM::parseArch(Arch);
 
-  if (ID == ARM::AK_INVALID)
+  if (ID == ARM::ArchKind::INVALID)
     return Error(ArchLoc, "unknown architecture '" + Arch + "'");
   if (parseToken(AsmToken::EndOfStatement))
     return true;
@@ -10189,8 +10056,8 @@ static const struct {
   { ARM::AEK_CRYPTO,  Feature_HasV8,
     {ARM::FeatureCrypto, ARM::FeatureNEON, ARM::FeatureFPARMv8} },
   { ARM::AEK_FP, Feature_HasV8, {ARM::FeatureFPARMv8} },
-  { (ARM::AEK_HWDIV | ARM::AEK_HWDIVARM), Feature_HasV7 | Feature_IsNotMClass,
-    {ARM::FeatureHWDiv, ARM::FeatureHWDivARM} },
+  { (ARM::AEK_HWDIVTHUMB | ARM::AEK_HWDIVARM), Feature_HasV7 | Feature_IsNotMClass,
+    {ARM::FeatureHWDivThumb, ARM::FeatureHWDivARM} },
   { ARM::AEK_MP, Feature_HasV7 | Feature_IsNotMClass, {ARM::FeatureMP} },
   { ARM::AEK_SIMD, Feature_HasV8, {ARM::FeatureNEON, ARM::FeatureFPARMv8} },
   { ARM::AEK_SEC, Feature_HasV6K, {ARM::FeatureTrustZone} },

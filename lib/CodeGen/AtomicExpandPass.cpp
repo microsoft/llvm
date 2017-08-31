@@ -17,6 +17,7 @@
 
 #include "llvm/CodeGen/AtomicExpandUtils.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
@@ -35,20 +36,17 @@ using namespace llvm;
 
 namespace {
   class AtomicExpand: public FunctionPass {
-    const TargetMachine *TM;
     const TargetLowering *TLI;
   public:
     static char ID; // Pass identification, replacement for typeid
-    explicit AtomicExpand(const TargetMachine *TM = nullptr)
-      : FunctionPass(ID), TM(TM), TLI(nullptr) {
+    AtomicExpand() : FunctionPass(ID), TLI(nullptr) {
       initializeAtomicExpandPass(*PassRegistry::getPassRegistry());
     }
 
     bool runOnFunction(Function &F) override;
 
   private:
-    bool bracketInstWithFences(Instruction *I, AtomicOrdering Order,
-                               bool IsStore, bool IsLoad);
+    bool bracketInstWithFences(Instruction *I, AtomicOrdering Order);
     IntegerType *getCorrespondingIntegerType(Type *T, const DataLayout &DL);
     LoadInst *convertAtomicLoadToIntegerType(LoadInst *LI);
     bool tryExpandAtomicLoad(LoadInst *LI);
@@ -98,12 +96,10 @@ namespace {
 
 char AtomicExpand::ID = 0;
 char &llvm::AtomicExpandID = AtomicExpand::ID;
-INITIALIZE_TM_PASS(AtomicExpand, "atomic-expand", "Expand Atomic instructions",
-                   false, false)
+INITIALIZE_PASS(AtomicExpand, DEBUG_TYPE, "Expand Atomic instructions",
+                false, false)
 
-FunctionPass *llvm::createAtomicExpandPass(const TargetMachine *TM) {
-  return new AtomicExpand(TM);
-}
+FunctionPass *llvm::createAtomicExpandPass() { return new AtomicExpand(); }
 
 namespace {
 // Helper functions to retrieve the size of atomic instructions.
@@ -173,9 +169,14 @@ bool atomicSizeSupported(const TargetLowering *TLI, Inst *I) {
 } // end anonymous namespace
 
 bool AtomicExpand::runOnFunction(Function &F) {
-  if (!TM || !TM->getSubtargetImpl(F)->enableAtomicExpand())
+  auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
+  if (!TPC)
     return false;
-  TLI = TM->getSubtargetImpl(F)->getTargetLowering();
+
+  auto &TM = TPC->getTM<TargetMachine>();
+  if (!TM.getSubtargetImpl(F)->enableAtomicExpand())
+    return false;
+  TLI = TM.getSubtargetImpl(F)->getTargetLowering();
 
   SmallVector<Instruction *, 1> AtomicInsts;
 
@@ -224,22 +225,16 @@ bool AtomicExpand::runOnFunction(Function &F) {
 
     if (TLI->shouldInsertFencesForAtomic(I)) {
       auto FenceOrdering = AtomicOrdering::Monotonic;
-      bool IsStore, IsLoad;
       if (LI && isAcquireOrStronger(LI->getOrdering())) {
         FenceOrdering = LI->getOrdering();
         LI->setOrdering(AtomicOrdering::Monotonic);
-        IsStore = false;
-        IsLoad = true;
       } else if (SI && isReleaseOrStronger(SI->getOrdering())) {
         FenceOrdering = SI->getOrdering();
         SI->setOrdering(AtomicOrdering::Monotonic);
-        IsStore = true;
-        IsLoad = false;
       } else if (RMWI && (isReleaseOrStronger(RMWI->getOrdering()) ||
                           isAcquireOrStronger(RMWI->getOrdering()))) {
         FenceOrdering = RMWI->getOrdering();
         RMWI->setOrdering(AtomicOrdering::Monotonic);
-        IsStore = IsLoad = true;
       } else if (CASI && !TLI->shouldExpandAtomicCmpXchgInIR(CASI) &&
                  (isReleaseOrStronger(CASI->getSuccessOrdering()) ||
                   isAcquireOrStronger(CASI->getSuccessOrdering()))) {
@@ -250,11 +245,10 @@ bool AtomicExpand::runOnFunction(Function &F) {
         FenceOrdering = CASI->getSuccessOrdering();
         CASI->setSuccessOrdering(AtomicOrdering::Monotonic);
         CASI->setFailureOrdering(AtomicOrdering::Monotonic);
-        IsStore = IsLoad = true;
       }
 
       if (FenceOrdering != AtomicOrdering::Monotonic) {
-        MadeChange |= bracketInstWithFences(I, FenceOrdering, IsStore, IsLoad);
+        MadeChange |= bracketInstWithFences(I, FenceOrdering);
       }
     }
 
@@ -320,23 +314,16 @@ bool AtomicExpand::runOnFunction(Function &F) {
   return MadeChange;
 }
 
-bool AtomicExpand::bracketInstWithFences(Instruction *I, AtomicOrdering Order,
-                                         bool IsStore, bool IsLoad) {
+bool AtomicExpand::bracketInstWithFences(Instruction *I, AtomicOrdering Order) {
   IRBuilder<> Builder(I);
 
-  auto LeadingFence = TLI->emitLeadingFence(Builder, Order, IsStore, IsLoad);
+  auto LeadingFence = TLI->emitLeadingFence(Builder, I, Order);
 
-  auto TrailingFence = TLI->emitTrailingFence(Builder, Order, IsStore, IsLoad);
-  // The trailing fence is emitted before the instruction instead of after
-  // because there is no easy way of setting Builder insertion point after
-  // an instruction. So we must erase it from the BB, and insert it back
-  // in the right place.
+  auto TrailingFence = TLI->emitTrailingFence(Builder, I, Order);
   // We have a guard here because not every atomic operation generates a
   // trailing fence.
-  if (TrailingFence) {
-    TrailingFence->removeFromParent();
-    TrailingFence->insertAfter(I);
-  }
+  if (TrailingFence)
+    TrailingFence->moveAfter(I);
 
   return (LeadingFence || TrailingFence);
 }
@@ -368,7 +355,7 @@ LoadInst *AtomicExpand::convertAtomicLoadToIntegerType(LoadInst *LI) {
   auto *NewLI = Builder.CreateLoad(NewAddr);
   NewLI->setAlignment(LI->getAlignment());
   NewLI->setVolatile(LI->isVolatile());
-  NewLI->setAtomic(LI->getOrdering(), LI->getSynchScope());
+  NewLI->setAtomic(LI->getOrdering(), LI->getSyncScopeID());
   DEBUG(dbgs() << "Replaced " << *LI << " with " << *NewLI << "\n");
   
   Value *NewVal = Builder.CreateBitCast(NewLI, LI->getType());
@@ -451,7 +438,7 @@ StoreInst *AtomicExpand::convertAtomicStoreToIntegerType(StoreInst *SI) {
   StoreInst *NewSI = Builder.CreateStore(NewVal, NewAddr);
   NewSI->setAlignment(SI->getAlignment());
   NewSI->setVolatile(SI->isVolatile());
-  NewSI->setAtomic(SI->getOrdering(), SI->getSynchScope());
+  NewSI->setAtomic(SI->getOrdering(), SI->getSyncScopeID());
   DEBUG(dbgs() << "Replaced " << *SI << " with " << *NewSI << "\n");
   SI->eraseFromParent();
   return NewSI;
@@ -808,7 +795,7 @@ void AtomicExpand::expandPartwordCmpXchg(AtomicCmpXchgInst *CI) {
   Value *FullWord_Cmp = Builder.CreateOr(Loaded_MaskOut, Cmp_Shifted);
   AtomicCmpXchgInst *NewCI = Builder.CreateAtomicCmpXchg(
       PMV.AlignedAddr, FullWord_Cmp, FullWord_NewVal, CI->getSuccessOrdering(),
-      CI->getFailureOrdering(), CI->getSynchScope());
+      CI->getFailureOrdering(), CI->getSyncScopeID());
   NewCI->setVolatile(CI->isVolatile());
   // When we're building a strong cmpxchg, we need a loop, so you
   // might think we could use a weak cmpxchg inside. But, using strong
@@ -931,7 +918,7 @@ AtomicCmpXchgInst *AtomicExpand::convertCmpXchgToIntegerType(AtomicCmpXchgInst *
   auto *NewCI = Builder.CreateAtomicCmpXchg(NewAddr, NewCmp, NewNewVal,
                                             CI->getSuccessOrdering(),
                                             CI->getFailureOrdering(),
-                                            CI->getSynchScope());
+                                            CI->getSyncScopeID());
   NewCI->setVolatile(CI->isVolatile());
   NewCI->setWeak(CI->isWeak());
   DEBUG(dbgs() << "Replaced " << *CI << " with " << *NewCI << "\n");
@@ -1048,8 +1035,7 @@ bool AtomicExpand::expandAtomicCmpXchg(AtomicCmpXchgInst *CI) {
   std::prev(BB->end())->eraseFromParent();
   Builder.SetInsertPoint(BB);
   if (ShouldInsertFencesForAtomic && UseUnconditionalReleaseBarrier)
-    TLI->emitLeadingFence(Builder, SuccessOrder, /*IsStore=*/true,
-                          /*IsLoad=*/true);
+    TLI->emitLeadingFence(Builder, CI, SuccessOrder);
   Builder.CreateBr(StartBB);
 
   // Start the main loop block now that we've taken care of the preliminaries.
@@ -1064,8 +1050,7 @@ bool AtomicExpand::expandAtomicCmpXchg(AtomicCmpXchgInst *CI) {
 
   Builder.SetInsertPoint(ReleasingStoreBB);
   if (ShouldInsertFencesForAtomic && !UseUnconditionalReleaseBarrier)
-    TLI->emitLeadingFence(Builder, SuccessOrder, /*IsStore=*/true,
-                          /*IsLoad=*/true);
+    TLI->emitLeadingFence(Builder, CI, SuccessOrder);
   Builder.CreateBr(TryStoreBB);
 
   Builder.SetInsertPoint(TryStoreBB);
@@ -1094,8 +1079,7 @@ bool AtomicExpand::expandAtomicCmpXchg(AtomicCmpXchgInst *CI) {
   // necessary.
   Builder.SetInsertPoint(SuccessBB);
   if (ShouldInsertFencesForAtomic)
-    TLI->emitTrailingFence(Builder, SuccessOrder, /*IsStore=*/true,
-                           /*IsLoad=*/true);
+    TLI->emitTrailingFence(Builder, CI, SuccessOrder);
   Builder.CreateBr(ExitBB);
 
   Builder.SetInsertPoint(NoStoreBB);
@@ -1107,8 +1091,7 @@ bool AtomicExpand::expandAtomicCmpXchg(AtomicCmpXchgInst *CI) {
 
   Builder.SetInsertPoint(FailureBB);
   if (ShouldInsertFencesForAtomic)
-    TLI->emitTrailingFence(Builder, FailureOrder, /*IsStore=*/true,
-                           /*IsLoad=*/true);
+    TLI->emitTrailingFence(Builder, CI, FailureOrder);
   Builder.CreateBr(ExitBB);
 
   // Finally, we have control-flow based knowledge of whether the cmpxchg

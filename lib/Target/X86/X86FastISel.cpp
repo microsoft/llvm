@@ -180,44 +180,6 @@ private:
 
 } // end anonymous namespace.
 
-static std::pair<X86::CondCode, bool>
-getX86ConditionCode(CmpInst::Predicate Predicate) {
-  X86::CondCode CC = X86::COND_INVALID;
-  bool NeedSwap = false;
-  switch (Predicate) {
-  default: break;
-  // Floating-point Predicates
-  case CmpInst::FCMP_UEQ: CC = X86::COND_E;       break;
-  case CmpInst::FCMP_OLT: NeedSwap = true;        LLVM_FALLTHROUGH;
-  case CmpInst::FCMP_OGT: CC = X86::COND_A;       break;
-  case CmpInst::FCMP_OLE: NeedSwap = true;        LLVM_FALLTHROUGH;
-  case CmpInst::FCMP_OGE: CC = X86::COND_AE;      break;
-  case CmpInst::FCMP_UGT: NeedSwap = true;        LLVM_FALLTHROUGH;
-  case CmpInst::FCMP_ULT: CC = X86::COND_B;       break;
-  case CmpInst::FCMP_UGE: NeedSwap = true;        LLVM_FALLTHROUGH;
-  case CmpInst::FCMP_ULE: CC = X86::COND_BE;      break;
-  case CmpInst::FCMP_ONE: CC = X86::COND_NE;      break;
-  case CmpInst::FCMP_UNO: CC = X86::COND_P;       break;
-  case CmpInst::FCMP_ORD: CC = X86::COND_NP;      break;
-  case CmpInst::FCMP_OEQ:                         LLVM_FALLTHROUGH;
-  case CmpInst::FCMP_UNE: CC = X86::COND_INVALID; break;
-
-  // Integer Predicates
-  case CmpInst::ICMP_EQ:  CC = X86::COND_E;       break;
-  case CmpInst::ICMP_NE:  CC = X86::COND_NE;      break;
-  case CmpInst::ICMP_UGT: CC = X86::COND_A;       break;
-  case CmpInst::ICMP_UGE: CC = X86::COND_AE;      break;
-  case CmpInst::ICMP_ULT: CC = X86::COND_B;       break;
-  case CmpInst::ICMP_ULE: CC = X86::COND_BE;      break;
-  case CmpInst::ICMP_SGT: CC = X86::COND_G;       break;
-  case CmpInst::ICMP_SGE: CC = X86::COND_GE;      break;
-  case CmpInst::ICMP_SLT: CC = X86::COND_L;       break;
-  case CmpInst::ICMP_SLE: CC = X86::COND_LE;      break;
-  }
-
-  return std::make_pair(CC, NeedSwap);
-}
-
 static std::pair<unsigned, bool>
 getX86SSEConditionCode(CmpInst::Predicate Predicate) {
   unsigned CC;
@@ -367,10 +329,6 @@ bool X86FastISel::X86FastEmitLoad(EVT VT, X86AddressMode &AM,
   switch (VT.getSimpleVT().SimpleTy) {
   default: return false;
   case MVT::i1:
-    // TODO: Support this properly.
-    if (Subtarget->hasAVX512())
-      return false;
-    LLVM_FALLTHROUGH;
   case MVT::i8:
     Opc = X86::MOV8rm;
     RC  = &X86::GR8RegClass;
@@ -452,6 +410,8 @@ bool X86FastISel::X86FastEmitLoad(EVT VT, X86AddressMode &AM,
     assert(HasAVX);
     if (IsNonTemporal && Alignment >= 32 && HasAVX2)
       Opc = HasVLX ? X86::VMOVNTDQAZ256rm : X86::VMOVNTDQAYrm;
+    else if (IsNonTemporal && Alignment >= 16)
+      return false; // Force split for X86::VMOVNTDQArm
     else if (Alignment >= 32)
       Opc = HasVLX ? X86::VMOVAPSZ256rm : X86::VMOVAPSYrm;
     else
@@ -462,6 +422,8 @@ bool X86FastISel::X86FastEmitLoad(EVT VT, X86AddressMode &AM,
     assert(HasAVX);
     if (IsNonTemporal && Alignment >= 32 && HasAVX2)
       Opc = X86::VMOVNTDQAYrm;
+    else if (IsNonTemporal && Alignment >= 16)
+      return false; // Force split for X86::VMOVNTDQArm
     else if (Alignment >= 32)
       Opc = HasVLX ? X86::VMOVAPDZ256rm : X86::VMOVAPDYrm;
     else
@@ -475,6 +437,8 @@ bool X86FastISel::X86FastEmitLoad(EVT VT, X86AddressMode &AM,
     assert(HasAVX);
     if (IsNonTemporal && Alignment >= 32 && HasAVX2)
       Opc = X86::VMOVNTDQAYrm;
+    else if (IsNonTemporal && Alignment >= 16)
+      return false; // Force split for X86::VMOVNTDQArm
     else if (Alignment >= 32)
       Opc = HasVLX ? X86::VMOVDQA64Z256rm : X86::VMOVDQAYrm;
     else
@@ -542,16 +506,6 @@ bool X86FastISel::X86FastEmitStore(EVT VT, unsigned ValReg, bool ValIsKill,
   case MVT::f80: // No f80 support yet.
   default: return false;
   case MVT::i1: {
-    // In case ValReg is a K register, COPY to a GPR
-    if (MRI.getRegClass(ValReg) == &X86::VK1RegClass) {
-      unsigned KValReg = ValReg;
-      ValReg = createResultReg(&X86::GR32RegClass);
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-              TII.get(TargetOpcode::COPY), ValReg)
-          .addReg(KValReg);
-      ValReg = fastEmitInst_extractsubreg(MVT::i8, ValReg, /*Kill=*/true,
-                                          X86::sub_8bit);
-    }
     // Mask out all but lowest bit.
     unsigned AndResult = createResultReg(&X86::GR8RegClass);
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
@@ -1109,10 +1063,6 @@ bool X86FastISel::X86SelectCallAddress(const Value *V, X86AddressMode &AM) {
         (AM.Base.Reg != 0 || AM.IndexReg != 0))
       return false;
 
-    // Can't handle DLL Import.
-    if (GV->hasDLLImportStorageClass())
-      return false;
-
     // Can't handle TLS.
     if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV))
       if (GVar->isThreadLocal())
@@ -1121,8 +1071,9 @@ bool X86FastISel::X86SelectCallAddress(const Value *V, X86AddressMode &AM) {
     // Okay, we've committed to selecting this global. Set up the basic address.
     AM.GV = GV;
 
-    // No ABI requires an extra load for anything other than DLLImport, which
-    // we rejected above. Return a direct reference to the global.
+    // Return a direct reference to the global. Fastisel can handle calls to
+    // functions that require loads, such as dllimport and nonlazybind
+    // functions.
     if (Subtarget->isPICStyleRIPRel()) {
       // Use rip-relative addressing if we can.  Above we verified that the
       // base and index registers are unused.
@@ -1219,7 +1170,7 @@ bool X86FastISel::X86SelectRet(const Instruction *I) {
       CC != CallingConv::X86_StdCall &&
       CC != CallingConv::X86_ThisCall &&
       CC != CallingConv::X86_64_SysV &&
-      CC != CallingConv::X86_64_Win64)
+      CC != CallingConv::Win64)
     return false;
 
   // Don't handle popping bytes if they don't fit the ret's immediate.
@@ -1286,16 +1237,6 @@ bool X86FastISel::X86SelectRet(const Instruction *I) {
       if (SrcVT == MVT::i1) {
         if (Outs[0].Flags.isSExt())
           return false;
-        // In case SrcReg is a K register, COPY to a GPR
-        if (MRI.getRegClass(SrcReg) == &X86::VK1RegClass) {
-          unsigned KSrcReg = SrcReg;
-          SrcReg = createResultReg(&X86::GR32RegClass);
-          BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-                  TII.get(TargetOpcode::COPY), SrcReg)
-              .addReg(KSrcReg);
-          SrcReg = fastEmitInst_extractsubreg(MVT::i8, SrcReg, /*Kill=*/true,
-                                              X86::sub_8bit);
-        }
         SrcReg = fastEmitZExtFromI1(MVT::i8, SrcReg, /*TODO: Kill=*/false);
         SrcVT = MVT::i8;
       }
@@ -1559,7 +1500,7 @@ bool X86FastISel::X86SelectCmp(const Instruction *I) {
 
   X86::CondCode CC;
   bool SwapArgs;
-  std::tie(CC, SwapArgs) = getX86ConditionCode(Predicate);
+  std::tie(CC, SwapArgs) = X86::getX86ConditionCode(Predicate);
   assert(CC <= X86::LAST_VALID_COND && "Unexpected condition code.");
   unsigned Opc = X86::getSETFromCond(CC);
 
@@ -1587,17 +1528,6 @@ bool X86FastISel::X86SelectZExt(const Instruction *I) {
   // Handle zero-extension from i1 to i8, which is common.
   MVT SrcVT = TLI.getSimpleValueType(DL, I->getOperand(0)->getType());
   if (SrcVT == MVT::i1) {
-    // In case ResultReg is a K register, COPY to a GPR
-    if (MRI.getRegClass(ResultReg) == &X86::VK1RegClass) {
-      unsigned KResultReg = ResultReg;
-      ResultReg = createResultReg(&X86::GR32RegClass);
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-              TII.get(TargetOpcode::COPY), ResultReg)
-          .addReg(KResultReg);
-      ResultReg = fastEmitInst_extractsubreg(MVT::i8, ResultReg, /*Kill=*/true,
-                                             X86::sub_8bit);
-    }
-
     // Set the high bits to zero.
     ResultReg = fastEmitZExtFromI1(MVT::i8, ResultReg, /*TODO: Kill=*/false);
     SrcVT = MVT::i8;
@@ -1697,7 +1627,7 @@ bool X86FastISel::X86SelectBranch(const Instruction *I) {
 
       bool SwapArgs;
       unsigned BranchOpc;
-      std::tie(CC, SwapArgs) = getX86ConditionCode(Predicate);
+      std::tie(CC, SwapArgs) = X86::getX86ConditionCode(Predicate);
       assert(CC <= X86::LAST_VALID_COND && "Unexpected condition code.");
 
       BranchOpc = X86::GetCondBranchFromCond(CC);
@@ -2070,7 +2000,7 @@ bool X86FastISel::X86FastEmitCMoveSelect(MVT RetVT, const Instruction *I) {
     }
 
     bool NeedSwap;
-    std::tie(CC, NeedSwap) = getX86ConditionCode(Predicate);
+    std::tie(CC, NeedSwap) = X86::getX86ConditionCode(Predicate);
     assert(CC <= X86::LAST_VALID_COND && "Unexpected condition code.");
 
     const Value *CmpLHS = CI->getOperand(0);
@@ -2149,7 +2079,8 @@ bool X86FastISel::X86FastEmitCMoveSelect(MVT RetVT, const Instruction *I) {
   if (!LHSReg || !RHSReg)
     return false;
 
-  unsigned Opc = X86::getCMovFromCond(CC, RC->getSize());
+  const TargetRegisterInfo &TRI = *Subtarget->getRegisterInfo();
+  unsigned Opc = X86::getCMovFromCond(CC, TRI.getRegSizeInBits(*RC)/8);
   unsigned ResultReg = fastEmitInst_rr(Opc, RC, RHSReg, RHSIsKill,
                                        LHSReg, LHSIsKill);
   updateValueMap(I, ResultReg);
@@ -2318,7 +2249,7 @@ bool X86FastISel::X86FastEmitPseudoSelect(MVT RetVT, const Instruction *I) {
   const auto *CI = dyn_cast<CmpInst>(Cond);
   if (CI && (CI->getParent() == I->getParent())) {
     bool NeedSwap;
-    std::tie(CC, NeedSwap) = getX86ConditionCode(CI->getPredicate());
+    std::tie(CC, NeedSwap) = X86::getX86ConditionCode(CI->getPredicate());
     if (CC > X86::LAST_VALID_COND)
       return false;
 
@@ -2516,8 +2447,7 @@ bool X86FastISel::X86SelectTrunc(const Instruction *I) {
   EVT DstVT = TLI.getValueType(DL, I->getType());
 
   // This code only handles truncation to byte.
-  // TODO: Support truncate to i1 with AVX512.
-  if (DstVT != MVT::i8 && (DstVT != MVT::i1 || Subtarget->hasAVX512()))
+  if (DstVT != MVT::i8 && DstVT != MVT::i1)
     return false;
   if (!TLI.isTypeLegal(SrcVT))
     return false;
@@ -3070,19 +3000,19 @@ bool X86FastISel::fastLowerArguments() {
   if (!Subtarget->is64Bit())
     return false;
 
+  if (Subtarget->useSoftFloat())
+    return false;
+
   // Only handle simple cases. i.e. Up to 6 i32/i64 scalar arguments.
   unsigned GPRCnt = 0;
   unsigned FPRCnt = 0;
-  unsigned Idx = 0;
   for (auto const &Arg : F->args()) {
-    // The first argument is at index 1.
-    ++Idx;
-    if (F->getAttributes().hasAttribute(Idx, Attribute::ByVal) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::InReg) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::StructRet) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::SwiftSelf) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::SwiftError) ||
-        F->getAttributes().hasAttribute(Idx, Attribute::Nest))
+    if (Arg.hasAttribute(Attribute::ByVal) ||
+        Arg.hasAttribute(Attribute::InReg) ||
+        Arg.hasAttribute(Attribute::StructRet) ||
+        Arg.hasAttribute(Attribute::SwiftSelf) ||
+        Arg.hasAttribute(Attribute::SwiftError) ||
+        Arg.hasAttribute(Attribute::Nest))
       return false;
 
     Type *ArgTy = Arg.getType();
@@ -3161,8 +3091,8 @@ static unsigned computeBytesPoppedByCalleeForSRet(const X86Subtarget *Subtarget,
     return 0;
 
   if (CS)
-    if (CS->arg_empty() || !CS->paramHasAttr(1, Attribute::StructRet) ||
-        CS->paramHasAttr(1, Attribute::InReg) || Subtarget->isTargetMCU())
+    if (CS->arg_empty() || !CS->paramHasAttr(0, Attribute::StructRet) ||
+        CS->paramHasAttr(0, Attribute::InReg) || Subtarget->isTargetMCU())
       return 0;
 
   return 4;
@@ -3183,6 +3113,15 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   bool Is64Bit        = Subtarget->is64Bit();
   bool IsWin64        = Subtarget->isCallingConvWin64(CC);
 
+  const CallInst *CI =
+      CLI.CS ? dyn_cast<CallInst>(CLI.CS->getInstruction()) : nullptr;
+  const Function *CalledFn = CI ? CI->getCalledFunction() : nullptr;
+
+  // Functions with no_caller_saved_registers that need special handling.
+  if ((CI && CI->hasFnAttr("no_caller_saved_registers")) ||
+      (CalledFn && CalledFn->hasFnAttribute("no_caller_saved_registers")))
+    return false;
+
   // Handle only C, fastcc, and webkit_js calling conventions for now.
   switch (CC) {
   default: return false;
@@ -3193,7 +3132,7 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   case CallingConv::X86_FastCall:
   case CallingConv::X86_StdCall:
   case CallingConv::X86_ThisCall:
-  case CallingConv::X86_64_Win64:
+  case CallingConv::Win64:
   case CallingConv::X86_64_SysV:
     break;
   }
@@ -3286,7 +3225,7 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   // Issue CALLSEQ_START
   unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
   BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(AdjStackDown))
-    .addImm(NumBytes).addImm(0);
+    .addImm(NumBytes).addImm(0).addImm(0);
 
   // Walk the register/memloc assignments, inserting copies/loads.
   const X86RegisterInfo *RegInfo = Subtarget->getRegisterInfo();
@@ -3322,16 +3261,6 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
 
       // Handle zero-extension from i1 to i8, which is common.
       if (ArgVT == MVT::i1) {
-        // In case SrcReg is a K register, COPY to a GPR
-        if (MRI.getRegClass(ArgReg) == &X86::VK1RegClass) {
-          unsigned KArgReg = ArgReg;
-          ArgReg = createResultReg(&X86::GR32RegClass);
-          BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-                  TII.get(TargetOpcode::COPY), ArgReg)
-              .addReg(KArgReg);
-          ArgReg = fastEmitInst_extractsubreg(MVT::i8, ArgReg, /*Kill=*/true,
-                                              X86::sub_8bit);
-        }
         // Set the high bits to zero.
         ArgReg = fastEmitZExtFromI1(MVT::i8, ArgReg, /*TODO: Kill=*/false);
         ArgVT = MVT::i8;
@@ -3477,19 +3406,28 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   } else {
     // Direct call.
     assert(GV && "Not a direct call");
-    unsigned CallOpc = Is64Bit ? X86::CALL64pcrel32 : X86::CALLpcrel32;
-
     // See if we need any target-specific flags on the GV operand.
     unsigned char OpFlags = Subtarget->classifyGlobalFunctionReference(GV);
     // Ignore NonLazyBind attribute in FastISel
     if (OpFlags == X86II::MO_GOTPCREL)
       OpFlags = 0;
 
+    // This will be a direct call, or an indirect call through memory for
+    // NonLazyBind calls or dllimport calls.
+    bool NeedLoad = OpFlags == X86II::MO_DLLIMPORT;
+    unsigned CallOpc = NeedLoad
+                           ? (Is64Bit ? X86::CALL64m : X86::CALL32m)
+                           : (Is64Bit ? X86::CALL64pcrel32 : X86::CALLpcrel32);
+
     MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(CallOpc));
+    if (NeedLoad)
+      MIB.addReg(Is64Bit ? X86::RIP : 0).addImm(1).addReg(0);
     if (Symbol)
       MIB.addSym(Symbol, OpFlags);
     else
       MIB.addGlobalAddress(GV, 0, OpFlags);
+    if (NeedLoad)
+      MIB.addReg(0);
   }
 
   // Add a register mask operand representing the call-preserved registers.
@@ -3678,13 +3616,6 @@ unsigned X86FastISel::X86MaterializeInt(const ConstantInt *CI, MVT VT) {
     switch (VT.SimpleTy) {
     default: llvm_unreachable("Unexpected value type");
     case MVT::i1:
-      if (Subtarget->hasAVX512()) {
-        // Need to copy to a VK1 register.
-        unsigned ResultReg = createResultReg(&X86::VK1RegClass);
-        BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-                TII.get(TargetOpcode::COPY), ResultReg).addReg(SrcReg);
-        return ResultReg;
-      }
     case MVT::i8:
       return fastEmitInst_extractsubreg(MVT::i8, SrcReg, /*Kill=*/true,
                                         X86::sub_8bit);

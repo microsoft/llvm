@@ -186,6 +186,10 @@ HANDLE_TARGET_OPCODE(PATCHABLE_TAIL_CALL)
 HANDLE_TARGET_OPCODE(ENTERTILE)
 HANDLE_TARGET_OPCODE(EXITTILE)
 
+/// Wraps a logging call and its arguments with nop sleds. At runtime, this can be
+/// patched to insert instrumentation instructions.
+HANDLE_TARGET_OPCODE(PATCHABLE_EVENT_CALL)
+
 /// The following generic opcodes are not supposed to appear after ISel.
 /// This is something we might want to relax, but for now, this is convenient
 /// to produce diagnostics.
@@ -221,6 +225,11 @@ HANDLE_TARGET_OPCODE(G_OR)
 /// Generic bitwise exclusive-or instruction.
 HANDLE_TARGET_OPCODE(G_XOR)
 
+HANDLE_TARGET_OPCODE(G_IMPLICIT_DEF)
+
+/// Generic PHI instruction with types.
+HANDLE_TARGET_OPCODE(G_PHI)
+
 /// Generic instruction to materialize the address of an alloca or other
 /// stack-based object.
 HANDLE_TARGET_OPCODE(G_FRAME_INDEX)
@@ -240,8 +249,6 @@ HANDLE_TARGET_OPCODE(G_INSERT)
 
 /// Generic instruction to paste a variable number of components together into a
 /// larger register.
-HANDLE_TARGET_OPCODE(G_SEQUENCE)
-
 HANDLE_TARGET_OPCODE(G_MERGE_VALUES)
 
 /// Generic pointer to int conversion.
@@ -358,6 +365,9 @@ HANDLE_TARGET_OPCODE(G_FSUB)
 /// Generic FP multiplication.
 HANDLE_TARGET_OPCODE(G_FMUL)
 
+/// Generic FMA multiplication. Behaves like llvm fma intrinsic
+HANDLE_TARGET_OPCODE(G_FMA)
+
 /// Generic FP division.
 HANDLE_TARGET_OPCODE(G_FDIV)
 
@@ -366,6 +376,18 @@ HANDLE_TARGET_OPCODE(G_FREM)
 
 /// Generic FP exponentiation.
 HANDLE_TARGET_OPCODE(G_FPOW)
+
+/// Generic base-e exponential of a value.
+HANDLE_TARGET_OPCODE(G_FEXP)
+
+/// Generic base-2 exponential of a value.
+HANDLE_TARGET_OPCODE(G_FEXP2)
+
+/// Floating point base-e logarithm of a value.
+HANDLE_TARGET_OPCODE(G_FLOG)
+
+/// Floating point base-2 logarithm of a value.
+HANDLE_TARGET_OPCODE(G_FLOG2)
 
 /// Generic FP negation.
 HANDLE_TARGET_OPCODE(G_FNEG)

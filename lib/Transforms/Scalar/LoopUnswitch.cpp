@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This pass transforms loops that contain branches on loop-invariant conditions
-// to have multiple loops.  For example, it turns the left into the right code:
+// to multiple loops.  For example, it turns the left into the right code:
 //
 //  for (...)                  if (lic)
 //    A                          for (...)
@@ -26,34 +26,34 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/BlockFrequencyInfo.h"
+#include "llvm/Analysis/BlockFrequencyInfoImpl.h"
+#include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/CodeMetrics.h"
 #include "llvm/Analysis/DivergenceAnalysis.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/BlockFrequencyInfoImpl.h"
-#include "llvm/Analysis/BlockFrequencyInfo.h"
-#include "llvm/Analysis/BranchProbabilityInfo.h"
-#include "llvm/Support/BranchProbability.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/Module.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -237,7 +237,7 @@ namespace {
     void EmitPreheaderBranchOnCondition(Value *LIC, Constant *Val,
                                         BasicBlock *TrueDest,
                                         BasicBlock *FalseDest,
-                                        Instruction *InsertPt,
+                                        BranchInst *OldBranch,
                                         TerminatorInst *TI);
 
     void SimplifyCode(std::vector<Instruction*> &Worklist, Loop *L);
@@ -518,9 +518,6 @@ bool LoopUnswitch::runOnLoop(Loop *L, LPPassManager &LPM_Ref) {
     Changed |= processCurrentLoop();
   } while(redoLoop);
 
-  // FIXME: Reconstruct dom info, because it is not preserved properly.
-  if (Changed)
-    DT->recalculate(*F);
   return Changed;
 }
 
@@ -550,6 +547,48 @@ bool LoopUnswitch::isUnreachableDueToPreviousUnswitching(BasicBlock *BB) {
     if (DT->dominates(UnreachableSucc, BB))
       return true;
   }
+  return false;
+}
+
+/// FIXME: Remove this workaround when freeze related patches are done.
+/// LoopUnswitch and Equality propagation in GVN have discrepancy about
+/// whether branch on undef/poison has undefine behavior. Here it is to
+/// rule out some common cases that we found such discrepancy already
+/// causing problems. Detail could be found in PR31652. Note if the
+/// func returns true, it is unsafe. But if it is false, it doesn't mean
+/// it is necessarily safe.
+static bool EqualityPropUnSafe(Value &LoopCond) {
+  ICmpInst *CI = dyn_cast<ICmpInst>(&LoopCond);
+  if (!CI || !CI->isEquality())
+    return false;
+
+  Value *LHS = CI->getOperand(0);
+  Value *RHS = CI->getOperand(1);
+  if (isa<UndefValue>(LHS) || isa<UndefValue>(RHS))
+    return true;
+
+  auto hasUndefInPHI = [](PHINode &PN) {
+    for (Value *Opd : PN.incoming_values()) {
+      if (isa<UndefValue>(Opd))
+        return true;
+    }
+    return false;
+  };
+  PHINode *LPHI = dyn_cast<PHINode>(LHS);
+  PHINode *RPHI = dyn_cast<PHINode>(RHS);
+  if ((LPHI && hasUndefInPHI(*LPHI)) || (RPHI && hasUndefInPHI(*RPHI)))
+    return true;
+
+  auto hasUndefInSelect = [](SelectInst &SI) {
+    if (isa<UndefValue>(SI.getTrueValue()) ||
+        isa<UndefValue>(SI.getFalseValue()))
+      return true;
+    return false;
+  };
+  SelectInst *LSI = dyn_cast<SelectInst>(LHS);
+  SelectInst *RSI = dyn_cast<SelectInst>(RHS);
+  if ((LSI && hasUndefInSelect(*LSI)) || (RSI && hasUndefInSelect(*RSI)))
+    return true;
   return false;
 }
 
@@ -666,7 +705,7 @@ bool LoopUnswitch::processCurrentLoop() {
         // unswitch on it if we desire.
         Value *LoopCond = FindLIVLoopCondition(BI->getCondition(),
                                                currentLoop, Changed).first;
-        if (LoopCond &&
+        if (LoopCond && !EqualityPropUnSafe(*LoopCond) &&
             UnswitchIfProfitable(LoopCond, ConstantInt::getTrue(Context), TI)) {
           ++NumBranches;
           return true;
@@ -709,9 +748,8 @@ bool LoopUnswitch::processCurrentLoop() {
           // Do not process same value again and again.
           // At this point we have some cases already unswitched and
           // some not yet unswitched. Let's find the first not yet unswitched one.
-          for (SwitchInst::CaseIt i = SI->case_begin(), e = SI->case_end();
-               i != e; ++i) {
-            Constant *UnswitchValCandidate = i.getCaseValue();
+          for (auto Case : SI->cases()) {
+            Constant *UnswitchValCandidate = Case.getCaseValue();
             if (!BranchesInfo.isUnswitched(SI, UnswitchValCandidate)) {
               UnswitchVal = UnswitchValCandidate;
               break;
@@ -832,7 +870,12 @@ bool LoopUnswitch::UnswitchIfProfitable(Value *LoopCond, Constant *Val,
 /// mapping the blocks with the specified map.
 static Loop *CloneLoop(Loop *L, Loop *PL, ValueToValueMapTy &VM,
                        LoopInfo *LI, LPPassManager *LPM) {
-  Loop &New = LPM->addLoop(PL);
+  Loop &New = *new Loop();
+  if (PL)
+    PL->addChildLoop(&New);
+  else
+    LI->addTopLevelLoop(&New);
+  LPM->addLoop(New);
 
   // Add all of the blocks in L to the new loop.
   for (Loop::block_iterator I = L->block_begin(), E = L->block_end();
@@ -848,30 +891,58 @@ static Loop *CloneLoop(Loop *L, Loop *PL, ValueToValueMapTy &VM,
 }
 
 /// Emit a conditional branch on two values if LIC == Val, branch to TrueDst,
-/// otherwise branch to FalseDest. Insert the code immediately before InsertPt.
+/// otherwise branch to FalseDest. Insert the code immediately before OldBranch
+/// and remove (but not erase!) it from the function.
 void LoopUnswitch::EmitPreheaderBranchOnCondition(Value *LIC, Constant *Val,
                                                   BasicBlock *TrueDest,
                                                   BasicBlock *FalseDest,
-                                                  Instruction *InsertPt,
+                                                  BranchInst *OldBranch,
                                                   TerminatorInst *TI) {
+  assert(OldBranch->isUnconditional() && "Preheader is not split correctly");
   // Insert a conditional branch on LIC to the two preheaders.  The original
   // code is the true version and the new code is the false version.
   Value *BranchVal = LIC;
   bool Swapped = false;
   if (!isa<ConstantInt>(Val) ||
       Val->getType() != Type::getInt1Ty(LIC->getContext()))
-    BranchVal = new ICmpInst(InsertPt, ICmpInst::ICMP_EQ, LIC, Val);
+    BranchVal = new ICmpInst(OldBranch, ICmpInst::ICMP_EQ, LIC, Val);
   else if (Val != ConstantInt::getTrue(Val->getContext())) {
     // We want to enter the new loop when the condition is true.
     std::swap(TrueDest, FalseDest);
     Swapped = true;
   }
 
+  // Old branch will be removed, so save its parent and successor to update the
+  // DomTree.
+  auto *OldBranchSucc = OldBranch->getSuccessor(0);
+  auto *OldBranchParent = OldBranch->getParent();
+
   // Insert the new branch.
   BranchInst *BI =
-      IRBuilder<>(InsertPt).CreateCondBr(BranchVal, TrueDest, FalseDest, TI);
+      IRBuilder<>(OldBranch).CreateCondBr(BranchVal, TrueDest, FalseDest, TI);
   if (Swapped)
     BI->swapProfMetadata();
+
+  // Remove the old branch so there is only one branch at the end. This is
+  // needed to perform DomTree's internal DFS walk on the function's CFG.
+  OldBranch->removeFromParent();
+
+  // Inform the DT about the new branch.
+  if (DT) {
+    // First, add both successors.
+    SmallVector<DominatorTree::UpdateType, 3> Updates;
+    if (TrueDest != OldBranchParent)
+      Updates.push_back({DominatorTree::Insert, OldBranchParent, TrueDest});
+    if (FalseDest != OldBranchParent)
+      Updates.push_back({DominatorTree::Insert, OldBranchParent, FalseDest});
+    // If both of the new successors are different from the old one, inform the
+    // DT that the edge was deleted.
+    if (OldBranchSucc != TrueDest && OldBranchSucc != FalseDest) {
+      Updates.push_back({DominatorTree::Delete, OldBranchParent, OldBranchSucc});
+    }
+
+    DT->applyUpdates(Updates);
+  }
 
   // If either edge is critical, split it. This helps preserve LoopSimplify
   // form for enclosing loops.
@@ -912,10 +983,14 @@ void LoopUnswitch::UnswitchTrivialCondition(Loop *L, Value *Cond, Constant *Val,
 
   // Okay, now we have a position to branch from and a position to branch to,
   // insert the new conditional branch.
-  EmitPreheaderBranchOnCondition(Cond, Val, NewExit, NewPH,
-                                 loopPreheader->getTerminator(), TI);
-  LPM->deleteSimpleAnalysisValue(loopPreheader->getTerminator(), L);
-  loopPreheader->getTerminator()->eraseFromParent();
+  auto *OldBranch = dyn_cast<BranchInst>(loopPreheader->getTerminator());
+  assert(OldBranch && "Failed to split the preheader");
+  EmitPreheaderBranchOnCondition(Cond, Val, NewExit, NewPH, OldBranch, TI);
+  LPM->deleteSimpleAnalysisValue(OldBranch, L);
+
+  // EmitPreheaderBranchOnCondition removed the OldBranch from the function.
+  // Delete it, as it is no longer needed.
+  delete OldBranch;
 
   // We need to reprocess this loop, it could be unswitched again.
   redoLoop = true;
@@ -987,7 +1062,7 @@ bool LoopUnswitch::TryTrivialLoopUnswitch(bool &Changed) {
       if (!Cond)
         break;
       // Find the target block we are definitely going to.
-      CurrentBB = SI->findCaseValue(Cond).getCaseSuccessor();
+      CurrentBB = SI->findCaseValue(Cond)->getCaseSuccessor();
     } else {
       // We do not understand these terminator instructions.
       break;
@@ -1031,6 +1106,9 @@ bool LoopUnswitch::TryTrivialLoopUnswitch(bool &Changed) {
     if (!LoopExitBB || isa<PHINode>(LoopExitBB->begin()))
       return false;   // Can't handle this.
 
+    if (EqualityPropUnSafe(*LoopCond))
+      return false;
+
     UnswitchTrivialCondition(currentLoop, LoopCond, CondVal, LoopExitBB,
                              CurrentTerm);
     ++NumBranches;
@@ -1051,13 +1129,12 @@ bool LoopUnswitch::TryTrivialLoopUnswitch(bool &Changed) {
     // this.
     // Note that we can't trivially unswitch on the default case or
     // on already unswitched cases.
-    for (SwitchInst::CaseIt i = SI->case_begin(), e = SI->case_end();
-         i != e; ++i) {
+    for (auto Case : SI->cases()) {
       BasicBlock *LoopExitCandidate;
-      if ((LoopExitCandidate = isTrivialLoopExitBlock(currentLoop,
-                                               i.getCaseSuccessor()))) {
+      if ((LoopExitCandidate =
+               isTrivialLoopExitBlock(currentLoop, Case.getCaseSuccessor()))) {
         // Okay, we found a trivial case, remember the value that is trivial.
-        ConstantInt *CaseVal = i.getCaseValue();
+        ConstantInt *CaseVal = Case.getCaseValue();
 
         // Check that it was not unswitched before, since already unswitched
         // trivial vals are looks trivial too.
@@ -1228,16 +1305,20 @@ void LoopUnswitch::UnswitchNontrivialCondition(Value *LIC, Constant *Val,
   EmitPreheaderBranchOnCondition(LIC, Val, NewBlocks[0], LoopBlocks[0], OldBR,
                                  TI);
   LPM->deleteSimpleAnalysisValue(OldBR, L);
-  OldBR->eraseFromParent();
+
+  // The OldBr was replaced by a new one and removed (but not erased) by
+  // EmitPreheaderBranchOnCondition. It is no longer needed, so delete it.
+  delete OldBR;
 
   LoopProcessWorklist.push_back(NewLoop);
   redoLoop = true;
 
-  // Keep a WeakVH holding onto LIC.  If the first call to RewriteLoopBody
+  // Keep a WeakTrackingVH holding onto LIC.  If the first call to
+  // RewriteLoopBody
   // deletes the instruction (for example by simplifying a PHI that feeds into
   // the condition that we're unswitching on), we don't rewrite the second
   // iteration.
-  WeakVH LICHandle(LIC);
+  WeakTrackingVH LICHandle(LIC);
 
   // Now we rewrite the original code to know that the condition is true and the
   // new code to know that the condition is false.
@@ -1264,7 +1345,7 @@ static void RemoveFromWorklist(Instruction *I,
 static void ReplaceUsesOfWith(Instruction *I, Value *V,
                               std::vector<Instruction*> &Worklist,
                               Loop *L, LPPassManager *LPM) {
-  DEBUG(dbgs() << "Replace with '" << *V << "': " << *I);
+  DEBUG(dbgs() << "Replace with '" << *V << "': " << *I << "\n");
 
   // Add uses to the worklist, which may be dead now.
   for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i)
@@ -1277,7 +1358,8 @@ static void ReplaceUsesOfWith(Instruction *I, Value *V,
   LPM->deleteSimpleAnalysisValue(I, L);
   RemoveFromWorklist(I, Worklist);
   I->replaceAllUsesWith(V);
-  I->eraseFromParent();
+  if (!I->mayHaveSideEffects())
+    I->eraseFromParent();
   ++NumSimplify;
 }
 
@@ -1361,9 +1443,11 @@ void LoopUnswitch::RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC,
     // NOTE: if a case value for the switch is unswitched out, we record it
     // after the unswitch finishes. We can not record it here as the switch
     // is not a direct user of the partial LIV.
-    SwitchInst::CaseIt DeadCase = SI->findCaseValue(cast<ConstantInt>(Val));
+    SwitchInst::CaseHandle DeadCase =
+        *SI->findCaseValue(cast<ConstantInt>(Val));
     // Default case is live for multiple values.
-    if (DeadCase == SI->case_default()) continue;
+    if (DeadCase == *SI->case_default())
+      continue;
 
     // Found a dead case value.  Don't remove PHI nodes in the
     // successor if they become single-entry, those PHI nodes may
@@ -1431,7 +1515,7 @@ void LoopUnswitch::SimplifyCode(std::vector<Instruction*> &Worklist, Loop *L) {
 
     // Simple DCE.
     if (isInstructionTriviallyDead(I)) {
-      DEBUG(dbgs() << "Remove dead instruction '" << *I);
+      DEBUG(dbgs() << "Remove dead instruction '" << *I << "\n");
 
       // Add uses to the worklist, which may be dead now.
       for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i)

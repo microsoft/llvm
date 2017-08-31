@@ -79,6 +79,11 @@ AVRTargetLowering::AVRTargetLowering(AVRTargetMachine &tm)
   setOperationAction(ISD::SRA_PARTS, MVT::i16, Expand);
   setOperationAction(ISD::SRL_PARTS, MVT::i16, Expand);
 
+  setOperationAction(ISD::ROTL, MVT::i8, Custom);
+  setOperationAction(ISD::ROTL, MVT::i16, Custom);
+  setOperationAction(ISD::ROTR, MVT::i8, Custom);
+  setOperationAction(ISD::ROTR, MVT::i16, Custom);
+
   setOperationAction(ISD::BR_CC, MVT::i8, Custom);
   setOperationAction(ISD::BR_CC, MVT::i16, Custom);
   setOperationAction(ISD::BR_CC, MVT::i32, Custom);
@@ -273,6 +278,12 @@ SDValue AVRTargetLowering::LowerShifts(SDValue Op, SelectionDAG &DAG) const {
     case ISD::SRL:
       return DAG.getNode(AVRISD::LSRLOOP, dl, VT, N->getOperand(0),
                          N->getOperand(1));
+    case ISD::ROTL:
+      return DAG.getNode(AVRISD::ROLLOOP, dl, VT, N->getOperand(0),
+                         N->getOperand(1));
+    case ISD::ROTR:
+      return DAG.getNode(AVRISD::RORLOOP, dl, VT, N->getOperand(0),
+                         N->getOperand(1));
     case ISD::SRA:
       return DAG.getNode(AVRISD::ASRLOOP, dl, VT, N->getOperand(0),
                          N->getOperand(1));
@@ -350,7 +361,7 @@ SDValue AVRTargetLowering::LowerDivRem(SDValue Op, SelectionDAG &DAG) const {
   SDValue Callee = DAG.getExternalSymbol(getLibcallName(LC),
                                          getPointerTy(DAG.getDataLayout()));
 
-  Type *RetTy = (Type *)StructType::get(Ty, Ty, nullptr);
+  Type *RetTy = (Type *)StructType::get(Ty, Ty);
 
   SDLoc dl(Op);
   TargetLowering::CallLoweringInfo CLI(DAG);
@@ -713,7 +724,7 @@ void AVRTargetLowering::ReplaceNodeResults(SDNode *N,
 /// by AM is legal for this target, for a load/store of the specified type.
 bool AVRTargetLowering::isLegalAddressingMode(const DataLayout &DL,
                                               const AddrMode &AM, Type *Ty,
-                                              unsigned AS) const {
+                                              unsigned AS, Instruction *I) const {
   int64_t Offs = AM.BaseOffs;
 
   // Allow absolute addresses.
@@ -1155,8 +1166,7 @@ SDValue AVRTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getNextStackOffset();
 
-  Chain = DAG.getCALLSEQ_START(Chain, DAG.getIntPtrConstant(NumBytes, DL, true),
-                               DL);
+  Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
 
   SmallVector<std::pair<unsigned, SDValue>, 8> RegsToPass;
 
@@ -1440,6 +1450,22 @@ MachineBasicBlock *AVRTargetLowering::insertShift(MachineInstr &MI,
     Opc = AVR::LSRWRd;
     RC = &AVR::DREGSRegClass;
     break;
+  case AVR::Rol8:
+    Opc = AVR::ROLRd;
+    RC = &AVR::GPR8RegClass;
+    break;
+  case AVR::Rol16:
+    Opc = AVR::ROLWRd;
+    RC = &AVR::DREGSRegClass;
+    break;
+  case AVR::Ror8:
+    Opc = AVR::RORRd;
+    RC = &AVR::GPR8RegClass;
+    break;
+  case AVR::Ror16:
+    Opc = AVR::RORWRd;
+    RC = &AVR::DREGSRegClass;
+    break;
   }
 
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
@@ -1474,9 +1500,9 @@ MachineBasicBlock *AVRTargetLowering::insertShift(MachineInstr &MI,
   unsigned DstReg = MI.getOperand(0).getReg();
 
   // BB:
-  // cp 0, N
+  // cpi N, 0
   // breq RemBB
-  BuildMI(BB, dl, TII.get(AVR::CPRdRr)).addReg(ShiftAmtSrcReg).addReg(AVR::R0);
+  BuildMI(BB, dl, TII.get(AVR::CPIRdK)).addReg(ShiftAmtSrcReg).addImm(0);
   BuildMI(BB, dl, TII.get(AVR::BREQk)).addMBB(RemBB);
 
   // LoopBB:
@@ -1552,6 +1578,10 @@ AVRTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   case AVR::Lsl16:
   case AVR::Lsr8:
   case AVR::Lsr16:
+  case AVR::Rol8:
+  case AVR::Rol16:
+  case AVR::Ror8:
+  case AVR::Ror16:
   case AVR::Asr8:
   case AVR::Asr16:
     return insertShift(MI, MBB);
@@ -1580,8 +1610,9 @@ AVRTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   MachineBasicBlock *trueMBB = MF->CreateMachineBasicBlock(LLVM_BB);
   MachineBasicBlock *falseMBB = MF->CreateMachineBasicBlock(LLVM_BB);
 
-  MachineFunction::iterator I = MBB->getParent()->begin();
-  ++I;
+  MachineFunction::iterator I;
+  for (I = MF->begin(); I != MF->end() && &(*I) != MBB; ++I);
+  if (I != MF->end()) ++I;
   MF->insert(I, trueMBB);
   MF->insert(I, falseMBB);
 

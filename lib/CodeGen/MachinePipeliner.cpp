@@ -61,7 +61,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/iterator_range.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/PriorityQueue.h"
 #include "llvm/ADT/SetVector.h"
@@ -69,6 +68,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -715,13 +715,13 @@ char MachinePipeliner::ID = 0;
 int MachinePipeliner::NumTries = 0;
 #endif
 char &llvm::MachinePipelinerID = MachinePipeliner::ID;
-INITIALIZE_PASS_BEGIN(MachinePipeliner, "pipeliner",
+INITIALIZE_PASS_BEGIN(MachinePipeliner, DEBUG_TYPE,
                       "Modulo Software Pipelining", false, false)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
 INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
 INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
-INITIALIZE_PASS_END(MachinePipeliner, "pipeliner",
+INITIALIZE_PASS_END(MachinePipeliner, DEBUG_TYPE,
                     "Modulo Software Pipelining", false, false)
 
 /// The "main" function for implementing Swing Modulo Scheduling.
@@ -3960,6 +3960,7 @@ void SMSchedule::finalizeSchedule(SwingSchedulerDAG *SSD) {
   DEBUG(dump(););
 }
 
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 /// Print the schedule information to the given output.
 void SMSchedule::print(raw_ostream &os) const {
   // Iterate over each cycle.
@@ -3975,7 +3976,6 @@ void SMSchedule::print(raw_ostream &os) const {
   }
 }
 
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 /// Utility function used for debugging to print the schedule.
 LLVM_DUMP_METHOD void SMSchedule::dump() const { print(dbgs()); }
 #endif

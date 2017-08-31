@@ -17,12 +17,12 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Dwarf.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
@@ -46,17 +46,19 @@ namespace llvm {
   class MCSectionELF;
   class MCSectionMachO;
   class MCSectionWasm;
+  class MCStreamer;
   class MCSymbol;
   class MCSymbolELF;
   class MCSymbolWasm;
   class SMLoc;
+  class SourceMgr;
 
   /// Context object for machine code objects.  This class owns all of the
   /// sections that it creates.
   ///
   class MCContext {
   public:
-    typedef StringMap<MCSymbol *, BumpPtrAllocator &> SymbolTable;
+    using SymbolTable = StringMap<MCSymbol *, BumpPtrAllocator &>;
 
   private:
     /// The SourceMgr for this object, if any.
@@ -223,10 +225,12 @@ namespace llvm {
       std::string SectionName;
       StringRef GroupName;
       unsigned UniqueID;
+
       WasmSectionKey(StringRef SectionName, StringRef GroupName,
                      unsigned UniqueID)
           : SectionName(SectionName), GroupName(GroupName), UniqueID(UniqueID) {
       }
+
       bool operator<(const WasmSectionKey &Other) const {
         if (SectionName != Other.SectionName)
           return SectionName < Other.SectionName;

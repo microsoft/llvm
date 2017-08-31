@@ -19,11 +19,11 @@ declare void @llvm.debugtrap() #0
 
 ; MESA-TRAP: .section .AMDGPU.config
 ; MESA-TRAP:  .long   47180
-; MESA-TRAP-NEXT: .long   208
+; MESA-TRAP-NEXT: .long   204
 
 ; NOMESA-TRAP: .section .AMDGPU.config
 ; NOMESA-TRAP:  .long   47180
-; NOMESA-TRAP-NEXT: .long   144
+; NOMESA-TRAP-NEXT: .long   140
 
 ; GCN-LABEL: {{^}}hsa_trap:
 ; HSA-TRAP: enable_trap_handler = 1
@@ -45,11 +45,11 @@ define amdgpu_kernel void @hsa_trap() {
 
 ; MESA-TRAP: .section .AMDGPU.config
 ; MESA-TRAP:  .long   47180
-; MESA-TRAP-NEXT: .long   208
+; MESA-TRAP-NEXT: .long   204
 
 ; NOMESA-TRAP: .section .AMDGPU.config
 ; NOMESA-TRAP:  .long   47180
-; NOMESA-TRAP-NEXT: .long   144
+; NOMESA-TRAP-NEXT: .long   140
 
 ; GCN-WARNING: warning: <unknown>:0:0: in function hsa_debugtrap void (): debugtrap handler not supported
 ; GCN-LABEL: {{^}}hsa_debugtrap:
@@ -77,6 +77,27 @@ define amdgpu_kernel void @hsa_debugtrap() {
 ; NO-MESA-TRAP: s_endpgm
 define amdgpu_kernel void @trap() {
   call void @llvm.trap()
+  ret void
+}
+
+; GCN-LABEL: {{^}}non_entry_trap:
+; TRAP-BIT: enable_trap_handler = 1
+; NO-TRAP-BIT: enable_trap_handler = 0
+
+; HSA: BB{{[0-9]_[0-9]+]]: ; %trap
+; HSA-TRAP: s_mov_b64 s[0:1], s[4:5]
+; HSA-TRAP-NEXT: s_trap 2
+define amdgpu_kernel void @non_entry_trap(i32 addrspace(1)* nocapture readonly %arg0) local_unnamed_addr #1 {
+entry:
+  %tmp29 = load volatile i32, i32 addrspace(1)* %arg0
+  %cmp = icmp eq i32 %tmp29, -1
+  br i1 %cmp, label %ret, label %trap
+
+trap:
+  call void @llvm.trap()
+  unreachable
+
+ret:
   ret void
 }
 

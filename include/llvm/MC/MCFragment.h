@@ -11,10 +11,10 @@
 #define LLVM_MC_MCFRAGMENT_H
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/ilist_node.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/ilist_node.h"
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/Support/SMLoc.h"
@@ -130,7 +130,7 @@ public:
   /// \brief Return true if given frgment has FT_Dummy type.
   bool isDummy() const { return Kind == FT_Dummy; }
 
-  void dump();
+  void dump() const;
 };
 
 class MCDummyFragment : public MCFragment {
@@ -200,8 +200,8 @@ protected:
                                                     Sec) {}
 
 public:
-  typedef SmallVectorImpl<MCFixup>::const_iterator const_fixup_iterator;
-  typedef SmallVectorImpl<MCFixup>::iterator fixup_iterator;
+  using const_fixup_iterator = SmallVectorImpl<MCFixup>::const_iterator;
+  using fixup_iterator = SmallVectorImpl<MCFixup>::iterator;
 
   SmallVectorImpl<MCFixup> &getFixups() { return Fixups; }
   const SmallVectorImpl<MCFixup> &getFixups() const { return Fixups; }

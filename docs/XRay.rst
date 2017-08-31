@@ -150,7 +150,7 @@ variable, where we list down the options and their defaults below.
 | xray_logfile_base | ``const char*`` | ``xray-log.`` | Filename base for the  |
 |                   |                 |               | XRay logfile.          |
 +-------------------+-----------------+---------------+------------------------+
-| xray_fdr_log      | ``bool``        | ``false``     | Wheter to install the  |
+| xray_fdr_log      | ``bool``        | ``false``     | Whether to install the |
 |                   |                 |               | Flight Data Recorder   |
 |                   |                 |               | (FDR) mode.            |
 +-------------------+-----------------+---------------+------------------------+
@@ -195,6 +195,9 @@ programmatically until the buffers are finalized and flushed. To use FDR mode
 on your application, you may set the ``xray_fdr_log`` option to ``true`` in the
 ``XRAY_OPTIONS`` environment variable (while also optionally setting the
 ``xray_naive_log`` to ``false``).
+
+When the buffers are flushed to disk, the result is a binary trace format
+described by `XRay FDR format <XRayFDRFormat.html>`_
 
 When FDR mode is on, it will keep writing and recycling memory buffers until
 the logging implementation is finalized -- at which point it can be flushed and

@@ -9,19 +9,26 @@
 
 #include "llvm/DebugInfo/PDB/Native/NativeCompilandSymbol.h"
 
+#include "llvm/ADT/STLExtras.h"
+
 namespace llvm {
 namespace pdb {
 
 NativeCompilandSymbol::NativeCompilandSymbol(NativeSession &Session,
-                                             const ModuleInfoEx &MI)
-    : NativeRawSymbol(Session), Module(MI) {}
+                                             SymIndexId SymbolId,
+                                             DbiModuleDescriptor MI)
+    : NativeRawSymbol(Session, SymbolId), Module(MI) {}
 
 PDB_SymType NativeCompilandSymbol::getSymTag() const {
   return PDB_SymType::Compiland;
 }
 
+std::unique_ptr<NativeRawSymbol> NativeCompilandSymbol::clone() const {
+  return llvm::make_unique<NativeCompilandSymbol>(Session, SymbolId, Module);
+}
+
 bool NativeCompilandSymbol::isEditAndContinueEnabled() const {
-  return Module.Info.hasECInfo();
+  return Module.hasECInfo();
 }
 
 uint32_t NativeCompilandSymbol::getLexicalParentId() const { return 0; }
@@ -32,11 +39,11 @@ uint32_t NativeCompilandSymbol::getLexicalParentId() const { return 0; }
 // this potential confusion.
 
 std::string NativeCompilandSymbol::getLibraryName() const {
-  return Module.Info.getObjFileName();
+  return Module.getObjFileName();
 }
 
 std::string NativeCompilandSymbol::getName() const {
-  return Module.Info.getModuleName();
+  return Module.getModuleName();
 }
 
 } // namespace pdb

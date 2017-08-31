@@ -10,13 +10,13 @@
 #include "MCTargetDesc/MipsFixupKinds.h"
 #include "MCTargetDesc/MipsMCTargetDesc.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ELF.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -374,6 +374,8 @@ unsigned MipsELFObjectWriter::getRelocType(MCContext &Ctx,
     return ELF::R_MICROMIPS_TLS_DTPREL_HI16;
   case Mips::fixup_MICROMIPS_TLS_DTPREL_LO16:
     return ELF::R_MICROMIPS_TLS_DTPREL_LO16;
+  case Mips::fixup_MICROMIPS_GOTTPREL:
+    return ELF::R_MICROMIPS_TLS_GOTTPREL;
   case Mips::fixup_MICROMIPS_TLS_TPREL_HI16:
     return ELF::R_MICROMIPS_TLS_TPREL_HI16;
   case Mips::fixup_MICROMIPS_TLS_TPREL_LO16:

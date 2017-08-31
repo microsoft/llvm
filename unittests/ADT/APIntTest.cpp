@@ -288,7 +288,7 @@ TEST(APIntTest, i1) {
   EXPECT_EQ(zero, one.shl(1));
   EXPECT_EQ(one, one.shl(0));
   EXPECT_EQ(zero, one.lshr(1));
-  EXPECT_EQ(zero, one.ashr(1));
+  EXPECT_EQ(one, one.ashr(1));
 
   // Rotates.
   EXPECT_EQ(one, one.rotl(0));
@@ -1002,6 +1002,64 @@ TEST(APIntTest, divrem_big7) {
           {224, "80000000800000010000000f", 16});
 }
 
+void testDiv(APInt a, uint64_t b, APInt c) {
+  auto p = a * b + c;
+
+  APInt q;
+  uint64_t r;
+  // Unsigned division will only work if our original number wasn't negative.
+  if (!a.isNegative()) {
+    q = p.udiv(b);
+    r = p.urem(b);
+    EXPECT_EQ(a, q);
+    EXPECT_EQ(c, r);
+    APInt::udivrem(p, b, q, r);
+    EXPECT_EQ(a, q);
+    EXPECT_EQ(c, r);
+  }
+  q = p.sdiv(b);
+  r = p.srem(b);
+  EXPECT_EQ(a, q);
+  if (c.isNegative())
+    EXPECT_EQ(-c, -r); // Need to negate so the uint64_t compare will work.
+  else
+    EXPECT_EQ(c, r);
+  int64_t sr;
+  APInt::sdivrem(p, b, q, sr);
+  EXPECT_EQ(a, q);
+  if (c.isNegative())
+    EXPECT_EQ(-c, -sr); // Need to negate so the uint64_t compare will work.
+  else
+    EXPECT_EQ(c, sr);
+}
+
+TEST(APIntTest, divremuint) {
+  // Single word APInt
+  testDiv(APInt{64, 9},
+          2,
+          APInt{64, 1});
+
+  // Single word negative APInt
+  testDiv(-APInt{64, 9},
+          2,
+          -APInt{64, 1});
+
+  // Multiword dividend with only one significant word.
+  testDiv(APInt{256, 9},
+          2,
+          APInt{256, 1});
+
+  // Negative dividend.
+  testDiv(-APInt{256, 9},
+          2,
+          -APInt{256, 1});
+
+  // Multiword dividend
+  testDiv(APInt{1024, 19}.shl(811),
+          4356013, // one word
+          APInt{1024, 1});
+}
+
 TEST(APIntTest, fromString) {
   EXPECT_EQ(APInt(32, 0), APInt(32,   "0", 2));
   EXPECT_EQ(APInt(32, 1), APInt(32,   "1", 2));
@@ -1601,36 +1659,6 @@ TEST(APIntTest, isShiftedMask) {
   }
 }
 
-#if defined(__clang__)
-// Disable the pragma warning from versions of Clang without -Wself-move
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunknown-pragmas"
-// Disable the warning that triggers on exactly what is being tested.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wself-move"
-#endif
-TEST(APIntTest, SelfMoveAssignment) {
-  APInt X(32, 0xdeadbeef);
-  X = std::move(X);
-  EXPECT_EQ(32u, X.getBitWidth());
-  EXPECT_EQ(0xdeadbeefULL, X.getLimitedValue());
-
-  uint64_t Bits[] = {0xdeadbeefdeadbeefULL, 0xdeadbeefdeadbeefULL};
-  APInt Y(128, Bits);
-  Y = std::move(Y);
-  EXPECT_EQ(128u, Y.getBitWidth());
-  EXPECT_EQ(~0ULL, Y.getLimitedValue());
-  const uint64_t *Raw = Y.getRawData();
-  EXPECT_EQ(2u, Y.getNumWords());
-  EXPECT_EQ(0xdeadbeefdeadbeefULL, Raw[0]);
-  EXPECT_EQ(0xdeadbeefdeadbeefULL, Raw[1]);
-}
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#pragma clang diagnostic pop
-#endif
-}
-
 TEST(APIntTest, reverseBits) {
   EXPECT_EQ(1, APInt(1, 1).reverseBits());
   EXPECT_EQ(0, APInt(1, 0).reverseBits());
@@ -1753,21 +1781,21 @@ TEST(APIntTest, getLowBitsSet) {
 }
 
 TEST(APIntTest, getBitsSet) {
-  APInt i64hi1lo1 = APInt::getBitsSet(64, 63, 1);
-  EXPECT_EQ(1u, i64hi1lo1.countLeadingOnes());
-  EXPECT_EQ(0u, i64hi1lo1.countLeadingZeros());
-  EXPECT_EQ(64u, i64hi1lo1.getActiveBits());
-  EXPECT_EQ(0u, i64hi1lo1.countTrailingZeros());
-  EXPECT_EQ(1u, i64hi1lo1.countTrailingOnes());
-  EXPECT_EQ(2u, i64hi1lo1.countPopulation());
+  APInt i64hi1lo1 = APInt::getBitsSet(64, 1, 63);
+  EXPECT_EQ(0u, i64hi1lo1.countLeadingOnes());
+  EXPECT_EQ(1u, i64hi1lo1.countLeadingZeros());
+  EXPECT_EQ(63u, i64hi1lo1.getActiveBits());
+  EXPECT_EQ(1u, i64hi1lo1.countTrailingZeros());
+  EXPECT_EQ(0u, i64hi1lo1.countTrailingOnes());
+  EXPECT_EQ(62u, i64hi1lo1.countPopulation());
 
-  APInt i127hi1lo1 = APInt::getBitsSet(127, 126, 1);
-  EXPECT_EQ(1u, i127hi1lo1.countLeadingOnes());
-  EXPECT_EQ(0u, i127hi1lo1.countLeadingZeros());
-  EXPECT_EQ(127u, i127hi1lo1.getActiveBits());
-  EXPECT_EQ(0u, i127hi1lo1.countTrailingZeros());
-  EXPECT_EQ(1u, i127hi1lo1.countTrailingOnes());
-  EXPECT_EQ(2u, i127hi1lo1.countPopulation());
+  APInt i127hi1lo1 = APInt::getBitsSet(127, 1, 126);
+  EXPECT_EQ(0u, i127hi1lo1.countLeadingOnes());
+  EXPECT_EQ(1u, i127hi1lo1.countLeadingZeros());
+  EXPECT_EQ(126u, i127hi1lo1.getActiveBits());
+  EXPECT_EQ(1u, i127hi1lo1.countTrailingZeros());
+  EXPECT_EQ(0u, i127hi1lo1.countTrailingOnes());
+  EXPECT_EQ(125u, i127hi1lo1.countPopulation());
 }
 
 TEST(APIntTest, getHighBitsSet) {
@@ -1977,3 +2005,218 @@ TEST(APIntTest, getHiBits) {
   i128.setHighBits(2);
   EXPECT_EQ(0xc, i128.getHiBits(4));
 }
+
+TEST(APIntTest, GCD) {
+  using APIntOps::GreatestCommonDivisor;
+
+  for (unsigned Bits : {1, 2, 32, 63, 64, 65}) {
+    // Test some corner cases near zero.
+    APInt Zero(Bits, 0), One(Bits, 1);
+    EXPECT_EQ(GreatestCommonDivisor(Zero, Zero), Zero);
+    EXPECT_EQ(GreatestCommonDivisor(Zero, One), One);
+    EXPECT_EQ(GreatestCommonDivisor(One, Zero), One);
+    EXPECT_EQ(GreatestCommonDivisor(One, One), One);
+
+    if (Bits > 1) {
+      APInt Two(Bits, 2);
+      EXPECT_EQ(GreatestCommonDivisor(Zero, Two), Two);
+      EXPECT_EQ(GreatestCommonDivisor(One, Two), One);
+      EXPECT_EQ(GreatestCommonDivisor(Two, Two), Two);
+
+      // Test some corner cases near the highest representable value.
+      APInt Max(Bits, 0);
+      Max.setAllBits();
+      EXPECT_EQ(GreatestCommonDivisor(Zero, Max), Max);
+      EXPECT_EQ(GreatestCommonDivisor(One, Max), One);
+      EXPECT_EQ(GreatestCommonDivisor(Two, Max), One);
+      EXPECT_EQ(GreatestCommonDivisor(Max, Max), Max);
+
+      APInt MaxOver2 = Max.udiv(Two);
+      EXPECT_EQ(GreatestCommonDivisor(MaxOver2, Max), One);
+      // Max - 1 == Max / 2 * 2, because Max is odd.
+      EXPECT_EQ(GreatestCommonDivisor(MaxOver2, Max - 1), MaxOver2);
+    }
+  }
+
+  // Compute the 20th Mersenne prime.
+  const unsigned BitWidth = 4450;
+  APInt HugePrime = APInt::getLowBitsSet(BitWidth, 4423);
+
+  // 9931 and 123456 are coprime.
+  APInt A = HugePrime * APInt(BitWidth, 9931);
+  APInt B = HugePrime * APInt(BitWidth, 123456);
+  APInt C = GreatestCommonDivisor(A, B);
+  EXPECT_EQ(C, HugePrime);
+}
+
+TEST(APIntTest, LogicalRightShift) {
+  APInt i256(APInt::getHighBitsSet(256, 2));
+
+  i256.lshrInPlace(1);
+  EXPECT_EQ(1U, i256.countLeadingZeros());
+  EXPECT_EQ(253U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256.lshrInPlace(62);
+  EXPECT_EQ(63U, i256.countLeadingZeros());
+  EXPECT_EQ(191U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256.lshrInPlace(65);
+  EXPECT_EQ(128U, i256.countLeadingZeros());
+  EXPECT_EQ(126U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256.lshrInPlace(64);
+  EXPECT_EQ(192U, i256.countLeadingZeros());
+  EXPECT_EQ(62U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256.lshrInPlace(63);
+  EXPECT_EQ(255U, i256.countLeadingZeros());
+  EXPECT_EQ(0U, i256.countTrailingZeros());
+  EXPECT_EQ(1U, i256.countPopulation());
+
+  // Ensure we handle large shifts of multi-word.
+  const APInt neg_one(128, static_cast<uint64_t>(-1), true);
+  EXPECT_EQ(0, neg_one.lshr(128));
+}
+
+TEST(APIntTest, ArithmeticRightShift) {
+  APInt i72(APInt::getHighBitsSet(72, 1));
+  i72.ashrInPlace(46);
+  EXPECT_EQ(47U, i72.countLeadingOnes());
+  EXPECT_EQ(25U, i72.countTrailingZeros());
+  EXPECT_EQ(47U, i72.countPopulation());
+
+  i72 = APInt::getHighBitsSet(72, 1);
+  i72.ashrInPlace(64);
+  EXPECT_EQ(65U, i72.countLeadingOnes());
+  EXPECT_EQ(7U, i72.countTrailingZeros());
+  EXPECT_EQ(65U, i72.countPopulation());
+
+  APInt i128(APInt::getHighBitsSet(128, 1));
+  i128.ashrInPlace(64);
+  EXPECT_EQ(65U, i128.countLeadingOnes());
+  EXPECT_EQ(63U, i128.countTrailingZeros());
+  EXPECT_EQ(65U, i128.countPopulation());
+
+  // Ensure we handle large shifts of multi-word.
+  const APInt signmin32(APInt::getSignedMinValue(32));
+  EXPECT_TRUE(signmin32.ashr(32).isAllOnesValue());
+
+  // Ensure we handle large shifts of multi-word.
+  const APInt umax32(APInt::getSignedMaxValue(32));
+  EXPECT_EQ(0, umax32.ashr(32));
+
+  // Ensure we handle large shifts of multi-word.
+  const APInt signmin128(APInt::getSignedMinValue(128));
+  EXPECT_TRUE(signmin128.ashr(128).isAllOnesValue());
+
+  // Ensure we handle large shifts of multi-word.
+  const APInt umax128(APInt::getSignedMaxValue(128));
+  EXPECT_EQ(0, umax128.ashr(128));
+}
+
+TEST(APIntTest, LeftShift) {
+  APInt i256(APInt::getLowBitsSet(256, 2));
+
+  i256 <<= 1;
+  EXPECT_EQ(253U, i256.countLeadingZeros());
+  EXPECT_EQ(1U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256 <<= 62;
+  EXPECT_EQ(191U, i256.countLeadingZeros());
+  EXPECT_EQ(63U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256 <<= 65;
+  EXPECT_EQ(126U, i256.countLeadingZeros());
+  EXPECT_EQ(128U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256 <<= 64;
+  EXPECT_EQ(62U, i256.countLeadingZeros());
+  EXPECT_EQ(192U, i256.countTrailingZeros());
+  EXPECT_EQ(2U, i256.countPopulation());
+
+  i256 <<= 63;
+  EXPECT_EQ(0U, i256.countLeadingZeros());
+  EXPECT_EQ(255U, i256.countTrailingZeros());
+  EXPECT_EQ(1U, i256.countPopulation());
+
+  // Ensure we handle large shifts of multi-word.
+  const APInt neg_one(128, static_cast<uint64_t>(-1), true);
+  EXPECT_EQ(0, neg_one.shl(128));
+}
+
+TEST(APIntTest, isSubsetOf) {
+  APInt i32_1(32, 1);
+  APInt i32_2(32, 2);
+  APInt i32_3(32, 3);
+  EXPECT_FALSE(i32_3.isSubsetOf(i32_1));
+  EXPECT_TRUE(i32_1.isSubsetOf(i32_3));
+  EXPECT_FALSE(i32_2.isSubsetOf(i32_1));
+  EXPECT_FALSE(i32_1.isSubsetOf(i32_2));
+  EXPECT_TRUE(i32_3.isSubsetOf(i32_3));
+
+  APInt i128_1(128, 1);
+  APInt i128_2(128, 2);
+  APInt i128_3(128, 3);
+  EXPECT_FALSE(i128_3.isSubsetOf(i128_1));
+  EXPECT_TRUE(i128_1.isSubsetOf(i128_3));
+  EXPECT_FALSE(i128_2.isSubsetOf(i128_1));
+  EXPECT_FALSE(i128_1.isSubsetOf(i128_2));
+  EXPECT_TRUE(i128_3.isSubsetOf(i128_3));
+
+  i128_1 <<= 64;
+  i128_2 <<= 64;
+  i128_3 <<= 64;
+  EXPECT_FALSE(i128_3.isSubsetOf(i128_1));
+  EXPECT_TRUE(i128_1.isSubsetOf(i128_3));
+  EXPECT_FALSE(i128_2.isSubsetOf(i128_1));
+  EXPECT_FALSE(i128_1.isSubsetOf(i128_2));
+  EXPECT_TRUE(i128_3.isSubsetOf(i128_3));
+}
+
+TEST(APIntTest, sext) {
+  EXPECT_EQ(0, APInt(1, 0).sext(64));
+  EXPECT_EQ(~uint64_t(0), APInt(1, 1).sext(64));
+
+  APInt i32_max(APInt::getSignedMaxValue(32).sext(63));
+  EXPECT_EQ(32U, i32_max.countLeadingZeros());
+  EXPECT_EQ(0U, i32_max.countTrailingZeros());
+  EXPECT_EQ(31U, i32_max.countPopulation());
+
+  APInt i32_min(APInt::getSignedMinValue(32).sext(63));
+  EXPECT_EQ(32U, i32_min.countLeadingOnes());
+  EXPECT_EQ(31U, i32_min.countTrailingZeros());
+  EXPECT_EQ(32U, i32_min.countPopulation());
+
+  APInt i32_neg1(APInt(32, ~uint64_t(0)).sext(63));
+  EXPECT_EQ(63U, i32_neg1.countLeadingOnes());
+  EXPECT_EQ(0U, i32_neg1.countTrailingZeros());
+  EXPECT_EQ(63U, i32_neg1.countPopulation());
+}
+
+TEST(APIntTest, multiply) {
+  APInt i64(64, 1234);
+
+  EXPECT_EQ(7006652, i64 * 5678);
+  EXPECT_EQ(7006652, 5678 * i64);
+
+  APInt i128 = APInt::getOneBitSet(128, 64);
+  APInt i128_1234(128, 1234);
+  i128_1234 <<= 64;
+  EXPECT_EQ(i128_1234, i128 * 1234);
+  EXPECT_EQ(i128_1234, 1234 * i128);
+
+  APInt i96 = APInt::getOneBitSet(96, 64);
+  i96 *= ~0ULL;
+  EXPECT_EQ(32U, i96.countLeadingOnes());
+  EXPECT_EQ(32U, i96.countPopulation());
+  EXPECT_EQ(64U, i96.countTrailingZeros());
+}
+
+} // end anonymous namespace

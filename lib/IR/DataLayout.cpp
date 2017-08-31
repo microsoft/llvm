@@ -1,4 +1,4 @@
-//===-- DataLayout.cpp - Data size & alignment routines --------------------==//
+//===- DataLayout.cpp - Data size & alignment routines ---------------------==//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -18,19 +18,25 @@
 
 #include "llvm/IR/DataLayout.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/Mutex.h"
-#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <cassert>
+#include <cstdint>
 #include <cstdlib>
+#include <tuple>
+#include <utility>
+
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -72,7 +78,6 @@ StructLayout::StructLayout(StructType *ST, const DataLayout &DL) {
     StructSize = alignTo(StructSize, StructAlignment);
   }
 }
-
 
 /// getElementContainingOffset - Given a valid offset into the structure,
 /// return the structure index that contains it.
@@ -302,7 +307,7 @@ void DataLayout::parseSpecifier(StringRef Desc) {
     case 'a': {
       AlignTypeEnum AlignType;
       switch (Specifier) {
-      default:
+      default: llvm_unreachable("Unexpected specifier!");
       case 'i': AlignType = INTEGER_ALIGN; break;
       case 'v': AlignType = VECTOR_ALIGN; break;
       case 'f': AlignType = FLOAT_ALIGN; break;
@@ -338,7 +343,7 @@ void DataLayout::parseSpecifier(StringRef Desc) {
       break;
     }
     case 'n':  // Native integer types.
-      for (;;) {
+      while (true) {
         unsigned Width = getInt(Tok);
         if (Width == 0)
           report_fatal_error(
@@ -393,7 +398,7 @@ void DataLayout::parseSpecifier(StringRef Desc) {
   }
 }
 
-DataLayout::DataLayout(const Module *M) : LayoutMap(nullptr) {
+DataLayout::DataLayout(const Module *M) {
   init(M);
 }
 
@@ -522,7 +527,7 @@ unsigned DataLayout::getAlignmentInfo(AlignTypeEnum AlignType,
 namespace {
 
 class StructLayoutMap {
-  typedef DenseMap<StructType*, StructLayout*> LayoutInfoTy;
+  using LayoutInfoTy = DenseMap<StructType*, StructLayout*>;
   LayoutInfoTy LayoutInfo;
 
 public:
@@ -567,6 +572,8 @@ const StructLayout *DataLayout::getStructLayout(StructType *Ty) const {
   int NumElts = Ty->getNumElements();
   StructLayout *L =
     (StructLayout *)malloc(sizeof(StructLayout)+(NumElts-1) * sizeof(uint64_t));
+  if (L == nullptr)
+    report_bad_alloc_error("Allocation of StructLayout elements failed.");
 
   // Set SL before calling StructLayout's ctor.  The ctor could cause other
   // entries to be added to TheMap, invalidating our reference.
@@ -576,7 +583,6 @@ const StructLayout *DataLayout::getStructLayout(StructType *Ty) const {
 
   return L;
 }
-
 
 unsigned DataLayout::getPointerABIAlignment(unsigned AS) const {
   PointersTy::const_iterator I = findPointerLowerBound(AS);
@@ -608,11 +614,8 @@ unsigned DataLayout::getPointerSize(unsigned AS) const {
 unsigned DataLayout::getPointerTypeSizeInBits(Type *Ty) const {
   assert(Ty->isPtrOrPtrVectorTy() &&
          "This should only be called with a pointer or pointer vector type");
-
-  if (Ty->isPointerTy())
-    return getTypeSizeInBits(Ty);
-
-  return getTypeSizeInBits(Ty->getScalarType());
+  Ty = Ty->getScalarType();
+  return getPointerSizeInBits(cast<PointerType>(Ty)->getAddressSpace());
 }
 
 /*!
@@ -624,7 +627,7 @@ unsigned DataLayout::getPointerTypeSizeInBits(Type *Ty) const {
   == false) for the requested type \a Ty.
  */
 unsigned DataLayout::getAlignment(Type *Ty, bool abi_or_pref) const {
-  int AlignType = -1;
+  AlignTypeEnum AlignType;
 
   assert(Ty->isSized() && "Cannot getTypeInfo() on a type that is unsized!");
   switch (Ty->getTypeID()) {
@@ -673,8 +676,7 @@ unsigned DataLayout::getAlignment(Type *Ty, bool abi_or_pref) const {
     llvm_unreachable("Bad type for getAlignment!!!");
   }
 
-  return getAlignmentInfo((AlignTypeEnum)AlignType, getTypeSizeInBits(Ty),
-                          abi_or_pref, Ty);
+  return getAlignmentInfo(AlignType, getTypeSizeInBits(Ty), abi_or_pref, Ty);
 }
 
 unsigned DataLayout::getABITypeAlignment(Type *Ty) const {
@@ -782,4 +784,3 @@ unsigned DataLayout::getPreferredAlignment(const GlobalVariable *GV) const {
 unsigned DataLayout::getPreferredAlignmentLog(const GlobalVariable *GV) const {
   return Log2_32(getPreferredAlignment(GV));
 }
-

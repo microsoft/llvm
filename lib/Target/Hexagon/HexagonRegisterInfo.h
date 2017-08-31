@@ -15,7 +15,6 @@
 #ifndef LLVM_LIB_TARGET_HEXAGON_HEXAGONREGISTERINFO_H
 #define LLVM_LIB_TARGET_HEXAGON_HEXAGONREGISTERINFO_H
 
-#include "llvm/MC/MachineLocation.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 
 #define GET_REGINFO_HEADER
@@ -77,7 +76,6 @@ public:
   unsigned getFirstCallerSavedNonParamReg() const;
 
   bool isEHReturnCalleeSaveReg(unsigned Reg) const;
-  bool isCalleeSaveReg(unsigned Reg) const;
 };
 
 } // end namespace llvm

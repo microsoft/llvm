@@ -14,8 +14,8 @@
 #ifndef LLVM_TRANSFORMS_IPO_FUNCTIONATTRS_H
 #define LLVM_TRANSFORMS_IPO_FUNCTIONATTRS_H
 
-#include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
@@ -56,7 +56,7 @@ Pass *createPostOrderFunctionAttrsLegacyPass();
 /// This pass provides a general RPO or "top down" propagation of
 /// function attributes. For a few (rare) cases, we can deduce significantly
 /// more about function attributes by working in RPO, so this pass
-/// provides the compliment to the post-order pass above where the majority of
+/// provides the complement to the post-order pass above where the majority of
 /// deduction is performed.
 // FIXME: Currently there is no RPO CGSCC pass structure to slide into and so
 // this is a boring module pass, but eventually it should be an RPO CGSCC pass

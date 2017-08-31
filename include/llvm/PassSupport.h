@@ -31,8 +31,6 @@
 
 namespace llvm {
 
-class TargetMachine;
-
 #define INITIALIZE_PASS(passName, arg, name, cfg, analysis)                    \
   static void *initialize##passName##PassOnce(PassRegistry &Registry) {        \
     PassInfo *PI = new PassInfo(                                               \
@@ -78,10 +76,6 @@ class TargetMachine;
 
 template <typename PassName> Pass *callDefaultCtor() { return new PassName(); }
 
-template <typename PassName> Pass *callTargetMachineCtor(TargetMachine *TM) {
-  return new PassName(TM);
-}
-
 //===---------------------------------------------------------------------------
 /// RegisterPass<t> template - This template class is used to notify the system
 /// that a Pass is available for use, and registers it into the internal
@@ -93,11 +87,7 @@ template <typename PassName> Pass *callTargetMachineCtor(TargetMachine *TM) {
 /// static RegisterPass<YourPassClassName> tmp("passopt", "My Pass Name");
 ///
 /// This statement will cause your pass to be created by calling the default
-/// constructor exposed by the pass.  If you have a different constructor that
-/// must be called, create a global constructor function (which takes the
-/// arguments you need and returns a Pass*) and register your pass like this:
-///
-/// static RegisterPass<PassClassName> tmp("passopt", "My Name");
+/// constructor exposed by the pass.
 ///
 template <typename passName> struct RegisterPass : public PassInfo {
   // Register Pass using default constructor...

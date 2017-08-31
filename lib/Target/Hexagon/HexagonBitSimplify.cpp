@@ -1,4 +1,4 @@
-//===--- HexagonBitSimplify.cpp -------------------------------------------===//
+//===- HexagonBitSimplify.cpp ---------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,14 +7,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "hexbit"
-
+#include "BitTracker.h"
 #include "HexagonBitTracker.h"
-#include "HexagonTargetMachine.h"
+#include "HexagonInstrInfo.h"
+#include "HexagonRegisterInfo.h"
+#include "HexagonSubtarget.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -24,13 +26,13 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -42,6 +44,8 @@
 #include <utility>
 #include <vector>
 
+#define DEBUG_TYPE "hexbit"
+
 using namespace llvm;
 
 static cl::opt<bool> PreserveTiedOps("hexbit-keep-tied", cl::Hidden,
@@ -52,10 +56,10 @@ static cl::opt<bool> GenBitSplit("hexbit-bitsplit", cl::Hidden,
   cl::init(true), cl::desc("Generate bitsplit instructions"));
 
 static cl::opt<unsigned> MaxExtract("hexbit-max-extract", cl::Hidden,
-  cl::init(UINT_MAX));
+  cl::init(std::numeric_limits<unsigned>::max()));
 static unsigned CountExtract = 0;
 static cl::opt<unsigned> MaxBitSplit("hexbit-max-bitsplit", cl::Hidden,
-  cl::init(UINT_MAX));
+  cl::init(std::numeric_limits<unsigned>::max()));
 static unsigned CountBitSplit = 0;
 
 namespace llvm {
@@ -180,7 +184,7 @@ namespace {
   public:
     static char ID;
 
-    HexagonBitSimplify() : MachineFunctionPass(ID), MDT(nullptr) {
+    HexagonBitSimplify() : MachineFunctionPass(ID) {
       initializeHexagonBitSimplifyPass(*PassRegistry::getPassRegistry());
     }
 
@@ -227,15 +231,14 @@ namespace {
         const BitTracker::RegisterRef &RS, MachineRegisterInfo &MRI);
 
   private:
-    MachineDominatorTree *MDT;
+    MachineDominatorTree *MDT = nullptr;
 
     bool visitBlock(MachineBasicBlock &B, Transformation &T, RegisterSet &AVs);
     static bool hasTiedUse(unsigned Reg, MachineRegisterInfo &MRI,
         unsigned NewSub = Hexagon::NoSubRegister);
   };
 
-  char HexagonBitSimplify::ID = 0;
-  typedef HexagonBitSimplify HBS;
+  using HBS = HexagonBitSimplify;
 
   // The purpose of this class is to provide a common facility to traverse
   // the function top-down or bottom-up via the dominator tree, and keep
@@ -251,6 +254,8 @@ namespace {
   };
 
 } // end anonymous namespace
+
+char HexagonBitSimplify::ID = 0;
 
 INITIALIZE_PASS_BEGIN(HexagonBitSimplify, "hexbit",
       "Hexagon bit simplification", false, false)
@@ -407,7 +412,7 @@ bool HexagonBitSimplify::getSubregMask(const BitTracker::RegisterRef &RR,
   const TargetRegisterClass *RC = MRI.getRegClass(RR.Reg);
   if (RR.Sub == 0) {
     Begin = 0;
-    Width = RC->getSize()*8;
+    Width = MRI.getTargetRegisterInfo()->getRegSizeInBits(*RC);
     return true;
   }
 
@@ -417,7 +422,7 @@ bool HexagonBitSimplify::getSubregMask(const BitTracker::RegisterRef &RR,
     case Hexagon::DoubleRegsRegClassID:
     case Hexagon::VecDblRegsRegClassID:
     case Hexagon::VecDblRegs128BRegClassID:
-      Width = RC->getSize()*8 / 2;
+      Width = MRI.getTargetRegisterInfo()->getRegSizeInBits(*RC) / 2;
       if (RR.Sub == Hexagon::isub_hi || RR.Sub == Hexagon::vsub_hi)
         Begin = Width;
       break;
@@ -1054,8 +1059,8 @@ namespace {
   class RedundantInstrElimination : public Transformation {
   public:
     RedundantInstrElimination(BitTracker &bt, const HexagonInstrInfo &hii,
-          MachineRegisterInfo &mri)
-        : Transformation(true), HII(hii), MRI(mri), BT(bt) {}
+          const HexagonRegisterInfo &hri, MachineRegisterInfo &mri)
+        : Transformation(true), HII(hii), HRI(hri), MRI(mri), BT(bt) {}
 
     bool processBlock(MachineBasicBlock &B, const RegisterSet &AVs) override;
 
@@ -1070,6 +1075,7 @@ namespace {
     bool usedBitsEqual(BitTracker::RegisterRef RD, BitTracker::RegisterRef RS);
 
     const HexagonInstrInfo &HII;
+    const HexagonRegisterInfo &HRI;
     MachineRegisterInfo &MRI;
     BitTracker &BT;
   };
@@ -1262,7 +1268,7 @@ bool RedundantInstrElimination::computeUsedBits(const MachineInstr &MI,
     assert(MI.getOperand(OpN).isReg());
     BitTracker::RegisterRef RR = MI.getOperand(OpN);
     const TargetRegisterClass *RC = HBS::getFinalVRegClass(RR, MRI);
-    uint16_t Width = RC->getSize()*8;
+    uint16_t Width = HRI.getRegSizeInBits(*RC);
 
     if (!GotBits)
       T.set(Begin, Begin+Width);
@@ -1946,8 +1952,10 @@ bool BitSimplification::genStoreImmediate(MachineInstr *MI) {
   switch (Opc) {
     case Hexagon::S2_storeri_io:
       Align++;
+      LLVM_FALLTHROUGH;
     case Hexagon::S2_storerh_io:
       Align++;
+      LLVM_FALLTHROUGH;
     case Hexagon::S2_storerb_io:
       break;
     default:
@@ -2173,8 +2181,10 @@ bool BitSimplification::genBitSplit(MachineInstr *MI,
       const RegisterSet &AVs) {
   if (!GenBitSplit)
     return false;
-  if (CountBitSplit >= MaxBitSplit)
-    return false;
+  if (MaxBitSplit.getNumOccurrences()) {
+    if (CountBitSplit >= MaxBitSplit)
+      return false;
+  }
 
   unsigned Opc = MI->getOpcode();
   switch (Opc) {
@@ -2253,7 +2263,8 @@ bool BitSimplification::genBitSplit(MachineInstr *MI,
       continue;
 
     // Generate bitsplit where S is defined.
-    CountBitSplit++;
+    if (MaxBitSplit.getNumOccurrences())
+      CountBitSplit++;
     MachineInstr *DefS = MRI.getVRegDef(S);
     assert(DefS != nullptr);
     DebugLoc DL = DefS->getDebugLoc();
@@ -2379,9 +2390,11 @@ bool BitSimplification::simplifyExtractLow(MachineInstr *MI,
       const RegisterSet &AVs) {
   if (!GenExtract)
     return false;
-  if (CountExtract >= MaxExtract)
-    return false;
-  CountExtract++;
+  if (MaxExtract.getNumOccurrences()) {
+    if (CountExtract >= MaxExtract)
+      return false;
+    CountExtract++;
+  }
 
   unsigned W = RC.width();
   unsigned RW = W;
@@ -2651,7 +2664,7 @@ bool HexagonBitSimplify::runOnMachineFunction(MachineFunction &MF) {
   Changed |= visitBlock(Entry, ImmG, AIG);
 
   RegisterSet ARE;  // Available registers for RIE.
-  RedundantInstrElimination RIE(BT, HII, MRI);
+  RedundantInstrElimination RIE(BT, HII, HRI, MRI);
   bool Ried = visitBlock(Entry, RIE, ARE);
   if (Ried) {
     Changed = true;
@@ -2759,31 +2772,32 @@ namespace {
   public:
     static char ID;
 
-    HexagonLoopRescheduling() : MachineFunctionPass(ID),
-        HII(nullptr), HRI(nullptr), MRI(nullptr), BTP(nullptr) {
+    HexagonLoopRescheduling() : MachineFunctionPass(ID) {
       initializeHexagonLoopReschedulingPass(*PassRegistry::getPassRegistry());
     }
 
     bool runOnMachineFunction(MachineFunction &MF) override;
 
   private:
-    const HexagonInstrInfo *HII;
-    const HexagonRegisterInfo *HRI;
-    MachineRegisterInfo *MRI;
-    BitTracker *BTP;
+    const HexagonInstrInfo *HII = nullptr;
+    const HexagonRegisterInfo *HRI = nullptr;
+    MachineRegisterInfo *MRI = nullptr;
+    BitTracker *BTP = nullptr;
 
     struct LoopCand {
       LoopCand(MachineBasicBlock *lb, MachineBasicBlock *pb,
             MachineBasicBlock *eb) : LB(lb), PB(pb), EB(eb) {}
+
       MachineBasicBlock *LB, *PB, *EB;
     };
-    typedef std::vector<MachineInstr*> InstrList;
+    using InstrList = std::vector<MachineInstr *>;
     struct InstrGroup {
       BitTracker::RegisterRef Inp, Out;
       InstrList Ins;
     };
     struct PhiInfo {
       PhiInfo(MachineInstr &P, MachineBasicBlock &B);
+
       unsigned DefR;
       BitTracker::RegisterRef LR, PR; // Loop Register, Preheader Register
       MachineBasicBlock *LB, *PB;     // Loop Block, Preheader Block
@@ -3071,7 +3085,7 @@ bool HexagonLoopRescheduling::processLoop(LoopCand &C) {
   // to the beginning of the loop, that input register would need to be
   // the loop-carried register (through a phi node) instead of the (currently
   // loop-carried) output register.
-  typedef std::vector<InstrGroup> InstrGroupList;
+  using InstrGroupList = std::vector<InstrGroup>;
   InstrGroupList Groups;
 
   for (unsigned i = 0, n = ShufIns.size(); i < n; ++i) {

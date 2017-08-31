@@ -11,12 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Object/MachO.h"
 #include "llvm-objdump.h"
 #include "llvm-c/Disassembler.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Config/config.h"
 #include "llvm/DebugInfo/DIContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
@@ -30,6 +30,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
@@ -39,7 +40,6 @@
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/LEB128.h"
-#include "llvm/Support/MachO.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
@@ -1135,7 +1135,8 @@ static void DumpInfoPlistSectionContents(StringRef Filename,
     DataRefImpl Ref = Section.getRawDataRefImpl();
     StringRef SegName = O->getSectionFinalSegmentName(Ref);
     if (SegName == "__TEXT" && SectName == "__info_plist") {
-      outs() << "Contents of (" << SegName << "," << SectName << ") section\n";
+      if (!NoLeadingHeaders)
+        outs() << "Contents of (" << SegName << "," << SectName << ") section\n";
       StringRef BytesStr;
       Section.getContents(BytesStr);
       const char *sect = reinterpret_cast<const char *>(BytesStr.data());
@@ -1223,8 +1224,13 @@ static void ProcessMachO(StringRef Name, MachOObjectFile *MachOOF,
     if (Error Err = MachOOF->checkSymbolTable())
       report_error(ArchiveName, FileName, std::move(Err), ArchitectureName);
 
-  if (Disassemble)
-    DisassembleMachO(FileName, MachOOF, "__TEXT", "__text");
+  if (Disassemble) {
+    if (MachOOF->getHeader().filetype == MachO::MH_KEXT_BUNDLE &&
+        MachOOF->getHeader().cputype == MachO::CPU_TYPE_ARM64)
+      DisassembleMachO(FileName, MachOOF, "__TEXT_EXEC", "__text");
+    else
+      DisassembleMachO(FileName, MachOOF, "__TEXT", "__text");
+  }
   if (IndirectSymbols)
     PrintIndirectSymbols(MachOOF, !NonVerbose);
   if (DataInCode)
@@ -1269,9 +1275,12 @@ static void ProcessMachO(StringRef Name, MachOObjectFile *MachOOF,
     printWeakBindTable(MachOOF);
 
   if (DwarfDumpType != DIDT_Null) {
-    std::unique_ptr<DIContext> DICtx(new DWARFContextInMemory(*MachOOF));
+    std::unique_ptr<DIContext> DICtx = DWARFContext::create(*MachOOF);
     // Dump the complete DWARF structure.
-    DICtx->dump(outs(), DwarfDumpType, true /* DumpEH */);
+    DIDumpOptions DumpOpts;
+    DumpOpts.DumpType = DwarfDumpType;
+    DumpOpts.DumpEH = true;
+    DICtx->dump(outs(), DumpOpts);
   }
 }
 
@@ -1917,11 +1926,45 @@ static int SymbolizerGetOpInfo(void *DisInfo, uint64_t Pc, uint64_t Offset,
   if (Arch == Triple::x86_64) {
     if (Size != 1 && Size != 2 && Size != 4 && Size != 0)
       return 0;
+    // For non MH_OBJECT types, like MH_KEXT_BUNDLE, Search the external
+    // relocation entries of a linked image (if any) for an entry that matches
+    // this segment offset.
     if (info->O->getHeader().filetype != MachO::MH_OBJECT) {
-      // TODO:
-      // Search the external relocation entries of a fully linked image
-      // (if any) for an entry that matches this segment offset.
-      // uint64_t seg_offset = (Pc + Offset);
+      uint64_t seg_offset = Pc + Offset;
+      bool reloc_found = false;
+      DataRefImpl Rel;
+      MachO::any_relocation_info RE;
+      bool isExtern = false;
+      SymbolRef Symbol;
+      for (const RelocationRef &Reloc : info->O->external_relocations()) {
+        uint64_t RelocOffset = Reloc.getOffset();
+        if (RelocOffset == seg_offset) {
+          Rel = Reloc.getRawDataRefImpl();
+          RE = info->O->getRelocation(Rel);
+          // external relocation entries should always be external.
+          isExtern = info->O->getPlainRelocationExternal(RE);
+          if (isExtern) {
+            symbol_iterator RelocSym = Reloc.getSymbol();
+            Symbol = *RelocSym;
+          }
+          reloc_found = true;
+          break;
+        }
+      }
+      if (reloc_found && isExtern) {
+        // The Value passed in will be adjusted by the Pc if the instruction
+        // adds the Pc.  But for x86_64 external relocation entries the Value
+        // is the offset from the external symbol.
+        if (info->O->getAnyRelocationPCRel(RE))
+          op_info->Value -= Pc + Offset + Size;
+        Expected<StringRef> SymName = Symbol.getName();
+        if (!SymName)
+          report_error(info->O->getFileName(), SymName.takeError());
+        const char *name = SymName->data();
+        op_info->AddSymbol.Present = 1;
+        op_info->AddSymbol.Name = name;
+        return 1;
+      }
       return 0;
     }
     // In MH_OBJECT filetypes search the section's relocation entries (if any)
@@ -2591,7 +2634,8 @@ static const char *get_symbol_32(uint32_t sect_offset, SectionRef S,
 
 // These are structs in the Objective-C meta data and read to produce the
 // comments for disassembly.  While these are part of the ABI they are no
-// public defintions.  So the are here not in include/llvm/Support/MachO.h .
+// public defintions.  So the are here not in include/llvm/BinaryFormat/MachO.h
+// .
 
 // The cfstring object in a 64-bit Mach-O file.
 struct cfstring64_t {
@@ -4568,6 +4612,12 @@ static void print_class64_t(uint64_t p, struct DisassembleInfo *info) {
                        n_value, c.superclass);
   if (name != nullptr)
     outs() << " " << name;
+  else {
+    name = get_dyld_bind_info_symbolname(S.getAddress() +
+             offset + offsetof(struct class64_t, superclass), info);
+    if (name != nullptr)
+      outs() << " " << name;
+  }
   outs() << "\n";
 
   outs() << "         cache " << format("0x%" PRIx64, c.cache);
@@ -5963,7 +6013,7 @@ static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
     xp = xar_iter_new();
     if(!xp){
       errs() << "Can't obtain an xar iterator for xar archive "
-	     << XarFilename.c_str() << "\n";
+             << XarFilename.c_str() << "\n";
       xar_close(xar);
       return;
     }
@@ -5976,12 +6026,12 @@ static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
 #if 0 // Useful for debugging.
       outs() << "key: " << key << " value: " << val << "\n";
 #endif
-      if(strcmp(key, "name") == 0)
-	member_name = val;
-      if(strcmp(key, "type") == 0)
-	member_type = val;
-      if(strcmp(key, "data/size") == 0)
-	member_size_string = val;
+      if (strcmp(key, "name") == 0)
+        member_name = val;
+      if (strcmp(key, "type") == 0)
+        member_type = val;
+      if (strcmp(key, "data/size") == 0)
+        member_size_string = val;
     }
     /*
      * If we find a file with a name, date/size and type properties
@@ -5994,38 +6044,38 @@ static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
       char *endptr;
       member_size = strtoul(member_size_string, &endptr, 10);
       if (*endptr == '\0' && member_size != 0) {
-	char *buffer = (char *) ::operator new (member_size);
-	if (xar_extract_tobuffersz(xar, xf, &buffer, &member_size) == 0) {
+        char *buffer = (char *)::operator new(member_size);
+        if (xar_extract_tobuffersz(xar, xf, &buffer, &member_size) == 0) {
 #if 0 // Useful for debugging.
 	  outs() << "xar member: " << member_name << " extracted\n";
 #endif
           // Set the XarMemberName we want to see printed in the header.
-	  std::string OldXarMemberName;
-	  // If XarMemberName is already set this is nested. So
-	  // save the old name and create the nested name.
-	  if (!XarMemberName.empty()) {
-	    OldXarMemberName = XarMemberName;
+          std::string OldXarMemberName;
+          // If XarMemberName is already set this is nested. So
+          // save the old name and create the nested name.
+          if (!XarMemberName.empty()) {
+            OldXarMemberName = XarMemberName;
             XarMemberName =
-             (Twine("[") + XarMemberName + "]" + member_name).str();
-	  } else {
-	    OldXarMemberName = "";
-	    XarMemberName = member_name;
-	  }
-	  // See if this is could be a xar file (nested).
-	  if (member_size >= sizeof(struct xar_header)) {
+                (Twine("[") + XarMemberName + "]" + member_name).str();
+          } else {
+            OldXarMemberName = "";
+            XarMemberName = member_name;
+          }
+          // See if this is could be a xar file (nested).
+          if (member_size >= sizeof(struct xar_header)) {
 #if 0 // Useful for debugging.
 	    outs() << "could be a xar file: " << member_name << "\n";
 #endif
-	    memcpy((char *)&XarHeader, buffer, sizeof(struct xar_header));
+            memcpy((char *)&XarHeader, buffer, sizeof(struct xar_header));
             if (sys::IsLittleEndianHost)
-	      swapStruct(XarHeader);
-	    if(XarHeader.magic == XAR_HEADER_MAGIC)
-	      DumpBitcodeSection(O, buffer, member_size, verbose,
+              swapStruct(XarHeader);
+            if (XarHeader.magic == XAR_HEADER_MAGIC)
+              DumpBitcodeSection(O, buffer, member_size, verbose,
                                  PrintXarHeader, PrintXarFileHeaders,
-		                 XarMemberName);
-	  }
-	  XarMemberName = OldXarMemberName;
-	}
+                                 XarMemberName);
+          }
+          XarMemberName = OldXarMemberName;
+        }
         delete buffer;
       }
     }
@@ -6544,7 +6594,7 @@ static void DisassembleMachO(StringRef Filename, MachOObjectFile *MachOOF,
     }
 
     // Setup the DIContext
-    diContext.reset(new DWARFContextInMemory(*DbgObj));
+    diContext = DWARFContext::create(*DbgObj);
   }
 
   if (FilterSections.size() == 0)
@@ -6653,7 +6703,7 @@ static void DisassembleMachO(StringRef Filename, MachOObjectFile *MachOOF,
         if (!DisSymName.empty() && DisSymName == SymName) {
           outs() << "-dis-symname: " << DisSymName << " not in the section\n";
           return;
-	}
+        }
         continue;
       }
       // The __mh_execute_header is special and we need to deal with that fact
@@ -7629,6 +7679,10 @@ static void PrintMachHeader(uint32_t magic, uint32_t cputype,
     if (f & MachO::MH_APP_EXTENSION_SAFE) {
       outs() << " APP_EXTENSION_SAFE";
       f &= ~MachO::MH_APP_EXTENSION_SAFE;
+    }
+    if (f & MachO::MH_NLIST_OUTOFSYNC_WITH_DYLDINFO) {
+      outs() << " NLIST_OUTOFSYNC_WITH_DYLDINFO";
+      f &= ~MachO::MH_NLIST_OUTOFSYNC_WITH_DYLDINFO;
     }
     if (f != 0 || flags == 0)
       outs() << format(" 0x%08" PRIx32, f);
@@ -9332,7 +9386,24 @@ void llvm::printMachOLoadCommands(const object::ObjectFile *Obj) {
 //===----------------------------------------------------------------------===//
 
 void llvm::printMachOExportsTrie(const object::MachOObjectFile *Obj) {
-  for (const llvm::object::ExportEntry &Entry : Obj->exports()) {
+  uint64_t BaseSegmentAddress = 0;
+  for (const auto &Command : Obj->load_commands()) {
+    if (Command.C.cmd == MachO::LC_SEGMENT) {
+      MachO::segment_command Seg = Obj->getSegmentLoadCommand(Command);
+      if (Seg.fileoff == 0 && Seg.filesize != 0) {
+        BaseSegmentAddress = Seg.vmaddr;
+        break;
+      }
+    } else if (Command.C.cmd == MachO::LC_SEGMENT_64) {
+      MachO::segment_command_64 Seg = Obj->getSegment64LoadCommand(Command);
+      if (Seg.fileoff == 0 && Seg.filesize != 0) {
+        BaseSegmentAddress = Seg.vmaddr;
+        break;
+      }
+    }
+  }
+  Error Err = Error::success();
+  for (const llvm::object::ExportEntry &Entry : Obj->exports(Err)) {
     uint64_t Flags = Entry.flags();
     bool ReExport = (Flags & MachO::EXPORT_SYMBOL_FLAGS_REEXPORT);
     bool WeakDef = (Flags & MachO::EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION);
@@ -9345,7 +9416,7 @@ void llvm::printMachOExportsTrie(const object::MachOObjectFile *Obj) {
       outs() << "[re-export] ";
     else
       outs() << format("0x%08llX  ",
-                       Entry.address()); // FIXME:add in base address
+                       Entry.address() + BaseSegmentAddress);
     outs() << Entry.name();
     if (WeakDef || ThreadLocal || Resolver || Abs) {
       bool NeedsComma = false;
@@ -9385,6 +9456,8 @@ void llvm::printMachOExportsTrie(const object::MachOObjectFile *Obj) {
     }
     outs() << "\n";
   }
+  if (Err)
+    report_error(Obj->getFileName(), std::move(Err));
 }
 
 //===----------------------------------------------------------------------===//

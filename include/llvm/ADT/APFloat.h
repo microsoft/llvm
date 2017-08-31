@@ -140,8 +140,8 @@ enum lostFraction { // Example of truncated bits:
 // implementation classes. This struct should not define any non-static data
 // members.
 struct APFloatBase {
-  // TODO remove this and use APInt typedef directly.
   typedef APInt::WordType integerPart;
+  static const unsigned integerPartWidth = APInt::APINT_BITS_PER_WORD;
 
   /// A signed type to represent a floating point numbers unbiased exponent.
   typedef signed short ExponentType;
@@ -397,6 +397,12 @@ public:
   ///   consider inserting before falling back to scientific
   ///   notation.  0 means to always use scientific notation.
   ///
+  /// \param TruncateZero Indicate whether to remove the trailing zero in
+  ///   fraction part or not. Also setting this parameter to false forcing
+  ///   producing of output more similar to default printf behavior.
+  ///   Specifically the lower e is used as exponent delimiter and exponent
+  ///   always contains no less than two digits.
+  ///
   /// Number       Precision    MaxPadding      Result
   /// ------       ---------    ----------      ------
   /// 1.01E+4              5             2       10100
@@ -406,7 +412,7 @@ public:
   /// 1.01E-2              4             2       0.0101
   /// 1.01E-2              4             1       1.01E-2
   void toString(SmallVectorImpl<char> &Str, unsigned FormatPrecision = 0,
-                unsigned FormatMaxPadding = 3) const;
+                unsigned FormatMaxPadding = 3, bool TruncateZero = true) const;
 
   /// If this value has an exact multiplicative inverse, store it in inv and
   /// return true.
@@ -649,7 +655,7 @@ public:
   bool isInteger() const;
 
   void toString(SmallVectorImpl<char> &Str, unsigned FormatPrecision,
-                unsigned FormatMaxPadding) const;
+                unsigned FormatMaxPadding, bool TruncateZero = true) const;
 
   bool getExactInverse(APFloat *inv) const;
 
@@ -1144,9 +1150,9 @@ public:
   APFloat &operator=(APFloat &&RHS) = default;
 
   void toString(SmallVectorImpl<char> &Str, unsigned FormatPrecision = 0,
-                unsigned FormatMaxPadding = 3) const {
+                unsigned FormatMaxPadding = 3, bool TruncateZero = true) const {
     APFLOAT_DISPATCH_ON_SEMANTICS(
-        toString(Str, FormatPrecision, FormatMaxPadding));
+        toString(Str, FormatPrecision, FormatMaxPadding, TruncateZero));
   }
 
   void print(raw_ostream &) const;

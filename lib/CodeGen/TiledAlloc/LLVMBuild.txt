@@ -16,7 +16,7 @@
 ;===------------------------------------------------------------------------===;
 
 [component_0]
-type = OptionalLibrary
+type = Library
 name = Tiled
 parent = CodeGen
-required_libraries = Core MC Support Target
+required_libraries = CodeGen Core MC Support Target

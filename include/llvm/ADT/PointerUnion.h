@@ -19,8 +19,8 @@
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/Support/PointerLikeTypeTraits.h"
 #include <cassert>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 
 namespace llvm {
 
@@ -158,7 +158,7 @@ public:
     assert(
         get<PT1>() == Val.getPointer() &&
         "Can't get the address because PointerLikeTypeTraits changes the ptr");
-    return (PT1 *)Val.getAddrOfPointer();
+    return const_cast<PT1 *>(reinterpret_cast<const PT1 *>(Val.getAddrOfPointer()));
   }
 
   /// Assignment from nullptr which just clears the union.
@@ -190,25 +190,24 @@ public:
 };
 
 template <typename PT1, typename PT2>
-static bool operator==(PointerUnion<PT1, PT2> lhs, PointerUnion<PT1, PT2> rhs) {
+bool operator==(PointerUnion<PT1, PT2> lhs, PointerUnion<PT1, PT2> rhs) {
   return lhs.getOpaqueValue() == rhs.getOpaqueValue();
 }
 
 template <typename PT1, typename PT2>
-static bool operator!=(PointerUnion<PT1, PT2> lhs, PointerUnion<PT1, PT2> rhs) {
+bool operator!=(PointerUnion<PT1, PT2> lhs, PointerUnion<PT1, PT2> rhs) {
   return lhs.getOpaqueValue() != rhs.getOpaqueValue();
 }
 
 template <typename PT1, typename PT2>
-static bool operator<(PointerUnion<PT1, PT2> lhs, PointerUnion<PT1, PT2> rhs) {
+bool operator<(PointerUnion<PT1, PT2> lhs, PointerUnion<PT1, PT2> rhs) {
   return lhs.getOpaqueValue() < rhs.getOpaqueValue();
 }
 
 // Teach SmallPtrSet that PointerUnion is "basically a pointer", that has
 // # low bits available = min(PT1bits,PT2bits)-1.
 template <typename PT1, typename PT2>
-class PointerLikeTypeTraits<PointerUnion<PT1, PT2>> {
-public:
+struct PointerLikeTypeTraits<PointerUnion<PT1, PT2>> {
   static inline void *getAsVoidPointer(const PointerUnion<PT1, PT2> &P) {
     return P.getOpaqueValue();
   }
@@ -328,8 +327,7 @@ public:
 // Teach SmallPtrSet that PointerUnion3 is "basically a pointer", that has
 // # low bits available = min(PT1bits,PT2bits,PT2bits)-2.
 template <typename PT1, typename PT2, typename PT3>
-class PointerLikeTypeTraits<PointerUnion3<PT1, PT2, PT3>> {
-public:
+struct PointerLikeTypeTraits<PointerUnion3<PT1, PT2, PT3>> {
   static inline void *getAsVoidPointer(const PointerUnion3<PT1, PT2, PT3> &P) {
     return P.getOpaqueValue();
   }
@@ -435,8 +433,7 @@ public:
 // Teach SmallPtrSet that PointerUnion4 is "basically a pointer", that has
 // # low bits available = min(PT1bits,PT2bits,PT2bits)-2.
 template <typename PT1, typename PT2, typename PT3, typename PT4>
-class PointerLikeTypeTraits<PointerUnion4<PT1, PT2, PT3, PT4>> {
-public:
+struct PointerLikeTypeTraits<PointerUnion4<PT1, PT2, PT3, PT4>> {
   static inline void *
   getAsVoidPointer(const PointerUnion4<PT1, PT2, PT3, PT4> &P) {
     return P.getOpaqueValue();

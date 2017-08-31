@@ -14,8 +14,8 @@
 #ifndef LLVM_CODEGEN_MACHINEOPERAND_H
 #define LLVM_CODEGEN_MACHINEOPERAND_H
 
-#include "llvm/Support/DataTypes.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/Support/DataTypes.h"
 #include <cassert>
 
 namespace llvm {
@@ -65,7 +65,6 @@ public:
     MO_CFIIndex,          ///< MCCFIInstruction index.
     MO_IntrinsicID,       ///< Intrinsic ID for ISel
     MO_Predicate,         ///< Generic predicate for ISel
-    MO_Placeholder,       ///< Placeholder for GlobalISel ComplexPattern result.
   };
 
 private:
@@ -559,6 +558,11 @@ public:
     Contents.OffsetedInfo.Val.Index = Idx;
   }
 
+  void setMetadata(const MDNode *MD) {
+    assert(isMetadata() && "Wrong MachineOperand mutator");
+    Contents.MD = MD;
+  }
+
   void setMBB(MachineBasicBlock *MBB) {
     assert(isMBB() && "Wrong MachineOperand mutator");
     Contents.MBB = MBB;
@@ -612,6 +616,10 @@ public:
 
   /// Replace this operand with a frame index.
   void ChangeToFrameIndex(int Idx);
+
+  /// Replace this operand with a target index.
+  void ChangeToTargetIndex(unsigned Idx, int64_t Offset,
+                           unsigned char TargetFlags = 0);
 
   /// ChangeToRegister - Replace this operand with a new register operand of
   /// the specified value.  If an operand is known to be an register already,
@@ -780,11 +788,6 @@ public:
   static MachineOperand CreatePredicate(unsigned Pred) {
     MachineOperand Op(MachineOperand::MO_Predicate);
     Op.Contents.Pred = Pred;
-    return Op;
-  }
-
-  static MachineOperand CreatePlaceholder() {
-    MachineOperand Op(MachineOperand::MO_Placeholder);
     return Op;
   }
 

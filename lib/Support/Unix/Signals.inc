@@ -15,9 +15,9 @@
 #include "Unix.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Demangle/Demangle.h"
-#include "llvm/Support/Format.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/Program.h"
@@ -25,8 +25,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <string>
-#if HAVE_EXECINFO_H
-# include <execinfo.h>         // For backtrace().
+#ifdef HAVE_BACKTRACE
+# include BACKTRACE_HEADER         // For backtrace().
 #endif
 #if HAVE_SIGNAL_H
 #include <signal.h>

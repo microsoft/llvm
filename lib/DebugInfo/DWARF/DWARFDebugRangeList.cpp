@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/DebugInfo/DWARF/DWARFDebugRangeList.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cinttypes>
@@ -22,7 +23,8 @@ void DWARFDebugRangeList::clear() {
   Entries.clear();
 }
 
-bool DWARFDebugRangeList::extract(DataExtractor data, uint32_t *offset_ptr) {
+bool DWARFDebugRangeList::extract(const DWARFDataExtractor &data,
+                                  uint32_t *offset_ptr) {
   clear();
   if (!data.isValidOffset(*offset_ptr))
     return false;
@@ -31,18 +33,22 @@ bool DWARFDebugRangeList::extract(DataExtractor data, uint32_t *offset_ptr) {
     return false;
   Offset = *offset_ptr;
   while (true) {
-    RangeListEntry entry;
+    RangeListEntry Entry;
+    Entry.SectionIndex = -1ULL;
+
     uint32_t prev_offset = *offset_ptr;
-    entry.StartAddress = data.getAddress(offset_ptr);
-    entry.EndAddress = data.getAddress(offset_ptr);
+    Entry.StartAddress = data.getRelocatedAddress(offset_ptr);
+    Entry.EndAddress =
+        data.getRelocatedAddress(offset_ptr, &Entry.SectionIndex);
+
     // Check that both values were extracted correctly.
     if (*offset_ptr != prev_offset + 2 * AddressSize) {
       clear();
       return false;
     }
-    if (entry.isEndOfListEntry())
+    if (Entry.isEndOfListEntry())
       break;
-    Entries.push_back(entry);
+    Entries.push_back(Entry);
   }
   return true;
 }
@@ -64,8 +70,8 @@ DWARFDebugRangeList::getAbsoluteRanges(uint64_t BaseAddress) const {
     if (RLE.isBaseAddressSelectionEntry(AddressSize)) {
       BaseAddress = RLE.EndAddress;
     } else {
-      Res.push_back(std::make_pair(BaseAddress + RLE.StartAddress,
-                                   BaseAddress + RLE.EndAddress));
+      Res.push_back({BaseAddress + RLE.StartAddress,
+                     BaseAddress + RLE.EndAddress, RLE.SectionIndex});
     }
   }
   return Res;

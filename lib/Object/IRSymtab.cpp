@@ -1,4 +1,4 @@
-//===- IRSymtab.cpp - implementation of IR symbol tables --------*- C++ -*-===//
+//===- IRSymtab.cpp - implementation of IR symbol tables ------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -8,34 +8,71 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Object/IRSymtab.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/ObjectUtils.h"
+#include "llvm/IR/Comdat.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/GlobalAlias.h"
+#include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/Mangler.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/MC/StringTableBuilder.h"
+#include "llvm/Object/IRObjectFile.h"
 #include "llvm/Object/ModuleSymbolTable.h"
+#include "llvm/Object/SymbolicFile.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/StringSaver.h"
+#include "llvm/Support/VCSRevision.h"
+#include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 using namespace irsymtab;
 
 namespace {
 
+const char *getExpectedProducerName() {
+  static char DefaultName[] = LLVM_VERSION_STRING
+#ifdef LLVM_REVISION
+      " " LLVM_REVISION
+#endif
+      ;
+  // Allows for testing of the irsymtab writer and upgrade mechanism. This
+  // environment variable should not be set by users.
+  if (char *OverrideName = getenv("LLVM_OVERRIDE_PRODUCER"))
+    return OverrideName;
+  return DefaultName;
+}
+
+const char *kExpectedProducerName = getExpectedProducerName();
+
 /// Stores the temporary state that is required to build an IR symbol table.
 struct Builder {
   SmallVector<char, 0> &Symtab;
-  SmallVector<char, 0> &Strtab;
-  Builder(SmallVector<char, 0> &Symtab, SmallVector<char, 0> &Strtab)
-      : Symtab(Symtab), Strtab(Strtab) {}
+  StringTableBuilder &StrtabBuilder;
+  StringSaver Saver;
 
-  StringTableBuilder StrtabBuilder{StringTableBuilder::ELF};
-
-  BumpPtrAllocator Alloc;
-  StringSaver Saver{Alloc};
+  // This ctor initializes a StringSaver using the passed in BumpPtrAllocator.
+  // The StringTableBuilder does not create a copy of any strings added to it,
+  // so this provides somewhere to store any strings that we create.
+  Builder(SmallVector<char, 0> &Symtab, StringTableBuilder &StrtabBuilder,
+          BumpPtrAllocator &Alloc)
+      : Symtab(Symtab), StrtabBuilder(StrtabBuilder), Saver(Alloc) {}
 
   DenseMap<const Comdat *, unsigned> ComdatMap;
-  ModuleSymbolTable Msymtab;
-  SmallPtrSet<GlobalValue *, 8> Used;
   Mangler Mang;
   Triple TT;
 
@@ -49,7 +86,9 @@ struct Builder {
 
   void setStr(storage::Str &S, StringRef Value) {
     S.Offset = StrtabBuilder.add(Value);
+    S.Size = Value.size();
   }
+
   template <typename T>
   void writeRange(storage::Range<T> &R, const std::vector<T> &Objs) {
     R.Offset = Symtab.size();
@@ -59,49 +98,65 @@ struct Builder {
   }
 
   Error addModule(Module *M);
-  Error addSymbol(ModuleSymbolTable::Symbol Sym);
+  Error addSymbol(const ModuleSymbolTable &Msymtab,
+                  const SmallPtrSet<GlobalValue *, 8> &Used,
+                  ModuleSymbolTable::Symbol Sym);
 
   Error build(ArrayRef<Module *> Mods);
 };
 
 Error Builder::addModule(Module *M) {
+  if (M->getDataLayoutStr().empty())
+    return make_error<StringError>("input module has no datalayout",
+                                   inconvertibleErrorCode());
+
+  SmallPtrSet<GlobalValue *, 8> Used;
   collectUsedGlobalVariables(*M, Used, /*CompilerUsed*/ false);
 
-  storage::Module Mod;
-  Mod.Begin = Msymtab.symbols().size();
+  ModuleSymbolTable Msymtab;
   Msymtab.addModule(M);
-  Mod.End = Msymtab.symbols().size();
+
+  storage::Module Mod;
+  Mod.Begin = Syms.size();
+  Mod.End = Syms.size() + Msymtab.symbols().size();
+  Mod.UncBegin = Uncommons.size();
   Mods.push_back(Mod);
 
   if (TT.isOSBinFormatCOFF()) {
     if (auto E = M->materializeMetadata())
       return E;
-    if (Metadata *Val = M->getModuleFlag("Linker Options")) {
-      MDNode *LinkerOptions = cast<MDNode>(Val);
-      for (const MDOperand &MDOptions : LinkerOptions->operands())
+    if (NamedMDNode *LinkerOptions =
+            M->getNamedMetadata("llvm.linker.options")) {
+      for (MDNode *MDOptions : LinkerOptions->operands())
         for (const MDOperand &MDOption : cast<MDNode>(MDOptions)->operands())
           COFFLinkerOptsOS << " " << cast<MDString>(MDOption)->getString();
     }
   }
 
+  for (ModuleSymbolTable::Symbol Msym : Msymtab.symbols())
+    if (Error Err = addSymbol(Msymtab, Used, Msym))
+      return Err;
+
   return Error::success();
 }
 
-Error Builder::addSymbol(ModuleSymbolTable::Symbol Msym) {
+Error Builder::addSymbol(const ModuleSymbolTable &Msymtab,
+                         const SmallPtrSet<GlobalValue *, 8> &Used,
+                         ModuleSymbolTable::Symbol Msym) {
   Syms.emplace_back();
   storage::Symbol &Sym = Syms.back();
   Sym = {};
 
-  Sym.UncommonIndex = -1;
   storage::Uncommon *Unc = nullptr;
   auto Uncommon = [&]() -> storage::Uncommon & {
     if (Unc)
       return *Unc;
-    Sym.UncommonIndex = Uncommons.size();
+    Sym.Flags |= 1 << storage::Symbol::FB_has_uncommon;
     Uncommons.emplace_back();
     Unc = &Uncommons.back();
     *Unc = {};
     setStr(Unc->COFFWeakExternFallbackName, "");
+    setStr(Unc->SectionName, "");
     return *Unc;
   };
 
@@ -125,10 +180,15 @@ Error Builder::addSymbol(ModuleSymbolTable::Symbol Msym) {
     Sym.Flags |= 1 << storage::Symbol::FB_global;
   if (Flags & object::BasicSymbolRef::SF_FormatSpecific)
     Sym.Flags |= 1 << storage::Symbol::FB_format_specific;
+  if (Flags & object::BasicSymbolRef::SF_Executable)
+    Sym.Flags |= 1 << storage::Symbol::FB_executable;
 
   Sym.ComdatIndex = -1;
   auto *GV = Msym.dyn_cast<GlobalValue *>();
   if (!GV) {
+    // Undefined module asm symbols act as GC roots and are implicitly used.
+    if (Flags & object::BasicSymbolRef::SF_Undefined)
+      Sym.Flags |= 1 << storage::Symbol::FB_used;
     setStr(Sym.IRName, "");
     return Error::success();
   }
@@ -181,6 +241,9 @@ Error Builder::addSymbol(ModuleSymbolTable::Symbol Msym) {
     }
   }
 
+  if (!Base->getSection().empty())
+    setStr(Uncommon().SectionName, Saver.save(Base->getSection()));
+
   return Error::success();
 }
 
@@ -188,20 +251,18 @@ Error Builder::build(ArrayRef<Module *> IRMods) {
   storage::Header Hdr;
 
   assert(!IRMods.empty());
+  Hdr.Version = storage::Header::kCurrentVersion;
+  setStr(Hdr.Producer, kExpectedProducerName);
+  setStr(Hdr.TargetTriple, IRMods[0]->getTargetTriple());
   setStr(Hdr.SourceFileName, IRMods[0]->getSourceFileName());
   TT = Triple(IRMods[0]->getTargetTriple());
 
-  // This adds the symbols for each module to Msymtab.
   for (auto *M : IRMods)
     if (Error Err = addModule(M))
       return Err;
 
-  for (ModuleSymbolTable::Symbol Msym : Msymtab.symbols())
-    if (Error Err = addSymbol(Msym))
-      return Err;
-
   COFFLinkerOptsOS.flush();
-  setStr(Hdr.COFFLinkerOpts, COFFLinkerOpts);
+  setStr(Hdr.COFFLinkerOpts, Saver.save(COFFLinkerOpts));
 
   // We are about to fill in the header's range fields, so reserve space for it
   // and copy it in afterwards.
@@ -212,17 +273,80 @@ Error Builder::build(ArrayRef<Module *> IRMods) {
   writeRange(Hdr.Uncommons, Uncommons);
 
   *reinterpret_cast<storage::Header *>(Symtab.data()) = Hdr;
-
-  raw_svector_ostream OS(Strtab);
-  StrtabBuilder.finalizeInOrder();
-  StrtabBuilder.write(OS);
-
   return Error::success();
 }
 
-} // anonymous namespace
+} // end anonymous namespace
 
 Error irsymtab::build(ArrayRef<Module *> Mods, SmallVector<char, 0> &Symtab,
-                      SmallVector<char, 0> &Strtab) {
-  return Builder(Symtab, Strtab).build(Mods);
+                      StringTableBuilder &StrtabBuilder,
+                      BumpPtrAllocator &Alloc) {
+  return Builder(Symtab, StrtabBuilder, Alloc).build(Mods);
+}
+
+// Upgrade a vector of bitcode modules created by an old version of LLVM by
+// creating an irsymtab for them in the current format.
+static Expected<FileContents> upgrade(ArrayRef<BitcodeModule> BMs) {
+  FileContents FC;
+
+  LLVMContext Ctx;
+  std::vector<Module *> Mods;
+  std::vector<std::unique_ptr<Module>> OwnedMods;
+  for (auto BM : BMs) {
+    Expected<std::unique_ptr<Module>> MOrErr =
+        BM.getLazyModule(Ctx, /*ShouldLazyLoadMetadata*/ true,
+                         /*IsImporting*/ false);
+    if (!MOrErr)
+      return MOrErr.takeError();
+
+    Mods.push_back(MOrErr->get());
+    OwnedMods.push_back(std::move(*MOrErr));
+  }
+
+  StringTableBuilder StrtabBuilder(StringTableBuilder::RAW);
+  BumpPtrAllocator Alloc;
+  if (Error E = build(Mods, FC.Symtab, StrtabBuilder, Alloc))
+    return std::move(E);
+
+  StrtabBuilder.finalizeInOrder();
+  FC.Strtab.resize(StrtabBuilder.getSize());
+  StrtabBuilder.write((uint8_t *)FC.Strtab.data());
+
+  FC.TheReader = {{FC.Symtab.data(), FC.Symtab.size()},
+                  {FC.Strtab.data(), FC.Strtab.size()}};
+  return std::move(FC);
+}
+
+Expected<FileContents> irsymtab::readBitcode(const BitcodeFileContents &BFC) {
+  if (BFC.Mods.empty())
+    return make_error<StringError>("Bitcode file does not contain any modules",
+                                   inconvertibleErrorCode());
+
+  if (BFC.StrtabForSymtab.empty() ||
+      BFC.Symtab.size() < sizeof(storage::Header))
+    return upgrade(BFC.Mods);
+
+  // We cannot use the regular reader to read the version and producer, because
+  // it will expect the header to be in the current format. The only thing we
+  // can rely on is that the version and producer will be present as the first
+  // struct elements.
+  auto *Hdr = reinterpret_cast<const storage::Header *>(BFC.Symtab.data());
+  unsigned Version = Hdr->Version;
+  StringRef Producer = Hdr->Producer.get(BFC.StrtabForSymtab);
+  if (Version != storage::Header::kCurrentVersion ||
+      Producer != kExpectedProducerName)
+    return upgrade(BFC.Mods);
+
+  FileContents FC;
+  FC.TheReader = {{BFC.Symtab.data(), BFC.Symtab.size()},
+                  {BFC.StrtabForSymtab.data(), BFC.StrtabForSymtab.size()}};
+
+  // Finally, make sure that the number of modules in the symbol table matches
+  // the number of modules in the bitcode file. If they differ, it may mean that
+  // the bitcode file was created by binary concatenation, so we need to create
+  // a new symbol table from scratch.
+  if (FC.TheReader.getNumModules() != BFC.Mods.size())
+    return upgrade(std::move(BFC.Mods));
+
+  return std::move(FC);
 }

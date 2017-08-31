@@ -1,4 +1,4 @@
-//===- CoverageMapping.cpp - Code coverage mapping support ------*- C++ -*-===//
+//===- CoverageMapping.cpp - Code coverage mapping support ----------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ProfileData/Coverage/CoverageMapping.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/None.h"
@@ -19,7 +20,6 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ProfileData/Coverage/CoverageMapping.h"
 #include "llvm/ProfileData/Coverage/CoverageMappingReader.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/Debug.h"
@@ -54,26 +54,26 @@ Counter CounterExpressionBuilder::get(const CounterExpression &E) {
   return Counter::getExpression(I);
 }
 
-void CounterExpressionBuilder::extractTerms(
-    Counter C, int Sign, SmallVectorImpl<std::pair<unsigned, int>> &Terms) {
+void CounterExpressionBuilder::extractTerms(Counter C, int Factor,
+                                            SmallVectorImpl<Term> &Terms) {
   switch (C.getKind()) {
   case Counter::Zero:
     break;
   case Counter::CounterValueReference:
-    Terms.push_back(std::make_pair(C.getCounterID(), Sign));
+    Terms.emplace_back(C.getCounterID(), Factor);
     break;
   case Counter::Expression:
     const auto &E = Expressions[C.getExpressionID()];
-    extractTerms(E.LHS, Sign, Terms);
-    extractTerms(E.RHS, E.Kind == CounterExpression::Subtract ? -Sign : Sign,
-                 Terms);
+    extractTerms(E.LHS, Factor, Terms);
+    extractTerms(
+        E.RHS, E.Kind == CounterExpression::Subtract ? -Factor : Factor, Terms);
     break;
   }
 }
 
 Counter CounterExpressionBuilder::simplify(Counter ExpressionTree) {
   // Gather constant terms.
-  SmallVector<std::pair<unsigned, int>, 32> Terms;
+  SmallVector<Term, 32> Terms;
   extractTerms(ExpressionTree, +1, Terms);
 
   // If there are no terms, this is just a zero. The algorithm below assumes at
@@ -82,17 +82,15 @@ Counter CounterExpressionBuilder::simplify(Counter ExpressionTree) {
     return Counter::getZero();
 
   // Group the terms by counter ID.
-  std::sort(Terms.begin(), Terms.end(),
-            [](const std::pair<unsigned, int> &LHS,
-               const std::pair<unsigned, int> &RHS) {
-    return LHS.first < RHS.first;
+  std::sort(Terms.begin(), Terms.end(), [](const Term &LHS, const Term &RHS) {
+    return LHS.CounterID < RHS.CounterID;
   });
 
   // Combine terms by counter ID to eliminate counters that sum to zero.
   auto Prev = Terms.begin();
   for (auto I = Prev + 1, E = Terms.end(); I != E; ++I) {
-    if (I->first == Prev->first) {
-      Prev->second += I->second;
+    if (I->CounterID == Prev->CounterID) {
+      Prev->Factor += I->Factor;
       continue;
     }
     ++Prev;
@@ -103,24 +101,24 @@ Counter CounterExpressionBuilder::simplify(Counter ExpressionTree) {
   Counter C;
   // Create additions. We do this before subtractions to avoid constructs like
   // ((0 - X) + Y), as opposed to (Y - X).
-  for (auto Term : Terms) {
-    if (Term.second <= 0)
+  for (auto T : Terms) {
+    if (T.Factor <= 0)
       continue;
-    for (int I = 0; I < Term.second; ++I)
+    for (int I = 0; I < T.Factor; ++I)
       if (C.isZero())
-        C = Counter::getCounter(Term.first);
+        C = Counter::getCounter(T.CounterID);
       else
         C = get(CounterExpression(CounterExpression::Add, C,
-                                  Counter::getCounter(Term.first)));
+                                  Counter::getCounter(T.CounterID)));
   }
 
   // Create subtractions.
-  for (auto Term : Terms) {
-    if (Term.second >= 0)
+  for (auto T : Terms) {
+    if (T.Factor >= 0)
       continue;
-    for (int I = 0; I < -Term.second; ++I)
+    for (int I = 0; I < -T.Factor; ++I)
       C = get(CounterExpression(CounterExpression::Subtract, C,
-                                Counter::getCounter(Term.first)));
+                                Counter::getCounter(T.CounterID)));
   }
   return C;
 }
@@ -200,6 +198,9 @@ Error CoverageMapping::loadFunctionRecord(
     const CoverageMappingRecord &Record,
     IndexedInstrProfReader &ProfileReader) {
   StringRef OrigFuncName = Record.FunctionName;
+  if (OrigFuncName.empty())
+    return make_error<CoverageMapError>(coveragemap_error::malformed);
+
   if (Record.Filenames.empty())
     OrigFuncName = getFuncNameWithoutPrefix(OrigFuncName);
   else
@@ -244,18 +245,6 @@ Error CoverageMapping::loadFunctionRecord(
   return Error::success();
 }
 
-Expected<std::unique_ptr<CoverageMapping>>
-CoverageMapping::load(CoverageMappingReader &CoverageReader,
-                      IndexedInstrProfReader &ProfileReader) {
-  auto Coverage = std::unique_ptr<CoverageMapping>(new CoverageMapping());
-
-  for (const auto &Record : CoverageReader)
-    if (Error E = Coverage->loadFunctionRecord(Record, ProfileReader))
-      return std::move(E);
-
-  return std::move(Coverage);
-}
-
 Expected<std::unique_ptr<CoverageMapping>> CoverageMapping::load(
     ArrayRef<std::unique_ptr<CoverageMappingReader>> CoverageReaders,
     IndexedInstrProfReader &ProfileReader) {
@@ -271,7 +260,7 @@ Expected<std::unique_ptr<CoverageMapping>> CoverageMapping::load(
 
 Expected<std::unique_ptr<CoverageMapping>>
 CoverageMapping::load(ArrayRef<StringRef> ObjectFilenames,
-                      StringRef ProfileFilename, StringRef Arch) {
+                      StringRef ProfileFilename, ArrayRef<StringRef> Arches) {
   auto ProfileReaderOrErr = IndexedInstrProfReader::create(ProfileFilename);
   if (Error E = ProfileReaderOrErr.takeError())
     return std::move(E);
@@ -279,10 +268,11 @@ CoverageMapping::load(ArrayRef<StringRef> ObjectFilenames,
 
   SmallVector<std::unique_ptr<CoverageMappingReader>, 4> Readers;
   SmallVector<std::unique_ptr<MemoryBuffer>, 4> Buffers;
-  for (StringRef ObjectFilename : ObjectFilenames) {
-    auto CovMappingBufOrErr = MemoryBuffer::getFileOrSTDIN(ObjectFilename);
+  for (const auto &File : llvm::enumerate(ObjectFilenames)) {
+    auto CovMappingBufOrErr = MemoryBuffer::getFileOrSTDIN(File.value());
     if (std::error_code EC = CovMappingBufOrErr.getError())
       return errorCodeToError(EC);
+    StringRef Arch = Arches.empty() ? StringRef() : Arches[File.index()];
     auto CoverageReaderOrErr =
         BinaryCoverageReader::create(CovMappingBufOrErr.get(), Arch);
     if (Error E = CoverageReaderOrErr.takeError())
@@ -300,8 +290,8 @@ namespace {
 /// An instantiation set is a collection of functions that have the same source
 /// code, ie, template functions specializations.
 class FunctionInstantiationSetCollector {
-  typedef DenseMap<std::pair<unsigned, unsigned>,
-                   std::vector<const FunctionRecord *>> MapT;
+  using MapT = DenseMap<std::pair<unsigned, unsigned>,
+                        std::vector<const FunctionRecord *>>;
   MapT InstantiatedFunctions;
 
 public:
@@ -315,7 +305,6 @@ public:
   }
 
   MapT::iterator begin() { return InstantiatedFunctions.begin(); }
-
   MapT::iterator end() { return InstantiatedFunctions.end(); }
 };
 
@@ -521,8 +510,8 @@ CoverageData CoverageMapping::getCoverageForFile(StringRef Filename) const {
   return FileCoverage;
 }
 
-std::vector<const FunctionRecord *>
-CoverageMapping::getInstantiations(StringRef Filename) const {
+std::vector<InstantiationGroup>
+CoverageMapping::getInstantiationGroups(StringRef Filename) const {
   FunctionInstantiationSetCollector InstantiationSetCollector;
   for (const auto &Function : Functions) {
     auto MainFileID = findMainViewFileID(Filename, Function);
@@ -531,12 +520,12 @@ CoverageMapping::getInstantiations(StringRef Filename) const {
     InstantiationSetCollector.insert(Function, *MainFileID);
   }
 
-  std::vector<const FunctionRecord *> Result;
+  std::vector<InstantiationGroup> Result;
   for (const auto &InstantiationSet : InstantiationSetCollector) {
-    if (InstantiationSet.second.size() < 2)
-      continue;
-    Result.insert(Result.end(), InstantiationSet.second.begin(),
-                  InstantiationSet.second.end());
+    InstantiationGroup IG{InstantiationSet.first.first,
+                          InstantiationSet.first.second,
+                          std::move(InstantiationSet.second)};
+    Result.emplace_back(std::move(IG));
   }
   return Result;
 }

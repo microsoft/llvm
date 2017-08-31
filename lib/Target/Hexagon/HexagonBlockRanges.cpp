@@ -1,4 +1,4 @@
-//===--- HexagonBlockRanges.cpp -------------------------------------------===//
+//===- HexagonBlockRanges.cpp ---------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -24,8 +24,10 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <iterator>
 #include <map>
+#include <utility>
 
 using namespace llvm;
 
@@ -232,14 +234,16 @@ HexagonBlockRanges::RegisterSet HexagonBlockRanges::getLiveIns(
       const TargetRegisterInfo &TRI) {
   RegisterSet LiveIns;
   RegisterSet Tmp;
+
   for (auto I : B.liveins()) {
-    if (I.LaneMask.all()) {
-      Tmp.insert({I.PhysReg,0});
+    MCSubRegIndexIterator S(I.PhysReg, &TRI);
+    if (I.LaneMask.all() || (I.LaneMask.any() && !S.isValid())) {
+      Tmp.insert({I.PhysReg, 0});
       continue;
     }
-    for (MCSubRegIndexIterator S(I.PhysReg, &TRI); S.isValid(); ++S) {
-      LaneBitmask M = TRI.getSubRegIndexLaneMask(S.getSubRegIndex());
-      if ((M & I.LaneMask).any())
+    for (; S.isValid(); ++S) {
+      unsigned SI = S.getSubRegIndex();
+      if ((I.LaneMask & TRI.getSubRegIndexLaneMask(SI)).any())
         Tmp.insert({S.getSubReg(), 0});
     }
   }

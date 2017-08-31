@@ -11,20 +11,21 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/MipsMCTargetDesc.h"
 #include "Mips.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCFixedLenDisassembler.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
 
@@ -32,7 +33,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "mips-disassembler"
 
-typedef MCDisassembler::DecodeStatus DecodeStatus;
+using DecodeStatus = MCDisassembler::DecodeStatus;
 
 namespace {
 
@@ -286,10 +287,8 @@ static DecodeStatus DecodeLoadByte15(MCInst &Inst,
                                      uint64_t Address,
                                      const void *Decoder);
 
-static DecodeStatus DecodeCacheOp(MCInst &Inst,
-                              unsigned Insn,
-                              uint64_t Address,
-                              const void *Decoder);
+static DecodeStatus DecodeCacheOp(MCInst &Inst, unsigned Insn, uint64_t Address,
+                                  const void *Decoder);
 
 static DecodeStatus DecodeCacheeOp_CacheOpR6(MCInst &Inst,
                                              unsigned Insn,
@@ -367,17 +366,14 @@ static DecodeStatus DecodeFMemMMR2(MCInst &Inst, unsigned Insn,
                                    uint64_t Address,
                                    const void *Decoder);
 
-static DecodeStatus DecodeFMem2(MCInst &Inst, unsigned Insn,
-                               uint64_t Address,
-                               const void *Decoder);
+static DecodeStatus DecodeFMem2(MCInst &Inst, unsigned Insn, uint64_t Address,
+                                const void *Decoder);
 
-static DecodeStatus DecodeFMem3(MCInst &Inst, unsigned Insn,
-                               uint64_t Address,
-                               const void *Decoder);
+static DecodeStatus DecodeFMem3(MCInst &Inst, unsigned Insn, uint64_t Address,
+                                const void *Decoder);
 
 static DecodeStatus DecodeFMemCop2R6(MCInst &Inst, unsigned Insn,
-                               uint64_t Address,
-                               const void *Decoder);
+                                     uint64_t Address, const void *Decoder);
 
 static DecodeStatus DecodeFMemCop2MMR6(MCInst &Inst, unsigned Insn,
                                        uint64_t Address,
@@ -581,7 +577,8 @@ static unsigned getReg(const void *D, unsigned RC, unsigned RegNo) {
 template <typename InsnType>
 static DecodeStatus DecodeINSVE_DF(MCInst &MI, InsnType insn, uint64_t Address,
                                    const void *Decoder) {
-  typedef DecodeStatus (*DecodeFN)(MCInst &, unsigned, uint64_t, const void *);
+  using DecodeFN = DecodeStatus (*)(MCInst &, unsigned, uint64_t, const void *);
+
   // The size of the n field depends on the element size
   // The register class also depends on this.
   InsnType tmp = fieldFromInstruction(insn, 17, 5);

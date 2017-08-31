@@ -94,13 +94,16 @@ std::error_code widenPath(const Twine &Path8,
         return EC;
       FullPath.append(CurPath);
     }
-    // Traverse the requested path, canonicalizing . and .. as we go (because
-    // the \\?\ prefix is documented to treat them as real components).
-    // The iterators don't report separators and append() always attaches
-    // preferred_separator so we don't need to call native() on the result.
+    // Traverse the requested path, canonicalizing . and .. (because the \\?\
+    // prefix is documented to treat them as real components).  Ignore
+    // separators, which can be returned from the iterator if the path has a
+    // drive name.  We don't need to call native() on the result since append()
+    // always attaches preferred_separator.
     for (llvm::sys::path::const_iterator I = llvm::sys::path::begin(Path8Str),
                                          E = llvm::sys::path::end(Path8Str);
                                          I != E; ++I) {
+      if (I->size() == 1 && is_separator((*I)[0]))
+        continue;
       if (I->size() == 1 && *I == ".")
         continue;
       if (I->size() == 2 && *I == "..")
@@ -250,7 +253,7 @@ std::error_code create_link(const Twine &to, const Twine &from) {
 }
 
 std::error_code create_hard_link(const Twine &to, const Twine &from) {
-	return create_link(to, from);
+  return create_link(to, from);
 }
 
 std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
@@ -925,9 +928,10 @@ std::error_code openFileForWrite(const Twine &Name, int &ResultFD,
   if (Flags & F_RW)
     Access |= GENERIC_READ;
 
-  HANDLE H = ::CreateFileW(PathUTF16.begin(), Access,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                           CreationDisposition, FILE_ATTRIBUTE_NORMAL, NULL);
+  HANDLE H =
+      ::CreateFileW(PathUTF16.begin(), Access,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, CreationDisposition, FILE_ATTRIBUTE_NORMAL, NULL);
 
   if (H == INVALID_HANDLE_VALUE) {
     DWORD LastError = ::GetLastError();
@@ -957,42 +961,6 @@ std::error_code openFileForWrite(const Twine &Name, int &ResultFD,
 
   ResultFD = FD;
   return std::error_code();
-}
-
-std::error_code getPathFromOpenFD(int FD, SmallVectorImpl<char> &ResultPath) {
-  HANDLE FileHandle = reinterpret_cast<HANDLE>(::_get_osfhandle(FD));
-  if (FileHandle == INVALID_HANDLE_VALUE)
-    return make_error_code(errc::bad_file_descriptor);
-
-  DWORD CharCount;
-  SmallVector<wchar_t, 1024> TempPath;
-  do {
-    CharCount = ::GetFinalPathNameByHandleW(FileHandle, TempPath.begin(),
-                                            TempPath.capacity(),
-                                            FILE_NAME_NORMALIZED);
-    if (CharCount < TempPath.capacity())
-      break;
-
-    // Reserve sufficient space for the path as well as the null character. Even
-    // though the API does not document that it is required, if we reserve just
-    // CharCount space, the function call will not store the resulting path and
-    // still report success.
-    TempPath.reserve(CharCount + 1);
-  } while (true);
-
-  if (CharCount == 0)
-    return mapWindowsError(::GetLastError());
-
-  TempPath.set_size(CharCount);
-
-  // On earlier Windows releases, the character count includes the terminating
-  // null.
-  if (TempPath.back() == L'\0') {
-    --CharCount;
-    TempPath.pop_back();
-  }
-
-  return windows::UTF16ToUTF8(TempPath.data(), CharCount, ResultPath);
 }
 
 std::error_code remove_directories(const Twine &path, bool IgnoreErrors) {

@@ -125,7 +125,7 @@ raw_ostream &operator<<(raw_ostream &OS, const LineLocation &Loc);
 /// will be a list of one or more functions.
 class SampleRecord {
 public:
-  typedef StringMap<uint64_t> CallTargetMap;
+  using CallTargetMap = StringMap<uint64_t>;
 
   SampleRecord() = default;
 
@@ -182,9 +182,11 @@ private:
 
 raw_ostream &operator<<(raw_ostream &OS, const SampleRecord &Sample);
 
-typedef std::map<LineLocation, SampleRecord> BodySampleMap;
 class FunctionSamples;
-typedef std::map<LineLocation, FunctionSamples> CallsiteSampleMap;
+
+using BodySampleMap = std::map<LineLocation, SampleRecord>;
+using FunctionSamplesMap = StringMap<FunctionSamples>;
+using CallsiteSampleMap = std::map<LineLocation, FunctionSamplesMap>;
 
 /// Representation of the samples collected for a function.
 ///
@@ -252,18 +254,41 @@ public:
   }
 
   /// Return the function samples at the given callsite location.
-  FunctionSamples &functionSamplesAt(const LineLocation &Loc) {
+  FunctionSamplesMap &functionSamplesAt(const LineLocation &Loc) {
     return CallsiteSamples[Loc];
   }
 
-  /// Return a pointer to function samples at the given callsite location.
-  const FunctionSamples *findFunctionSamplesAt(const LineLocation &Loc) const {
+  /// Returns the FunctionSamplesMap at the given \p Loc.
+  const FunctionSamplesMap *
+  findFunctionSamplesMapAt(const LineLocation &Loc) const {
     auto iter = CallsiteSamples.find(Loc);
-    if (iter == CallsiteSamples.end()) {
+    if (iter == CallsiteSamples.end())
       return nullptr;
-    } else {
-      return &iter->second;
-    }
+    return &iter->second;
+  }
+
+  /// Returns a pointer to FunctionSamples at the given callsite location \p Loc
+  /// with callee \p CalleeName. If no callsite can be found, relax the
+  /// restriction to return the FunctionSamples at callsite location \p Loc
+  /// with the maximum total sample count.
+  const FunctionSamples *findFunctionSamplesAt(const LineLocation &Loc,
+                                               StringRef CalleeName) const {
+    auto iter = CallsiteSamples.find(Loc);
+    if (iter == CallsiteSamples.end())
+      return nullptr;
+    auto FS = iter->second.find(CalleeName);
+    if (FS != iter->second.end())
+      return &FS->getValue();
+    // If we cannot find exact match of the callee name, return the FS with
+    // the max total count.
+    uint64_t MaxTotalSamples = 0;
+    const FunctionSamples *R = nullptr;
+    for (const auto &NameFS : iter->second)
+      if (NameFS.second.getTotalSamples() >= MaxTotalSamples) {
+        MaxTotalSamples = NameFS.second.getTotalSamples();
+        R = &NameFS.second;
+      }
+    return R;
   }
 
   bool empty() const { return TotalSamples == 0; }
@@ -297,8 +322,9 @@ public:
     }
     for (const auto &I : Other.getCallsiteSamples()) {
       const LineLocation &Loc = I.first;
-      const FunctionSamples &Rec = I.second;
-      MergeResult(Result, functionSamplesAt(Loc).merge(Rec, Weight));
+      FunctionSamplesMap &FSMap = functionSamplesAt(Loc);
+      for (const auto &Rec : I.second)
+        MergeResult(Result, FSMap[Rec.first()].merge(Rec.second, Weight));
     }
     return Result;
   }
@@ -314,7 +340,8 @@ public:
     if (!F || !F->getSubprogram())
       S.insert(Function::getGUID(Name));
     for (auto CS : CallsiteSamples)
-      CS.second.findImportedFunctions(S, M, Threshold);
+      for (const auto &NameFS : CS.second)
+        NameFS.second.findImportedFunctions(S, M, Threshold);
   }
 
   /// Set the name of the function.
@@ -372,8 +399,8 @@ raw_ostream &operator<<(raw_ostream &OS, const FunctionSamples &FS);
 /// order of LocationT.
 template <class LocationT, class SampleT> class SampleSorter {
 public:
-  typedef std::pair<const LocationT, SampleT> SamplesWithLoc;
-  typedef SmallVector<const SamplesWithLoc *, 20> SamplesWithLocList;
+  using SamplesWithLoc = std::pair<const LocationT, SampleT>;
+  using SamplesWithLocList = SmallVector<const SamplesWithLoc *, 20>;
 
   SampleSorter(const std::map<LocationT, SampleT> &Samples) {
     for (const auto &I : Samples)

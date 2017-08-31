@@ -16,7 +16,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Utils/UnrollLoop.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
@@ -39,6 +38,7 @@
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
+#include "llvm/Transforms/Utils/UnrollLoop.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "loop-unroll"
@@ -295,7 +295,8 @@ static bool isEpilogProfitable(Loop *L) {
 bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
                       bool AllowRuntime, bool AllowExpensiveTripCount,
                       bool PreserveCondBr, bool PreserveOnlyFirst,
-                      unsigned TripMultiple, unsigned PeelCount, LoopInfo *LI,
+                      unsigned TripMultiple, unsigned PeelCount,
+                      bool UnrollRemainder, LoopInfo *LI,
                       ScalarEvolution *SE, DominatorTree *DT,
                       AssumptionCache *AC, OptimizationRemarkEmitter *ORE,
                       bool PreserveLCSSA) {
@@ -318,6 +319,10 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
     return false;
   }
 
+  // The current loop unroll pass can only unroll loops with a single latch
+  // that's a conditional branch exiting the loop.
+  // FIXME: The implementation can be extended to work with more complicated
+  // cases, e.g. loops with multiple latches.
   BasicBlock *Header = L->getHeader();
   BranchInst *BI = dyn_cast<BranchInst>(LatchBlock->getTerminator());
 
@@ -325,6 +330,16 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
     // The loop-rotate pass can be helpful to avoid this in many cases.
     DEBUG(dbgs() <<
              "  Can't unroll; loop not terminated by a conditional branch.\n");
+    return false;
+  }
+
+  auto CheckSuccessors = [&](unsigned S1, unsigned S2) {
+    return BI->getSuccessor(S1) == Header && !L->contains(BI->getSuccessor(S2));
+  };
+
+  if (!CheckSuccessors(0, 1) && !CheckSuccessors(1, 0)) {
+    DEBUG(dbgs() << "Can't unroll; only loops with one conditional latch"
+                    " exiting the loop can be unrolled\n");
     return false;
   }
 
@@ -381,8 +396,19 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
          "Did not expect runtime trip-count unrolling "
          "and peeling for the same loop");
 
-  if (PeelCount)
-    peelLoop(L, PeelCount, LI, SE, DT, AC, PreserveLCSSA);
+  if (PeelCount) {
+    bool Peeled = peelLoop(L, PeelCount, LI, SE, DT, AC, PreserveLCSSA);
+
+    // Successful peeling may result in a change in the loop preheader/trip
+    // counts. If we later unroll the loop, we want these to be updated.
+    if (Peeled) {
+      BasicBlock *ExitingBlock = L->getExitingBlock();
+      assert(ExitingBlock && "Loop without exiting block?");
+      Preheader = L->getLoopPreheader();
+      TripCount = SE->getSmallConstantTripCount(L, ExitingBlock);
+      TripMultiple = SE->getSmallConstantTripMultiple(L, ExitingBlock);
+    }
+  }
 
   // Loops containing convergent instructions must have a count that divides
   // their TripMultiple.
@@ -404,7 +430,8 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
 
   if (RuntimeTripCount && TripMultiple % Count != 0 &&
       !UnrollRuntimeLoopRemainder(L, Count, AllowExpensiveTripCount,
-                                  EpilogProfitability, LI, SE, DT,
+                                  EpilogProfitability, UnrollRemainder,
+                                  LI, SE, DT, AC, ORE,
                                   PreserveLCSSA)) {
     if (Force)
       RuntimeTripCount = false;
@@ -743,7 +770,7 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
 
   // Simplify any new induction variables in the partially unrolled loop.
   if (SE && !CompletelyUnroll && Count > 1) {
-    SmallVector<WeakVH, 16> DeadInsts;
+    SmallVector<WeakTrackingVH, 16> DeadInsts;
     simplifyLoopIVs(L, SE, DT, LI, DeadInsts);
 
     // Aggressively clean up dead instructions that simplifyLoopIVs already
@@ -763,7 +790,7 @@ bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount, bool Force,
     for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ) {
       Instruction *Inst = &*I++;
 
-      if (Value *V = SimplifyInstruction(Inst, DL))
+      if (Value *V = SimplifyInstruction(Inst, {DL, nullptr, DT, AC}))
         if (LI->replacementPreservesLCSSAForm(Inst, V))
           Inst->replaceAllUsesWith(V);
       if (isInstructionTriviallyDead(Inst))

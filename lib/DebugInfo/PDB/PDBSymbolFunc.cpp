@@ -12,10 +12,10 @@
 #include "llvm/DebugInfo/PDB/ConcreteSymbolEnumerator.h"
 #include "llvm/DebugInfo/PDB/IPDBEnumChildren.h"
 #include "llvm/DebugInfo/PDB/IPDBSession.h"
+#include "llvm/DebugInfo/PDB/PDBSymDumper.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolData.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolTypeFunctionSig.h"
 #include "llvm/DebugInfo/PDB/PDBSymbolTypeUDT.h"
-#include "llvm/DebugInfo/PDB/PDBSymDumper.h"
 #include "llvm/DebugInfo/PDB/PDBTypes.h"
 
 #include <unordered_set>
@@ -95,3 +95,14 @@ PDBSymbolFunc::getArguments() const {
 }
 
 void PDBSymbolFunc::dump(PDBSymDumper &Dumper) const { Dumper.dump(*this); }
+
+bool PDBSymbolFunc::isDestructor() const {
+  std::string Name = getName();
+  if (Name.empty())
+    return false;
+  if (Name[0] == '~')
+    return true;
+  if (Name == "__vecDelDtor")
+    return true;
+  return false;
+}

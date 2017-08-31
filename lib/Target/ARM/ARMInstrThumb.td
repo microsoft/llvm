@@ -284,8 +284,8 @@ def tADJCALLSTACKUP :
             Requires<[IsThumb, IsThumb1Only]>;
 
 def tADJCALLSTACKDOWN :
-  PseudoInst<(outs), (ins i32imm:$amt), NoItinerary,
-             [(ARMcallseq_start imm:$amt)]>,
+  PseudoInst<(outs), (ins i32imm:$amt, i32imm:$amt2), NoItinerary,
+             [(ARMcallseq_start imm:$amt, imm:$amt2)]>,
             Requires<[IsThumb, IsThumb1Only]>;
 }
 
@@ -953,7 +953,7 @@ let isAdd = 1 in {
   /// These opcodes will be converted to the real non-S opcodes by
   /// AdjustInstrPostInstrSelection after giving then an optional CPSR operand.
   let hasPostISelHook = 1, Defs = [CPSR] in {
-    let isCommutable = 1 in
+    let isCommutable = 1, Uses = [CPSR] in
     def tADCS : tPseudoInst<(outs tGPR:$Rdn), (ins tGPR:$Rn, tGPR:$Rm),
                             2, IIC_iALUr,
                             [(set tGPR:$Rdn, CPSR, (ARMadde tGPR:$Rn, tGPR:$Rm,
@@ -1292,6 +1292,7 @@ def tSUBrr :                    // A8.6.212
 /// These opcodes will be converted to the real non-S opcodes by
 /// AdjustInstrPostInstrSelection after giving then an optional CPSR operand.
 let hasPostISelHook = 1, Defs = [CPSR] in {
+  let Uses = [CPSR] in
   def tSBCS : tPseudoInst<(outs tGPR:$Rdn), (ins tGPR:$Rn, tGPR:$Rm),
                           2, IIC_iALUr,
                           [(set tGPR:$Rdn, CPSR, (ARMsube tGPR:$Rn, tGPR:$Rm,
@@ -1412,14 +1413,15 @@ def tLEApcrelJT : tPseudoInst<(outs tGPR:$Rd),
 
 // Thumb-1 doesn't have the TBB or TBH instructions, but we can synthesize them
 // and make use of the same compressed jump table format as Thumb-2.
-let Size = 2 in {
+let Size = 2, isBranch = 1, isTerminator = 1, isBarrier = 1,
+    isIndirectBranch = 1 in {
 def tTBB_JT : tPseudoInst<(outs),
-        (ins tGPR:$base, tGPR:$index, i32imm:$jt, i32imm:$pclbl), 0, IIC_Br, []>,
-        Sched<[WriteBr]>;
+        (ins tGPRwithpc:$base, tGPR:$index, i32imm:$jt, i32imm:$pclbl), 0,
+         IIC_Br, []>, Sched<[WriteBr]>;
 
 def tTBH_JT : tPseudoInst<(outs),
-        (ins tGPR:$base, tGPR:$index, i32imm:$jt, i32imm:$pclbl), 0, IIC_Br, []>,
-        Sched<[WriteBr]>;
+        (ins tGPRwithpc:$base, tGPR:$index, i32imm:$jt, i32imm:$pclbl), 0,
+         IIC_Br, []>,  Sched<[WriteBr]>;
 }
 
 //===----------------------------------------------------------------------===//

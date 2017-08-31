@@ -11,6 +11,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "ARM.h"
+
+#include "ARMCallLowering.h"
+#include "ARMLegalizerInfo.h"
+#include "ARMRegisterBankInfo.h"
 #include "ARMSubtarget.h"
 #include "ARMFrameLowering.h"
 #include "ARMInstrInfo.h"
@@ -23,15 +28,19 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/CodeGen/GlobalISel/IRTranslator.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
+#include "llvm/CodeGen/GlobalISel/Legalizer.h"
+#include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetParser.h"
+#include "llvm/Target/TargetOptions.h"
 #include <cassert>
 #include <string>
 
@@ -78,11 +87,6 @@ ARMSubtarget &ARMSubtarget::initializeSubtargetDependencies(StringRef CPU,
   return *this;
 }
 
-/// EnableExecuteOnly - Enables the generation of execute-only code on supported
-/// targets
-static cl::opt<bool>
-EnableExecuteOnly("arm-execute-only");
-
 ARMFrameLowering *ARMSubtarget::initializeFrameLowering(StringRef CPU,
                                                         StringRef FS) {
   ARMSubtarget &STI = initializeSubtargetDependencies(CPU, FS);
@@ -96,9 +100,8 @@ ARMSubtarget::ARMSubtarget(const Triple &TT, const std::string &CPU,
                            const std::string &FS,
                            const ARMBaseTargetMachine &TM, bool IsLittle)
     : ARMGenSubtargetInfo(TT, CPU, FS), UseMulOps(UseFusedMulOps),
-      GenExecuteOnly(EnableExecuteOnly), CPUString(CPU), IsLittle(IsLittle),
-      TargetTriple(TT), Options(TM.Options), TM(TM),
-      FrameLowering(initializeFrameLowering(CPU, FS)),
+      CPUString(CPU), IsLittle(IsLittle), TargetTriple(TT), Options(TM.Options),
+      TM(TM), FrameLowering(initializeFrameLowering(CPU, FS)),
       // At this point initializeSubtargetDependencies has been called so
       // we can query directly.
       InstrInfo(isThumb1Only()
@@ -106,26 +109,36 @@ ARMSubtarget::ARMSubtarget(const Triple &TT, const std::string &CPU,
                     : !isThumb()
                           ? (ARMBaseInstrInfo *)new ARMInstrInfo(*this)
                           : (ARMBaseInstrInfo *)new Thumb2InstrInfo(*this)),
-      TLInfo(TM, *this) {}
+      TLInfo(TM, *this) {
+
+  CallLoweringInfo.reset(new ARMCallLowering(*getTargetLowering()));
+  Legalizer.reset(new ARMLegalizerInfo(*this));
+
+  auto *RBI = new ARMRegisterBankInfo(*getRegisterInfo());
+
+  // FIXME: At this point, we can't rely on Subtarget having RBI.
+  // It's awkward to mix passing RBI and the Subtarget; should we pass
+  // TII/TRI as well?
+  InstSelector.reset(createARMInstructionSelector(
+      *static_cast<const ARMBaseTargetMachine *>(&TM), *this, *RBI));
+
+  RegBankInfo.reset(RBI);
+}
 
 const CallLowering *ARMSubtarget::getCallLowering() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getCallLowering();
+  return CallLoweringInfo.get();
 }
 
 const InstructionSelector *ARMSubtarget::getInstructionSelector() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getInstructionSelector();
+  return InstSelector.get();
 }
 
 const LegalizerInfo *ARMSubtarget::getLegalizerInfo() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getLegalizerInfo();
+  return Legalizer.get();
 }
 
 const RegisterBankInfo *ARMSubtarget::getRegBankInfo() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getRegBankInfo();
+  return RegBankInfo.get();
 }
 
 bool ARMSubtarget::isXRaySupported() const {
@@ -150,11 +163,11 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
 
     if (isTargetDarwin()) {
       StringRef ArchName = TargetTriple.getArchName();
-      unsigned ArchKind = ARM::parseArch(ArchName);
-      if (ArchKind == ARM::AK_ARMV7S)
+      ARM::ArchKind AK = ARM::parseArch(ArchName);
+      if (AK == ARM::ArchKind::ARMV7S)
         // Default to the Swift CPU when targeting armv7s/thumbv7s.
         CPUString = "swift";
-      else if (ArchKind == ARM::AK_ARMV7K)
+      else if (AK == ARM::ArchKind::ARMV7K)
         // Default to the Cortex-a7 CPU when targeting armv7k/thumbv7k.
         // ARMv7k does not use SjLj exception handling.
         CPUString = "cortex-a7";
@@ -266,16 +279,18 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
   case CortexA32:
   case CortexA35:
   case CortexA53:
+  case CortexA55:
   case CortexA57:
   case CortexA72:
   case CortexA73:
+  case CortexA75:
   case CortexR4:
   case CortexR4F:
   case CortexR5:
   case CortexR7:
   case CortexM3:
-  case ExynosM1:
   case CortexR52:
+  case ExynosM1:
   case Kryo:
     break;
   case Krait:
@@ -327,6 +342,13 @@ bool ARMSubtarget::isGVIndirectSymbol(const GlobalValue *GV) const {
   return false;
 }
 
+ARMCP::ARMCPModifier ARMSubtarget::getCPModifier(const GlobalValue *GV) const {
+  if (isTargetELF() && TM.isPositionIndependent() &&
+      !TM.shouldAssumeDSOLocal(*GV->getParent(), GV))
+    return ARMCP::GOT_PREL;
+  return ARMCP::no_modifier;
+}
+
 unsigned ARMSubtarget::getMispredictionPenalty() const {
   return SchedModel.MispredictPenalty;
 }
@@ -337,19 +359,17 @@ bool ARMSubtarget::hasSinCos() const {
 }
 
 bool ARMSubtarget::enableMachineScheduler() const {
-  // Enable the MachineScheduler before register allocation for out-of-order
-  // architectures where we do not use the PostRA scheduler anymore (for now
-  // restricted to swift).
-  return getSchedModel().isOutOfOrder() && isSwift();
+  // Enable the MachineScheduler before register allocation for subtargets
+  // with the use-misched feature.
+  return useMachineScheduler();
 }
 
 // This overrides the PostRAScheduler bit in the SchedModel for any CPU.
 bool ARMSubtarget::enablePostRAScheduler() const {
-  // No need for PostRA scheduling on out of order CPUs (for now restricted to
-  // swift).
-  if (getSchedModel().isOutOfOrder() && isSwift())
+  if (disablePostRAScheduler())
     return false;
-  return (!isThumb() || hasThumb2());
+  // Don't reschedule potential IT blocks.
+  return !isThumb1Only();
 }
 
 bool ARMSubtarget::enableAtomicExpand() const { return hasAnyDataBarrier(); }

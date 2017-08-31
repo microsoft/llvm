@@ -67,6 +67,8 @@ public:
   virtual void printCOFFDirectives() { }
   virtual void printCOFFBaseReloc() { }
   virtual void printCOFFDebugDirectory() { }
+  virtual void printCOFFResources() {}
+  virtual void printCOFFLoadConfig() { }
   virtual void printCodeViewDebugInfo() { }
   virtual void mergeCodeViewTypes(llvm::codeview::TypeTableBuilder &CVIDs,
                                   llvm::codeview::TypeTableBuilder &CVTypes) {}

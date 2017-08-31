@@ -302,7 +302,21 @@ SDValue DAGTypeLegalizer::ScalarizeVecRes_SCALAR_TO_VECTOR(SDNode *N) {
 }
 
 SDValue DAGTypeLegalizer::ScalarizeVecRes_VSELECT(SDNode *N) {
-  SDValue Cond = GetScalarizedVector(N->getOperand(0));
+  SDValue Cond = N->getOperand(0);
+  EVT OpVT = Cond.getValueType();
+  SDLoc DL(N);
+  // The vselect result and true/value operands needs scalarizing, but it's
+  // not a given that the Cond does. For instance, in AVX512 v1i1 is legal.
+  // See the similar logic in ScalarizeVecRes_VSETCC
+  if (getTypeAction(OpVT) == TargetLowering::TypeScalarizeVector) {
+    Cond = GetScalarizedVector(Cond);
+  } else {
+    EVT VT = OpVT.getVectorElementType();
+    Cond = DAG.getNode(
+        ISD::EXTRACT_VECTOR_ELT, DL, VT, Cond,
+        DAG.getConstant(0, DL, TLI.getVectorIdxTy(DAG.getDataLayout())));
+  }
+
   SDValue LHS = GetScalarizedVector(N->getOperand(1));
   TargetLowering::BooleanContent ScalarBool =
       TLI.getBooleanContents(false, false);
@@ -470,6 +484,9 @@ bool DAGTypeLegalizer::ScalarizeVectorOperand(SDNode *N, unsigned OpNo) {
     case ISD::VSELECT:
       Res = ScalarizeVecOp_VSELECT(N);
       break;
+    case ISD::SETCC:
+      Res = ScalarizeVecOp_VSETCC(N);
+      break;
     case ISD::STORE:
       Res = ScalarizeVecOp_STORE(cast<StoreSDNode>(N), OpNo);
       break;
@@ -512,7 +529,7 @@ SDValue DAGTypeLegalizer::ScalarizeVecOp_UnaryOp(SDNode *N) {
                            N->getValueType(0).getScalarType(), Elt);
   // Revectorize the result so the types line up with what the uses of this
   // expression expect.
-  return DAG.getNode(ISD::BUILD_VECTOR, SDLoc(N), N->getValueType(0), Op);
+  return DAG.getBuildVector(N->getValueType(0), SDLoc(N), Op);
 }
 
 /// The vectors to concatenate have length one - use a BUILD_VECTOR instead.
@@ -526,13 +543,14 @@ SDValue DAGTypeLegalizer::ScalarizeVecOp_CONCAT_VECTORS(SDNode *N) {
 /// If the input is a vector that needs to be scalarized, it must be <1 x ty>,
 /// so just return the element, ignoring the index.
 SDValue DAGTypeLegalizer::ScalarizeVecOp_EXTRACT_VECTOR_ELT(SDNode *N) {
+  EVT VT = N->getValueType(0);
   SDValue Res = GetScalarizedVector(N->getOperand(0));
-  if (Res.getValueType() != N->getValueType(0))
-    Res = DAG.getNode(ISD::ANY_EXTEND, SDLoc(N), N->getValueType(0),
-                      Res);
+  if (Res.getValueType() != VT)
+    Res = VT.isFloatingPoint()
+              ? DAG.getNode(ISD::FP_EXTEND, SDLoc(N), VT, Res)
+              : DAG.getNode(ISD::ANY_EXTEND, SDLoc(N), VT, Res);
   return Res;
 }
-
 
 /// If the input condition is a vector that needs to be scalarized, it must be
 /// <1 x i1>, so just convert to a normal ISD::SELECT
@@ -543,6 +561,36 @@ SDValue DAGTypeLegalizer::ScalarizeVecOp_VSELECT(SDNode *N) {
 
   return DAG.getNode(ISD::SELECT, SDLoc(N), VT, ScalarCond, N->getOperand(1),
                      N->getOperand(2));
+}
+
+/// If the operand is a vector that needs to be scalarized then the
+/// result must be v1i1, so just convert to a scalar SETCC and wrap
+/// with a scalar_to_vector since the res type is legal if we got here
+SDValue DAGTypeLegalizer::ScalarizeVecOp_VSETCC(SDNode *N) {
+  assert(N->getValueType(0).isVector() &&
+         N->getOperand(0).getValueType().isVector() &&
+         "Operand types must be vectors");
+  assert(N->getValueType(0) == MVT::v1i1 && "Expected v1i1 type");
+
+  EVT VT = N->getValueType(0);
+  SDValue LHS = GetScalarizedVector(N->getOperand(0));
+  SDValue RHS = GetScalarizedVector(N->getOperand(1));
+
+  EVT OpVT = N->getOperand(0).getValueType();
+  EVT NVT = VT.getVectorElementType();
+  SDLoc DL(N);
+  // Turn it into a scalar SETCC.
+  SDValue Res = DAG.getNode(ISD::SETCC, DL, MVT::i1, LHS, RHS,
+      N->getOperand(2));
+
+  // Vectors may have a different boolean contents to scalars.  Promote the
+  // value appropriately.
+  ISD::NodeType ExtendCode =
+      TargetLowering::getExtendForContent(TLI.getBooleanContents(OpVT));
+
+  Res = DAG.getNode(ExtendCode, DL, NVT, Res);
+
+  return DAG.getNode(ISD::SCALAR_TO_VECTOR, DL, VT, Res);
 }
 
 /// If the value to store is a vector that needs to be scalarized, it must be
@@ -730,7 +778,7 @@ void DAGTypeLegalizer::SplitVecRes_BinOp(SDNode *N, SDValue &Lo,
   GetSplitVector(N->getOperand(1), RHSLo, RHSHi);
   SDLoc dl(N);
 
-  const SDNodeFlags *Flags = N->getFlags();
+  const SDNodeFlags Flags = N->getFlags();
   unsigned Opcode = N->getOpcode();
   Lo = DAG.getNode(Opcode, dl, LHSLo.getValueType(), LHSLo, RHSLo, Flags);
   Hi = DAG.getNode(Opcode, dl, LHSHi.getValueType(), LHSHi, RHSHi, Flags);
@@ -1293,12 +1341,9 @@ void DAGTypeLegalizer::SplitVecRes_ExtendOp(SDNode *N, SDValue &Lo,
   if ((NumElements & 1) == 0 &&
       SrcVT.getSizeInBits() * 2 < DestVT.getSizeInBits()) {
     LLVMContext &Ctx = *DAG.getContext();
-    EVT NewSrcVT = EVT::getVectorVT(
-        Ctx, EVT::getIntegerVT(
-                 Ctx, SrcVT.getScalarSizeInBits() * 2),
-        NumElements);
-    EVT SplitSrcVT =
-        EVT::getVectorVT(Ctx, SrcVT.getVectorElementType(), NumElements / 2);
+    EVT NewSrcVT = SrcVT.widenIntegerVectorElementType(Ctx);
+    EVT SplitSrcVT = SrcVT.getHalfNumVectorElementsVT(Ctx);
+
     EVT SplitLoVT, SplitHiVT;
     std::tie(SplitLoVT, SplitHiVT) = DAG.GetSplitDestVTs(NewSrcVT);
     if (TLI.isTypeLegal(SrcVT) && !TLI.isTypeLegal(SplitSrcVT) &&
@@ -1515,6 +1560,22 @@ bool DAGTypeLegalizer::SplitVectorOperand(SDNode *N, unsigned OpNo) {
     case ISD::ZERO_EXTEND_VECTOR_INREG:
       Res = SplitVecOp_ExtVecInRegOp(N);
       break;
+
+    case ISD::VECREDUCE_FADD:
+    case ISD::VECREDUCE_FMUL:
+    case ISD::VECREDUCE_ADD:
+    case ISD::VECREDUCE_MUL:
+    case ISD::VECREDUCE_AND:
+    case ISD::VECREDUCE_OR:
+    case ISD::VECREDUCE_XOR:
+    case ISD::VECREDUCE_SMAX:
+    case ISD::VECREDUCE_SMIN:
+    case ISD::VECREDUCE_UMAX:
+    case ISD::VECREDUCE_UMIN:
+    case ISD::VECREDUCE_FMAX:
+    case ISD::VECREDUCE_FMIN:
+      Res = SplitVecOp_VECREDUCE(N, OpNo);
+      break;
     }
   }
 
@@ -1565,6 +1626,48 @@ SDValue DAGTypeLegalizer::SplitVecOp_VSELECT(SDNode *N, unsigned OpNo) {
     DAG.getNode(ISD::VSELECT, DL, HiOpVT, HiMask, HiOp0, HiOp1);
 
   return DAG.getNode(ISD::CONCAT_VECTORS, DL, Src0VT, LoSelect, HiSelect);
+}
+
+SDValue DAGTypeLegalizer::SplitVecOp_VECREDUCE(SDNode *N, unsigned OpNo) {
+  EVT ResVT = N->getValueType(0);
+  SDValue Lo, Hi;
+  SDLoc dl(N);
+
+  SDValue VecOp = N->getOperand(OpNo);
+  EVT VecVT = VecOp.getValueType();
+  assert(VecVT.isVector() && "Can only split reduce vector operand");
+  GetSplitVector(VecOp, Lo, Hi);
+  EVT LoOpVT, HiOpVT;
+  std::tie(LoOpVT, HiOpVT) = DAG.GetSplitDestVTs(VecVT);
+
+  bool NoNaN = N->getFlags().hasNoNaNs();
+  unsigned CombineOpc = 0;
+  switch (N->getOpcode()) {
+  case ISD::VECREDUCE_FADD: CombineOpc = ISD::FADD; break;
+  case ISD::VECREDUCE_FMUL: CombineOpc = ISD::FMUL; break;
+  case ISD::VECREDUCE_ADD:  CombineOpc = ISD::ADD; break;
+  case ISD::VECREDUCE_MUL:  CombineOpc = ISD::MUL; break;
+  case ISD::VECREDUCE_AND:  CombineOpc = ISD::AND; break;
+  case ISD::VECREDUCE_OR:   CombineOpc = ISD::OR; break;
+  case ISD::VECREDUCE_XOR:  CombineOpc = ISD::XOR; break;
+  case ISD::VECREDUCE_SMAX: CombineOpc = ISD::SMAX; break;
+  case ISD::VECREDUCE_SMIN: CombineOpc = ISD::SMIN; break;
+  case ISD::VECREDUCE_UMAX: CombineOpc = ISD::UMAX; break;
+  case ISD::VECREDUCE_UMIN: CombineOpc = ISD::UMIN; break;
+  case ISD::VECREDUCE_FMAX:
+    CombineOpc = NoNaN ? ISD::FMAXNUM : ISD::FMAXNAN;
+    break;
+  case ISD::VECREDUCE_FMIN:
+    CombineOpc = NoNaN ? ISD::FMINNUM : ISD::FMINNAN;
+    break;
+  default:
+    llvm_unreachable("Unexpected reduce ISD node");
+  }
+
+  // Use the appropriate scalar instruction on the split subvectors before
+  // reducing the now partially reduced smaller vector.
+  SDValue Partial = DAG.getNode(CombineOpc, dl, LoOpVT, Lo, Hi);
+  return DAG.getNode(N->getOpcode(), dl, ResVT, Partial);
 }
 
 SDValue DAGTypeLegalizer::SplitVecOp_UnaryOp(SDNode *N) {
@@ -2222,7 +2325,7 @@ SDValue DAGTypeLegalizer::WidenVecRes_BinaryCanTrap(SDNode *N) {
   EVT WidenEltVT = WidenVT.getVectorElementType();
   EVT VT = WidenVT;
   unsigned NumElts =  VT.getVectorNumElements();
-  const SDNodeFlags *Flags = N->getFlags();
+  const SDNodeFlags Flags = N->getFlags();
   while (!TLI.isTypeLegal(VT) && NumElts != 1) {
     NumElts = NumElts / 2;
     VT = EVT::getVectorVT(*DAG.getContext(), WidenEltVT, NumElts);
@@ -2370,7 +2473,7 @@ SDValue DAGTypeLegalizer::WidenVecRes_Convert(SDNode *N) {
 
   unsigned Opcode = N->getOpcode();
   unsigned InVTNumElts = InVT.getVectorNumElements();
-  const SDNodeFlags *Flags = N->getFlags();
+  const SDNodeFlags Flags = N->getFlags();
   if (getTypeAction(InVT) == TargetLowering::TypeWidenVector) {
     InOp = GetWidenedVector(N->getOperand(0));
     InVT = InOp.getValueType();
@@ -2634,7 +2737,7 @@ SDValue DAGTypeLegalizer::WidenVecRes_BITCAST(SDNode *N) {
       if (InVT.isVector())
         NewVec = DAG.getNode(ISD::CONCAT_VECTORS, dl, NewInVT, Ops);
       else
-        NewVec = DAG.getNode(ISD::BUILD_VECTOR, dl, NewInVT, Ops);
+        NewVec = DAG.getBuildVector(NewInVT, dl, Ops);
       return DAG.getNode(ISD::BITCAST, dl, WidenVT, NewVec);
     }
   }
@@ -2909,7 +3012,12 @@ static inline bool isSETCCorConvertedSETCC(SDValue N) {
   else if (N.getOpcode() == ISD::SIGN_EXTEND)
     N = N.getOperand(0);
 
-  return (N.getOpcode() == ISD::SETCC);
+  if (isLogicalMaskOp(N.getOpcode()))
+    return isSETCCorConvertedSETCC(N.getOperand(0)) &&
+           isSETCCorConvertedSETCC(N.getOperand(1));
+
+  return (N.getOpcode() == ISD::SETCC ||
+          ISD::isBuildVectorOfConstantSDNodes(N.getNode()));
 }
 #endif
 
@@ -2917,24 +3025,20 @@ static inline bool isSETCCorConvertedSETCC(SDValue N) {
 // to ToMaskVT if needed with vector extension or truncation.
 SDValue DAGTypeLegalizer::convertMask(SDValue InMask, EVT MaskVT,
                                       EVT ToMaskVT) {
-  LLVMContext &Ctx = *DAG.getContext();
-
   // Currently a SETCC or a AND/OR/XOR with two SETCCs are handled.
-  unsigned InMaskOpc = InMask->getOpcode();
-  assert((InMaskOpc == ISD::SETCC ||
-          (isLogicalMaskOp(InMaskOpc) &&
-           isSETCCorConvertedSETCC(InMask->getOperand(0)) &&
-           isSETCCorConvertedSETCC(InMask->getOperand(1)))) &&
-         "Unexpected mask argument.");
+  // FIXME: This code seems to be too restrictive, we might consider
+  // generalizing it or dropping it.
+  assert(isSETCCorConvertedSETCC(InMask) && "Unexpected mask argument.");
 
   // Make a new Mask node, with a legal result VT.
   SmallVector<SDValue, 4> Ops;
-  for (unsigned i = 0; i < InMask->getNumOperands(); ++i)
+  for (unsigned i = 0, e = InMask->getNumOperands(); i < e; ++i)
     Ops.push_back(InMask->getOperand(i));
-  SDValue Mask = DAG.getNode(InMaskOpc, SDLoc(InMask), MaskVT, Ops);
+  SDValue Mask = DAG.getNode(InMask->getOpcode(), SDLoc(InMask), MaskVT, Ops);
 
   // If MaskVT has smaller or bigger elements than ToMaskVT, a vector sign
   // extend or truncate is needed.
+  LLVMContext &Ctx = *DAG.getContext();
   unsigned MaskScalarBits = MaskVT.getScalarSizeInBits();
   unsigned ToMaskScalBits = ToMaskVT.getScalarSizeInBits();
   if (MaskScalarBits < ToMaskScalBits) {
@@ -2961,12 +3065,9 @@ SDValue DAGTypeLegalizer::convertMask(SDValue InMask, EVT MaskVT,
   } else if (CurrMaskNumEls < ToMaskVT.getVectorNumElements()) {
     unsigned NumSubVecs = (ToMaskVT.getVectorNumElements() / CurrMaskNumEls);
     EVT SubVT = Mask->getValueType(0);
-    SmallVector<SDValue, 16> SubConcatOps(NumSubVecs);
-    SubConcatOps[0] = Mask;
-    for (unsigned i = 1; i < NumSubVecs; ++i)
-      SubConcatOps[i] = DAG.getUNDEF(SubVT);
-    Mask =
-        DAG.getNode(ISD::CONCAT_VECTORS, SDLoc(Mask), ToMaskVT, SubConcatOps);
+    SmallVector<SDValue, 16> SubOps(NumSubVecs, DAG.getUNDEF(SubVT));
+    SubOps[0] = Mask;
+    Mask = DAG.getNode(ISD::CONCAT_VECTORS, SDLoc(Mask), ToMaskVT, SubOps);
   }
 
   assert((Mask->getValueType(0) == ToMaskVT) &&
@@ -3012,8 +3113,8 @@ SDValue DAGTypeLegalizer::WidenVSELECTAndMask(SDNode *N) {
   // Don't touch if this will be scalarized.
   EVT FinalVT = VSelVT;
   while (getTypeAction(FinalVT) == TargetLowering::TypeSplitVector)
-    FinalVT = EVT::getVectorVT(Ctx, FinalVT.getVectorElementType(),
-                               FinalVT.getVectorNumElements() / 2);
+    FinalVT = FinalVT.getHalfNumVectorElementsVT(Ctx);
+
   if (FinalVT.getVectorNumElements() == 1)
     return SDValue();
 

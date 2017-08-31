@@ -1,4 +1,4 @@
-//===--- HexagonBitTracker.cpp --------------------------------------------===//
+//===- HexagonBitTracker.cpp ----------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,11 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Hexagon.h"
 #include "HexagonBitTracker.h"
+#include "Hexagon.h"
 #include "HexagonInstrInfo.h"
 #include "HexagonRegisterInfo.h"
-#include "HexagonTargetMachine.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
@@ -20,6 +20,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -34,7 +35,7 @@
 
 using namespace llvm;
 
-typedef BitTracker BT;
+using BT = BitTracker;
 
 HexagonEvaluator::HexagonEvaluator(const HexagonRegisterInfo &tri,
                                    MachineRegisterInfo &mri,
@@ -57,12 +58,12 @@ HexagonEvaluator::HexagonEvaluator(const HexagonRegisterInfo &tri,
   // tion). To avoid the complications with in-memory arguments, only consi-
   // der the initial sequence of formal parameters that are known to be
   // passed via registers.
-  unsigned AttrIdx = 0;
   unsigned InVirtReg, InPhysReg = 0;
   const Function &F = *MF.getFunction();
-  typedef Function::const_arg_iterator arg_iterator;
+
+  using arg_iterator = Function::const_arg_iterator;
+
   for (arg_iterator I = F.arg_begin(), E = F.arg_end(); I != E; ++I) {
-    AttrIdx++;
     const Argument &Arg = *I;
     Type *ATy = Arg.getType();
     unsigned Width = 0;
@@ -74,8 +75,7 @@ HexagonEvaluator::HexagonEvaluator(const HexagonRegisterInfo &tri,
     // Module::AnyPointerSize.
     if (Width == 0 || Width > 64)
       break;
-    AttributeList Attrs = F.getAttributes();
-    if (Attrs.hasAttribute(AttrIdx, Attribute::ByVal))
+    if (Arg.hasAttribute(Attribute::ByVal))
       continue;
     InPhysReg = getNextPhysReg(InPhysReg, Width);
     if (!InPhysReg)
@@ -83,9 +83,9 @@ HexagonEvaluator::HexagonEvaluator(const HexagonRegisterInfo &tri,
     InVirtReg = getVirtRegFor(InPhysReg);
     if (!InVirtReg)
       continue;
-    if (Attrs.hasAttribute(AttrIdx, Attribute::SExt))
+    if (Arg.hasAttribute(Attribute::SExt))
       VRX.insert(std::make_pair(InVirtReg, ExtType(ExtType::SExt, Width)));
-    else if (Attrs.hasAttribute(AttrIdx, Attribute::ZExt))
+    else if (Arg.hasAttribute(Attribute::ZExt))
       VRX.insert(std::make_pair(InVirtReg, ExtType(ExtType::ZExt, Width)));
   }
 }
@@ -940,6 +940,7 @@ bool HexagonEvaluator::evaluate(const MachineInstr &BI,
     case Hexagon::J2_jumpfnew:
     case Hexagon::J2_jumpfnewpt:
       Negated = true;
+      LLVM_FALLTHROUGH;
     case Hexagon::J2_jumpt:
     case Hexagon::J2_jumptpt:
     case Hexagon::J2_jumptnew:
@@ -1214,7 +1215,8 @@ unsigned HexagonEvaluator::getNextPhysReg(unsigned PReg, unsigned Width) const {
 }
 
 unsigned HexagonEvaluator::getVirtRegFor(unsigned PReg) const {
-  typedef MachineRegisterInfo::livein_iterator iterator;
+  using iterator = MachineRegisterInfo::livein_iterator;
+
   for (iterator I = MRI.livein_begin(), E = MRI.livein_end(); I != E; ++I) {
     if (I->first == PReg)
       return I->second;

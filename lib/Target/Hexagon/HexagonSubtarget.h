@@ -1,4 +1,4 @@
-//===-- HexagonSubtarget.h - Define Subtarget for the Hexagon ---*- C++ -*-===//
+//===- HexagonSubtarget.h - Define Subtarget for the Hexagon ----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -15,12 +15,17 @@
 #define LLVM_LIB_TARGET_HEXAGON_HEXAGONSUBTARGET_H
 
 #include "HexagonFrameLowering.h"
-#include "HexagonISelLowering.h"
 #include "HexagonInstrInfo.h"
+#include "HexagonISelLowering.h"
 #include "HexagonSelectionDAGInfo.h"
-#include "llvm/Target/TargetMachine.h"
+#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/ScheduleDAGMutation.h"
+#include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
+#include <memory>
 #include <string>
+#include <vector>
 
 #define GET_SUBTARGETINFO_HEADER
 #include "HexagonGenSubtargetInfo.inc"
@@ -29,6 +34,12 @@
 #define Hexagon_SLOTS 4
 
 namespace llvm {
+
+class MachineInstr;
+class SDep;
+class SUnit;
+class TargetMachine;
+class Triple;
 
 class HexagonSubtarget : public HexagonGenSubtargetInfo {
   virtual void anchor();
@@ -45,8 +56,19 @@ public:
   /// default for V60.
   bool UseBSBScheduling;
 
-  class HexagonDAGMutation : public ScheduleDAGMutation {
-  public:
+  struct UsrOverflowMutation : public ScheduleDAGMutation {
+    void apply(ScheduleDAGInstrs *DAG) override;
+  };
+  struct HVXMemLatencyMutation : public ScheduleDAGMutation {
+    void apply(ScheduleDAGInstrs *DAG) override;
+  };
+  struct CallMutation : public ScheduleDAGMutation {
+    void apply(ScheduleDAGInstrs *DAG) override;
+  private:
+    bool shouldTFRICallBind(const HexagonInstrInfo &HII,
+          const SUnit &Inst1, const SUnit &Inst2) const;
+  };
+  struct BankConflictMutation : public ScheduleDAGMutation {
     void apply(ScheduleDAGInstrs *DAG) override;
   };
 
@@ -57,6 +79,7 @@ private:
   HexagonSelectionDAGInfo TSInfo;
   HexagonFrameLowering FrameLowering;
   InstrItineraryData InstrItins;
+
   void initializeEnvironment();
 
 public:
@@ -104,9 +127,11 @@ public:
   bool useHVXDblOps() const { return UseHVXOps && UseHVXDblOps; }
   bool useHVXSglOps() const { return UseHVXOps && !UseHVXDblOps; }
   bool useLongCalls() const { return UseLongCalls; }
+  bool usePredicatedCalls() const;
 
   bool useBSBScheduling() const { return UseBSBScheduling; }
   bool enableMachineScheduler() const override;
+
   // Always use the TargetLowering default scheduler.
   // FIXME: This will use the vliw scheduler which is probably just hurting
   // compiler time and will be removed eventually anyway.
@@ -123,6 +148,7 @@ public:
   unsigned getSmallDataThreshold() const {
     return Hexagon_SMALL_DATA_THRESHOLD;
   }
+
   const HexagonArchEnum &getHexagonArchVersion() const {
     return HexagonArchVersion;
   }
@@ -146,13 +172,12 @@ private:
   // Helper function responsible for increasing the latency only.
   void updateLatency(MachineInstr &SrcInst, MachineInstr &DstInst, SDep &Dep)
       const;
-  void changeLatency(SUnit *Src, SmallVector<SDep, 4> &Deps, SUnit *Dst,
-      unsigned Lat) const;
-  bool isBestZeroLatency(SUnit *Src, SUnit *Dst, const HexagonInstrInfo *TII)
-      const;
-  void changePhiLatency(MachineInstr &SrcInst, SUnit *Dst, SDep &Dep) const;
+  void restoreLatency(SUnit *Src, SUnit *Dst) const;
+  void changeLatency(SUnit *Src, SUnit *Dst, unsigned Lat) const;
+  bool isBestZeroLatency(SUnit *Src, SUnit *Dst, const HexagonInstrInfo *TII,
+      SmallSet<SUnit*, 4> &ExclSrc, SmallSet<SUnit*, 4> &ExclDst) const;
 };
 
 } // end namespace llvm
 
-#endif
+#endif // LLVM_LIB_TARGET_HEXAGON_HEXAGONSUBTARGET_H

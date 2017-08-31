@@ -635,8 +635,8 @@ define <8 x float>@test_int_x86_avx512_mask_broadcastf32x2_256(<4 x float> %x0, 
 ; CHECK-NEXT:    ## ymm1 {%k1} = xmm0[0,1,0,1,0,1,0,1]
 ; CHECK-NEXT:    vbroadcastf32x2 %xmm0, %ymm2 {%k1} {z} ## encoding: [0x62,0xf2,0x7d,0xa9,0x19,0xd0]
 ; CHECK-NEXT:    ## ymm2 {%k1} {z} = xmm0[0,1,0,1,0,1,0,1]
-; CHECK-NEXT:    vbroadcastsd %xmm0, %ymm0 ## EVEX TO VEX Compression encoding: [0xc4,0xe2,0x7d,0x19,0xc0]
 ; CHECK-NEXT:    vaddps %ymm2, %ymm1, %ymm1 ## EVEX TO VEX Compression encoding: [0xc5,0xf4,0x58,0xca]
+; CHECK-NEXT:    vbroadcastsd %xmm0, %ymm0 ## EVEX TO VEX Compression encoding: [0xc4,0xe2,0x7d,0x19,0xc0]
 ; CHECK-NEXT:    vaddps %ymm0, %ymm1, %ymm0 ## EVEX TO VEX Compression encoding: [0xc5,0xf4,0x58,0xc0]
 ; CHECK-NEXT:    retq ## encoding: [0xc3]
   %res = call <8 x float> @llvm.x86.avx512.mask.broadcastf32x2.256(<4 x float>  %x0, <8 x float> %x2, i8 %x3)
@@ -680,8 +680,8 @@ define <4 x i32>@test_int_x86_avx512_mask_broadcasti32x2_128(<4 x i32> %x0, <4 x
 ; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
 ; CHECK-NEXT:    vbroadcasti32x2 %xmm0, %xmm1 {%k1} ## encoding: [0x62,0xf2,0x7d,0x09,0x59,0xc8]
 ; CHECK-NEXT:    vbroadcasti32x2 %xmm0, %xmm2 {%k1} {z} ## encoding: [0x62,0xf2,0x7d,0x89,0x59,0xd0]
-; CHECK-NEXT:    vpbroadcastq %xmm0, %xmm0 ## EVEX TO VEX Compression encoding: [0xc4,0xe2,0x79,0x59,0xc0]
 ; CHECK-NEXT:    vpaddd %xmm2, %xmm1, %xmm1 ## EVEX TO VEX Compression encoding: [0xc5,0xf1,0xfe,0xca]
+; CHECK-NEXT:    vpbroadcastq %xmm0, %xmm0 ## EVEX TO VEX Compression encoding: [0xc4,0xe2,0x79,0x59,0xc0]
 ; CHECK-NEXT:    vpaddd %xmm0, %xmm1, %xmm0 ## EVEX TO VEX Compression encoding: [0xc5,0xf1,0xfe,0xc0]
 ; CHECK-NEXT:    retq ## encoding: [0xc3]
   %res = call <4 x i32> @llvm.x86.avx512.mask.broadcasti32x2.128(<4 x i32>  %x0, <4 x i32> %x2, i8 %x3)
@@ -742,82 +742,4 @@ define i8@test_int_x86_avx512_cvtq2mask_256(<4 x i64> %x0) {
 ; CHECK-NEXT:    retq ## encoding: [0xc3]
     %res = call i8 @llvm.x86.avx512.cvtq2mask.256(<4 x i64> %x0)
     ret i8 %res
-}
-
-declare <4 x double> @llvm.x86.avx512.mask.broadcastf64x2.256(<2 x double>, <4 x double>, i8)
-
-define <4 x double>@test_int_x86_avx512_mask_broadcastf64x2_256(<2 x double> %x0, <4 x double> %x2, i8 %mask) {
-; CHECK-LABEL: test_int_x86_avx512_mask_broadcastf64x2_256:
-; CHECK:       ## BB#0:
-; CHECK-NEXT:    ## kill: %XMM0<def> %XMM0<kill> %YMM0<def>
-; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
-; CHECK-NEXT:    vshuff64x2 $0, %ymm0, %ymm0, %ymm2 {%k1} {z} ## encoding: [0x62,0xf3,0xfd,0xa9,0x23,0xd0,0x00]
-; CHECK-NEXT:    ## ymm2 {%k1} {z} = ymm0[0,1,0,1]
-; CHECK-NEXT:    vshuff64x2 $0, %ymm0, %ymm0, %ymm1 {%k1} ## encoding: [0x62,0xf3,0xfd,0x29,0x23,0xc8,0x00]
-; CHECK-NEXT:    ## ymm1 {%k1} = ymm0[0,1,0,1]
-; CHECK-NEXT:    vshuff64x2 $0, %ymm0, %ymm0, %ymm0 ## encoding: [0x62,0xf3,0xfd,0x28,0x23,0xc0,0x00]
-; CHECK-NEXT:    ## ymm0 = ymm0[0,1,0,1]
-; CHECK-NEXT:    vaddpd %ymm1, %ymm0, %ymm0 ## EVEX TO VEX Compression encoding: [0xc5,0xfd,0x58,0xc1]
-; CHECK-NEXT:    vaddpd %ymm0, %ymm2, %ymm0 ## EVEX TO VEX Compression encoding: [0xc5,0xed,0x58,0xc0]
-; CHECK-NEXT:    retq ## encoding: [0xc3]
-
-  %res1 = call <4 x double> @llvm.x86.avx512.mask.broadcastf64x2.256(<2 x double> %x0, <4 x double> %x2, i8 -1)
-  %res2 = call <4 x double> @llvm.x86.avx512.mask.broadcastf64x2.256(<2 x double> %x0, <4 x double> %x2, i8 %mask)
-  %res3 = call <4 x double> @llvm.x86.avx512.mask.broadcastf64x2.256(<2 x double> %x0, <4 x double> zeroinitializer, i8 %mask)
-  %res4 = fadd <4 x double> %res1, %res2
-  %res5 = fadd <4 x double> %res3, %res4
-  ret <4 x double> %res5
-}
-
-define <4 x double>@test_int_x86_avx512_mask_broadcastf64x2_256_load(<2 x double>* %x0ptr, <4 x double> %x2, i8 %mask) {
-; CHECK-LABEL: test_int_x86_avx512_mask_broadcastf64x2_256_load:
-; CHECK:       ## BB#0:
-; CHECK-NEXT:    kmovw %esi, %k1 ## encoding: [0xc5,0xf8,0x92,0xce]
-; CHECK-NEXT:    vmovapd (%rdi), %xmm1 ## EVEX TO VEX Compression encoding: [0xc5,0xf9,0x28,0x0f]
-; CHECK-NEXT:    vshuff64x2 $0, %ymm1, %ymm1, %ymm0 {%k1} ## encoding: [0x62,0xf3,0xf5,0x29,0x23,0xc1,0x00]
-; CHECK-NEXT:    ## ymm0 {%k1} = ymm1[0,1,0,1]
-; CHECK-NEXT:    retq ## encoding: [0xc3]
-
-  %x0 = load <2 x double>, <2 x double>* %x0ptr
-  %res = call <4 x double> @llvm.x86.avx512.mask.broadcastf64x2.256(<2 x double> %x0, <4 x double> %x2, i8 %mask)
-  ret <4 x double> %res
-}
-
-declare <4 x i64> @llvm.x86.avx512.mask.broadcasti64x2.256(<2 x i64>, <4 x i64>, i8)
-
-define <4 x i64>@test_int_x86_avx512_mask_broadcasti64x2_256(<2 x i64> %x0, <4 x i64> %x2, i8 %mask) {
-; CHECK-LABEL: test_int_x86_avx512_mask_broadcasti64x2_256:
-; CHECK:       ## BB#0:
-; CHECK-NEXT:    ## kill: %XMM0<def> %XMM0<kill> %YMM0<def>
-; CHECK-NEXT:    kmovw %edi, %k1 ## encoding: [0xc5,0xf8,0x92,0xcf]
-; CHECK-NEXT:    vshufi64x2 $0, %ymm0, %ymm0, %ymm2 {%k1} {z} ## encoding: [0x62,0xf3,0xfd,0xa9,0x43,0xd0,0x00]
-; CHECK-NEXT:    ## ymm2 {%k1} {z} = ymm0[0,1,0,1]
-; CHECK-NEXT:    vshufi64x2 $0, %ymm0, %ymm0, %ymm1 {%k1} ## encoding: [0x62,0xf3,0xfd,0x29,0x43,0xc8,0x00]
-; CHECK-NEXT:    ## ymm1 {%k1} = ymm0[0,1,0,1]
-; CHECK-NEXT:    vshufi64x2 $0, %ymm0, %ymm0, %ymm0 ## encoding: [0x62,0xf3,0xfd,0x28,0x43,0xc0,0x00]
-; CHECK-NEXT:    ## ymm0 = ymm0[0,1,0,1]
-; CHECK-NEXT:    vpaddq %ymm1, %ymm0, %ymm0 ## EVEX TO VEX Compression encoding: [0xc5,0xfd,0xd4,0xc1]
-; CHECK-NEXT:    vpaddq %ymm0, %ymm2, %ymm0 ## EVEX TO VEX Compression encoding: [0xc5,0xed,0xd4,0xc0]
-; CHECK-NEXT:    retq ## encoding: [0xc3]
-
-  %res1 = call <4 x i64> @llvm.x86.avx512.mask.broadcasti64x2.256(<2 x i64> %x0, <4 x i64> %x2, i8 -1)
-  %res2 = call <4 x i64> @llvm.x86.avx512.mask.broadcasti64x2.256(<2 x i64> %x0, <4 x i64> %x2, i8 %mask)
-  %res3 = call <4 x i64> @llvm.x86.avx512.mask.broadcasti64x2.256(<2 x i64> %x0, <4 x i64> zeroinitializer, i8 %mask)
-  %res4 = add <4 x i64> %res1, %res2
-  %res5 = add <4 x i64> %res3, %res4
-  ret <4 x i64> %res5
-}
-
-define <4 x i64>@test_int_x86_avx512_mask_broadcasti64x2_256_load(<2 x i64>* %x0ptr, <4 x i64> %x2, i8 %mask) {
-; CHECK-LABEL: test_int_x86_avx512_mask_broadcasti64x2_256_load:
-; CHECK:       ## BB#0:
-; CHECK-NEXT:    kmovw %esi, %k1 ## encoding: [0xc5,0xf8,0x92,0xce]
-; CHECK-NEXT:    vmovdqa (%rdi), %xmm1 ## EVEX TO VEX Compression encoding: [0xc5,0xf9,0x6f,0x0f]
-; CHECK-NEXT:    vshufi64x2 $0, %ymm1, %ymm1, %ymm0 {%k1} ## encoding: [0x62,0xf3,0xf5,0x29,0x43,0xc1,0x00]
-; CHECK-NEXT:    ## ymm0 {%k1} = ymm1[0,1,0,1]
-; CHECK-NEXT:    retq ## encoding: [0xc3]
-
-  %x0 = load <2 x i64>, <2 x i64>* %x0ptr
-  %res = call <4 x i64> @llvm.x86.avx512.mask.broadcasti64x2.256(<2 x i64> %x0, <4 x i64> %x2, i8 %mask)
-  ret <4 x i64> %res
 }

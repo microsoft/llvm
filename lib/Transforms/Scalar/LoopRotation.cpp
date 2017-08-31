@@ -58,13 +58,14 @@ class LoopRotate {
   AssumptionCache *AC;
   DominatorTree *DT;
   ScalarEvolution *SE;
+  const SimplifyQuery &SQ;
 
 public:
   LoopRotate(unsigned MaxHeaderSize, LoopInfo *LI,
              const TargetTransformInfo *TTI, AssumptionCache *AC,
-             DominatorTree *DT, ScalarEvolution *SE)
-      : MaxHeaderSize(MaxHeaderSize), LI(LI), TTI(TTI), AC(AC), DT(DT), SE(SE) {
-  }
+             DominatorTree *DT, ScalarEvolution *SE, const SimplifyQuery &SQ)
+      : MaxHeaderSize(MaxHeaderSize), LI(LI), TTI(TTI), AC(AC), DT(DT), SE(SE),
+        SQ(SQ) {}
   bool processLoop(Loop *L);
 
 private:
@@ -311,8 +312,6 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   for (; PHINode *PN = dyn_cast<PHINode>(I); ++I)
     ValueMap[PN] = PN->getIncomingValueForBlock(OrigPreheader);
 
-  const DataLayout &DL = L->getHeader()->getModule()->getDataLayout();
-
   // For the rest of the instructions, either hoist to the OrigPreheader if
   // possible or create a clone in the OldPreHeader if not.
   TerminatorInst *LoopEntryBranch = OrigPreheader->getTerminator();
@@ -342,14 +341,13 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
     // With the operands remapped, see if the instruction constant folds or is
     // otherwise simplifyable.  This commonly occurs because the entry from PHI
     // nodes allows icmps and other instructions to fold.
-    // FIXME: Provide TLI, DT, AC to SimplifyInstruction.
-    Value *V = SimplifyInstruction(C, DL);
+    Value *V = SimplifyInstruction(C, SQ);
     if (V && LI->replacementPreservesLCSSAForm(C, V)) {
       // If so, then delete the temporary instruction and stick the folded value
       // in the map.
       ValueMap[Inst] = V;
       if (!C->mayHaveSideEffects()) {
-        delete C;
+        C->deleteValue();
         C = nullptr;
       }
     } else {
@@ -397,6 +395,17 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
   L->moveToHeader(NewHeader);
   assert(L->getHeader() == NewHeader && "Latch block is our new header");
 
+  // Inform DT about changes to the CFG.
+  if (DT) {
+    // The OrigPreheader branches to the NewHeader and Exit now. Then, inform
+    // the DT about the removed edge to the OrigHeader (that got removed).
+    SmallVector<DominatorTree::UpdateType, 3> Updates;
+    Updates.push_back({DominatorTree::Insert, OrigPreheader, Exit});
+    Updates.push_back({DominatorTree::Insert, OrigPreheader, NewHeader});
+    Updates.push_back({DominatorTree::Delete, OrigPreheader, OrigHeader});
+    DT->applyUpdates(Updates);
+  }
+
   // At this point, we've finished our major CFG changes.  As part of cloning
   // the loop into the preheader we've simplified instructions and the
   // duplicated conditional branch may now be branching on a constant.  If it is
@@ -410,26 +419,7 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
       PHBI->getSuccessor(cast<ConstantInt>(PHBI->getCondition())->isZero()) !=
           NewHeader) {
     // The conditional branch can't be folded, handle the general case.
-    // Update DominatorTree to reflect the CFG change we just made.  Then split
-    // edges as necessary to preserve LoopSimplify form.
-    if (DT) {
-      // Everything that was dominated by the old loop header is now dominated
-      // by the original loop preheader. Conceptually the header was merged
-      // into the preheader, even though we reuse the actual block as a new
-      // loop latch.
-      DomTreeNode *OrigHeaderNode = DT->getNode(OrigHeader);
-      SmallVector<DomTreeNode *, 8> HeaderChildren(OrigHeaderNode->begin(),
-                                                   OrigHeaderNode->end());
-      DomTreeNode *OrigPreheaderNode = DT->getNode(OrigPreheader);
-      for (unsigned I = 0, E = HeaderChildren.size(); I != E; ++I)
-        DT->changeImmediateDominator(HeaderChildren[I], OrigPreheaderNode);
-
-      assert(DT->getNode(Exit)->getIDom() == OrigPreheaderNode);
-      assert(DT->getNode(NewHeader)->getIDom() == OrigPreheaderNode);
-
-      // Update OrigHeader to be dominated by the new header block.
-      DT->changeImmediateDominator(OrigHeader, OrigLatch);
-    }
+    // Split edges as necessary to preserve LoopSimplify form.
 
     // Right now OrigPreHeader has two successors, NewHeader and ExitBlock, and
     // thus is not a preheader anymore.
@@ -469,40 +459,7 @@ bool LoopRotate::rotateLoop(Loop *L, bool SimplifiedLatch) {
     PHBI->eraseFromParent();
 
     // With our CFG finalized, update DomTree if it is available.
-    if (DT) {
-      // Update OrigHeader to be dominated by the new header block.
-      DT->changeImmediateDominator(NewHeader, OrigPreheader);
-      DT->changeImmediateDominator(OrigHeader, OrigLatch);
-
-      // Brute force incremental dominator tree update. Call
-      // findNearestCommonDominator on all CFG predecessors of each child of the
-      // original header.
-      DomTreeNode *OrigHeaderNode = DT->getNode(OrigHeader);
-      SmallVector<DomTreeNode *, 8> HeaderChildren(OrigHeaderNode->begin(),
-                                                   OrigHeaderNode->end());
-      bool Changed;
-      do {
-        Changed = false;
-        for (unsigned I = 0, E = HeaderChildren.size(); I != E; ++I) {
-          DomTreeNode *Node = HeaderChildren[I];
-          BasicBlock *BB = Node->getBlock();
-
-          pred_iterator PI = pred_begin(BB);
-          BasicBlock *NearestDom = *PI;
-          for (pred_iterator PE = pred_end(BB); PI != PE; ++PI)
-            NearestDom = DT->findNearestCommonDominator(NearestDom, *PI);
-
-          // Remember if this changes the DomTree.
-          if (Node->getIDom()->getBlock() != NearestDom) {
-            DT->changeImmediateDominator(BB, NearestDom);
-            Changed = true;
-          }
-        }
-
-        // If the dominator changed, this may have an effect on other
-        // predecessors, continue until we reach a fixpoint.
-      } while (Changed);
-    }
+    if (DT) DT->deleteEdge(OrigPreheader, Exit);
   }
 
   assert(L->getLoopPreheader() && "Invalid loop preheader after loop rotation");
@@ -671,7 +628,10 @@ PreservedAnalyses LoopRotatePass::run(Loop &L, LoopAnalysisManager &AM,
                                       LoopStandardAnalysisResults &AR,
                                       LPMUpdater &) {
   int Threshold = EnableHeaderDuplication ? DefaultRotationThreshold : 0;
-  LoopRotate LR(Threshold, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE);
+  const DataLayout &DL = L.getHeader()->getModule()->getDataLayout();
+  const SimplifyQuery SQ = getBestSimplifyQuery(AR, DL);
+  LoopRotate LR(Threshold, &AR.LI, &AR.TTI, &AR.AC, &AR.DT, &AR.SE,
+                SQ);
 
   bool Changed = LR.processLoop(&L);
   if (!Changed)
@@ -714,7 +674,8 @@ public:
     auto *DT = DTWP ? &DTWP->getDomTree() : nullptr;
     auto *SEWP = getAnalysisIfAvailable<ScalarEvolutionWrapperPass>();
     auto *SE = SEWP ? &SEWP->getSE() : nullptr;
-    LoopRotate LR(MaxHeaderSize, LI, TTI, AC, DT, SE);
+    const SimplifyQuery SQ = getBestSimplifyQuery(*this, F);
+    LoopRotate LR(MaxHeaderSize, LI, TTI, AC, DT, SE, SQ);
     return LR.processLoop(L);
   }
 };

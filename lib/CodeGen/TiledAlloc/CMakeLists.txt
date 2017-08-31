@@ -36,8 +36,9 @@ add_llvm_library(LLVMTiled
   ${CMAKE_CURRENT_SOURCE_DIR}/GraphColor
   ${CMAKE_CURRENT_SOURCE_DIR}/BitVector
   ${CMAKE_CURRENT_SOURCE_DIR}/Dataflow
+
+  DEPENDS
+  intrinsics_gen
 )
 
 include_directories(${LLVM_MAIN_SRC_DIR}/lib)
-
-add_dependencies(LLVMTiled intrinsics_gen)

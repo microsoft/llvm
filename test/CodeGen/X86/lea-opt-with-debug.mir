@@ -1,7 +1,8 @@
-# RUN: llc -mtriple=x86_64-unknown-unknown -start-after peephole-opt -stop-before detect-dead-lanes -o - %s | FileCheck %s
+# RUN: llc -mtriple=x86_64-unknown-unknown -start-after=peephole-opt -stop-before=detect-dead-lanes -o - %s | FileCheck %s
 
-# Test that pass optimize LEA can remove a redundant LEA even when it is also
-# used by a DBG_VALUE.
+# Test that the optimize LEA pass can remove a redundant LEA even when it is
+# also used by a DBG_VALUE. Check that the uses of the replaced LEA are updated
+# correctly.
 
 --- |
   target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
@@ -22,13 +23,13 @@
     %6 = trunc i64 %5 to i32, !dbg !13
     store i32 %6, i32* @d, align 4, !dbg !13
     %7 = getelementptr inbounds %struct.A, %struct.A* %1, i64 %3, i32 2, !dbg !14
-    tail call void @llvm.dbg.value(metadata i32* %7, i64 0, metadata !11, metadata !15), !dbg !16
-    br label %8, !dbg !17
+    tail call void @llvm.dbg.value(metadata i32* %7, i64 0, metadata !11, metadata !DIExpression()), !dbg !15
+    br label %8, !dbg !16
 
   ; <label>:8:                                      ; preds = %8, %0
-    %9 = load i32, i32* %7, align 4, !dbg !18
-    store i32 %9, i32* @d, align 4, !dbg !18
-    br label %8, !dbg !19
+    %9 = load i32, i32* %7, align 4, !dbg !17
+    store i32 %9, i32* @d, align 4, !dbg !17
+    br label %8, !dbg !18
   }
 
   ; Function Attrs: nounwind readnone
@@ -54,11 +55,10 @@
   !12 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !4, size: 64)
   !13 = !DILocation(line: 9, scope: !8)
   !14 = !DILocation(line: 10, scope: !8)
-  !15 = !DIExpression()
-  !16 = !DILocation(line: 8, scope: !8)
-  !17 = !DILocation(line: 11, scope: !8)
-  !18 = !DILocation(line: 13, scope: !8)
-  !19 = !DILocation(line: 14, scope: !8)
+  !15 = !DILocation(line: 8, scope: !8)
+  !16 = !DILocation(line: 11, scope: !8)
+  !17 = !DILocation(line: 13, scope: !8)
+  !18 = !DILocation(line: 14, scope: !8)
 
 ...
 ---
@@ -98,7 +98,7 @@ body:             |
     ; CHECK: %3 = LEA64r %2, 2, %2, 0, _, debug-location !13
     ; CHECK-NEXT: %4 = LEA64r %1, 4, %3, 0, _, debug-location !13
     ; CHECK-NOT: %0 = LEA64r %1, 4, %3, 8, _, debug-location !14
-    ; CHECK: DBG_VALUE debug-use _, debug-use _, !11, !15, debug-location !16
+    ; CHECK: DBG_VALUE debug-use %4, debug-use _, !11, !DIExpression(DW_OP_plus_uconst, 8, DW_OP_stack_value), debug-location !15
 
     %1 = MOV64rm %rip, 1, _, @c, _, debug-location !13 :: (dereferenceable load 8 from @c)
     %2 = MOVSX64rm32 %rip, 1, _, @a, _, debug-location !13 :: (dereferenceable load 4 from @a)
@@ -107,16 +107,16 @@ body:             |
     %5 = COPY %4.sub_32bit, debug-location !13
     MOV32mr %rip, 1, _, @d, _, killed %5, debug-location !13 :: (store 4 into @d)
     %0 = LEA64r %1, 4, %3, 8, _, debug-location !14
-    DBG_VALUE debug-use %0, debug-use _, !11, !15, debug-location !16
+    DBG_VALUE debug-use %0, debug-use _, !11, !DIExpression(), debug-location !15
 
     ; CHECK-LABEL: bb.1 (%ir-block.8):
-    ; CHECK: %6 = MOV32rm %4, 1, _, 8, _, debug-location !18 :: (load 4 from %ir.7)
+    ; CHECK: %6 = MOV32rm %4, 1, _, 8, _, debug-location !17 :: (load 4 from %ir.7)
 
   bb.1 (%ir-block.8):
     successors: %bb.1(0x80000000)
 
-    %6 = MOV32rm %0, 1, _, 0, _, debug-location !18 :: (load 4 from %ir.7)
-    MOV32mr %rip, 1, _, @d, _, killed %6, debug-location !18 :: (store 4 into @d)
-    JMP_1 %bb.1, debug-location !19
+    %6 = MOV32rm %0, 1, _, 0, _, debug-location !17 :: (load 4 from %ir.7)
+    MOV32mr %rip, 1, _, @d, _, killed %6, debug-location !17 :: (store 4 into @d)
+    JMP_1 %bb.1, debug-location !18
 
 ...

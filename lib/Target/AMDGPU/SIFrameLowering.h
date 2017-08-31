@@ -26,6 +26,8 @@ public:
     AMDGPUFrameLowering(D, StackAl, LAO, TransAl) {}
   ~SIFrameLowering() override = default;
 
+  void emitEntryFunctionPrologue(MachineFunction &MF,
+                                 MachineBasicBlock &MBB) const;
   void emitPrologue(MachineFunction &MF,
                     MachineBasicBlock &MBB) const override;
   void emitEpilogue(MachineFunction &MF,
@@ -36,6 +38,11 @@ public:
   void processFunctionBeforeFrameFinalized(
     MachineFunction &MF,
     RegScavenger *RS = nullptr) const override;
+
+  MachineBasicBlock::iterator
+  eliminateCallFramePseudoInstr(MachineFunction &MF,
+                                MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MI) const override;
 
 private:
   void emitFlatScratchInit(const SISubtarget &ST,
@@ -49,7 +56,7 @@ private:
     SIMachineFunctionInfo *MFI,
     MachineFunction &MF) const;
 
-  unsigned getReservedPrivateSegmentWaveByteOffsetReg(
+  std::pair<unsigned, unsigned> getReservedPrivateSegmentWaveByteOffsetReg(
     const SISubtarget &ST,
     const SIInstrInfo *TII,
     const SIRegisterInfo *TRI,
@@ -58,6 +65,10 @@ private:
 
   /// \brief Emits debugger prologue.
   void emitDebuggerPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const;
+
+public:
+  bool hasFP(const MachineFunction &MF) const override;
+  bool hasSP(const MachineFunction &MF) const;
 };
 
 } // end namespace llvm

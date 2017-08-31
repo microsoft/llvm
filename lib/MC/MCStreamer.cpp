@@ -7,9 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/COFF.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCCodeView.h"
@@ -21,19 +23,17 @@
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionCOFF.h"
-#include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCWin64EH.h"
 #include "llvm/MC/MCWinEH.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/COFF.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cstdlib>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <utility>
 
 using namespace llvm;
@@ -508,6 +508,12 @@ void MCStreamer::EmitCFIWindowSave() {
   CurFrame->Instructions.push_back(Instruction);
 }
 
+void MCStreamer::EmitCFIReturnColumn(int64_t Register) {
+  EnsureValidDwarfFrame();
+  MCDwarfFrameInfo *CurFrame = getCurrentDwarfFrameInfo();
+  CurFrame->RAReg = Register;
+}
+
 void MCStreamer::EnsureValidWinFrameInfo() {
   const MCAsmInfo *MAI = Context.getAsmInfo();
   if (!MAI->usesWindowsCFI())
@@ -777,8 +783,8 @@ void MCStreamer::visitUsedExpr(const MCExpr &Expr) {
   }
 }
 
-void MCStreamer::EmitInstruction(const MCInst &Inst,
-                                 const MCSubtargetInfo &STI) {
+void MCStreamer::EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI,
+                                 bool) {
   // Scan for values.
   for (unsigned i = Inst.getNumOperands(); i--;)
     if (Inst.getOperand(i).isExpr())

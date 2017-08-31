@@ -12,12 +12,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ObjectYAML/ELFYAML.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MipsABIFlags.h"
+#include "llvm/Support/YAMLTraits.h"
+#include <cassert>
+#include <cstdint>
 
 namespace llvm {
 
-ELFYAML::Section::~Section() {}
+ELFYAML::Section::~Section() = default;
 
 namespace yaml {
 
@@ -31,6 +37,21 @@ void ScalarEnumerationTraits<ELFYAML::ELF_ET>::enumeration(
   ECase(ET_CORE);
 #undef ECase
   IO.enumFallback<Hex16>(Value);
+}
+
+void ScalarEnumerationTraits<ELFYAML::ELF_PT>::enumeration(
+    IO &IO, ELFYAML::ELF_PT &Value) {
+#define ECase(X) IO.enumCase(Value, #X, ELF::X)
+  ECase(PT_NULL);
+  ECase(PT_LOAD);
+  ECase(PT_DYNAMIC);
+  ECase(PT_INTERP);
+  ECase(PT_NOTE);
+  ECase(PT_SHLIB);
+  ECase(PT_PHDR);
+  ECase(PT_TLS);
+#undef ECase
+  IO.enumFallback<Hex32>(Value);
 }
 
 void ScalarEnumerationTraits<ELFYAML::ELF_EM>::enumeration(
@@ -372,6 +393,7 @@ void ScalarEnumerationTraits<ELFYAML::ELF_SHT>::enumeration(
   ECase(SHT_GROUP);
   ECase(SHT_SYMTAB_SHNDX);
   ECase(SHT_LOOS);
+  ECase(SHT_LLVM_ODRTAB);
   ECase(SHT_GNU_ATTRIBUTES);
   ECase(SHT_GNU_HASH);
   ECase(SHT_GNU_verdef);
@@ -405,6 +427,14 @@ void ScalarEnumerationTraits<ELFYAML::ELF_SHT>::enumeration(
 #undef ECase
 }
 
+void ScalarBitSetTraits<ELFYAML::ELF_PF>::bitset(IO &IO,
+                                                 ELFYAML::ELF_PF &Value) {
+#define BCase(X) IO.bitSetCase(Value, #X, ELF::X)
+  BCase(PF_X);
+  BCase(PF_W);
+  BCase(PF_R);
+}
+
 void ScalarBitSetTraits<ELFYAML::ELF_SHF>::bitset(IO &IO,
                                                   ELFYAML::ELF_SHF &Value) {
   const auto *Object = static_cast<ELFYAML::Object *>(IO.getContext());
@@ -423,12 +453,6 @@ void ScalarBitSetTraits<ELFYAML::ELF_SHF>::bitset(IO &IO,
   switch (Object->Header.Machine) {
   case ELF::EM_ARM:
     BCase(SHF_ARM_PURECODE);
-    break;
-  case ELF::EM_AMDGPU:
-    BCase(SHF_AMDGPU_HSA_GLOBAL);
-    BCase(SHF_AMDGPU_HSA_READONLY);
-    BCase(SHF_AMDGPU_HSA_CODE);
-    BCase(SHF_AMDGPU_HSA_AGENT);
     break;
   case ELF::EM_HEXAGON:
     BCase(SHF_HEX_GPREL);
@@ -513,40 +537,41 @@ void ScalarEnumerationTraits<ELFYAML::ELF_REL>::enumeration(
 #define ELF_RELOC(X, Y) IO.enumCase(Value, #X, ELF::X);
   switch (Object->Header.Machine) {
   case ELF::EM_X86_64:
-#include "llvm/Support/ELFRelocs/x86_64.def"
+#include "llvm/BinaryFormat/ELFRelocs/x86_64.def"
     break;
   case ELF::EM_MIPS:
-#include "llvm/Support/ELFRelocs/Mips.def"
+#include "llvm/BinaryFormat/ELFRelocs/Mips.def"
     break;
   case ELF::EM_HEXAGON:
-#include "llvm/Support/ELFRelocs/Hexagon.def"
+#include "llvm/BinaryFormat/ELFRelocs/Hexagon.def"
     break;
   case ELF::EM_386:
   case ELF::EM_IAMCU:
-#include "llvm/Support/ELFRelocs/i386.def"
+#include "llvm/BinaryFormat/ELFRelocs/i386.def"
     break;
   case ELF::EM_AARCH64:
-#include "llvm/Support/ELFRelocs/AArch64.def"
+#include "llvm/BinaryFormat/ELFRelocs/AArch64.def"
     break;
   case ELF::EM_ARM:
-#include "llvm/Support/ELFRelocs/ARM.def"
+#include "llvm/BinaryFormat/ELFRelocs/ARM.def"
     break;
   case ELF::EM_RISCV:
-#include "llvm/Support/ELFRelocs/RISCV.def"
+#include "llvm/BinaryFormat/ELFRelocs/RISCV.def"
     break;
   case ELF::EM_LANAI:
-#include "llvm/Support/ELFRelocs/Lanai.def"
+#include "llvm/BinaryFormat/ELFRelocs/Lanai.def"
     break;
   case ELF::EM_AMDGPU:
-#include "llvm/Support/ELFRelocs/AMDGPU.def"
+#include "llvm/BinaryFormat/ELFRelocs/AMDGPU.def"
     break;
   case ELF::EM_BPF:
-#include "llvm/Support/ELFRelocs/BPF.def"
+#include "llvm/BinaryFormat/ELFRelocs/BPF.def"
     break;
   default:
     llvm_unreachable("Unsupported architecture");
   }
 #undef ELF_RELOC
+  IO.enumFallback<Hex32>(Value);
 }
 
 void ScalarEnumerationTraits<ELFYAML::MIPS_AFL_REG>::enumeration(
@@ -647,7 +672,17 @@ void MappingTraits<ELFYAML::FileHeader>::mapping(IO &IO,
   IO.mapOptional("Entry", FileHdr.Entry, Hex64(0));
 }
 
+void MappingTraits<ELFYAML::ProgramHeader>::mapping(
+    IO &IO, ELFYAML::ProgramHeader &Phdr) {
+  IO.mapRequired("Type", Phdr.Type);
+  IO.mapOptional("Flags", Phdr.Flags, ELFYAML::ELF_PF(0));
+  IO.mapOptional("Sections", Phdr.Sections);
+  IO.mapOptional("VAddr", Phdr.VAddr, Hex64(0));
+  IO.mapOptional("PAddr", Phdr.PAddr, Hex64(0));
+}
+
 namespace {
+
 struct NormalizedOther {
   NormalizedOther(IO &)
       : Visibility(ELFYAML::ELF_STV(0)), Other(ELFYAML::ELF_STO(0)) {}
@@ -659,7 +694,8 @@ struct NormalizedOther {
   ELFYAML::ELF_STV Visibility;
   ELFYAML::ELF_STO Other;
 };
-}
+
+} // end anonymous namespace
 
 void MappingTraits<ELFYAML::Symbol>::mapping(IO &IO, ELFYAML::Symbol &Symbol) {
   IO.mapOptional("Name", Symbol.Name, StringRef());
@@ -714,6 +750,11 @@ static void groupSectionMapping(IO &IO, ELFYAML::Group &group) {
 void MappingTraits<ELFYAML::SectionOrType>::mapping(
     IO &IO, ELFYAML::SectionOrType &sectionOrType) {
   IO.mapRequired("SectionOrType", sectionOrType.sectionNameOrType);
+}
+
+void MappingTraits<ELFYAML::SectionName>::mapping(
+    IO &IO, ELFYAML::SectionName &sectionName) {
+  IO.mapRequired("Section", sectionName.Section);
 }
 
 static void sectionMapping(IO &IO, ELFYAML::MipsABIFlags &Section) {
@@ -782,6 +823,7 @@ StringRef MappingTraits<std::unique_ptr<ELFYAML::Section>>::validate(
 }
 
 namespace {
+
 struct NormalizedMips64RelType {
   NormalizedMips64RelType(IO &)
       : Type(ELFYAML::ELF_REL(ELF::R_MIPS_NONE)),
@@ -802,7 +844,8 @@ struct NormalizedMips64RelType {
   ELFYAML::ELF_REL Type3;
   ELFYAML::ELF_RSS SpecSym;
 };
-}
+
+} // end anonymous namespace
 
 void MappingTraits<ELFYAML::Relocation>::mapping(IO &IO,
                                                  ELFYAML::Relocation &Rel) {
@@ -810,7 +853,7 @@ void MappingTraits<ELFYAML::Relocation>::mapping(IO &IO,
   assert(Object && "The IO context is not initialized");
 
   IO.mapRequired("Offset", Rel.Offset);
-  IO.mapRequired("Symbol", Rel.Symbol);
+  IO.mapOptional("Symbol", Rel.Symbol);
 
   if (Object->Header.Machine == ELFYAML::ELF_EM(ELF::EM_MIPS) &&
       Object->Header.Class == ELFYAML::ELF_ELFCLASS(ELF::ELFCLASS64)) {
@@ -831,6 +874,7 @@ void MappingTraits<ELFYAML::Object>::mapping(IO &IO, ELFYAML::Object &Object) {
   IO.setContext(&Object);
   IO.mapTag("!ELF", true);
   IO.mapRequired("FileHeader", Object.Header);
+  IO.mapOptional("ProgramHeaders", Object.ProgramHeaders);
   IO.mapOptional("Sections", Object.Sections);
   IO.mapOptional("Symbols", Object.Symbols);
   IO.setContext(nullptr);
@@ -843,4 +887,5 @@ LLVM_YAML_STRONG_TYPEDEF(uint32_t, MIPS_AFL_ASE)
 LLVM_YAML_STRONG_TYPEDEF(uint32_t, MIPS_AFL_FLAGS1)
 
 } // end namespace yaml
+
 } // end namespace llvm

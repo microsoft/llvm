@@ -1,6 +1,6 @@
-; RUN: llc -march=amdgcn -mcpu=verde -verify-machineinstrs < %s | FileCheck -check-prefix=SI -check-prefix=FUNC %s
-; RUN: llc -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -verify-machineinstrs < %s | FileCheck -check-prefix=SI -check-prefix=FUNC %s
-; RUN: llc -march=r600 -mcpu=redwood < %s | FileCheck -check-prefix=EG %s -check-prefix=FUNC
+; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=amdgcn -mcpu=verde -verify-machineinstrs < %s | FileCheck -check-prefix=SI -check-prefix=FUNC %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -verify-machineinstrs < %s | FileCheck -check-prefix=SI -check-prefix=FUNC %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=r600 -mcpu=redwood < %s | FileCheck -check-prefix=EG %s -check-prefix=FUNC
 
 ; mul24 and mad24 are affected
 
@@ -211,10 +211,10 @@ endif:
 ; SI: s_mul_i32
 ; SI: v_mul_hi_u32
 ; SI: s_mul_i32
-; SI: s_mul_i32
-; SI: v_mul_hi_u32
-; SI: v_mul_hi_u32
-; SI: s_mul_i32
+; SI-DAG: s_mul_i32
+; SI-DAG: v_mul_hi_u32
+; SI-DAG: v_mul_hi_u32
+; SI-DAG: s_mul_i32
 ; SI-DAG: s_mul_i32
 ; SI-DAG: v_mul_hi_u32
 ; SI: s_mul_i32

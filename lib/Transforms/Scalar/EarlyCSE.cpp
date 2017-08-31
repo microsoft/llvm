@@ -15,10 +15,13 @@
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/ScopedHashTable.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/DataLayout.h"
@@ -32,8 +35,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Utils/MemorySSA.h"
-#include "llvm/Transforms/Utils/MemorySSAUpdater.h"
 #include <deque>
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -253,6 +254,7 @@ public:
   const TargetTransformInfo &TTI;
   DominatorTree &DT;
   AssumptionCache &AC;
+  const SimplifyQuery SQ;
   MemorySSA *MSSA;
   std::unique_ptr<MemorySSAUpdater> MSSAUpdater;
   typedef RecyclingAllocator<
@@ -315,9 +317,10 @@ public:
   unsigned CurrentGeneration;
 
   /// \brief Set up the EarlyCSE runner for a particular function.
-  EarlyCSE(const TargetLibraryInfo &TLI, const TargetTransformInfo &TTI,
-           DominatorTree &DT, AssumptionCache &AC, MemorySSA *MSSA)
-      : TLI(TLI), TTI(TTI), DT(DT), AC(AC), MSSA(MSSA),
+  EarlyCSE(const DataLayout &DL, const TargetLibraryInfo &TLI,
+           const TargetTransformInfo &TTI, DominatorTree &DT,
+           AssumptionCache &AC, MemorySSA *MSSA)
+      : TLI(TLI), TTI(TTI), DT(DT), AC(AC), SQ(DL, &TLI, &DT, &AC), MSSA(MSSA),
         MSSAUpdater(make_unique<MemorySSAUpdater>(MSSA)), CurrentGeneration(0) {
   }
 
@@ -504,7 +507,7 @@ private:
     if (MemoryAccess *MA = MSSA->getMemoryAccess(Inst)) {
       // Optimize MemoryPhi nodes that may become redundant by having all the
       // same input values once MA is removed.
-      SmallVector<MemoryPhi *, 4> PhisToCheck;
+      SmallSetVector<MemoryPhi *, 4> PhisToCheck;
       SmallVector<MemoryAccess *, 8> WorkQueue;
       WorkQueue.push_back(MA);
       // Process MemoryPhi nodes in FIFO order using a ever-growing vector since
@@ -515,7 +518,7 @@ private:
 
         for (auto *U : WI->users())
           if (MemoryPhi *MP = dyn_cast<MemoryPhi>(U))
-            PhisToCheck.push_back(MP);
+            PhisToCheck.insert(MP);
 
         MSSAUpdater->removeMemoryAccess(WI);
 
@@ -559,13 +562,27 @@ bool EarlyCSE::isSameMemGeneration(unsigned EarlierGeneration,
   if (!MSSA)
     return false;
 
+  // If MemorySSA has determined that one of EarlierInst or LaterInst does not
+  // read/write memory, then we can safely return true here.
+  // FIXME: We could be more aggressive when checking doesNotAccessMemory(),
+  // onlyReadsMemory(), mayReadFromMemory(), and mayWriteToMemory() in this pass
+  // by also checking the MemorySSA MemoryAccess on the instruction.  Initial
+  // experiments suggest this isn't worthwhile, at least for C/C++ code compiled
+  // with the default optimization pipeline.
+  auto *EarlierMA = MSSA->getMemoryAccess(EarlierInst);
+  if (!EarlierMA)
+    return true;
+  auto *LaterMA = MSSA->getMemoryAccess(LaterInst);
+  if (!LaterMA)
+    return true;
+
   // Since we know LaterDef dominates LaterInst and EarlierInst dominates
   // LaterInst, if LaterDef dominates EarlierInst then it can't occur between
   // EarlierInst and LaterInst and neither can any other write that potentially
   // clobbers LaterInst.
   MemoryAccess *LaterDef =
       MSSA->getWalker()->getClobberingMemoryAccess(LaterInst);
-  return MSSA->dominates(LaterDef, MSSA->getMemoryAccess(EarlierInst));
+  return MSSA->dominates(LaterDef, EarlierMA);
 }
 
 bool EarlyCSE::processNode(DomTreeNode *Node) {
@@ -604,7 +621,7 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
         if (unsigned Count = replaceDominatedUsesWith(
                 CondInst, TorF, DT, BasicBlockEdge(Pred, BB))) {
           Changed = true;
-          NumCSECVP = NumCSECVP + Count;
+          NumCSECVP += Count;
         }
       }
     }
@@ -615,8 +632,6 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
   /// to the same location, we delete the dead store.  This zaps trivial dead
   /// stores which can occur in bitfield code among other things.
   Instruction *LastStore = nullptr;
-
-  const DataLayout &DL = BB->getModule()->getDataLayout();
 
   // See if any instructions in the block can be eliminated.  If so, do it.  If
   // not, add them to AvailableValues.
@@ -635,10 +650,16 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
 
     // Skip assume intrinsics, they don't really have side effects (although
     // they're marked as such to ensure preservation of control dependencies),
-    // and this pass will not disturb any of the assumption's control
-    // dependencies.
+    // and this pass will not bother with its removal. However, we should mark
+    // its condition as true for all dominated blocks.
     if (match(Inst, m_Intrinsic<Intrinsic::assume>())) {
-      DEBUG(dbgs() << "EarlyCSE skipping assumption: " << *Inst << '\n');
+      auto *CondI =
+          dyn_cast<Instruction>(cast<CallInst>(Inst)->getArgOperand(0));
+      if (CondI && SimpleValue::canHandle(CondI)) {
+        DEBUG(dbgs() << "EarlyCSE considering assumption: " << *Inst << '\n');
+        AvailableValues.insert(CondI, ConstantInt::getTrue(BB->getContext()));
+      } else
+        DEBUG(dbgs() << "EarlyCSE skipping assumption: " << *Inst << '\n');
       continue;
     }
 
@@ -658,10 +679,25 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
     if (match(Inst, m_Intrinsic<Intrinsic::experimental_guard>())) {
       if (auto *CondI =
               dyn_cast<Instruction>(cast<CallInst>(Inst)->getArgOperand(0))) {
-        // The condition we're on guarding here is true for all dominated
-        // locations.
-        if (SimpleValue::canHandle(CondI))
+        if (SimpleValue::canHandle(CondI)) {
+          // Do we already know the actual value of this condition?
+          if (auto *KnownCond = AvailableValues.lookup(CondI)) {
+            // Is the condition known to be true?
+            if (isa<ConstantInt>(KnownCond) &&
+                cast<ConstantInt>(KnownCond)->isOne()) {
+              DEBUG(dbgs() << "EarlyCSE removing guard: " << *Inst << '\n');
+              removeMSSA(Inst);
+              Inst->eraseFromParent();
+              Changed = true;
+              continue;
+            } else
+              // Use the known value if it wasn't true.
+              cast<CallInst>(Inst)->setArgOperand(0, KnownCond);
+          }
+          // The condition we're on guarding here is true for all dominated
+          // locations.
           AvailableValues.insert(CondI, ConstantInt::getTrue(BB->getContext()));
+        }
       }
 
       // Guard intrinsics read all memory, but don't write any memory.
@@ -673,7 +709,7 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
 
     // If the instruction can be simplified (e.g. X+0 = X) then replace it with
     // its simpler value.
-    if (Value *V = SimplifyInstruction(Inst, DL, &TLI, &DT, &AC)) {
+    if (Value *V = SimplifyInstruction(Inst, SQ)) {
       DEBUG(dbgs() << "EarlyCSE Simplify: " << *Inst << "  to: " << *V << '\n');
       bool Killed = false;
       if (!Inst->use_empty()) {
@@ -964,7 +1000,7 @@ PreservedAnalyses EarlyCSEPass::run(Function &F,
   auto *MSSA =
       UseMemorySSA ? &AM.getResult<MemorySSAAnalysis>(F).getMSSA() : nullptr;
 
-  EarlyCSE CSE(TLI, TTI, DT, AC, MSSA);
+  EarlyCSE CSE(F.getParent()->getDataLayout(), TLI, TTI, DT, AC, MSSA);
 
   if (!CSE.run())
     return PreservedAnalyses::all();
@@ -1008,7 +1044,7 @@ public:
     auto *MSSA =
         UseMemorySSA ? &getAnalysis<MemorySSAWrapperPass>().getMSSA() : nullptr;
 
-    EarlyCSE CSE(TLI, TTI, DT, AC, MSSA);
+    EarlyCSE CSE(F.getParent()->getDataLayout(), TLI, TTI, DT, AC, MSSA);
 
     return CSE.run();
   }

@@ -1,4 +1,4 @@
-//===--- DebugInfo.cpp - Debug Information Helper Classes -----------------===//
+//===- DebugInfo.cpp - Debug Information Helper Classes -------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,21 +13,28 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/DebugInfo.h"
-#include "LLVMContextImpl.h"
-#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/DIBuilder.h"
-#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GVMaterializer.h"
-#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/ValueHandle.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/Dwarf.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Casting.h"
+#include <algorithm>
+#include <cassert>
+#include <utility>
+
 using namespace llvm;
 using namespace llvm::dwarf;
 
@@ -79,9 +86,19 @@ void DebugInfoFinder::processModule(const Module &M) {
         processScope(M->getScope());
     }
   }
-  for (auto &F : M.functions())
+  for (auto &F : M.functions()) {
     if (auto *SP = cast_or_null<DISubprogram>(F.getSubprogram()))
       processSubprogram(SP);
+    // There could be subprograms from inlined functions referenced from
+    // instructions only. Walk the function to find them.
+    for (const BasicBlock &BB : F) {
+      for (const Instruction &I : BB) {
+        if (!I.getDebugLoc())
+          continue;
+        processLocation(M, I.getDebugLoc().get());
+      }
+    }
+  }
 }
 
 void DebugInfoFinder::processLocation(const Module &M, const DILocation *Loc) {
@@ -239,7 +256,7 @@ bool DebugInfoFinder::addScope(DIScope *Scope) {
   return true;
 }
 
-static llvm::MDNode *stripDebugLocFromLoopID(llvm::MDNode *N) {
+static MDNode *stripDebugLocFromLoopID(MDNode *N) {
   assert(N->op_begin() != N->op_end() && "Missing self reference?");
 
   // if there is no debug location, we do not have to rewrite this MDNode.
@@ -278,7 +295,7 @@ bool llvm::stripDebugInfo(Function &F) {
     F.setSubprogram(nullptr);
   }
 
-  llvm::DenseMap<llvm::MDNode*, llvm::MDNode*> LoopIDsMap;
+  DenseMap<MDNode*, MDNode*> LoopIDsMap;
   for (BasicBlock &BB : F) {
     for (auto II = BB.begin(), End = BB.end(); II != End;) {
       Instruction &I = *II++; // We may delete the instruction, increment now.
@@ -294,6 +311,9 @@ bool llvm::stripDebugInfo(Function &F) {
     }
 
     auto *TermInst = BB.getTerminator();
+    if (!TermInst)
+      // This is invalid IR, but we may not have run the verifier yet
+      continue;
     if (auto *LoopID = TermInst->getMetadata(LLVMContext::MD_loop)) {
       auto *NewLoopID = LoopIDsMap.lookup(LoopID);
       if (!NewLoopID)
@@ -515,7 +535,7 @@ private:
   void traverse(MDNode *);
 };
 
-} // Anonymous namespace.
+} // end anonymous namespace
 
 void DebugTypeInfoRemoval::traverse(MDNode *N) {
   if (!N || Replacements.count(N))
@@ -580,7 +600,7 @@ bool llvm::stripNonLineTableDebugInfo(Module &M) {
     GV.eraseMetadata(LLVMContext::MD_dbg);
 
   DebugTypeInfoRemoval Mapper(M.getContext());
-  auto remap = [&](llvm::MDNode *Node) -> llvm::MDNode * {
+  auto remap = [&](MDNode *Node) -> MDNode * {
     if (!Node)
       return nullptr;
     Mapper.traverseAndRemap(Node);

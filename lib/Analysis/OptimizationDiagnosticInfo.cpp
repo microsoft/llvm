@@ -25,7 +25,7 @@ using namespace llvm;
 
 OptimizationRemarkEmitter::OptimizationRemarkEmitter(const Function *F)
     : F(F), BFI(nullptr) {
-  if (!F->getContext().getDiagnosticHotnessRequested())
+  if (!F->getContext().getDiagnosticsHotnessRequested())
     return;
 
   // First create a dominator tree.
@@ -101,7 +101,7 @@ void MappingTraits<DiagnosticInfoOptimizationBase *>::mapping(
   // These are read-only for now.
   DiagnosticLocation DL = OptDiag->getLocation();
   StringRef FN =
-      GlobalValue::getRealLinkageName(OptDiag->getFunction().getName());
+      GlobalValue::dropLLVMManglingEscape(OptDiag->getFunction().getName());
 
   StringRef PassName(OptDiag->PassName);
   io.mapRequired("Pass", PassName);
@@ -155,10 +155,18 @@ void OptimizationRemarkEmitter::emit(
     DiagnosticInfoOptimizationBase &OptDiagBase) {
   auto &OptDiag = cast<DiagnosticInfoIROptimization>(OptDiagBase);
   computeHotness(OptDiag);
+  // If a diagnostic has a hotness value, then only emit it if its hotness
+  // meets the threshold.
+  if (OptDiag.getHotness() &&
+      *OptDiag.getHotness() <
+          F->getContext().getDiagnosticsHotnessThreshold()) {
+    return;
+  }
 
   yaml::Output *Out = F->getContext().getDiagnosticsOutputFile();
   if (Out) {
-    auto *P = const_cast<DiagnosticInfoOptimizationBase *>(&OptDiagBase);
+    // For remarks the << operator takes a reference to a pointer.
+    auto *P = &OptDiagBase;
     *Out << P;
   }
   // FIXME: now that IsVerbose is part of DI, filtering for this will be moved
@@ -176,7 +184,7 @@ OptimizationRemarkEmitterWrapperPass::OptimizationRemarkEmitterWrapperPass()
 bool OptimizationRemarkEmitterWrapperPass::runOnFunction(Function &Fn) {
   BlockFrequencyInfo *BFI;
 
-  if (Fn.getContext().getDiagnosticHotnessRequested())
+  if (Fn.getContext().getDiagnosticsHotnessRequested())
     BFI = &getAnalysis<LazyBlockFrequencyInfoPass>().getBFI();
   else
     BFI = nullptr;
@@ -198,7 +206,7 @@ OptimizationRemarkEmitterAnalysis::run(Function &F,
                                        FunctionAnalysisManager &AM) {
   BlockFrequencyInfo *BFI;
 
-  if (F.getContext().getDiagnosticHotnessRequested())
+  if (F.getContext().getDiagnosticsHotnessRequested())
     BFI = &AM.getResult<BlockFrequencyAnalysis>(F);
   else
     BFI = nullptr;

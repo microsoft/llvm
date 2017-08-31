@@ -34,6 +34,7 @@
 namespace llvm {
 
 class AsmPrinterHandler;
+class BasicBlock;
 class BlockAddress;
 class Constant;
 class ConstantArray;
@@ -43,6 +44,7 @@ class DIEAbbrev;
 class DwarfDebug;
 class GCMetadataPrinter;
 class GlobalIndirectSymbol;
+class GlobalObject;
 class GlobalValue;
 class GlobalVariable;
 class GCStrategy;
@@ -65,6 +67,8 @@ class MCSubtargetInfo;
 class MCSymbol;
 class MCTargetOptions;
 class MDNode;
+class Module;
+class raw_ostream;
 class TargetLoweringObjectFile;
 class TargetMachine;
 
@@ -109,8 +113,11 @@ public:
 
   /// Map global GOT equivalent MCSymbols to GlobalVariables and keep track of
   /// its number of uses by other globals.
-  typedef std::pair<const GlobalVariable *, unsigned> GOTEquivUsePair;
+  using GOTEquivUsePair = std::pair<const GlobalVariable *, unsigned>;
   MapVector<const MCSymbol *, GOTEquivUsePair> GlobalGOTEquivs;
+
+  /// Enable print [latency:throughput] in output
+  bool EnablePrintSchedInfo = false;
 
 private:
   MCSymbol *CurrentFnBegin = nullptr;
@@ -223,6 +230,7 @@ public:
     FUNCTION_EXIT = 1,
     TAIL_CALL = 2,
     LOG_ARGS_ENTER = 3,
+    CUSTOM_EVENT = 4,
   };
 
   // The table will contain these structs that point to the sled, the function
@@ -239,7 +247,7 @@ public:
   };
 
   // All the sleds to be emitted.
-  std::vector<XRayFunctionEntry> Sleds;
+  SmallVector<XRayFunctionEntry, 4> Sleds;
 
   // Helper function to record a given XRay sled.
   void recordSled(MCSymbol *Sled, const MachineInstr &MI, SledKind Kind);
@@ -286,7 +294,7 @@ public:
   void emitFrameAlloc(const MachineInstr &MI);
 
   enum CFIMoveType { CFI_M_None, CFI_M_EH, CFI_M_Debug };
-  CFIMoveType needsCFIMoves();
+  CFIMoveType needsCFIMoves() const;
 
   /// Returns false if needsCFIMoves() == CFI_M_EH for any function
   /// in the module.
@@ -600,8 +608,8 @@ private:
   // Internal Implementation Details
   //===------------------------------------------------------------------===//
 
-  /// This emits visibility information about symbol, if this is suported by the
-  /// target.
+  /// This emits visibility information about symbol, if this is supported by
+  /// the target.
   void EmitVisibility(MCSymbol *Sym, unsigned Visibility,
                       bool IsDefinition = true) const;
 

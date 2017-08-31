@@ -45,7 +45,7 @@ class InstSI <dag outs, dag ins, string asm = "",
   field bit FLAT = 0;
   field bit DS = 0;
 
-   // Pseudo instruction formats.
+  // Pseudo instruction formats.
   field bit VGPRSpill = 0;
   field bit SGPRSpill = 0;
 
@@ -82,6 +82,21 @@ class InstSI <dag outs, dag ins, string asm = "",
   // This bit indicates that this has a floating point result type, so
   // the clamp modifier has floating point semantics.
   field bit FPClamp = 0;
+
+  // This bit indicates that this is a VOP3 opcode which supports op_sel
+  // modifier (gfx9 only).
+  field bit VOP3_OPSEL = 0;
+
+  // Is it possible for this instruction to be atomic?
+  field bit maybeAtomic = 0;
+
+  // This bit indicates that this is a 16-bit instruction which zero-fills
+  // unused bits in dst. Note that new GFX9 opcodes preserve unused bits.
+  field bit F16_ZFILL = 0;
+
+  // This bit indicates that instruction may support integer clamping
+  // which depends on GPU features.
+  field bit IntClamp = 0;
 
   // These need to be kept in sync with the enum in SIInstrFlags.
   let TSFlags{0} = SALU;
@@ -127,6 +142,11 @@ class InstSI <dag outs, dag ins, string asm = "",
   let TSFlags{40} = FixedSize;
   let TSFlags{41} = VOPAsmPrefer32Bit;
   let TSFlags{42} = FPClamp;
+  let TSFlags{43} = VOP3_OPSEL;
+
+  let TSFlags{44} = maybeAtomic;
+  let TSFlags{45} = F16_ZFILL;
+  let TSFlags{46} = IntClamp;
 
   let SchedRW = [Write32Bit];
 
@@ -228,10 +248,10 @@ class EXPe : Enc64 {
   bits<1> compr;
   bits<1> done;
   bits<1> vm;
-  bits<8> vsrc0;
-  bits<8> vsrc1;
-  bits<8> vsrc2;
-  bits<8> vsrc3;
+  bits<8> src0;
+  bits<8> src1;
+  bits<8> src2;
+  bits<8> src3;
 
   let Inst{3-0} = en;
   let Inst{9-4} = tgt;
@@ -239,10 +259,10 @@ class EXPe : Enc64 {
   let Inst{11} = done;
   let Inst{12} = vm;
   let Inst{31-26} = 0x3e;
-  let Inst{39-32} = vsrc0;
-  let Inst{47-40} = vsrc1;
-  let Inst{55-48} = vsrc2;
-  let Inst{63-56} = vsrc3;
+  let Inst{39-32} = src0;
+  let Inst{47-40} = src1;
+  let Inst{55-48} = src2;
+  let Inst{63-56} = src3;
 }
 
 let Uses = [EXEC] in {

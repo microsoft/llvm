@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CodeGen/Passes.h"
 #include "BranchFolding.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -25,6 +24,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -39,7 +39,7 @@
 
 using namespace llvm;
 
-#define DEBUG_TYPE "ifcvt"
+#define DEBUG_TYPE "if-converter"
 
 // Hidden options for help debugging.
 static cl::opt<int> IfCvtFnStart("ifcvt-fn-start", cl::init(-1), cl::Hidden);
@@ -242,7 +242,6 @@ namespace {
     void AnalyzeBlocks(MachineFunction &MF,
                        std::vector<std::unique_ptr<IfcvtToken>> &Tokens);
     void InvalidatePreds(MachineBasicBlock &MBB);
-    void RemoveExtraEdges(BBInfo &BBI);
     bool IfConvertSimple(BBInfo &BBI, IfcvtKind Kind);
     bool IfConvertTriangle(BBInfo &BBI, IfcvtKind Kind);
     bool IfConvertDiamondCommon(BBInfo &BBI, BBInfo &TrueBBI, BBInfo &FalseBBI,
@@ -316,9 +315,9 @@ namespace {
 
 char &llvm::IfConverterID = IfConverter::ID;
 
-INITIALIZE_PASS_BEGIN(IfConverter, "if-converter", "If Converter", false, false)
+INITIALIZE_PASS_BEGIN(IfConverter, DEBUG_TYPE, "If Converter", false, false)
 INITIALIZE_PASS_DEPENDENCY(MachineBranchProbabilityInfo)
-INITIALIZE_PASS_END(IfConverter, "if-converter", "If Converter", false, false)
+INITIALIZE_PASS_END(IfConverter, DEBUG_TYPE, "If Converter", false, false)
 
 bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(*MF.getFunction()) || (PredicateFtor && !PredicateFtor(MF)))
@@ -1318,7 +1317,8 @@ static bool canFallThroughTo(MachineBasicBlock &MBB, MachineBasicBlock &ToMBB) {
       return false;
     PI = I++;
   }
-  return true;
+  // Finally see if the last I is indeed a successor to PI.
+  return PI->isSuccessor(&*I);
 }
 
 /// Invalidate predecessor BB info so it would be re-analyzed to determine if it
@@ -1339,14 +1339,6 @@ static void InsertUncondBranch(MachineBasicBlock &MBB, MachineBasicBlock &ToMBB,
   DebugLoc dl;  // FIXME: this is nowhere
   SmallVector<MachineOperand, 0> NoCond;
   TII->insertBranch(MBB, &ToMBB, nullptr, NoCond, dl);
-}
-
-/// Remove true / false edges if either / both are no longer successors.
-void IfConverter::RemoveExtraEdges(BBInfo &BBI) {
-  MachineBasicBlock *TBB = nullptr, *FBB = nullptr;
-  SmallVector<MachineOperand, 4> Cond;
-  if (!TII->analyzeBranch(*BBI.BB, TBB, FBB, Cond))
-    BBI.BB->CorrectExtraCFGEdges(TBB, FBB, !Cond.empty());
 }
 
 /// Behaves like LiveRegUnits::StepForward() but also adds implicit uses to all
@@ -1473,21 +1465,24 @@ bool IfConverter::IfConvertSimple(BBInfo &BBI, IfcvtKind Kind) {
     DontKill.addLiveIns(NextMBB);
   }
 
+  // Remove the branches from the entry so we can add the contents of the true
+  // block to it.
+  BBI.NonPredSize -= TII->removeBranch(*BBI.BB);
+
   if (CvtMBB.pred_size() > 1) {
-    BBI.NonPredSize -= TII->removeBranch(*BBI.BB);
     // Copy instructions in the true block, predicate them, and add them to
     // the entry block.
     CopyAndPredicateBlock(BBI, *CvtBBI, Cond);
 
-    // RemoveExtraEdges won't work if the block has an unanalyzable branch, so
-    // explicitly remove CvtBBI as a successor.
+    // Keep the CFG updated.
     BBI.BB->removeSuccessor(&CvtMBB, true);
   } else {
+    // Predicate the instructions in the true block.
     RemoveKills(CvtMBB.begin(), CvtMBB.end(), DontKill, *TRI);
     PredicateBlock(*CvtBBI, CvtMBB.end(), Cond);
 
-    // Merge converted block into entry block.
-    BBI.NonPredSize -= TII->removeBranch(*BBI.BB);
+    // Merge converted block into entry block. The BB to Cvt edge is removed
+    // by MergeBlocks.
     MergeBlocks(BBI, *CvtBBI);
   }
 
@@ -1507,8 +1502,6 @@ bool IfConverter::IfConvertSimple(BBInfo &BBI, IfcvtKind Kind) {
     // available if cmp executes.
     IterIfcvt = false;
   }
-
-  RemoveExtraEdges(BBI);
 
   // Update block info. BB can be iteratively if-converted.
   if (!IterIfcvt)
@@ -1587,24 +1580,25 @@ bool IfConverter::IfConvertTriangle(BBInfo &BBI, IfcvtKind Kind) {
     BBCvt = MBPI->getEdgeProbability(BBI.BB, &CvtMBB);
   }
 
+  // Remove the branches from the entry so we can add the contents of the true
+  // block to it.
+  BBI.NonPredSize -= TII->removeBranch(*BBI.BB);
+
   if (CvtMBB.pred_size() > 1) {
-    BBI.NonPredSize -= TII->removeBranch(*BBI.BB);
     // Copy instructions in the true block, predicate them, and add them to
     // the entry block.
     CopyAndPredicateBlock(BBI, *CvtBBI, Cond, true);
-
-    // RemoveExtraEdges won't work if the block has an unanalyzable branch, so
-    // explicitly remove CvtBBI as a successor.
-    BBI.BB->removeSuccessor(&CvtMBB, true);
   } else {
     // Predicate the 'true' block after removing its branch.
     CvtBBI->NonPredSize -= TII->removeBranch(CvtMBB);
     PredicateBlock(*CvtBBI, CvtMBB.end(), Cond);
 
     // Now merge the entry of the triangle with the true block.
-    BBI.NonPredSize -= TII->removeBranch(*BBI.BB);
     MergeBlocks(BBI, *CvtBBI, false);
   }
+
+  // Keep the CFG updated.
+  BBI.BB->removeSuccessor(&CvtMBB, true);
 
   // If 'true' block has a 'false' successor, add an exit branch to it.
   if (HasEarlyExit) {
@@ -1652,8 +1646,6 @@ bool IfConverter::IfConvertTriangle(BBInfo &BBI, IfcvtKind Kind) {
     // predicated.
     IterIfcvt = false;
   }
-
-  RemoveExtraEdges(BBI);
 
   // Update block info. BB can be iteratively if-converted.
   if (!IterIfcvt)
@@ -1917,8 +1909,6 @@ bool IfConverter::IfConvertForkedDiamond(
   TII->insertBranch(*BBI.BB, TrueBBI.TrueBB, TrueBBI.FalseBB,
                     TrueBBI.BrCond, dl);
 
-  RemoveExtraEdges(BBI);
-
   // Update block info.
   BBI.IsDone = TrueBBI.IsDone = FalseBBI.IsDone = true;
   InvalidatePreds(*BBI.BB);
@@ -1955,6 +1945,11 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
   // fold the tail block in as well. Otherwise, unless it falls through to the
   // tail, add a unconditional branch to it.
   if (TailBB) {
+    // We need to remove the edges to the true and false blocks manually since
+    // we didn't let IfConvertDiamondCommon update the CFG.
+    BBI.BB->removeSuccessor(TrueBBI.BB);
+    BBI.BB->removeSuccessor(FalseBBI.BB, true);
+
     BBInfo &TailBBI = BBAnalysis[TailBB->getNumber()];
     bool CanMergeTail = !TailBBI.HasFallThrough &&
       !TailBBI.BB->hasAddressTaken();
@@ -1983,13 +1978,6 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
       BBI.HasFallThrough = false;
     }
   }
-
-  // RemoveExtraEdges won't work if the block has an unanalyzable branch,
-  // which can happen here if TailBB is unanalyzable and is merged, so
-  // explicitly remove BBI1 and BBI2 as successors.
-  BBI.BB->removeSuccessor(TrueBBI.BB);
-  BBI.BB->removeSuccessor(FalseBBI.BB, /* NormalizeSuccessProbs */ true);
-  RemoveExtraEdges(BBI);
 
   // Update block info.
   BBI.IsDone = TrueBBI.IsDone = FalseBBI.IsDone = true;
@@ -2127,7 +2115,8 @@ void IfConverter::CopyAndPredicateBlock(BBInfo &ToBBI, BBInfo &FromBBI,
 /// Move all instructions from FromBB to the end of ToBB.  This will leave
 /// FromBB as an empty block, so remove all of its successor edges except for
 /// the fall-through edge.  If AddEdges is true, i.e., when FromBBI's branch is
-/// being moved, add those successor edges to ToBBI.
+/// being moved, add those successor edges to ToBBI and remove the old edge
+/// from ToBBI to FromBBI.
 void IfConverter::MergeBlocks(BBInfo &ToBBI, BBInfo &FromBBI, bool AddEdges) {
   MachineBasicBlock &FromMBB = *FromBBI.BB;
   assert(!FromMBB.hasAddressTaken() &&
@@ -2159,12 +2148,10 @@ void IfConverter::MergeBlocks(BBInfo &ToBBI, BBInfo &FromBBI, bool AddEdges) {
   // AddEdges is true and FromMBB is a successor of ToBBI.BB.
   auto To2FromProb = BranchProbability::getZero();
   if (AddEdges && ToBBI.BB->isSuccessor(&FromMBB)) {
+    // Remove the old edge but remember the edge probability so we can calculate
+    // the correct weights on the new edges being added further down.
     To2FromProb = MBPI->getEdgeProbability(ToBBI.BB, &FromMBB);
-    // Set the edge probability from ToBBI.BB to FromMBB to zero to avoid the
-    // edge probability being merged to other edges when this edge is removed
-    // later.
-    ToBBI.BB->setSuccProbability(find(ToBBI.BB->successors(), &FromMBB),
-                                 BranchProbability::getZero());
+    ToBBI.BB->removeSuccessor(&FromMBB);
   }
 
   for (MachineBasicBlock *Succ : FromSuccs) {
@@ -2223,9 +2210,11 @@ void IfConverter::MergeBlocks(BBInfo &ToBBI, BBInfo &FromBBI, bool AddEdges) {
     }
   }
 
-  // Now FromBBI always falls through to the next block!
-  if (NBB && !FromMBB.isSuccessor(NBB))
-    FromMBB.addSuccessor(NBB);
+  // Move the now empty FromMBB out of the way to the end of the function so
+  // it doesn't interfere with fallthrough checks done by canFallThroughTo().
+  MachineBasicBlock *Last = &*FromMBB.getParent()->rbegin();
+  if (Last != &FromMBB)
+    FromMBB.moveAfter(Last);
 
   // Normalize the probabilities of ToBBI.BB's successors with all adjustment
   // we've done above.

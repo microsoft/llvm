@@ -441,6 +441,15 @@ the program where they can be handled appropriately. Handling the error may be
 as simple as reporting the issue to the user, or it may involve attempts at
 recovery.
 
+.. note::
+
+   While it would be ideal to use this error handling scheme throughout
+   LLVM, there are places where this hasn't been practical to apply. In
+   situations where you absolutely must emit a non-programmatic error and
+   the ``Error`` model isn't workable you can call ``report_fatal_error``,
+   which will call installed error handlers, print a message, and exit the
+   program.
+
 Recoverable errors are modeled using LLVM's ``Error`` scheme. This scheme
 represents errors using function return values, similar to classic C integer
 error codes, or C++'s ``std::error_code``. However, the ``Error`` class is
@@ -776,22 +785,21 @@ readability.
 Using cantFail to simplify safe callsites
 """""""""""""""""""""""""""""""""""""""""
 
-Some functions may only fail for a subset of their inputs. For such functions
-call-sites using known-safe inputs can assume that the result will be a success
-value.
+Some functions may only fail for a subset of their inputs, so calls using known
+safe inputs can be assumed to succeed.
 
 The cantFail functions encapsulate this by wrapping an assertion that their
 argument is a success value and, in the case of Expected<T>, unwrapping the
-T value from the Expected<T> argument:
+T value:
 
 .. code-block:: c++
 
-  Error mayFail(int X);
-  Expected<int> mayFail2(int X);
+  Error onlyFailsForSomeXValues(int X);
+  Expected<int> onlyFailsForSomeXValues2(int X);
 
   void foo() {
-    cantFail(mayFail(KnownSafeValue));
-    int Y = cantFail(mayFail2(KnownSafeValue));
+    cantFail(onlyFailsForSomeXValues(KnownSafeValue));
+    int Y = cantFail(onlyFailsForSomeXValues2(KnownSafeValue));
     ...
   }
 
@@ -801,8 +809,8 @@ terminate the program on an error input, cantFile simply asserts that the result
 is success. In debug builds this will result in an assertion failure if an error
 is encountered. In release builds the behavior of cantFail for failure values is
 undefined. As such, care must be taken in the use of cantFail: clients must be
-certain that a cantFail wrapped call really can not fail under any
-circumstances.
+certain that a cantFail wrapped call really can not fail with the given
+arguments.
 
 Use of the cantFail functions should be rare in library code, but they are
 likely to be of more use in tool and unit-test code where inputs and/or
@@ -1225,7 +1233,7 @@ Define your DebugCounter like this:
 .. code-block:: c++
 
   DEBUG_COUNTER(DeleteAnInstruction, "passname-delete-instruction",
-		"Controls which instructions get delete").
+		"Controls which instructions get delete");
 
 The ``DEBUG_COUNTER`` macro defines a static variable, whose name
 is specified by the first argument.  The name of the counter
@@ -2106,7 +2114,7 @@ is stored in the same allocation as the Value of a pair).
 StringMap also provides query methods that take byte ranges, so it only ever
 copies a string if a value is inserted into the table.
 
-StringMap iteratation order, however, is not guaranteed to be deterministic, so
+StringMap iteration order, however, is not guaranteed to be deterministic, so
 any uses which require that should instead use a std::map.
 
 .. _dss_indexmap:

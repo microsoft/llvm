@@ -33,9 +33,9 @@ attributes #1 = { nounwind readnone }
 !llvm.dbg.cu = !{!15}
 !llvm.module.flags = !{!18}
 
-!0 = !DIGlobalVariableExpression(var: !1)
+!0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
 !1 = !DIGlobalVariable(name: "f", linkageName: "_ZN7PR156371fE", scope: !2, file: !3, line: 6, type: !4, isLocal: false, isDefinition: true)
-!2 = !DINamespace(name: "PR15637", scope: null, file: !3, line: 1)
+!2 = !DINamespace(name: "PR15637", scope: null)
 !3 = !DIFile(filename: "foo.cc", directory: "/usr/local/google/home/echristo/tmp")
 !4 = !DICompositeType(tag: DW_TAG_union_type, name: "Value<float>", scope: !2, file: !3, line: 2, size: 32, align: 32, elements: !5, templateParams: !12)
 !5 = !{!6, !8}

@@ -18,6 +18,7 @@ add_llvm_library(LLVMAnalysis
   CallGraphSCCPass.cpp
   CallPrinter.cpp
   CaptureTracking.cpp
+  CmpInstAnalysis.cpp
   CostModel.cpp
   CodeMetrics.cpp
   ConstantFolding.cpp
@@ -53,6 +54,8 @@ add_llvm_library(LLVMAnalysis
   MemoryBuiltins.cpp
   MemoryDependenceAnalysis.cpp
   MemoryLocation.cpp
+  MemorySSA.cpp
+  MemorySSAUpdater.cpp
   ModuleDebugInfoPrinter.cpp
   ModuleSummaryAnalysis.cpp
   ObjCARCAliasAnalysis.cpp

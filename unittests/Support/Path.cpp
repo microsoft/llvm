@@ -8,9 +8,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/Path.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -698,6 +699,21 @@ TEST_F(FileSystemTest, CreateDir) {
     ThisDir = path::parent_path(ThisDir);
   }
 
+  // Also verify that paths with Unix separators are handled correctly.
+  std::string LongPathWithUnixSeparators(TestDirectory.str());
+  // Add at least one subdirectory to TestDirectory, and replace slashes with
+  // backslashes
+  do {
+    LongPathWithUnixSeparators.append("/DirNameWith19Charss");
+  } while (LongPathWithUnixSeparators.size() < 260);
+  std::replace(LongPathWithUnixSeparators.begin(),
+               LongPathWithUnixSeparators.end(),
+               '\\', '/');
+  ASSERT_NO_ERROR(fs::create_directories(Twine(LongPathWithUnixSeparators)));
+  // cleanup
+  ASSERT_NO_ERROR(fs::remove_directories(Twine(TestDirectory) +
+                                         "/DirNameWith19Charss"));
+
   // Similarly for a relative pathname.  Need to set the current directory to
   // TestDirectory so that the one we create ends up in the right place.
   char PreviousDir[260];
@@ -919,86 +935,6 @@ TEST_F(FileSystemTest, Remove) {
   ASSERT_FALSE(fs::exists(BaseDir));
 }
 
-const char archive[] = "!<arch>\x0A";
-const char bitcode[] = "\xde\xc0\x17\x0b";
-const char coff_object[] = "\x00\x00......";
-const char coff_bigobj[] = "\x00\x00\xff\xff\x00\x02......"
-    "\xc7\xa1\xba\xd1\xee\xba\xa9\x4b\xaf\x20\xfa\xf6\x6a\xa4\xdc\xb8";
-const char coff_import_library[] = "\x00\x00\xff\xff....";
-const char elf_relocatable[] = { 0x7f, 'E', 'L', 'F', 1, 2, 1, 0, 0,
-                                 0,    0,   0,   0,   0, 0, 0, 0, 1 };
-const char macho_universal_binary[] = "\xca\xfe\xba\xbe...\x00";
-const char macho_object[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x01............";
-const char macho_executable[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x02............";
-const char macho_fixed_virtual_memory_shared_lib[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x03............";
-const char macho_core[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x04............";
-const char macho_preload_executable[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x05............";
-const char macho_dynamically_linked_shared_lib[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x06............";
-const char macho_dynamic_linker[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x07............";
-const char macho_bundle[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x08............";
-const char macho_dsym_companion[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x0a............";
-const char macho_kext_bundle[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x0b............";
-const char windows_resource[] = "\x00\x00\x00\x00\x020\x00\x00\x00\xff";
-const char macho_dynamically_linked_shared_lib_stub[] =
-    "\xfe\xed\xfa\xce........\x00\x00\x00\x09............";
-
-TEST_F(FileSystemTest, Magic) {
-  struct type {
-    const char *filename;
-    const char *magic_str;
-    size_t magic_str_len;
-    fs::file_magic magic;
-  } types[] = {
-#define DEFINE(magic)                                           \
-    { #magic, magic, sizeof(magic), fs::file_magic::magic }
-    DEFINE(archive),
-    DEFINE(bitcode),
-    DEFINE(coff_object),
-    { "coff_bigobj", coff_bigobj, sizeof(coff_bigobj), fs::file_magic::coff_object },
-    DEFINE(coff_import_library),
-    DEFINE(elf_relocatable),
-    DEFINE(macho_universal_binary),
-    DEFINE(macho_object),
-    DEFINE(macho_executable),
-    DEFINE(macho_fixed_virtual_memory_shared_lib),
-    DEFINE(macho_core),
-    DEFINE(macho_preload_executable),
-    DEFINE(macho_dynamically_linked_shared_lib),
-    DEFINE(macho_dynamic_linker),
-    DEFINE(macho_bundle),
-    DEFINE(macho_dynamically_linked_shared_lib_stub),
-    DEFINE(macho_dsym_companion),
-    DEFINE(macho_kext_bundle),
-    DEFINE(windows_resource)
-#undef DEFINE
-    };
-
-  // Create some files filled with magic.
-  for (type *i = types, *e = types + (sizeof(types) / sizeof(type)); i != e;
-                                                                     ++i) {
-    SmallString<128> file_pathname(TestDirectory);
-    path::append(file_pathname, i->filename);
-    std::error_code EC;
-    raw_fd_ostream file(file_pathname, EC, sys::fs::F_None);
-    ASSERT_FALSE(file.has_error());
-    StringRef magic(i->magic_str, i->magic_str_len);
-    file << magic;
-    file.close();
-    EXPECT_EQ(i->magic, fs::identify_magic(magic));
-    ASSERT_NO_ERROR(fs::remove(Twine(file_pathname)));
-  }
-}
-
 #ifdef LLVM_ON_WIN32
 TEST_F(FileSystemTest, CarriageReturn) {
   SmallString<128> FilePathname(TestDirectory);
@@ -1047,7 +983,7 @@ TEST_F(FileSystemTest, MD5) {
   SmallString<64> TempPath;
   ASSERT_NO_ERROR(fs::createTemporaryFile("prefix", "temp", FD, TempPath));
   StringRef Data("abcdefghijklmnopqrstuvwxyz");
-  write(FD, Data.data(), Data.size());
+  ASSERT_EQ(write(FD, Data.data(), Data.size()), static_cast<ssize_t>(Data.size()));
   lseek(FD, 0, SEEK_SET);
   auto Hash = fs::md5_contents(FD);
   ::close(FD);
@@ -1222,96 +1158,6 @@ TEST(Support, ReplacePathPrefix) {
   Path = Path2;
   path::replace_path_prefix(Path, OldPrefix, EmptyPrefix);
   EXPECT_EQ(Path, "/foo");
-}
-
-TEST_F(FileSystemTest, PathFromFD) {
-  // Create a temp file.
-  int FileDescriptor;
-  SmallString<64> TempPath;
-  ASSERT_NO_ERROR(
-      fs::createTemporaryFile("prefix", "temp", FileDescriptor, TempPath));
-  FileRemover Cleanup(TempPath);
-
-  // Make sure it exists.
-  ASSERT_TRUE(sys::fs::exists(Twine(TempPath)));
-
-  // Try to get the path from the file descriptor
-  SmallString<64> ResultPath;
-  std::error_code ErrorCode =
-      fs::getPathFromOpenFD(FileDescriptor, ResultPath);
-
-  // If we succeeded, check that the paths are the same (modulo case):
-  if (!ErrorCode) {
-    // The paths returned by createTemporaryFile and getPathFromOpenFD
-    // should reference the same file on disk.
-    fs::UniqueID D1, D2;
-    ASSERT_NO_ERROR(fs::getUniqueID(Twine(TempPath), D1));
-    ASSERT_NO_ERROR(fs::getUniqueID(Twine(ResultPath), D2));
-    ASSERT_EQ(D1, D2);
-  }
-
-  ::close(FileDescriptor);
-}
-
-TEST_F(FileSystemTest, PathFromFDWin32) {
-  // Create a temp file.
-  int FileDescriptor;
-  SmallString<64> TempPath;
-  ASSERT_NO_ERROR(
-    fs::createTemporaryFile("prefix", "temp", FileDescriptor, TempPath));
-  FileRemover Cleanup(TempPath);
-
-  // Make sure it exists.
-  ASSERT_TRUE(sys::fs::exists(Twine(TempPath)));
-  
-  SmallVector<char, 8> ResultPath;
-  std::error_code ErrorCode =
-    fs::getPathFromOpenFD(FileDescriptor, ResultPath);
-
-  if (!ErrorCode) {
-    // Now that we know how much space is required for the path, create a path
-    // buffer with exactly enough space (sans null terminator, which should not
-    // be present), and call getPathFromOpenFD again to ensure that the API
-    // properly handles exactly-sized buffers.
-    SmallVector<char, 8> ExactSizedPath(ResultPath.size());
-    ErrorCode = fs::getPathFromOpenFD(FileDescriptor, ExactSizedPath);
-    ResultPath = ExactSizedPath;
-  }
-
-  if (!ErrorCode) {
-    fs::UniqueID D1, D2;
-    ASSERT_NO_ERROR(fs::getUniqueID(Twine(TempPath), D1));
-    ASSERT_NO_ERROR(fs::getUniqueID(Twine(ResultPath), D2));
-    ASSERT_EQ(D1, D2);
-  }
-  ::close(FileDescriptor);
-}
-
-TEST_F(FileSystemTest, PathFromFDUnicode) {
-  // Create a temp file.
-  int FileDescriptor;
-  SmallString<64> TempPath;
-
-  // Test Unicode: "<temp directory>/(pi)r^2<temp rand chars>.aleth.0"
-  ASSERT_NO_ERROR(
-    fs::createTemporaryFile("\xCF\x80r\xC2\xB2",
-                            "\xE2\x84\xB5.0", FileDescriptor, TempPath));
-  FileRemover Cleanup(TempPath);
-
-  // Make sure it exists.
-  ASSERT_TRUE(sys::fs::exists(Twine(TempPath)));
-
-  SmallVector<char, 8> ResultPath;
-  std::error_code ErrorCode =
-    fs::getPathFromOpenFD(FileDescriptor, ResultPath);
-
-  if (!ErrorCode) {
-    fs::UniqueID D1, D2;
-    ASSERT_NO_ERROR(fs::getUniqueID(Twine(TempPath), D1));
-    ASSERT_NO_ERROR(fs::getUniqueID(Twine(ResultPath), D2));
-    ASSERT_EQ(D1, D2);
-  }
-  ::close(FileDescriptor);
 }
 
 TEST_F(FileSystemTest, OpenFileForRead) {
@@ -1515,6 +1361,8 @@ TEST_F(FileSystemTest, permissions) {
   EXPECT_EQ(fs::setPermissions(TempPath, fs::set_gid_on_exe), NoError);
   EXPECT_TRUE(CheckPermissions(fs::set_gid_on_exe));
 
+  // Modern BSDs require root to set the sticky bit on files.
+#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
   EXPECT_EQ(fs::setPermissions(TempPath, fs::sticky_bit), NoError);
   EXPECT_TRUE(CheckPermissions(fs::sticky_bit));
 
@@ -1534,6 +1382,11 @@ TEST_F(FileSystemTest, permissions) {
 
   EXPECT_EQ(fs::setPermissions(TempPath, fs::all_perms), NoError);
   EXPECT_TRUE(CheckPermissions(fs::all_perms));
+#endif // !FreeBSD && !NetBSD && !OpenBSD
+
+  EXPECT_EQ(fs::setPermissions(TempPath, fs::all_perms & ~fs::sticky_bit),
+                               NoError);
+  EXPECT_TRUE(CheckPermissions(fs::all_perms & ~fs::sticky_bit));
 #endif
 }
 

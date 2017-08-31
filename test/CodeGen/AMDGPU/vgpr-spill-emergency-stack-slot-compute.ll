@@ -19,8 +19,9 @@
 ; HSA: workitem_private_segment_byte_size = 1536
 
 ; GCN-NOT: flat_scr
+; MESA-NOT: s_mov_b32 s3
+; HSA-NOT: s_mov_b32 s7
 
-; GCNMESA-DAG: s_mov_b32 s16, s3
 ; GCNMESA-DAG: s_mov_b32 s12, SCRATCH_RSRC_DWORD0
 ; GCNMESA-DAG: s_mov_b32 s13, SCRATCH_RSRC_DWORD1
 ; GCNMESA-DAG: s_mov_b32 s14, -1
@@ -29,17 +30,32 @@
 ; GFX9MESA-DAG: s_mov_b32 s15, 0xe00000
 
 
-; GCN: buffer_store_dword {{v[0-9]+}}, off, s[12:15], s16 offset:{{[0-9]+}} ; 4-byte Folded Spill
+; GCNMESAMESA: buffer_store_dword {{v[0-9]+}}, off, s[12:15], s3 offset:{{[0-9]+}} ; 4-byte Folded Spill
 
-; GCN: buffer_store_dword {{v[0-9]}}, off, s[12:15], s16 offset:{{[0-9]+}}
-; GCN: buffer_store_dword {{v[0-9]}}, off, s[12:15], s16 offset:{{[0-9]+}}
-; GCN: buffer_store_dword {{v[0-9]}}, off, s[12:15], s16 offset:{{[0-9]+}}
-; GCN: buffer_store_dword {{v[0-9]}}, off, s[12:15], s16 offset:{{[0-9]+}}
+; GCNMESA: buffer_store_dword {{v[0-9]}}, off, s[12:15], s3 offset:{{[0-9]+}}
+; GCNMESA: buffer_store_dword {{v[0-9]}}, off, s[12:15], s3 offset:{{[0-9]+}}
+; GCNMESA: buffer_store_dword {{v[0-9]}}, off, s[12:15], s3 offset:{{[0-9]+}}
+; GCNMESA: buffer_store_dword {{v[0-9]}}, off, s[12:15], s3 offset:{{[0-9]+}}
 
-; GCN: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s16 offset:{{[0-9]+}}
-; GCN: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s16 offset:{{[0-9]+}}
-; GCN: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s16 offset:{{[0-9]+}}
-; GCN: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s16 offset:{{[0-9]+}}
+; GCNMESA: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s3 offset:{{[0-9]+}}
+; GCNMESA: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s3 offset:{{[0-9]+}}
+; GCNMESA: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s3 offset:{{[0-9]+}}
+; GCNMESA: buffer_load_dword {{v[0-9]+}}, off, s[12:15], s3 offset:{{[0-9]+}}
+
+
+
+; HSA: buffer_store_dword {{v[0-9]+}}, off, s[0:3], s7 offset:{{[0-9]+}} ; 4-byte Folded Spill
+
+; HSA: buffer_store_dword {{v[0-9]}}, off, s[0:3], s7 offset:{{[0-9]+}}
+; HSA: buffer_store_dword {{v[0-9]}}, off, s[0:3], s7 offset:{{[0-9]+}}
+; HSA: buffer_store_dword {{v[0-9]}}, off, s[0:3], s7 offset:{{[0-9]+}}
+; HSA: buffer_store_dword {{v[0-9]}}, off, s[0:3], s7 offset:{{[0-9]+}}
+
+; HSA: buffer_load_dword {{v[0-9]+}}, off, s[0:3], s7 offset:{{[0-9]+}}
+; HSA: buffer_load_dword {{v[0-9]+}}, off, s[0:3], s7 offset:{{[0-9]+}}
+; HSA: buffer_load_dword {{v[0-9]+}}, off, s[0:3], s7 offset:{{[0-9]+}}
+; HSA: buffer_load_dword {{v[0-9]+}}, off, s[0:3], s7 offset:{{[0-9]+}}
+
 
 ; GCN: NumVgprs: 256
 ; GCN: ScratchSize: 1536
@@ -186,7 +202,7 @@ bb12:                                             ; preds = %bb145, %bb
   %tmp140 = phi float [ 0.000000e+00, %bb ], [ %tmp405, %bb145 ]
   %tmp141 = phi float [ 0.000000e+00, %bb ], [ %tmp406, %bb145 ]
   %tmp142 = bitcast float %tmp95 to i32
-  %tid = call i32 @llvm.r600.read.tidig.x() #1
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() #1
   %tmp143 = icmp sgt i32 %tmp142, %tid
   br i1 %tmp143, label %bb144, label %bb145
 
@@ -593,7 +609,7 @@ bb145:                                            ; preds = %bb12
   br label %bb12
 }
 
-declare i32 @llvm.r600.read.tidig.x() #1
+declare i32 @llvm.amdgcn.workitem.id.x() #1
 
 attributes #0 = { nounwind }
 attributes #1 = { nounwind readnone }

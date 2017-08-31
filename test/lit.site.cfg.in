@@ -24,6 +24,7 @@ config.include_go_tests = @LLVM_INCLUDE_GO_TESTS@
 config.go_executable = "@GO_EXECUTABLE@"
 config.enable_shared = @ENABLE_SHARED@
 config.enable_assertions = @ENABLE_ASSERTIONS@
+config.enable_abi_breaking_checks = "@LLVM_ENABLE_ABI_BREAKING_CHECKS@"
 config.targets_to_build = "@TARGETS_TO_BUILD@"
 config.native_target = "@LLVM_NATIVE_ARCH@"
 config.llvm_bindings = "@LLVM_BINDINGS@".split(' ')
@@ -39,6 +40,7 @@ config.have_libxar = @HAVE_LIBXAR@
 config.have_dia_sdk = @LLVM_ENABLE_DIA_SDK@
 config.enable_ffi = @LLVM_ENABLE_FFI@
 config.build_shared_libs = @BUILD_SHARED_LIBS@
+config.llvm_libxml2_enabled = "@LLVM_LIBXML2_ENABLED@"
 
 # Support substitution of the tools_dir with user parameters. This is
 # used when we can't determine the tool dir at configuration time.

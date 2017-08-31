@@ -23,7 +23,7 @@ MipsMCAsmInfo::MipsMCAsmInfo(const Triple &TheTriple) {
 
   if ((TheTriple.getArch() == Triple::mips64el) ||
       (TheTriple.getArch() == Triple::mips64)) {
-    PointerSize = CalleeSaveStackSlotSize = 8;
+    CodePointerSize = CalleeSaveStackSlotSize = 8;
   }
 
   // FIXME: This condition isn't quite right but it's the best we can do until
@@ -60,5 +60,9 @@ MipsMCAsmInfo::MipsMCAsmInfo(const Triple &TheTriple) {
 
   // Enable IAS by default for Debian mips64/mips64el.
   if (TheTriple.getEnvironment() == Triple::GNUABI64)
+    UseIntegratedAssembler = true;
+
+  // Enable IAS by default for Android mips64el that uses N64 ABI.
+  if (TheTriple.getArch() == Triple::mips64el && TheTriple.isAndroid())
     UseIntegratedAssembler = true;
 }

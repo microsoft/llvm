@@ -21,6 +21,7 @@ using namespace llvm;
 using namespace llvm::xray;
 using llvm::yaml::Input;
 
+namespace {
 using XRayRecordStorage =
     std::aligned_storage<sizeof(XRayRecord), alignof(XRayRecord)>::type;
 
@@ -115,6 +116,7 @@ struct FDRState {
   uint16_t CPUId;
   uint16_t ThreadId;
   uint64_t BaseTSC;
+
   /// Encode some of the state transitions for the FDR log reader as explicit
   /// checks. These are expectations for the next Record in the stream.
   enum class Token {
@@ -123,15 +125,17 @@ struct FDRState {
     NEW_CPU_ID_RECORD,
     FUNCTION_SEQUENCE,
     SCAN_TO_END_OF_THREAD_BUF,
+    CUSTOM_EVENT_DATA,
   };
   Token Expects;
+
   // Each threads buffer may have trailing garbage to scan over, so we track our
   // progress.
   uint64_t CurrentBufferSize;
   uint64_t CurrentBufferConsumed;
 };
 
-Twine fdrStateToTwine(const FDRState::Token &state) {
+const char *fdrStateToTwine(const FDRState::Token &state) {
   switch (state) {
   case FDRState::Token::NEW_BUFFER_RECORD_OR_EOF:
     return "NEW_BUFFER_RECORD_OR_EOF";
@@ -143,6 +147,8 @@ Twine fdrStateToTwine(const FDRState::Token &state) {
     return "FUNCTION_SEQUENCE";
   case FDRState::Token::SCAN_TO_END_OF_THREAD_BUF:
     return "SCAN_TO_END_OF_THREAD_BUF";
+  case FDRState::Token::CUSTOM_EVENT_DATA:
+    return "CUSTOM_EVENT_DATA";
   }
   return "UNKNOWN";
 }
@@ -212,13 +218,32 @@ Error processFDRWallTimeRecord(FDRState &State, uint8_t RecordFirstByte,
   return Error::success();
 }
 
+/// State transition when a CustomEventMarker is encountered.
+Error processCustomEventMarker(FDRState &State, uint8_t RecordFirstByte,
+                               DataExtractor &RecordExtractor,
+                               size_t &RecordSize) {
+  // We can encounter a CustomEventMarker anywhere in the log, so we can handle
+  // it regardless of the expectation. However, we do set the expectation to
+  // read a set number of fixed bytes, as described in the metadata.
+  uint32_t OffsetPtr = 1; // Read after the first byte.
+  uint32_t DataSize = RecordExtractor.getU32(&OffsetPtr);
+  uint64_t TSC = RecordExtractor.getU64(&OffsetPtr);
+
+  // FIXME: Actually represent the record through the API. For now we only skip
+  // through the data.
+  (void)TSC;
+  RecordSize = 16 + DataSize;
+  return Error::success();
+}
+
 /// Advances the state machine for reading the FDR record type by reading one
 /// Metadata Record and updating the State appropriately based on the kind of
 /// record encountered. The RecordKind is encoded in the first byte of the
 /// Record, which the caller should pass in because they have already read it
 /// to determine that this is a metadata record as opposed to a function record.
 Error processFDRMetadataRecord(FDRState &State, uint8_t RecordFirstByte,
-                               DataExtractor &RecordExtractor) {
+                               DataExtractor &RecordExtractor,
+                               size_t &RecordSize) {
   // The remaining 7 bits are the RecordKind enum.
   uint8_t RecordKind = RecordFirstByte >> 1;
   switch (RecordKind) {
@@ -245,6 +270,11 @@ Error processFDRMetadataRecord(FDRState &State, uint8_t RecordFirstByte,
   case 4: // WallTimeMarker
     if (auto E =
             processFDRWallTimeRecord(State, RecordFirstByte, RecordExtractor))
+      return E;
+    break;
+  case 5: // CustomEventMarker
+    if (auto E = processCustomEventMarker(State, RecordFirstByte,
+                                          RecordExtractor, RecordSize))
       return E;
     break;
   default:
@@ -304,7 +334,7 @@ Error processFDRFunctionRecord(FDRState &State, uint8_t RecordFirstByte,
     }
     Record.CPU = State.CPUId;
     Record.TId = State.ThreadId;
-    // Back up to read first 32 bits, including the 8 we pulled RecordType
+    // Back up to read first 32 bits, including the 4 we pulled RecordType
     // and RecordKind out of. The remaining 28 are FunctionId.
     uint32_t OffsetPtr = 0;
     // Despite function Id being a signed int on XRayRecord,
@@ -340,8 +370,9 @@ Error processFDRFunctionRecord(FDRState &State, uint8_t RecordFirstByte,
 /// We expect a format complying with the grammar in the following pseudo-EBNF.
 ///
 /// FDRLog: XRayFileHeader ThreadBuffer*
-/// XRayFileHeader: 32 bits to identify the log as FDR with machine metadata.
-/// ThreadBuffer: BufSize NewBuffer WallClockTime NewCPUId FunctionSequence EOB
+/// XRayFileHeader: 32 bytes to identify the log as FDR with machine metadata.
+///     Includes BufferSize
+/// ThreadBuffer: NewBuffer WallClockTime NewCPUId FunctionSequence EOB
 /// BufSize: 8 byte unsigned integer indicating how large the buffer is.
 /// NewBuffer: 16 byte metadata record with Thread Id.
 /// WallClockTime: 16 byte metadata record with human readable time.
@@ -400,7 +431,8 @@ Error loadFDRLog(StringRef Data, XRayFileHeader &FileHeader,
     bool isMetadataRecord = BitField & 0x01uL;
     if (isMetadataRecord) {
       RecordSize = 16;
-      if (auto E = processFDRMetadataRecord(State, BitField, RecordExtractor))
+      if (auto E = processFDRMetadataRecord(State, BitField, RecordExtractor,
+                                            RecordSize))
         return E;
       State.CurrentBufferConsumed += RecordSize;
     } else { // Process Function Record
@@ -453,6 +485,7 @@ Error loadYAMLLog(StringRef Data, XRayFileHeader &FileHeader,
                  });
   return Error::success();
 }
+} // namespace
 
 Expected<Trace> llvm::xray::loadTraceFile(StringRef Filename, bool Sort) {
   int Fd;

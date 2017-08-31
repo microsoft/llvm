@@ -29,6 +29,7 @@ template <typename T> class ArrayRef;
   class DominatorTree;
   class GEPOperator;
   class Instruction;
+  struct KnownBits;
   class Loop;
   class LoopInfo;
   class OptimizationRemarkEmitter;
@@ -49,31 +50,29 @@ template <typename T> class ArrayRef;
   /// where V is a vector, the known zero and known one values are the
   /// same width as the vector element, and the bit is set only if it is true
   /// for all of the elements in the vector.
-  void computeKnownBits(const Value *V, APInt &KnownZero, APInt &KnownOne,
+  void computeKnownBits(const Value *V, KnownBits &Known,
                         const DataLayout &DL, unsigned Depth = 0,
                         AssumptionCache *AC = nullptr,
                         const Instruction *CxtI = nullptr,
                         const DominatorTree *DT = nullptr,
                         OptimizationRemarkEmitter *ORE = nullptr);
+  /// Returns the known bits rather than passing by reference.
+  KnownBits computeKnownBits(const Value *V, const DataLayout &DL,
+                             unsigned Depth = 0, AssumptionCache *AC = nullptr,
+                             const Instruction *CxtI = nullptr,
+                             const DominatorTree *DT = nullptr,
+                             OptimizationRemarkEmitter *ORE = nullptr);
   /// Compute known bits from the range metadata.
   /// \p KnownZero the set of bits that are known to be zero
   /// \p KnownOne the set of bits that are known to be one
   void computeKnownBitsFromRangeMetadata(const MDNode &Ranges,
-                                         APInt &KnownZero, APInt &KnownOne);
+                                         KnownBits &Known);
   /// Return true if LHS and RHS have no common bits set.
   bool haveNoCommonBitsSet(const Value *LHS, const Value *RHS,
                            const DataLayout &DL,
                            AssumptionCache *AC = nullptr,
                            const Instruction *CxtI = nullptr,
                            const DominatorTree *DT = nullptr);
-
-  /// Determine whether the sign bit is known to be zero or one. Convenience
-  /// wrapper around computeKnownBits.
-  void ComputeSignBit(const Value *V, bool &KnownZero, bool &KnownOne,
-                      const DataLayout &DL, unsigned Depth = 0,
-                      AssumptionCache *AC = nullptr,
-                      const Instruction *CxtI = nullptr,
-                      const DominatorTree *DT = nullptr);
 
   /// Return true if the given value is known to have exactly one bit set when
   /// defined. For vectors return true if every element is known to be a power
@@ -85,6 +84,8 @@ template <typename T> class ArrayRef;
                               AssumptionCache *AC = nullptr,
                               const Instruction *CxtI = nullptr,
                               const DominatorTree *DT = nullptr);
+
+  bool isOnlyUsedInZeroEqualityComparison(const Instruction *CxtI);
 
   /// Return true if the given value is known to be non-zero when defined. For
   /// vectors, return true if every element is known to be non-zero when
@@ -220,9 +221,38 @@ template <typename T> class ArrayRef;
                                             DL);
   }
 
-  /// Returns true if the GEP is based on a pointer to a string (array of i8), 
-  /// and is indexing into this string.
-  bool isGEPBasedOnPointerToString(const GEPOperator *GEP);
+  /// Returns true if the GEP is based on a pointer to a string (array of
+  // \p CharSize integers) and is indexing into this string.
+  bool isGEPBasedOnPointerToString(const GEPOperator *GEP,
+                                   unsigned CharSize = 8);
+
+  /// Represents offset+length into a ConstantDataArray.
+  struct ConstantDataArraySlice {
+    /// ConstantDataArray pointer. nullptr indicates a zeroinitializer (a valid
+    /// initializer, it just doesn't fit the ConstantDataArray interface).
+    const ConstantDataArray *Array;
+    /// Slice starts at this Offset.
+    uint64_t Offset;
+    /// Length of the slice.
+    uint64_t Length;
+
+    /// Moves the Offset and adjusts Length accordingly.
+    void move(uint64_t Delta) {
+      assert(Delta < Length);
+      Offset += Delta;
+      Length -= Delta;
+    }
+    /// Convenience accessor for elements in the slice.
+    uint64_t operator[](unsigned I) const {
+      return Array==nullptr ? 0 : Array->getElementAsInteger(I + Offset);
+    }
+  };
+
+  /// Returns true if the value \p V is a pointer into a ConstantDataArray.
+  /// If successful \p Slice will point to a ConstantDataArray info object
+  /// with an appropriate offset.
+  bool getConstantDataArrayInfo(const Value *V, ConstantDataArraySlice &Slice,
+                                unsigned ElementSize, uint64_t Offset = 0);
 
   /// This function computes the length of a null-terminated C string pointed to
   /// by V. If successful, it returns true and returns the string in Str. If
@@ -235,7 +265,7 @@ template <typename T> class ArrayRef;
 
   /// If we can compute the length of the string pointed to by the specified
   /// pointer, return 'len+1'.  If we can't, return 0.
-  uint64_t GetStringLength(const Value *V);
+  uint64_t GetStringLength(const Value *V, unsigned CharSize = 8);
 
   /// This method strips off any GEP address adjustments and pointer casts from
   /// the specified value, returning the original object being addressed. Note
@@ -281,6 +311,12 @@ template <typename T> class ArrayRef;
   void GetUnderlyingObjects(Value *V, SmallVectorImpl<Value *> &Objects,
                             const DataLayout &DL, LoopInfo *LI = nullptr,
                             unsigned MaxLookup = 6);
+
+  /// This is a wrapper around GetUnderlyingObjects and adds support for basic
+  /// ptrtoint+arithmetic+inttoptr sequences.
+  void getUnderlyingObjectsForCodeGen(const Value *V,
+                            SmallVectorImpl<Value *> &Objects,
+                            const DataLayout &DL);
 
   /// Return true if the only users of this pointer are lifetime markers.
   bool onlyUsedByLifetimeMarkers(const Value *V);
@@ -416,7 +452,7 @@ template <typename T> class ArrayRef;
   ///
   /// Note that this currently only considers the basic block that is
   /// the parent of I.
-  bool isKnownNotFullPoison(const Instruction *PoisonI);
+  bool programUndefinedIfFullPoison(const Instruction *PoisonI);
 
   /// \brief Specific patterns of select instructions we can match.
   enum SelectPatternFlavor {
@@ -492,12 +528,8 @@ template <typename T> class ArrayRef;
   ///  F | T | T
   /// (A)
   Optional<bool> isImpliedCondition(const Value *LHS, const Value *RHS,
-                                    const DataLayout &DL,
-                                    bool InvertAPred = false,
-                                    unsigned Depth = 0,
-                                    AssumptionCache *AC = nullptr,
-                                    const Instruction *CxtI = nullptr,
-                                    const DominatorTree *DT = nullptr);
+                                    const DataLayout &DL, bool LHSIsTrue = true,
+                                    unsigned Depth = 0);
 } // end namespace llvm
 
 #endif

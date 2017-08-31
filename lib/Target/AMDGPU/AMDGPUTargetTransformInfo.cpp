@@ -1,4 +1,4 @@
-//===-- AMDGPUTargetTransformInfo.cpp - AMDGPU specific TTI pass ---------===//
+//===- AMDGPUTargetTransformInfo.cpp - AMDGPU specific TTI pass -----------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -16,15 +16,40 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPUTargetTransformInfo.h"
+#include "AMDGPUSubtarget.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/CodeGen/BasicTTIImpl.h"
+#include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/CodeGen/MachineValueType.h"
+#include "llvm/CodeGen/ValueTypes.h"
+#include "llvm/IR/Argument.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/CallingConv.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/MC/SubtargetFeature.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Target/CostTable.h"
-#include "llvm/Target/TargetLowering.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
+#include <algorithm>
+#include <cassert>
+#include <limits>
+#include <utility>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "AMDGPUtti"
@@ -54,7 +79,7 @@ static bool dependsOnLocalPhi(const Loop *L, const Value *Cond,
     if (!L->contains(I))
       continue;
     if (const PHINode *PHI = dyn_cast<PHINode>(V)) {
-      if (none_of(L->getSubLoops(), [PHI](const Loop* SubLoop) {
+      if (llvm::none_of(L->getSubLoops(), [PHI](const Loop* SubLoop) {
                   return SubLoop->contains(PHI); }))
         return true;
     } else if (Depth < 10 && dependsOnLocalPhi(L, V, Depth+1))
@@ -63,10 +88,10 @@ static bool dependsOnLocalPhi(const Loop *L, const Value *Cond,
   return false;
 }
 
-void AMDGPUTTIImpl::getUnrollingPreferences(Loop *L,
+void AMDGPUTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
                                             TTI::UnrollingPreferences &UP) {
   UP.Threshold = 300; // Twice the default.
-  UP.MaxCount = UINT_MAX;
+  UP.MaxCount = std::numeric_limits<unsigned>::max();
   UP.Partial = true;
 
   // TODO: Do we want runtime unrolling?
@@ -81,12 +106,11 @@ void AMDGPUTTIImpl::getUnrollingPreferences(Loop *L,
     const DataLayout &DL = BB->getModule()->getDataLayout();
     unsigned LocalGEPsSeen = 0;
 
-    if (any_of(L->getSubLoops(), [BB](const Loop* SubLoop) {
+    if (llvm::any_of(L->getSubLoops(), [BB](const Loop* SubLoop) {
                return SubLoop->contains(BB); }))
         continue; // Block belongs to an inner loop.
 
     for (const Instruction &I : *BB) {
-
       // Unroll a loop which contains an "if" statement whose condition
       // defined by a PHI belonging to the loop. This may help to eliminate
       // if region and potentially even PHI itself, saving on both divergence
@@ -153,7 +177,7 @@ void AMDGPUTTIImpl::getUnrollingPreferences(Loop *L,
         if (!Inst || L->isLoopInvariant(Op))
           continue;
 
-        if (any_of(L->getSubLoops(), [Inst](const Loop* SubLoop) {
+        if (llvm::any_of(L->getSubLoops(), [Inst](const Loop* SubLoop) {
              return SubLoop->contains(Inst); }))
           continue;
         HasLoopDef = true;
@@ -184,9 +208,9 @@ void AMDGPUTTIImpl::getUnrollingPreferences(Loop *L,
   }
 }
 
-unsigned AMDGPUTTIImpl::getNumberOfRegisters(bool Vec) {
-  if (Vec)
-    return 0;
+unsigned AMDGPUTTIImpl::getHardwareNumberOfRegisters(bool Vec) const {
+  // The concept of vector registers doesn't really exist. Some packed vector
+  // operations operate on the normal 32-bit registers.
 
   // Number of VGPRs on SI.
   if (ST->getGeneration() >= AMDGPUSubtarget::SOUTHERN_ISLANDS)
@@ -195,8 +219,18 @@ unsigned AMDGPUTTIImpl::getNumberOfRegisters(bool Vec) {
   return 4 * 128; // XXX - 4 channels. Should these count as vector instead?
 }
 
-unsigned AMDGPUTTIImpl::getRegisterBitWidth(bool Vector) {
-  return Vector ? 0 : 32;
+unsigned AMDGPUTTIImpl::getNumberOfRegisters(bool Vec) const {
+  // This is really the number of registers to fill when vectorizing /
+  // interleaving loops, so we lie to avoid trying to use all registers.
+  return getHardwareNumberOfRegisters(Vec) >> 3;
+}
+
+unsigned AMDGPUTTIImpl::getRegisterBitWidth(bool Vector) const {
+  return 32;
+}
+
+unsigned AMDGPUTTIImpl::getMinVectorRegisterBitWidth() const {
+  return 32;
 }
 
 unsigned AMDGPUTTIImpl::getLoadStoreVecRegBitWidth(unsigned AddrSpace) const {
@@ -247,18 +281,17 @@ bool AMDGPUTTIImpl::isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes,
 
 unsigned AMDGPUTTIImpl::getMaxInterleaveFactor(unsigned VF) {
   // Disable unrolling if the loop is not vectorized.
+  // TODO: Enable this again.
   if (VF == 1)
     return 1;
 
-  // Semi-arbitrary large amount.
-  return 64;
+  return 8;
 }
 
 int AMDGPUTTIImpl::getArithmeticInstrCost(
     unsigned Opcode, Type *Ty, TTI::OperandValueKind Opd1Info,
     TTI::OperandValueKind Opd2Info, TTI::OperandValueProperties Opd1PropInfo,
     TTI::OperandValueProperties Opd2PropInfo, ArrayRef<const Value *> Args ) {
-
   EVT OrigTy = TLI->getValueType(DL, Ty);
   if (!OrigTy.isSimple()) {
     return BaseT::getArithmeticInstrCost(Opcode, Ty, Opd1Info, Opd2Info,
@@ -279,25 +312,23 @@ int AMDGPUTTIImpl::getArithmeticInstrCost(
   switch (ISD) {
   case ISD::SHL:
   case ISD::SRL:
-  case ISD::SRA: {
+  case ISD::SRA:
     if (SLT == MVT::i64)
       return get64BitInstrCost() * LT.first * NElts;
 
     // i32
     return getFullRateInstrCost() * LT.first * NElts;
-  }
   case ISD::ADD:
   case ISD::SUB:
   case ISD::AND:
   case ISD::OR:
-  case ISD::XOR: {
+  case ISD::XOR:
     if (SLT == MVT::i64){
       // and, or and xor are typically split into 2 VALU instructions.
       return 2 * getFullRateInstrCost() * LT.first * NElts;
     }
 
     return LT.first * NElts * getFullRateInstrCost();
-  }
   case ISD::MUL: {
     const int QuarterRateCost = getQuarterRateInstrCost();
     if (SLT == MVT::i64) {
@@ -317,14 +348,12 @@ int AMDGPUTTIImpl::getArithmeticInstrCost(
     if (SLT == MVT::f32 || SLT == MVT::f16)
       return LT.first * NElts * getFullRateInstrCost();
     break;
-
   case ISD::FDIV:
   case ISD::FREM:
     // FIXME: frem should be handled separately. The fdiv in it is most of it,
     // but the current lowering is also not entirely correct.
     if (SLT == MVT::f64) {
       int Cost = 4 * get64BitInstrCost() + 7 * getQuarterRateInstrCost();
-
       // Add cost of workaround.
       if (ST->getGeneration() == AMDGPUSubtarget::SOUTHERN_ISLANDS)
         Cost += 3 * getFullRateInstrCost();
@@ -332,13 +361,34 @@ int AMDGPUTTIImpl::getArithmeticInstrCost(
       return LT.first * Cost * NElts;
     }
 
-    // Assuming no fp32 denormals lowering.
-    if (SLT == MVT::f32 || SLT == MVT::f16) {
-      assert(!ST->hasFP32Denormals() && "will change when supported");
-      int Cost = 7 * getFullRateInstrCost() + 1 * getQuarterRateInstrCost();
-      return LT.first * NElts * Cost;
+    if (!Args.empty() && match(Args[0], PatternMatch::m_FPOne())) {
+      // TODO: This is more complicated, unsafe flags etc.
+      if ((SLT == MVT::f32 && !ST->hasFP32Denormals()) ||
+          (SLT == MVT::f16 && ST->has16BitInsts())) {
+        return LT.first * getQuarterRateInstrCost() * NElts;
+      }
     }
 
+    if (SLT == MVT::f16 && ST->has16BitInsts()) {
+      // 2 x v_cvt_f32_f16
+      // f32 rcp
+      // f32 fmul
+      // v_cvt_f16_f32
+      // f16 div_fixup
+      int Cost = 4 * getFullRateInstrCost() + 2 * getQuarterRateInstrCost();
+      return LT.first * Cost * NElts;
+    }
+
+    if (SLT == MVT::f32 || SLT == MVT::f16) {
+      int Cost = 7 * getFullRateInstrCost() + 1 * getQuarterRateInstrCost();
+
+      if (!ST->hasFP32Denormals()) {
+        // FP mode switches.
+        Cost += 2 * getFullRateInstrCost();
+      }
+
+      return LT.first * NElts * Cost;
+    }
     break;
   default:
     break;
@@ -363,13 +413,22 @@ int AMDGPUTTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
                                       unsigned Index) {
   switch (Opcode) {
   case Instruction::ExtractElement:
-  case Instruction::InsertElement:
+  case Instruction::InsertElement: {
+    unsigned EltSize
+      = DL.getTypeSizeInBits(cast<VectorType>(ValTy)->getElementType());
+    if (EltSize < 32) {
+      if (EltSize == 16 && Index == 0 && ST->has16BitInsts())
+        return 0;
+      return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
+    }
+
     // Extracts are just reads of a subregister, so are free. Inserts are
     // considered free because we don't want to have any cost for scalarizing
     // operations, and we don't have to copy into a different register class.
 
     // Dynamic indexing isn't free and is best avoided.
     return Index == ~0u ? 2 : 0;
+  }
   default:
     return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
   }
@@ -426,23 +485,29 @@ static bool isArgPassedInSGPR(const Argument *A) {
   const Function *F = A->getParent();
 
   // Arguments to compute shaders are never a source of divergence.
-  if (!AMDGPU::isShader(F->getCallingConv()))
+  CallingConv::ID CC = F->getCallingConv();
+  switch (CC) {
+  case CallingConv::AMDGPU_KERNEL:
+  case CallingConv::SPIR_KERNEL:
     return true;
-
-  // For non-compute shaders, SGPR inputs are marked with either inreg or byval.
-  if (F->getAttributes().hasAttribute(A->getArgNo() + 1, Attribute::InReg) ||
-      F->getAttributes().hasAttribute(A->getArgNo() + 1, Attribute::ByVal))
-    return true;
-
-  // Everything else is in VGPRs.
-  return false;
+  case CallingConv::AMDGPU_VS:
+  case CallingConv::AMDGPU_HS:
+  case CallingConv::AMDGPU_GS:
+  case CallingConv::AMDGPU_PS:
+  case CallingConv::AMDGPU_CS:
+    // For non-compute shaders, SGPR inputs are marked with either inreg or byval.
+    // Everything else is in VGPRs.
+    return F->getAttributes().hasParamAttribute(A->getArgNo(), Attribute::InReg) ||
+           F->getAttributes().hasParamAttribute(A->getArgNo(), Attribute::ByVal);
+  default:
+    // TODO: Should calls support inreg for SGPR inputs?
+    return false;
+  }
 }
 
-///
 /// \returns true if the result of the value could potentially be
 /// different across workitems in a wavefront.
 bool AMDGPUTTIImpl::isSourceOfDivergence(const Value *V) const {
-
   if (const Argument *A = dyn_cast<Argument>(V))
     return !isArgPassedInSGPR(A);
 
@@ -470,4 +535,53 @@ bool AMDGPUTTIImpl::isSourceOfDivergence(const Value *V) const {
     return true;
 
   return false;
+}
+
+bool AMDGPUTTIImpl::isAlwaysUniform(const Value *V) const {
+  if (const IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(V)) {
+    switch (Intrinsic->getIntrinsicID()) {
+    default:
+      return false;
+    case Intrinsic::amdgcn_readfirstlane:
+    case Intrinsic::amdgcn_readlane:
+      return true;
+    }
+  }
+  return false;
+}
+
+unsigned AMDGPUTTIImpl::getShuffleCost(TTI::ShuffleKind Kind, Type *Tp, int Index,
+                                       Type *SubTp) {
+  if (ST->hasVOP3PInsts()) {
+    VectorType *VT = cast<VectorType>(Tp);
+    if (VT->getNumElements() == 2 &&
+        DL.getTypeSizeInBits(VT->getElementType()) == 16) {
+      // With op_sel VOP3P instructions freely can access the low half or high
+      // half of a register, so any swizzle is free.
+
+      switch (Kind) {
+      case TTI::SK_Broadcast:
+      case TTI::SK_Reverse:
+      case TTI::SK_PermuteSingleSrc:
+        return 0;
+      default:
+        break;
+      }
+    }
+  }
+
+  return BaseT::getShuffleCost(Kind, Tp, Index, SubTp);
+}
+
+bool AMDGPUTTIImpl::areInlineCompatible(const Function *Caller,
+                                        const Function *Callee) const {
+  const TargetMachine &TM = getTLI()->getTargetMachine();
+  const FeatureBitset &CallerBits =
+    TM.getSubtargetImpl(*Caller)->getFeatureBits();
+  const FeatureBitset &CalleeBits =
+    TM.getSubtargetImpl(*Callee)->getFeatureBits();
+
+  FeatureBitset RealCallerBits = CallerBits & ~InlineFeatureIgnoreList;
+  FeatureBitset RealCalleeBits = CalleeBits & ~InlineFeatureIgnoreList;
+  return ((RealCallerBits & RealCalleeBits) == RealCalleeBits);
 }

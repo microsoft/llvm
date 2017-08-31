@@ -1,4 +1,4 @@
-//===-- MipsInstrInfo.cpp - Mips Instruction Information ------------------===//
+//===- MipsInstrInfo.cpp - Mips Instruction Information -------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -12,14 +12,22 @@
 //===----------------------------------------------------------------------===//
 
 #include "MipsInstrInfo.h"
-#include "InstPrinter/MipsInstPrinter.h"
-#include "MipsMachineFunction.h"
+#include "MCTargetDesc/MipsBaseInfo.h"
+#include "MCTargetDesc/MipsMCTargetDesc.h"
 #include "MipsSubtarget.h"
-#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/TargetRegistry.h"
+#include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOpcodes.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
+#include <cassert>
 
 using namespace llvm;
 
@@ -35,9 +43,9 @@ MipsInstrInfo::MipsInstrInfo(const MipsSubtarget &STI, unsigned UncondBr)
 
 const MipsInstrInfo *MipsInstrInfo::create(MipsSubtarget &STI) {
   if (STI.inMips16Mode())
-    return llvm::createMips16InstrInfo(STI);
+    return createMips16InstrInfo(STI);
 
-  return llvm::createMipsSEInstrInfo(STI);
+  return createMipsSEInstrInfo(STI);
 }
 
 bool MipsInstrInfo::isZeroImm(const MachineOperand &op) const {
@@ -80,7 +88,7 @@ void MipsInstrInfo::AnalyzeCondBr(const MachineInstr *Inst, unsigned Opc,
   BB = Inst->getOperand(NumOp-1).getMBB();
   Cond.push_back(MachineOperand::CreateImm(Opc));
 
-  for (int i=0; i<NumOp-1; i++)
+  for (int i = 0; i < NumOp-1; i++)
     Cond.push_back(Inst->getOperand(i));
 }
 
@@ -103,12 +111,9 @@ void MipsInstrInfo::BuildCondBr(MachineBasicBlock &MBB, MachineBasicBlock *TBB,
   MachineInstrBuilder MIB = BuildMI(&MBB, DL, MCID);
 
   for (unsigned i = 1; i < Cond.size(); ++i) {
-    if (Cond[i].isReg())
-      MIB.addReg(Cond[i].getReg());
-    else if (Cond[i].isImm())
-      MIB.addImm(Cond[i].getImm());
-    else
-       assert(false && "Cannot copy operand");
+    assert((Cond[i].isImm() || Cond[i].isReg()) &&
+           "Cannot copy operand for conditional branch!");
+    MIB.add(Cond[i]);
   }
   MIB.addMBB(TBB);
 }
@@ -188,7 +193,6 @@ MipsInstrInfo::BranchType MipsInstrInfo::analyzeBranch(
     MachineBasicBlock &MBB, MachineBasicBlock *&TBB, MachineBasicBlock *&FBB,
     SmallVectorImpl<MachineOperand> &Cond, bool AllowModify,
     SmallVectorImpl<MachineInstr *> &BranchInstrs) const {
-
   MachineBasicBlock::reverse_iterator I = MBB.rbegin(), REnd = MBB.rend();
 
   // Skip all the debug instructions.
@@ -399,7 +403,6 @@ bool MipsInstrInfo::SafeInForbiddenSlot(const MachineInstr &MI) const {
     return false;
 
   return (MI.getDesc().TSFlags & MipsII::IsCTI) == 0;
-
 }
 
 /// Predicate for distingushing instructions that have forbidden slots.
@@ -517,7 +520,7 @@ bool MipsInstrInfo::findCommutedOpIndices(MachineInstr &MI, unsigned &SrcOpIdx1,
   case Mips::DPADD_U_D:
   case Mips::DPADD_S_H:
   case Mips::DPADD_S_W:
-  case Mips::DPADD_S_D: {
+  case Mips::DPADD_S_D:
     // The first operand is both input and output, so it should not commute
     if (!fixCommutedOpIndices(SrcOpIdx1, SrcOpIdx2, 2, 3))
       return false;
@@ -525,7 +528,6 @@ bool MipsInstrInfo::findCommutedOpIndices(MachineInstr &MI, unsigned &SrcOpIdx1,
     if (!MI.getOperand(SrcOpIdx1).isReg() || !MI.getOperand(SrcOpIdx2).isReg())
       return false;
     return true;
-  }
   }
   return TargetInstrInfo::findCommutedOpIndices(MI, SrcOpIdx1, SrcOpIdx2);
 }

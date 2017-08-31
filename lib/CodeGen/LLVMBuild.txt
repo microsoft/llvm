@@ -22,4 +22,5 @@ subdirectories = AsmPrinter SelectionDAG MIRParser GlobalISel TiledAlloc
 type = Library
 name = CodeGen
 parent = Libraries
-required_libraries = Analysis BitReader BitWriter Core MC Scalar Support Target Tiled TransformUtils
+required_libraries = Analysis BitReader BitWriter Core MC ProfileData Scalar Support Target TransformUtils
+

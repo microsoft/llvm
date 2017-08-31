@@ -11,18 +11,18 @@
 #define LLVM_DEBUGINFO_PDB_NATIVE_NATIVEENUMMODULES_H
 
 #include "llvm/DebugInfo/PDB/IPDBEnumChildren.h"
-#include "llvm/DebugInfo/PDB/Native/ModInfo.h"
+#include "llvm/DebugInfo/PDB/Native/DbiModuleDescriptor.h"
 #include "llvm/DebugInfo/PDB/PDBSymbol.h"
 namespace llvm {
 namespace pdb {
 
+class DbiModuleList;
 class NativeSession;
 
 class NativeEnumModules : public IPDBEnumChildren<PDBSymbol> {
 public:
-  explicit NativeEnumModules(NativeSession &Session,
-                             ArrayRef<ModuleInfoEx> Modules,
-                             uint32_t Index = 0);
+  NativeEnumModules(NativeSession &Session, const DbiModuleList &Modules,
+                    uint32_t Index = 0);
 
   uint32_t getChildCount() const override;
   std::unique_ptr<PDBSymbol> getChildAtIndex(uint32_t Index) const override;
@@ -32,7 +32,7 @@ public:
 
 private:
   NativeSession &Session;
-  ArrayRef<ModuleInfoEx> Modules;
+  const DbiModuleList &Modules;
   uint32_t Index;
 };
 }

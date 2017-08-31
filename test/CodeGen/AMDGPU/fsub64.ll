@@ -1,5 +1,5 @@
-; RUN: llc -march=amdgcn -mcpu=tahiti -verify-machineinstrs < %s | FileCheck -check-prefix=SI %s
-; RUN: llc -march=amdgcn -mcpu=tonga -verify-machineinstrs < %s | FileCheck -check-prefix=SI %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=amdgcn -mcpu=tahiti -verify-machineinstrs < %s | FileCheck -check-prefix=SI %s
+; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=amdgcn -mcpu=tonga -verify-machineinstrs < %s | FileCheck -check-prefix=SI %s
 
 declare double @llvm.fabs.f64(double) #0
 
@@ -39,7 +39,7 @@ define amdgpu_kernel void @fsub_fabs_inv_f64(double addrspace(1)* %out, double a
 }
 
 ; SI-LABEL: {{^}}s_fsub_f64:
-; SI: v_add_f64 {{v\[[0-9]+:[0-9]+\], -v\[[0-9]+:[0-9]+\], s\[[0-9]+:[0-9]+\]}}
+; SI: v_add_f64 {{v\[[0-9]+:[0-9]+\], s\[[0-9]+:[0-9]+\], -v\[[0-9]+:[0-9]+\]}}
 define amdgpu_kernel void @s_fsub_f64(double addrspace(1)* %out, double %a, double %b) {
   %sub = fsub double %a, %b
   store double %sub, double addrspace(1)* %out

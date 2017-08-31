@@ -17,6 +17,7 @@
 
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -27,10 +28,9 @@
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombineWorklist.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Support/Dwarf.h"
-#include "llvm/IR/DIBuilder.h"
 
 #define DEBUG_TYPE "instcombine"
 
@@ -39,9 +39,9 @@ class CallSite;
 class DataLayout;
 class DominatorTree;
 class TargetLibraryInfo;
-class DbgDeclareInst;
 class MemIntrinsic;
 class MemSetInst;
+class OptimizationRemarkEmitter;
 
 /// Assign a complexity or rank value to LLVM Values. This is used to reduce
 /// the amount of pattern matching needed for compares and commutative
@@ -72,6 +72,39 @@ static inline unsigned getComplexity(Value *V) {
   return isa<Constant>(V) ? (isa<UndefValue>(V) ? 0 : 1) : 2;
 }
 
+/// Predicate canonicalization reduces the number of patterns that need to be
+/// matched by other transforms. For example, we may swap the operands of a
+/// conditional branch or select to create a compare with a canonical (inverted)
+/// predicate which is then more likely to be matched with other values.
+static inline bool isCanonicalPredicate(CmpInst::Predicate Pred) {
+  switch (Pred) {
+  case CmpInst::ICMP_NE:
+  case CmpInst::ICMP_ULE:
+  case CmpInst::ICMP_SLE:
+  case CmpInst::ICMP_UGE:
+  case CmpInst::ICMP_SGE:
+  // TODO: There are 16 FCMP predicates. Should others be (not) canonical?
+  case CmpInst::FCMP_ONE:
+  case CmpInst::FCMP_OLE:
+  case CmpInst::FCMP_OGE:
+    return false;
+  default:
+    return true;
+  }
+}
+
+/// Return the source operand of a potentially bitcasted value while optionally
+/// checking if it has one use. If there is no bitcast or the one use check is
+/// not met, return the input value itself.
+static inline Value *peekThroughBitcast(Value *V, bool OneUseOnly = false) {
+  if (auto *BitCast = dyn_cast<BitCastInst>(V))
+    if (!OneUseOnly || BitCast->hasOneUse())
+      return BitCast->getOperand(0);
+
+  // V is not a bitcast or V has more than one use and OneUseOnly is true.
+  return V;
+}
+
 /// \brief Add one to a Constant
 static inline Constant *AddOne(Constant *C) {
   return ConstantExpr::getAdd(C, ConstantInt::get(C->getType(), 1));
@@ -96,11 +129,10 @@ static inline bool IsFreeToInvert(Value *V, bool WillInvertAllUses) {
     return true;
 
   // A vector of constant integers can be inverted easily.
-  Constant *CV;
-  if (V->getType()->isVectorTy() && match(V, PatternMatch::m_Constant(CV))) {
+  if (V->getType()->isVectorTy() && isa<Constant>(V)) {
     unsigned NumElts = V->getType()->getVectorNumElements();
     for (unsigned i = 0; i != NumElts; ++i) {
-      Constant *Elt = CV->getAggregateElement(i);
+      Constant *Elt = cast<Constant>(V)->getAggregateElement(i);
       if (!Elt)
         return false;
 
@@ -178,7 +210,7 @@ public:
   /// \brief An IRBuilder that automatically inserts new instructions into the
   /// worklist.
   typedef IRBuilder<TargetFolder, IRBuilderCallbackInserter> BuilderTy;
-  BuilderTy *Builder;
+  BuilderTy &Builder;
 
 private:
   // Mode in which we are running the combiner.
@@ -193,7 +225,8 @@ private:
   TargetLibraryInfo &TLI;
   DominatorTree &DT;
   const DataLayout &DL;
-
+  const SimplifyQuery SQ;
+  OptimizationRemarkEmitter &ORE;
   // Optional analyses. When non-null, these can both be used to do better
   // combining and will be updated to reflect any changes.
   LoopInfo *LI;
@@ -201,13 +234,14 @@ private:
   bool MadeIRChange;
 
 public:
-  InstCombiner(InstCombineWorklist &Worklist, BuilderTy *Builder,
+  InstCombiner(InstCombineWorklist &Worklist, BuilderTy &Builder,
                bool MinimizeSize, bool ExpensiveCombines, AliasAnalysis *AA,
-               AssumptionCache &AC, TargetLibraryInfo &TLI,
-               DominatorTree &DT, const DataLayout &DL, LoopInfo *LI)
+               AssumptionCache &AC, TargetLibraryInfo &TLI, DominatorTree &DT,
+               OptimizationRemarkEmitter &ORE, const DataLayout &DL,
+               LoopInfo *LI)
       : Worklist(Worklist), Builder(Builder), MinimizeSize(MinimizeSize),
         ExpensiveCombines(ExpensiveCombines), AA(AA), AC(AC), TLI(TLI), DT(DT),
-        DL(DL), LI(LI), MadeIRChange(false) {}
+        DL(DL), SQ(DL, &TLI, &DT, &AC), ORE(ORE), LI(LI), MadeIRChange(false) {}
 
   /// \brief Run the combiner over the entire worklist until it is empty.
   ///
@@ -252,15 +286,7 @@ public:
   Instruction *visitSDiv(BinaryOperator &I);
   Instruction *visitFDiv(BinaryOperator &I);
   Value *simplifyRangeCheck(ICmpInst *Cmp0, ICmpInst *Cmp1, bool Inverted);
-  Value *FoldAndOfICmps(ICmpInst *LHS, ICmpInst *RHS);
-  Value *FoldAndOfFCmps(FCmpInst *LHS, FCmpInst *RHS);
   Instruction *visitAnd(BinaryOperator &I);
-  Value *FoldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS, Instruction *CxtI);
-  Value *FoldOrOfFCmps(FCmpInst *LHS, FCmpInst *RHS);
-  Instruction *FoldOrWithConstants(BinaryOperator &I, Value *Op, Value *A,
-                                   Value *B, Value *C);
-  Instruction *FoldXorWithConstants(BinaryOperator &I, Value *Op, Value *A,
-                                    Value *B, Value *C);
   Instruction *visitOr(BinaryOperator &I);
   Instruction *visitXor(BinaryOperator &I);
   Instruction *visitShl(BinaryOperator &I);
@@ -387,15 +413,33 @@ private:
                                  bool DoTransform = true);
 
   Instruction *transformSExtICmp(ICmpInst *ICI, Instruction &CI);
-  bool WillNotOverflowSignedAdd(Value *LHS, Value *RHS, Instruction &CxtI);
-  bool WillNotOverflowSignedSub(Value *LHS, Value *RHS, Instruction &CxtI);
-  bool WillNotOverflowUnsignedSub(Value *LHS, Value *RHS, Instruction &CxtI);
-  bool WillNotOverflowSignedMul(Value *LHS, Value *RHS, Instruction &CxtI);
+  bool willNotOverflowSignedAdd(const Value *LHS, const Value *RHS,
+                                const Instruction &CxtI) const {
+    return computeOverflowForSignedAdd(LHS, RHS, &CxtI) ==
+           OverflowResult::NeverOverflows;
+  };
+  bool willNotOverflowUnsignedAdd(const Value *LHS, const Value *RHS,
+                                  const Instruction &CxtI) const {
+    return computeOverflowForUnsignedAdd(LHS, RHS, &CxtI) ==
+           OverflowResult::NeverOverflows;
+  };
+  bool willNotOverflowSignedSub(const Value *LHS, const Value *RHS,
+                                const Instruction &CxtI) const;
+  bool willNotOverflowUnsignedSub(const Value *LHS, const Value *RHS,
+                                  const Instruction &CxtI) const;
+  bool willNotOverflowSignedMul(const Value *LHS, const Value *RHS,
+                                const Instruction &CxtI) const;
+  bool willNotOverflowUnsignedMul(const Value *LHS, const Value *RHS,
+                                  const Instruction &CxtI) const {
+    return computeOverflowForUnsignedMul(LHS, RHS, &CxtI) ==
+           OverflowResult::NeverOverflows;
+  };
   Value *EmitGEPOffset(User *GEP);
   Instruction *scalarizePHI(ExtractElementInst &EI, PHINode *PN);
   Value *EvaluateInDifferentElementOrder(Value *V, ArrayRef<int> Mask);
   Instruction *foldCastedBitwiseLogic(BinaryOperator &I);
-  Instruction *shrinkBitwiseLogic(TruncInst &Trunc);
+  Instruction *narrowBinOp(TruncInst &Trunc);
+  Instruction *narrowRotate(TruncInst &Trunc);
   Instruction *optimizeBitCastFromPhi(CastInst &CI, PHINode *PN);
 
   /// Determine if a pair of casts can be replaced by a single cast.
@@ -411,6 +455,14 @@ private:
   Instruction::CastOps isEliminableCastPair(const CastInst *CI1,
                                             const CastInst *CI2);
 
+  Value *foldAndOfICmps(ICmpInst *LHS, ICmpInst *RHS, Instruction &CxtI);
+  Value *foldAndOfFCmps(FCmpInst *LHS, FCmpInst *RHS);
+  Value *foldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS, Instruction &CxtI);
+  Value *foldOrOfFCmps(FCmpInst *LHS, FCmpInst *RHS);
+  Value *foldXorOfICmps(ICmpInst *LHS, ICmpInst *RHS);
+
+  Value *foldAndOrOfICmpsOfAndWithPow2(ICmpInst *LHS, ICmpInst *RHS,
+                                       bool JoinedByAnd, Instruction &CxtI);
 public:
   /// \brief Inserts an instruction \p New before instruction \p Old
   ///
@@ -489,32 +541,43 @@ public:
     return nullptr; // Don't do anything with FI
   }
 
-  void computeKnownBits(Value *V, APInt &KnownZero, APInt &KnownOne,
-                        unsigned Depth, Instruction *CxtI) const {
-    return llvm::computeKnownBits(V, KnownZero, KnownOne, DL, Depth, &AC, CxtI,
-                                  &DT);
+  void computeKnownBits(const Value *V, KnownBits &Known,
+                        unsigned Depth, const Instruction *CxtI) const {
+    llvm::computeKnownBits(V, Known, DL, Depth, &AC, CxtI, &DT);
+  }
+  KnownBits computeKnownBits(const Value *V, unsigned Depth,
+                             const Instruction *CxtI) const {
+    return llvm::computeKnownBits(V, DL, Depth, &AC, CxtI, &DT);
   }
 
-  bool MaskedValueIsZero(Value *V, const APInt &Mask, unsigned Depth = 0,
-                         Instruction *CxtI = nullptr) const {
+  bool isKnownToBeAPowerOfTwo(const Value *V, bool OrZero = false,
+                              unsigned Depth = 0,
+                              const Instruction *CxtI = nullptr) {
+    return llvm::isKnownToBeAPowerOfTwo(V, DL, OrZero, Depth, &AC, CxtI, &DT);
+  }
+
+  bool MaskedValueIsZero(const Value *V, const APInt &Mask, unsigned Depth = 0,
+                         const Instruction *CxtI = nullptr) const {
     return llvm::MaskedValueIsZero(V, Mask, DL, Depth, &AC, CxtI, &DT);
   }
-  unsigned ComputeNumSignBits(Value *Op, unsigned Depth = 0,
-                              Instruction *CxtI = nullptr) const {
+  unsigned ComputeNumSignBits(const Value *Op, unsigned Depth = 0,
+                              const Instruction *CxtI = nullptr) const {
     return llvm::ComputeNumSignBits(Op, DL, Depth, &AC, CxtI, &DT);
   }
-  void ComputeSignBit(Value *V, bool &KnownZero, bool &KnownOne,
-                      unsigned Depth = 0, Instruction *CxtI = nullptr) const {
-    return llvm::ComputeSignBit(V, KnownZero, KnownOne, DL, Depth, &AC, CxtI,
-                                &DT);
-  }
-  OverflowResult computeOverflowForUnsignedMul(Value *LHS, Value *RHS,
-                                               const Instruction *CxtI) {
+  OverflowResult computeOverflowForUnsignedMul(const Value *LHS,
+                                               const Value *RHS,
+                                               const Instruction *CxtI) const {
     return llvm::computeOverflowForUnsignedMul(LHS, RHS, DL, &AC, CxtI, &DT);
   }
-  OverflowResult computeOverflowForUnsignedAdd(Value *LHS, Value *RHS,
-                                               const Instruction *CxtI) {
+  OverflowResult computeOverflowForUnsignedAdd(const Value *LHS,
+                                               const Value *RHS,
+                                               const Instruction *CxtI) const {
     return llvm::computeOverflowForUnsignedAdd(LHS, RHS, DL, &AC, CxtI, &DT);
+  }
+  OverflowResult computeOverflowForSignedAdd(const Value *LHS,
+                                             const Value *RHS,
+                                             const Instruction *CxtI) const {
+    return llvm::computeOverflowForSignedAdd(LHS, RHS, DL, &AC, CxtI, &DT);
   }
 
   /// Maximum size of array considered when transforming.
@@ -534,19 +597,39 @@ private:
   /// value, or null if it didn't simplify.
   Value *SimplifyUsingDistributiveLaws(BinaryOperator &I);
 
+  /// This tries to simplify binary operations by factorizing out common terms
+  /// (e. g. "(A*B)+(A*C)" -> "A*(B+C)").
+  Value *tryFactorization(BinaryOperator &, Instruction::BinaryOps, Value *,
+                          Value *, Value *, Value *);
+
+  /// Match a select chain which produces one of three values based on whether
+  /// the LHS is less than, equal to, or greater than RHS respectively.
+  /// Return true if we matched a three way compare idiom. The LHS, RHS, Less,
+  /// Equal and Greater values are saved in the matching process and returned to
+  /// the caller.
+  bool matchThreeWayIntCompare(SelectInst *SI, Value *&LHS, Value *&RHS,
+                               ConstantInt *&Less, ConstantInt *&Equal,
+                               ConstantInt *&Greater);
+
   /// \brief Attempts to replace V with a simpler value based on the demanded
   /// bits.
-  Value *SimplifyDemandedUseBits(Value *V, APInt DemandedMask, APInt &KnownZero,
-                                 APInt &KnownOne, unsigned Depth,
-                                 Instruction *CxtI);
+  Value *SimplifyDemandedUseBits(Value *V, APInt DemandedMask, KnownBits &Known,
+                                 unsigned Depth, Instruction *CxtI);
   bool SimplifyDemandedBits(Instruction *I, unsigned Op,
-                            const APInt &DemandedMask, APInt &KnownZero,
-                            APInt &KnownOne, unsigned Depth = 0);
+                            const APInt &DemandedMask, KnownBits &Known,
+                            unsigned Depth = 0);
+  /// Helper routine of SimplifyDemandedUseBits. It computes KnownZero/KnownOne
+  /// bits. It also tries to handle simplifications that can be done based on
+  /// DemandedMask, but without modifying the Instruction.
+  Value *SimplifyMultipleUseDemandedBits(Instruction *I,
+                                         const APInt &DemandedMask,
+                                         KnownBits &Known,
+                                         unsigned Depth, Instruction *CxtI);
   /// Helper routine of SimplifyDemandedUseBits. It tries to simplify demanded
   /// bit for "r1 = shr x, c1; r2 = shl r1, c2" instruction sequence.
-  Value *SimplifyShrShlDemandedBits(Instruction *Lsr, Instruction *Sftl,
-                                    const APInt &DemandedMask, APInt &KnownZero,
-                                    APInt &KnownOne);
+  Value *simplifyShrShlDemandedBits(
+      Instruction *Shr, const APInt &ShrOp1, Instruction *Shl,
+      const APInt &ShlOp1, const APInt &DemandedMask, KnownBits &Known);
 
   /// \brief Tries to simplify operands to an integer instruction based on its
   /// demanded bits.
@@ -556,13 +639,12 @@ private:
                                     APInt &UndefElts, unsigned Depth = 0);
 
   Value *SimplifyVectorOp(BinaryOperator &Inst);
-  Value *SimplifyBSwap(BinaryOperator &Inst);
 
 
   /// Given a binary operator, cast instruction, or select which has a PHI node
   /// as operand #0, see if we can fold the instruction into the PHI (which is
   /// only possible if all operands to the PHI are constants).
-  Instruction *FoldOpIntoPhi(Instruction &I);
+  Instruction *foldOpIntoPhi(Instruction &I, PHINode *PN);
 
   /// Given an instruction with a select as one operand and a constant as the
   /// other operand, try to fold the binary operator into the select arguments.
@@ -594,7 +676,7 @@ private:
                                             ConstantInt *AndCst = nullptr);
   Instruction *foldFCmpIntToFPConst(FCmpInst &I, Instruction *LHSI,
                                     Constant *RHSC);
-  Instruction *foldICmpAddOpConst(Instruction &ICI, Value *X, ConstantInt *CI,
+  Instruction *foldICmpAddOpConst(Value *X, ConstantInt *CI,
                                   ICmpInst::Predicate Pred);
   Instruction *foldICmpWithCastAndCast(ICmpInst &ICI);
 
@@ -605,7 +687,9 @@ private:
   Instruction *foldICmpBinOp(ICmpInst &Cmp);
   Instruction *foldICmpEquality(ICmpInst &Cmp);
 
-  Instruction *foldICmpTruncConstant(ICmpInst &Cmp, Instruction *Trunc,
+  Instruction *foldICmpSelectConstant(ICmpInst &Cmp, SelectInst *Select,
+                                      ConstantInt *C);
+  Instruction *foldICmpTruncConstant(ICmpInst &Cmp, TruncInst *Trunc,
                                      const APInt *C);
   Instruction *foldICmpAndConstant(ICmpInst &Cmp, BinaryOperator *And,
                                    const APInt *C);
@@ -659,7 +743,8 @@ private:
   Instruction *MatchBSwap(BinaryOperator &I);
   bool SimplifyStoreAtEndOfBlock(StoreInst &SI);
 
-  Instruction *SimplifyElementAtomicMemCpy(ElementAtomicMemCpyInst *AMI);
+  Instruction *
+  SimplifyElementUnorderedAtomicMemCpy(ElementUnorderedAtomicMemCpyInst *AMI);
   Instruction *SimplifyMemTransfer(MemIntrinsic *MI);
   Instruction *SimplifyMemSet(MemSetInst *MI);
 

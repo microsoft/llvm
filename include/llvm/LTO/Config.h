@@ -39,12 +39,15 @@ struct Config {
   std::string CPU;
   TargetOptions Options;
   std::vector<std::string> MAttrs;
-  Reloc::Model RelocModel = Reloc::PIC_;
-  CodeModel::Model CodeModel = CodeModel::Default;
+  Optional<Reloc::Model> RelocModel = Reloc::PIC_;
+  Optional<CodeModel::Model> CodeModel = None;
   CodeGenOpt::Level CGOptLevel = CodeGenOpt::Default;
   TargetMachine::CodeGenFileType CGFileType = TargetMachine::CGFT_ObjectFile;
   unsigned OptLevel = 2;
   bool DisableVerify = false;
+
+  /// Use the new pass manager
+  bool UseNewPM = false;
 
   /// Disable entirely the optimizer, including importing for ThinLTO
   bool CodeGenOnly = false;
@@ -75,6 +78,9 @@ struct Config {
 
   /// Whether to emit optimization remarks with hotness informations.
   bool RemarksWithHotness = false;
+
+  /// Whether to emit the pass manager debuggging informations.
+  bool DebugPassManager = false;
 
   bool ShouldDiscardValueNames = true;
   DiagnosticHandlerFunction DiagHandler;

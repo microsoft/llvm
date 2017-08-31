@@ -13,7 +13,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/IPO.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -23,6 +22,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/TypeFinder.h"
 #include "llvm/Pass.h"
+#include "llvm/Transforms/IPO.h"
 using namespace llvm;
 
 namespace {
@@ -123,7 +123,11 @@ namespace {
             TLI.getLibFunc(F, Tmp))
           continue;
 
-        F.setName(renamer.newName());
+        // Leave @main alone. The output of -metarenamer might be passed to
+        // lli for execution and the latter needs a main entry point.
+        if (Name != "main")
+          F.setName(renamer.newName());
+
         runOnFunction(F);
       }
       return true;

@@ -13,6 +13,7 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/DebugInfo/CodeView/TypeRecord.h"
 #include "llvm/DebugInfo/PDB/Native/RawConstants.h"
+#include "llvm/DebugInfo/PDB/Native/RawTypes.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/BinaryByteStream.h"
 #include "llvm/Support/BinaryItemStream.h"
@@ -57,12 +58,15 @@ public:
 
   Error finalizeMsfLayout();
 
+  uint32_t getRecordCount() const { return TypeRecords.size(); }
+
   Error commit(const msf::MSFLayout &Layout, WritableBinaryStreamRef Buffer);
 
   uint32_t calculateSerializedLength();
 
 private:
   uint32_t calculateHashBufferSize() const;
+  uint32_t calculateIndexOffsetSize() const;
   Error finalize();
 
   msf::MSFBuilder &Msf;
@@ -70,9 +74,10 @@ private:
 
   size_t TypeRecordBytes = 0;
 
-  Optional<PdbRaw_TpiVer> VerHeader;
+  PdbRaw_TpiVer VerHeader = PdbRaw_TpiVer::PdbTpiV80;
   std::vector<ArrayRef<uint8_t>> TypeRecords;
   std::vector<uint32_t> TypeHashes;
+  std::vector<codeview::TypeIndexOffset> TypeIndexOffsets;
   uint32_t HashStreamIndex = kInvalidStreamIndex;
   std::unique_ptr<BinaryByteStream> HashValueStream;
 

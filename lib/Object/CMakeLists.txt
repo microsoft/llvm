@@ -2,6 +2,8 @@ add_llvm_library(LLVMObject
   Archive.cpp
   ArchiveWriter.cpp
   Binary.cpp
+  COFFImportFile.cpp
+  COFFModuleDefinition.cpp
   COFFObjectFile.cpp
   Decompressor.cpp
   ELF.cpp
@@ -11,7 +13,6 @@ add_llvm_library(LLVMObject
   IRSymtab.cpp
   MachOObjectFile.cpp
   MachOUniversal.cpp
-  ModuleSummaryIndexObjectFile.cpp
   ModuleSymbolTable.cpp
   Object.cpp
   ObjectFile.cpp
@@ -19,10 +20,12 @@ add_llvm_library(LLVMObject
   SymbolicFile.cpp
   SymbolSize.cpp
   WasmObjectFile.cpp
+  WindowsResource.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Object
 
   DEPENDS
   intrinsics_gen
+  llvm_vcsrevision_h
   )

@@ -24,10 +24,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "ObjCARC.h"
 #include "ARCRuntimeEntryPoints.h"
 #include "BlotMapVector.h"
 #include "DependencyAnalysis.h"
+#include "ObjCARC.h"
 #include "ProvenanceAnalysis.h"
 #include "PtrState.h"
 #include "llvm/ADT/DenseMap.h"
@@ -2027,7 +2027,8 @@ void ObjCARCOpt::OptimizeReturns(Function &F) {
       continue;
 
     CallInst *Retain = FindPredecessorRetainWithSafePath(
-        Arg, &BB, Autorelease, DependingInstructions, Visited, PA);
+        Arg, Autorelease->getParent(), Autorelease, DependingInstructions,
+        Visited, PA);
     DependingInstructions.clear();
     Visited.clear();
 

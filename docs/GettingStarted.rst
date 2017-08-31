@@ -171,6 +171,8 @@ Linux              PowerPC               GCC, Clang
 Solaris            V9 (Ultrasparc)       GCC
 FreeBSD            x86\ :sup:`1`         GCC, Clang
 FreeBSD            amd64                 GCC, Clang
+NetBSD             x86\ :sup:`1`         GCC, Clang
+NetBSD             amd64                 GCC, Clang
 MacOS X\ :sup:`2`  PowerPC               GCC
 MacOS X            x86                   GCC, Clang
 Cygwin/Win32       x86\ :sup:`1, 3`      GCC
@@ -697,14 +699,14 @@ For developers to work with a git monorepo
 
 .. note::
 
-   This set-up is using unofficial mirror hosted on GitHub, use with caution.
+   This set-up is using an unofficial mirror hosted on GitHub, use with caution.
 
 To set up a clone of all the llvm projects using a unified repository:
 
 .. code-block:: console
 
   % export TOP_LEVEL_DIR=`pwd`
-  % git clone https://github.com/llvm-project/llvm-project/
+  % git clone https://github.com/llvm-project/llvm-project-20170507/ llvm-project
   % cd llvm-project
   % git config branch.master.rebase true
 

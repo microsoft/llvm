@@ -77,20 +77,20 @@ TMModel("thread-model",
                    clEnumValN(ThreadModel::Single, "single",
                               "Single thread model")));
 
-cl::opt<llvm::CodeModel::Model>
-CMModel("code-model",
-        cl::desc("Choose code model"),
-        cl::init(CodeModel::Default),
-        cl::values(clEnumValN(CodeModel::Default, "default",
-                              "Target default code model"),
-                   clEnumValN(CodeModel::Small, "small",
-                              "Small code model"),
-                   clEnumValN(CodeModel::Kernel, "kernel",
-                              "Kernel code model"),
-                   clEnumValN(CodeModel::Medium, "medium",
-                              "Medium code model"),
-                   clEnumValN(CodeModel::Large, "large",
-                              "Large code model")));
+cl::opt<llvm::CodeModel::Model> CMModel(
+    "code-model", cl::desc("Choose code model"),
+    cl::values(clEnumValN(CodeModel::Small, "small", "Small code model"),
+               clEnumValN(CodeModel::Kernel, "kernel", "Kernel code model"),
+               clEnumValN(CodeModel::Medium, "medium", "Medium code model"),
+               clEnumValN(CodeModel::Large, "large", "Large code model")));
+
+static inline Optional<CodeModel::Model> getCodeModel() {
+  if (CMModel.getNumOccurrences()) {
+    CodeModel::Model M = CMModel;
+    return M;
+  }
+  return None;
+}
 
 cl::opt<llvm::ExceptionHandling>
 ExceptionModel("exception-model",
@@ -346,29 +346,21 @@ static inline void setFunctionAttributes(StringRef CPU, StringRef Features,
                                          Module &M) {
   for (auto &F : M) {
     auto &Ctx = F.getContext();
-    AttributeList Attrs = F.getAttributes(), NewAttrs;
+    AttributeList Attrs = F.getAttributes();
+    AttrBuilder NewAttrs;
 
     if (!CPU.empty())
-      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeList::FunctionIndex,
-                                       "target-cpu", CPU);
-
+      NewAttrs.addAttribute("target-cpu", CPU);
     if (!Features.empty())
-      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeList::FunctionIndex,
-                                       "target-features", Features);
-
+      NewAttrs.addAttribute("target-features", Features);
     if (DisableFPElim.getNumOccurrences() > 0)
-      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeList::FunctionIndex,
-                                       "no-frame-pointer-elim",
-                                       DisableFPElim ? "true" : "false");
-
+      NewAttrs.addAttribute("no-frame-pointer-elim",
+                            DisableFPElim ? "true" : "false");
     if (DisableTailCalls.getNumOccurrences() > 0)
-      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeList::FunctionIndex,
-                                       "disable-tail-calls",
-                                       toStringRef(DisableTailCalls));
-
+      NewAttrs.addAttribute("disable-tail-calls",
+                            toStringRef(DisableTailCalls));
     if (StackRealign)
-      NewAttrs = NewAttrs.addAttribute(Ctx, AttributeList::FunctionIndex,
-                                       "stackrealign");
+      NewAttrs.addAttribute("stackrealign");
 
     if (TrapFuncName.getNumOccurrences() > 0)
       for (auto &B : F)
@@ -382,8 +374,8 @@ static inline void setFunctionAttributes(StringRef CPU, StringRef Features,
                     Attribute::get(Ctx, "trap-func-name", TrapFuncName));
 
     // Let NewAttrs override Attrs.
-    NewAttrs = Attrs.addAttributes(Ctx, AttributeList::FunctionIndex, NewAttrs);
-    F.setAttributes(NewAttrs);
+    F.setAttributes(
+        Attrs.addAttributes(Ctx, AttributeList::FunctionIndex, NewAttrs));
   }
 }
 

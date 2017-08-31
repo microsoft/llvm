@@ -11,9 +11,9 @@
 #define LLVM_MC_MCPARSER_MCASMPARSER_H
 
 #include "llvm/ADT/None.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCParser/MCAsmLexer.h"
@@ -67,9 +67,9 @@ public:
 /// assembly parsers.
 class MCAsmParser {
 public:
-  typedef bool (*DirectiveHandler)(MCAsmParserExtension*, StringRef, SMLoc);
-  typedef std::pair<MCAsmParserExtension*, DirectiveHandler>
-    ExtensionDirectiveHandler;
+  using DirectiveHandler = bool (*)(MCAsmParserExtension*, StringRef, SMLoc);
+  using ExtensionDirectiveHandler =
+      std::pair<MCAsmParserExtension*, DirectiveHandler>;
 
   struct MCPendingError {
     SMLoc Loc;

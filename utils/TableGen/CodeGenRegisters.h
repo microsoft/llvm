@@ -72,6 +72,10 @@ namespace llvm {
     mutable LaneBitmask LaneMask;
     mutable SmallVector<MaskRolPair,1> CompositionLaneMaskTransform;
 
+    /// A list of subregister indexes concatenated resulting in this
+    /// subregister index. This is the reverse of CodeGenRegBank::ConcatIdx.
+    SmallVector<CodeGenSubRegIndex*,4> ConcatenationOf;
+
     // Are all super-registers containing this SubRegIndex covered by their
     // sub-registers?
     bool AllSuperRegsCovered;
@@ -122,6 +126,12 @@ namespace llvm {
 
     // Compute LaneMask from Composed. Return LaneMask.
     LaneBitmask computeLaneMask() const;
+
+    void setConcatenationOf(ArrayRef<CodeGenSubRegIndex*> Parts);
+
+    /// Replaces subregister indexes in the `ConcatenationOf` list with
+    /// list of subregisters they are composed of (if any). Do this recursively.
+    void computeConcatTransitiveClosure();
 
   private:
     CompMap Composed;
@@ -308,13 +318,13 @@ namespace llvm {
 
   public:
     unsigned EnumValue;
-    std::string Namespace;
+    StringRef Namespace;
     SmallVector<MVT::SimpleValueType, 4> VTs;
     unsigned SpillSize;
     unsigned SpillAlignment;
     int CopyCost;
     bool Allocatable;
-    std::string AltOrderSelect;
+    StringRef AltOrderSelect;
     uint8_t AllocationPriority;
     /// Contains the combination of the lane masks of all subregisters.
     LaneBitmask LaneMask;
@@ -329,6 +339,9 @@ namespace llvm {
     const std::string &getName() const { return Name; }
     std::string getQualifiedName() const;
     ArrayRef<MVT::SimpleValueType> getValueTypes() const {return VTs;}
+    bool hasValueType(MVT::SimpleValueType VT) const {
+      return std::find(VTs.begin(), VTs.end(), VT) != VTs.end();
+    }
     unsigned getNumValueTypes() const { return VTs.size(); }
 
     MVT::SimpleValueType getValueTypeNum(unsigned VTNum) const {
@@ -360,6 +373,18 @@ namespace llvm {
       return SubClassWithSubReg.lookup(SubIdx);
     }
 
+    /// Find largest subclass where all registers have SubIdx subregisters in
+    /// SubRegClass and the largest subregister class that contains those
+    /// subregisters without (as far as possible) also containing additional registers.
+    ///
+    /// This can be used to find a suitable pair of classes for subregister copies.
+    /// \return std::pair<SubClass, SubRegClass> where SubClass is a SubClass is
+    /// a class where every register has SubIdx and SubRegClass is a class where
+    /// every register is covered by the SubIdx subregister of SubClass.
+    Optional<std::pair<CodeGenRegisterClass *, CodeGenRegisterClass *>>
+    getMatchingSubClassWithSubRegs(CodeGenRegBank &RegBank,
+                                   const CodeGenSubRegIndex *SubIdx) const;
+
     void setSubClassWithSubReg(const CodeGenSubRegIndex *SubIdx,
                                CodeGenRegisterClass *SubRC) {
       SubClassWithSubReg[SubIdx] = SubRC;
@@ -370,7 +395,7 @@ namespace llvm {
     void getSuperRegClasses(const CodeGenSubRegIndex *SubIdx,
                             BitVector &Out) const;
 
-    // addSuperRegClass - Add a class containing only SudIdx super-registers.
+    // addSuperRegClass - Add a class containing only SubIdx super-registers.
     void addSuperRegClass(CodeGenSubRegIndex *SubIdx,
                           CodeGenRegisterClass *SuperRC) {
       SuperRegClasses[SubIdx].insert(SuperRC);
@@ -593,12 +618,6 @@ namespace llvm {
     // non-overlapping sibling indices.
     CodeGenSubRegIndex *
       getConcatSubRegIndex(const SmallVector<CodeGenSubRegIndex *, 8>&);
-
-    void
-    addConcatSubRegIndex(const SmallVector<CodeGenSubRegIndex *, 8> &Parts,
-                         CodeGenSubRegIndex *Idx) {
-      ConcatIdx.insert(std::make_pair(Parts, Idx));
-    }
 
     const std::deque<CodeGenRegister> &getRegisters() { return Registers; }
 

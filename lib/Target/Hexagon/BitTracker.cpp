@@ -1,4 +1,4 @@
-//===--- BitTracker.cpp ---------------------------------------------------===//
+//===- BitTracker.cpp -----------------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -65,13 +65,13 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegisterInfo.h"
-#include <iterator>
 #include <cassert>
 #include <cstdint>
+#include <iterator>
 
 using namespace llvm;
 
-typedef BitTracker BT;
+using BT = BitTracker;
 
 namespace {
 
@@ -347,7 +347,7 @@ uint16_t BT::MachineEvaluator::getRegBitWidth(const RegisterRef &RR) const {
 
   unsigned PhysS = (RR.Sub == 0) ? PhysR : TRI.getSubReg(PhysR, RR.Sub);
   const TargetRegisterClass *RC = TRI.getMinimalPhysRegClass(PhysS);
-  uint16_t BW = RC->getSize()*8;
+  uint16_t BW = TRI.getRegSizeInBits(*RC);
   return BW;
 }
 
@@ -927,7 +927,8 @@ void BT::visitBranchesFrom(const MachineInstr &BI) {
     ++It;
   } while (FallsThrough && It != End);
 
-  typedef MachineBasicBlock::const_succ_iterator succ_iterator;
+  using succ_iterator = MachineBasicBlock::const_succ_iterator;
+
   if (!DefaultToAll) {
     // Need to add all CFG successors that lead to EH landing pads.
     // There won't be explicit branches to these blocks, but they must
@@ -958,7 +959,8 @@ void BT::visitUsesOf(unsigned Reg) {
   if (Trace)
     dbgs() << "visiting uses of " << PrintReg(Reg, &ME.TRI) << "\n";
 
-  typedef MachineRegisterInfo::use_nodbg_iterator use_iterator;
+  using use_iterator = MachineRegisterInfo::use_nodbg_iterator;
+
   use_iterator End = MRI.use_nodbg_end();
   for (use_iterator I = MRI.use_nodbg_begin(Reg); I != End; ++I) {
     MachineInstr *UseI = I->getParent();
@@ -1011,12 +1013,7 @@ void BT::subst(RegisterRef OldRR, RegisterRef NewRR) {
 bool BT::reached(const MachineBasicBlock *B) const {
   int BN = B->getNumber();
   assert(BN >= 0);
-  for (EdgeSetType::iterator I = EdgeExec.begin(), E = EdgeExec.end();
-       I != E; ++I) {
-    if (I->second == BN)
-      return true;
-  }
-  return false;
+  return ReachedBB.count(BN);
 }
 
 // Visit an individual instruction. This could be a newly added instruction,
@@ -1036,13 +1033,16 @@ void BT::reset() {
   EdgeExec.clear();
   InstrExec.clear();
   Map.clear();
+  ReachedBB.clear();
+  ReachedBB.reserve(MF.size());
 }
 
 void BT::run() {
   reset();
   assert(FlowQ.empty());
 
-  typedef GraphTraits<const MachineFunction*> MachineFlowGraphTraits;
+  using MachineFlowGraphTraits = GraphTraits<const MachineFunction*>;
+
   const MachineBasicBlock *Entry = MachineFlowGraphTraits::getEntryNode(&MF);
 
   unsigned MaxBN = 0;
@@ -1068,6 +1068,7 @@ void BT::run() {
     if (EdgeExec.count(Edge))
       continue;
     EdgeExec.insert(Edge);
+    ReachedBB.insert(Edge.second);
 
     const MachineBasicBlock &B = *MF.getBlockNumbered(Edge.second);
     MachineBasicBlock::const_iterator It = B.begin(), End = B.end();

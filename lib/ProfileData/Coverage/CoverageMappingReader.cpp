@@ -1,4 +1,4 @@
-//===- CoverageMappingReader.cpp - Code coverage mapping reader -*- C++ -*-===//
+//===- CoverageMappingReader.cpp - Code coverage mapping reader -----------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -12,23 +12,24 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ProfileData/Coverage/CoverageMappingReader.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h" 
+#include "llvm/ADT/Triple.h"
 #include "llvm/Object/Binary.h"
+#include "llvm/Object/COFF.h"
 #include "llvm/Object/Error.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/ProfileData/Coverage/CoverageMappingReader.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Endian.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -61,7 +62,7 @@ void CoverageMappingIterator::increment() {
 }
 
 Error RawCoverageReader::readULEB128(uint64_t &Result) {
-  if (Data.size() < 1)
+  if (Data.empty())
     return make_error<CoverageMapError>(coveragemap_error::truncated);
   unsigned N = 0;
   Result = decodeULEB128(reinterpret_cast<const uint8_t *>(Data.data()), &N);
@@ -391,9 +392,9 @@ struct CovMapFuncRecordReader {
 // A class for reading coverage mapping function records for a module.
 template <CovMapVersion Version, class IntPtrT, support::endianness Endian>
 class VersionedCovMapFuncRecordReader : public CovMapFuncRecordReader {
-  typedef typename CovMapTraits<
-      Version, IntPtrT>::CovMapFuncRecordType FuncRecordType;
-  typedef typename CovMapTraits<Version, IntPtrT>::NameRefType  NameRefType;
+  using FuncRecordType =
+      typename CovMapTraits<Version, IntPtrT>::CovMapFuncRecordType;
+  using NameRefType = typename CovMapTraits<Version, IntPtrT>::NameRefType;
 
   // Maps function's name references to the indexes of their records
   // in \c Records.
@@ -418,6 +419,8 @@ class VersionedCovMapFuncRecordReader : public CovMapFuncRecordReader {
       StringRef FuncName;
       if (Error Err = CFR->template getFuncName<Endian>(ProfileNames, FuncName))
         return Err;
+      if (FuncName.empty())
+        return make_error<InstrProfError>(instrprof_error::malformed);
       Records.emplace_back(Version, FuncName, FuncHash, Mapping, FilenamesBegin,
                            Filenames.size() - FilenamesBegin);
       return Error::success();
@@ -573,7 +576,7 @@ static Error loadTestingFormat(StringRef Data, InstrProfSymtab &ProfileNames,
   Endian = support::endianness::little;
 
   Data = Data.substr(StringRef(TestingFormatMagic).size());
-  if (Data.size() < 1)
+  if (Data.empty())
     return make_error<CoverageMapError>(coveragemap_error::truncated);
   unsigned N = 0;
   auto ProfileNamesSize =
@@ -581,7 +584,7 @@ static Error loadTestingFormat(StringRef Data, InstrProfSymtab &ProfileNames,
   if (N > Data.size())
     return make_error<CoverageMapError>(coveragemap_error::malformed);
   Data = Data.substr(N);
-  if (Data.size() < 1)
+  if (Data.empty())
     return make_error<CoverageMapError>(coveragemap_error::truncated);
   N = 0;
   uint64_t Address =
@@ -595,7 +598,7 @@ static Error loadTestingFormat(StringRef Data, InstrProfSymtab &ProfileNames,
     return E;
   CoverageMapping = Data.substr(ProfileNamesSize);
   // Skip the padding bytes because coverage map data has an alignment of 8.
-  if (CoverageMapping.size() < 1)
+  if (CoverageMapping.empty())
     return make_error<CoverageMapError>(coveragemap_error::truncated);
   size_t Pad = alignmentAdjustment(CoverageMapping.data(), 8);
   if (CoverageMapping.size() < Pad)
@@ -648,11 +651,15 @@ static Error loadBinaryFormat(MemoryBufferRef ObjectBuffer,
                                 : support::endianness::big;
 
   // Look for the sections that we are interested in.
-  auto NamesSection = lookupSection(*OF, getInstrProfNameSectionName(false));
+  auto ObjFormat = OF->getTripleObjectFormat();
+  auto NamesSection =
+      lookupSection(*OF, getInstrProfSectionName(IPSK_name, ObjFormat,
+                                                 /*AddSegmentInfo=*/false));
   if (auto E = NamesSection.takeError())
     return E;
   auto CoverageSection =
-      lookupSection(*OF, getInstrProfCoverageSectionName(false));
+      lookupSection(*OF, getInstrProfSectionName(IPSK_covmap, ObjFormat,
+                                                 /*AddSegmentInfo=*/false));
   if (auto E = CoverageSection.takeError())
     return E;
 

@@ -14,7 +14,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
-#include "llvm/Transforms/IPO.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
@@ -34,7 +33,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Transforms/IPO.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "functionattrs"
@@ -222,15 +221,11 @@ static bool addReadAttrs(const SCCNodeSet &SCCNodes, AARGetterT &&AARGetter) {
     MadeChange = true;
 
     // Clear out any existing attributes.
-    AttrBuilder B;
-    B.addAttribute(Attribute::ReadOnly).addAttribute(Attribute::ReadNone);
-    F->removeAttributes(
-        AttributeList::FunctionIndex,
-        AttributeList::get(F->getContext(), AttributeList::FunctionIndex, B));
+    F->removeFnAttr(Attribute::ReadOnly);
+    F->removeFnAttr(Attribute::ReadNone);
 
     // Add in the new attribute.
-    F->addAttribute(AttributeList::FunctionIndex,
-                    ReadsMemory ? Attribute::ReadOnly : Attribute::ReadNone);
+    F->addFnAttr(ReadsMemory ? Attribute::ReadOnly : Attribute::ReadNone);
 
     if (ReadsMemory)
       ++NumReadOnly;
@@ -495,9 +490,6 @@ determinePointerReadAttrs(Argument *A,
 static bool addArgumentReturnedAttrs(const SCCNodeSet &SCCNodes) {
   bool Changed = false;
 
-  AttrBuilder B;
-  B.addAttribute(Attribute::Returned);
-
   // Check each function in turn, determining if an argument is always returned.
   for (Function *F : SCCNodes) {
     // We can infer and propagate function attributes only when we know that the
@@ -535,7 +527,7 @@ static bool addArgumentReturnedAttrs(const SCCNodeSet &SCCNodes) {
 
     if (Value *RetArg = FindRetArg()) {
       auto *A = cast<Argument>(RetArg);
-      A->addAttr(AttributeList::get(F->getContext(), A->getArgNo() + 1, B));
+      A->addAttr(Attribute::Returned);
       ++NumReturned;
       Changed = true;
     }
@@ -593,9 +585,6 @@ static bool addArgumentAttrs(const SCCNodeSet &SCCNodes) {
 
   ArgumentGraph AG;
 
-  AttrBuilder B;
-  B.addAttribute(Attribute::NoCapture);
-
   // Check each function in turn, determining which pointer arguments are not
   // captured.
   for (Function *F : SCCNodes) {
@@ -614,7 +603,7 @@ static bool addArgumentAttrs(const SCCNodeSet &SCCNodes) {
       for (Function::arg_iterator A = F->arg_begin(), E = F->arg_end(); A != E;
            ++A) {
         if (A->getType()->isPointerTy() && !A->hasNoCaptureAttr()) {
-          A->addAttr(AttributeList::get(F->getContext(), A->getArgNo() + 1, B));
+          A->addAttr(Attribute::NoCapture);
           ++NumNoCapture;
           Changed = true;
         }
@@ -633,8 +622,7 @@ static bool addArgumentAttrs(const SCCNodeSet &SCCNodes) {
         if (!Tracker.Captured) {
           if (Tracker.Uses.empty()) {
             // If it's trivially not captured, mark it nocapture now.
-            A->addAttr(
-                AttributeList::get(F->getContext(), A->getArgNo() + 1, B));
+            A->addAttr(Attribute::NoCapture);
             ++NumNoCapture;
             Changed = true;
           } else {
@@ -660,9 +648,7 @@ static bool addArgumentAttrs(const SCCNodeSet &SCCNodes) {
         Self.insert(&*A);
         Attribute::AttrKind R = determinePointerReadAttrs(&*A, Self);
         if (R != Attribute::None) {
-          AttrBuilder B;
-          B.addAttribute(R);
-          A->addAttr(AttributeList::get(A->getContext(), A->getArgNo() + 1, B));
+          A->addAttr(R);
           Changed = true;
           R == Attribute::ReadOnly ? ++NumReadOnlyArg : ++NumReadNoneArg;
         }
@@ -687,7 +673,7 @@ static bool addArgumentAttrs(const SCCNodeSet &SCCNodes) {
       if (ArgumentSCC[0]->Uses.size() == 1 &&
           ArgumentSCC[0]->Uses[0] == ArgumentSCC[0]) {
         Argument *A = ArgumentSCC[0]->Definition;
-        A->addAttr(AttributeList::get(A->getContext(), A->getArgNo() + 1, B));
+        A->addAttr(Attribute::NoCapture);
         ++NumNoCapture;
         Changed = true;
       }
@@ -729,7 +715,7 @@ static bool addArgumentAttrs(const SCCNodeSet &SCCNodes) {
 
     for (unsigned i = 0, e = ArgumentSCC.size(); i != e; ++i) {
       Argument *A = ArgumentSCC[i]->Definition;
-      A->addAttr(AttributeList::get(A->getContext(), A->getArgNo() + 1, B));
+      A->addAttr(Attribute::NoCapture);
       ++NumNoCapture;
       Changed = true;
     }
@@ -760,15 +746,12 @@ static bool addArgumentAttrs(const SCCNodeSet &SCCNodes) {
     }
 
     if (ReadAttr != Attribute::None) {
-      AttrBuilder B, R;
-      B.addAttribute(ReadAttr);
-      R.addAttribute(Attribute::ReadOnly).addAttribute(Attribute::ReadNone);
       for (unsigned i = 0, e = ArgumentSCC.size(); i != e; ++i) {
         Argument *A = ArgumentSCC[i]->Definition;
         // Clear out existing readonly/readnone attributes
-        A->removeAttr(
-            AttributeList::get(A->getContext(), A->getArgNo() + 1, R));
-        A->addAttr(AttributeList::get(A->getContext(), A->getArgNo() + 1, B));
+        A->removeAttr(Attribute::ReadOnly);
+        A->removeAttr(Attribute::ReadNone);
+        A->addAttr(ReadAttr);
         ReadAttr == Attribute::ReadOnly ? ++NumReadOnlyArg : ++NumReadNoneArg;
         Changed = true;
       }
@@ -828,7 +811,7 @@ static bool isFunctionMallocLike(Function *F, const SCCNodeSet &SCCNodes) {
       case Instruction::Call:
       case Instruction::Invoke: {
         CallSite CS(RVI);
-        if (CS.paramHasAttr(0, Attribute::NoAlias))
+        if (CS.hasRetAttr(Attribute::NoAlias))
           break;
         if (CS.getCalledFunction() && SCCNodes.count(CS.getCalledFunction()))
           break;
@@ -851,7 +834,7 @@ static bool addNoAliasAttrs(const SCCNodeSet &SCCNodes) {
   // pointers.
   for (Function *F : SCCNodes) {
     // Already noalias.
-    if (F->doesNotAlias(0))
+    if (F->returnDoesNotAlias())
       continue;
 
     // We can infer and propagate function attributes only when we know that the
@@ -871,10 +854,11 @@ static bool addNoAliasAttrs(const SCCNodeSet &SCCNodes) {
 
   bool MadeChange = false;
   for (Function *F : SCCNodes) {
-    if (F->doesNotAlias(0) || !F->getReturnType()->isPointerTy())
+    if (F->returnDoesNotAlias() ||
+        !F->getReturnType()->isPointerTy())
       continue;
 
-    F->setDoesNotAlias(0);
+    F->setReturnDoesNotAlias();
     ++NumNoAlias;
     MadeChange = true;
   }
@@ -1202,6 +1186,10 @@ static bool runImpl(CallGraphSCC &SCC, AARGetterT AARGetter) {
 
     SCCNodes.insert(F);
   }
+
+  // Skip it if the SCC only contains optnone functions.
+  if (SCCNodes.empty())
+    return Changed;
 
   Changed |= addArgumentReturnedAttrs(SCCNodes);
   Changed |= addReadAttrs(SCCNodes, AARGetter);

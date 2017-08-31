@@ -7,6 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+include "ARMSystemRegister.td"
+
 //===----------------------------------------------------------------------===//
 //  Declarations that describe the ARM register file
 //===----------------------------------------------------------------------===//
@@ -49,9 +51,19 @@ def ssub_0  : SubRegIndex<32>;
 def ssub_1  : SubRegIndex<32, 32>;
 def ssub_2  : ComposedSubRegIndex<dsub_1, ssub_0>;
 def ssub_3  : ComposedSubRegIndex<dsub_1, ssub_1>;
+def ssub_4  : ComposedSubRegIndex<dsub_2, ssub_0>;
+def ssub_5  : ComposedSubRegIndex<dsub_2, ssub_1>;
+def ssub_6  : ComposedSubRegIndex<dsub_3, ssub_0>;
+def ssub_7  : ComposedSubRegIndex<dsub_3, ssub_1>;
+def ssub_8  : ComposedSubRegIndex<dsub_4, ssub_0>;
+def ssub_9  : ComposedSubRegIndex<dsub_4, ssub_1>;
+def ssub_10 : ComposedSubRegIndex<dsub_5, ssub_0>;
+def ssub_11 : ComposedSubRegIndex<dsub_5, ssub_1>;
+def ssub_12 : ComposedSubRegIndex<dsub_6, ssub_0>;
+def ssub_13 : ComposedSubRegIndex<dsub_6, ssub_1>;
 
-def gsub_0  : SubRegIndex<32>;
-def gsub_1  : SubRegIndex<32, 32>;
+def gsub_0 : SubRegIndex<32>;
+def gsub_1 : SubRegIndex<32, 32>;
 // Let TableGen synthesize the remaining 12 ssub_* indices.
 // We don't need to name them.
 }
@@ -244,6 +256,10 @@ def rGPR : RegisterClass<"ARM", [i32], 32, (sub GPR, SP, PC)> {
 // Thumb registers are R0-R7 normally. Some instructions can still use
 // the general GPR register class above (MOV, e.g.)
 def tGPR : RegisterClass<"ARM", [i32], 32, (trunc GPR, 8)>;
+
+// Thumb registers R0-R7 and the PC. Some instructions like TBB or THH allow
+// the PC to be used as a destination operand as well.
+def tGPRwithpc : RegisterClass<"ARM", [i32], 32, (add tGPR, PC)>;
 
 // The high registers in thumb mode, R8-R15.
 def hGPR : RegisterClass<"ARM", [i32], 32, (sub GPR, tGPR)>;

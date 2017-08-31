@@ -87,10 +87,28 @@ Some important things to remember about fuzz targets:
 * Usually, the narrower the target the better. E.g. if your target can parse several data formats, split it into several targets, one per format.
 
 
-Building
---------
+Fuzzer Usage
+------------
 
-Next, build the libFuzzer library as a static archive, without any sanitizer
+Very recent versions of Clang (after April 20 2017) include libFuzzer,
+and no installation is necessary.
+In order to fuzz your binary, use the `-fsanitize=fuzzer` flag during the compilation::
+
+   clang -fsanitize=fuzzer,address mytarget.c
+
+This will perform the necessary instrumentation, as well as linking in libFuzzer
+library.
+Note that linking in libFuzzer defines the ``main`` symbol.
+If modifying ``CFLAGS`` of a large project, which also compiles executables
+requiring their own ``main`` symbol, it may be desirable to request just the
+instrumentation without linking::
+
+   clang -fsanitize=fuzzer-no-link mytarget.c
+
+Then libFuzzer can be linked to the desired driver by passing in
+``-fsanitize=fuzzer`` during the linking stage.
+
+Otherwise, build the libFuzzer library as a static archive, without any sanitizer
 options. Note that the libFuzzer library contains the ``main()`` function:
 
 .. code-block:: console
@@ -335,6 +353,9 @@ possible event codes are:
 ``NEW``
   The fuzzer has created a test input that covers new areas of the code
   under test.  This input will be saved to the primary corpus directory.
+``REDUCE``
+  The fuzzer has found a better (smaller) input that triggers previously
+  discovered features (set ``-reduce_inputs=0`` to disable).
 ``pulse``
   The fuzzer has generated 2\ :sup:`n` inputs (generated periodically to reassure
   the user that the fuzzer is still working).
@@ -533,21 +554,12 @@ How good is my fuzzer?
 Once you implement your target function ``LLVMFuzzerTestOneInput`` and fuzz it to death,
 you will want to know whether the function or the corpus can be improved further.
 One easy to use metric is, of course, code coverage.
-You can get the coverage for your corpus like this:
 
-.. code-block:: console
+We recommend to use
+`Clang Coverage <http://clang.llvm.org/docs/SourceBasedCodeCoverage.html>`_,
+to visualize and study your code coverage
+(`example <https://github.com/google/fuzzer-test-suite/blob/master/tutorial/libFuzzerTutorial.md#visualizing-coverage>`_).
 
-  ASAN_OPTIONS=coverage=1 ./fuzzer CORPUS_DIR -runs=0
-
-This will run all tests in the CORPUS_DIR but will not perform any fuzzing.
-At the end of the process it will dump a single ``.sancov`` file with coverage 
-information.  See SanitizerCoverage_ for details on querying the file using the
-``sancov`` tool.
-
-You may also use other ways to visualize coverage,
-e.g. using `Clang coverage <http://clang.llvm.org/docs/SourceBasedCodeCoverage.html>`_,
-but those will require
-you to rebuild the code with different compiler flags.
 
 User-supplied mutators
 ----------------------
@@ -570,7 +582,7 @@ The simplest way is to have a statically initialized global object inside
 
 Alternatively, you may define an optional init function and it will receive
 the program arguments that you can read and modify. Do this **only** if you
-realy need to access ``argv``/``argc``.
+really need to access ``argv``/``argc``.
 
 .. code-block:: c++
 
@@ -604,12 +616,14 @@ you will eventually run out of RAM (see the ``-rss_limit_mb`` flag).
 Developing libFuzzer
 ====================
 
-Building libFuzzer as a part of LLVM project and running its test requires
-fresh clang as the host compiler and special CMake configuration:
+LibFuzzer is built as a part of LLVM project by default on macos and Linux.
+Users of other operating systems can explicitly request compilation using
+``-DLIBFUZZER_ENABLE=YES`` flag.
+Tests are run using ``check-fuzzer`` target from the build directory
+which was configured with ``-DLIBFUZZER_ENABLE_TESTS=ON`` flag.
 
 .. code-block:: console
 
-    cmake -GNinja  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_USE_SANITIZER=Address -DLLVM_USE_SANITIZE_COVERAGE=YES -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON /path/to/llvm
     ninja check-fuzzer
 
 
@@ -728,6 +742,7 @@ to crash on invalid inputs.
 Examples: regular expression matchers, text or binary format parsers, compression,
 network, crypto.
 
+
 Trophies
 ========
 * GLIBC: https://sourceware.org/glibc/wiki/FuzzingLibc
@@ -771,6 +786,8 @@ Trophies
 * Tensorflow: `[1] <https://da-data.blogspot.com/2017/01/finding-bugs-in-tensorflow-with.html>`__
 
 * Ffmpeg: `[1] <https://github.com/FFmpeg/FFmpeg/commit/c92f55847a3d9cd12db60bfcd0831ff7f089c37c>`__  `[2] <https://github.com/FFmpeg/FFmpeg/commit/25ab1a65f3acb5ec67b53fb7a2463a7368f1ad16>`__  `[3] <https://github.com/FFmpeg/FFmpeg/commit/85d23e5cbc9ad6835eef870a5b4247de78febe56>`__ `[4] <https://github.com/FFmpeg/FFmpeg/commit/04bd1b38ee6b8df410d0ab8d4949546b6c4af26a>`__
+
+* `Wireshark <https://bugs.wireshark.org/bugzilla/buglist.cgi?bug_status=UNCONFIRMED&bug_status=CONFIRMED&bug_status=IN_PROGRESS&bug_status=INCOMPLETE&bug_status=RESOLVED&bug_status=VERIFIED&f0=OP&f1=OP&f2=product&f3=component&f4=alias&f5=short_desc&f7=content&f8=CP&f9=CP&j1=OR&o2=substring&o3=substring&o4=substring&o5=substring&o6=substring&o7=matches&order=bug_id%20DESC&query_format=advanced&v2=libfuzzer&v3=libfuzzer&v4=libfuzzer&v5=libfuzzer&v6=libfuzzer&v7=%22libfuzzer%22>`_
 
 .. _pcre2: http://www.pcre.org/
 .. _AFL: http://lcamtuf.coredump.cx/afl/

@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_DEBUGINFO_PDB_IPDBSYMBOL_H
-#define LLVM_DEBUGINFO_PDB_IPDBSYMBOL_H
+#ifndef LLVM_DEBUGINFO_PDB_PDBSYMBOL_H
+#define LLVM_DEBUGINFO_PDB_PDBSYMBOL_H
 
 #include "ConcreteSymbolEnumerator.h"
 #include "IPDBRawSymbol.h"
@@ -62,6 +62,7 @@ class PDBSymbol {
 protected:
   PDBSymbol(const IPDBSession &PDBSession,
             std::unique_ptr<IPDBRawSymbol> Symbol);
+  PDBSymbol(PDBSymbol &Symbol);
 
 public:
   static std::unique_ptr<PDBSymbol>
@@ -88,13 +89,9 @@ public:
 
   template <typename T> std::unique_ptr<T> findOneChild() const {
     auto Enumerator(findAllChildren<T>());
+    if (!Enumerator)
+      return nullptr;
     return Enumerator->getNext();
-  }
-
-  template <typename T> T *cast() { return llvm::dyn_cast<T>(this); }
-
-  template <typename T> const T *cast() const {
-    return llvm::dyn_cast<T>(this);
   }
 
   std::unique_ptr<PDBSymbol> clone() const;
@@ -102,6 +99,8 @@ public:
   template <typename T>
   std::unique_ptr<ConcreteSymbolEnumerator<T>> findAllChildren() const {
     auto BaseIter = RawSymbol->findChildren(T::Tag);
+    if (!BaseIter)
+      return nullptr;
     return llvm::make_unique<ConcreteSymbolEnumerator<T>>(std::move(BaseIter));
   }
   std::unique_ptr<IPDBEnumSymbols> findAllChildren(PDB_SymType Type) const;
@@ -128,18 +127,11 @@ protected:
 
   template <typename ConcreteType>
   std::unique_ptr<ConcreteType> getConcreteSymbolByIdHelper(uint32_t Id) const {
-    auto Sym = getSymbolByIdHelper(Id);
-    if (!Sym)
-      return nullptr;
-    ConcreteType *Result = Sym->cast<ConcreteType>();
-    if (!Result)
-      return nullptr;
-    Sym.release();
-    return std::unique_ptr<ConcreteType>(Result);
+    return unique_dyn_cast_or_null<ConcreteType>(getSymbolByIdHelper(Id));
   }
 
   const IPDBSession &Session;
-  const std::unique_ptr<IPDBRawSymbol> RawSymbol;
+  std::unique_ptr<IPDBRawSymbol> RawSymbol;
 };
 
 } // namespace llvm

@@ -345,12 +345,12 @@ bool TargetInstrInfo::getStackSlotRange(const TargetRegisterClass *RC,
                                         unsigned SubIdx, unsigned &Size,
                                         unsigned &Offset,
                                         const MachineFunction &MF) const {
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   if (!SubIdx) {
-    Size = RC->getSize();
+    Size = TRI->getSpillSize(*RC);
     Offset = 0;
     return true;
   }
-  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   unsigned BitSize = TRI->getSubRegIdxSize(SubIdx);
   // Convert bit size to byte size to be consistent with
   // MCRegisterClass::getSize().
@@ -364,10 +364,10 @@ bool TargetInstrInfo::getStackSlotRange(const TargetRegisterClass *RC,
   Size = BitSize /= 8;
   Offset = (unsigned)BitOffset / 8;
 
-  assert(RC->getSize() >= (Offset + Size) && "bad subregister range");
+  assert(TRI->getSpillSize(*RC) >= (Offset + Size) && "bad subregister range");
 
   if (!MF.getDataLayout().isLittleEndian()) {
-    Offset = RC->getSize() - (Offset + Size);
+    Offset = TRI->getSpillSize(*RC) - (Offset + Size);
   }
   return true;
 }
@@ -388,10 +388,11 @@ bool TargetInstrInfo::produceSameValue(const MachineInstr &MI0,
   return MI0.isIdenticalTo(MI1, MachineInstr::IgnoreVRegDefs);
 }
 
-MachineInstr *TargetInstrInfo::duplicate(MachineInstr &Orig,
-                                         MachineFunction &MF) const {
+MachineInstr &TargetInstrInfo::duplicate(MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator InsertBefore, const MachineInstr &Orig) const {
   assert(!Orig.isNotDuplicable() && "Instruction cannot be duplicated");
-  return MF.CloneMachineInstr(&Orig);
+  MachineFunction &MF = *MBB.getParent();
+  return MF.CloneMachineInstrBundle(MBB, InsertBefore, Orig);
 }
 
 // If the COPY instruction in MI can be folded to a stack operation, return
@@ -428,8 +429,8 @@ static const TargetRegisterClass *canFoldCopy(const MachineInstr &MI,
   return nullptr;
 }
 
-void TargetInstrInfo::getNoopForMachoTarget(MCInst &NopInst) const {
-  llvm_unreachable("Not a MachO target");
+void TargetInstrInfo::getNoop(MCInst &NopInst) const {
+  llvm_unreachable("Not implemented");
 }
 
 static MachineInstr *foldPatchpoint(MachineFunction &MF, MachineInstr &MI,
@@ -941,12 +942,10 @@ int TargetInstrInfo::getSPAdjust(const MachineInstr &MI) const {
   unsigned FrameSetupOpcode = getCallFrameSetupOpcode();
   unsigned FrameDestroyOpcode = getCallFrameDestroyOpcode();
 
-  if (MI.getOpcode() != FrameSetupOpcode &&
-      MI.getOpcode() != FrameDestroyOpcode)
+  if (!isFrameInstr(MI))
     return 0;
 
-  int SPAdj = MI.getOperand(0).getImm();
-  SPAdj = TFI->alignSPAdjust(SPAdj);
+  int SPAdj = TFI->alignSPAdjust(getFrameSize(MI));
 
   if ((!StackGrowsDown && MI.getOpcode() == FrameSetupOpcode) ||
       (StackGrowsDown && MI.getOpcode() == FrameDestroyOpcode))

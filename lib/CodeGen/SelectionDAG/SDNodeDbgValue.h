@@ -20,7 +20,8 @@
 
 namespace llvm {
 
-class MDNode;
+class DIVariable;
+class DIExpression;
 class SDNode;
 class Value;
 
@@ -43,9 +44,8 @@ private:
     const Value *Const;     // valid for constants
     unsigned FrameIx;       // valid for stack objects
   } u;
-  MDNode *Var;
-  MDNode *Expr;
-  uint64_t Offset;
+  DIVariable *Var;
+  DIExpression *Expr;
   DebugLoc DL;
   unsigned Order;
   enum DbgValueKind kind;
@@ -54,29 +54,26 @@ private:
 
 public:
   // Constructor for non-constants.
-  SDDbgValue(MDNode *Var, MDNode *Expr, SDNode *N, unsigned R, bool indir,
-             uint64_t off, DebugLoc dl, unsigned O)
-      : Var(Var), Expr(Expr), Offset(off), DL(std::move(dl)), Order(O),
-        IsIndirect(indir) {
+  SDDbgValue(DIVariable *Var, DIExpression *Expr, SDNode *N, unsigned R,
+             bool indir, DebugLoc dl, unsigned O)
+      : Var(Var), Expr(Expr), DL(std::move(dl)), Order(O), IsIndirect(indir) {
     kind = SDNODE;
     u.s.Node = N;
     u.s.ResNo = R;
   }
 
   // Constructor for constants.
-  SDDbgValue(MDNode *Var, MDNode *Expr, const Value *C, uint64_t off,
-             DebugLoc dl, unsigned O)
-      : Var(Var), Expr(Expr), Offset(off), DL(std::move(dl)), Order(O),
-        IsIndirect(false) {
+  SDDbgValue(DIVariable *Var, DIExpression *Expr, const Value *C, DebugLoc dl,
+             unsigned O)
+      : Var(Var), Expr(Expr), DL(std::move(dl)), Order(O), IsIndirect(false) {
     kind = CONST;
     u.Const = C;
   }
 
   // Constructor for frame indices.
-  SDDbgValue(MDNode *Var, MDNode *Expr, unsigned FI, uint64_t off, DebugLoc dl,
+  SDDbgValue(DIVariable *Var, DIExpression *Expr, unsigned FI, DebugLoc dl,
              unsigned O)
-      : Var(Var), Expr(Expr), Offset(off), DL(std::move(dl)), Order(O),
-        IsIndirect(false) {
+      : Var(Var), Expr(Expr), DL(std::move(dl)), Order(O), IsIndirect(false) {
     kind = FRAMEIX;
     u.FrameIx = FI;
   }
@@ -84,11 +81,11 @@ public:
   // Returns the kind.
   DbgValueKind getKind() const { return kind; }
 
-  // Returns the MDNode pointer for the variable.
-  MDNode *getVariable() const { return Var; }
+  // Returns the DIVariable pointer for the variable.
+  DIVariable *getVariable() const { return Var; }
 
-  // Returns the MDNode pointer for the expression.
-  MDNode *getExpression() const { return Expr; }
+  // Returns the DIExpression pointer for the expression.
+  DIExpression *getExpression() const { return Expr; }
 
   // Returns the SDNode* for a register ref
   SDNode *getSDNode() const { assert (kind==SDNODE); return u.s.Node; }
@@ -104,9 +101,6 @@ public:
 
   // Returns whether this is an indirect value.
   bool isIndirect() const { return IsIndirect; }
-
-  // Returns the offset.
-  uint64_t getOffset() const { return Offset; }
 
   // Returns the DebugLoc.
   DebugLoc getDebugLoc() const { return DL; }

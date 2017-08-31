@@ -7,11 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/MC/StringTableBuilder.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/MC/StringTableBuilder.h"
-#include "llvm/Support/COFF.h"
+#include "llvm/BinaryFormat/COFF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -58,7 +58,7 @@ void StringTableBuilder::write(raw_ostream &OS) const {
   OS << Data;
 }
 
-typedef std::pair<CachedHashStringRef, size_t> StringPair;
+using StringPair = std::pair<CachedHashStringRef, size_t>;
 
 void StringTableBuilder::write(uint8_t *Buf) const {
   assert(isFinalized());

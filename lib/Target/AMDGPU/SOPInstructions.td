@@ -82,6 +82,12 @@ class SOP1_0_32 <string opName, list<dag> pattern = []> : SOP1_Pseudo <
   let has_sdst = 0;
 }
 
+class SOP1_0_32R <string opName, list<dag> pattern = []> : SOP1_Pseudo <
+  opName, (outs), (ins SReg_32:$src0),
+  "$src0", pattern> {
+  let has_sdst = 0;
+}
+
 class SOP1_64 <string opName, list<dag> pattern=[]> : SOP1_Pseudo <
   opName, (outs SReg_64:$sdst), (ins SSrc_b64:$src0),
   "$sdst, $src0", pattern
@@ -178,13 +184,27 @@ def S_BITSET0_B32 : SOP1_32    <"s_bitset0_b32">;
 def S_BITSET0_B64 : SOP1_64_32 <"s_bitset0_b64">;
 def S_BITSET1_B32 : SOP1_32    <"s_bitset1_b32">;
 def S_BITSET1_B64 : SOP1_64_32 <"s_bitset1_b64">;
-def S_GETPC_B64 : SOP1_64_0  <"s_getpc_b64">;
+def S_GETPC_B64 : SOP1_64_0  <"s_getpc_b64",
+  [(set i64:$sdst, (int_amdgcn_s_getpc))]
+>;
 
-let isTerminator = 1, isBarrier = 1,
-    isBranch = 1, isIndirectBranch = 1 in {
+let isTerminator = 1, isBarrier = 1, SchedRW = [WriteBranch] in {
+
+let isBranch = 1, isIndirectBranch = 1 in {
 def S_SETPC_B64 : SOP1_1  <"s_setpc_b64">;
+} // End isBranch = 1, isIndirectBranch = 1
+
+let isReturn = 1 in {
+// Define variant marked as return rather than branch.
+def S_SETPC_B64_return : SOP1_1<"", [(AMDGPUret_flag i64:$src0)]>;
 }
-def S_SWAPPC_B64 : SOP1_64 <"s_swappc_b64">;
+} // End isTerminator = 1, isBarrier = 1
+
+let isCall = 1 in {
+def S_SWAPPC_B64 : SOP1_64 <"s_swappc_b64"
+>;
+}
+
 def S_RFE_B64 : SOP1_1  <"s_rfe_b64">;
 
 let hasSideEffects = 1, Uses = [EXEC], Defs = [EXEC, SCC] in {
@@ -210,7 +230,7 @@ def S_MOVRELD_B32 : SOP1_32 <"s_movreld_b32">;
 def S_MOVRELD_B64 : SOP1_64 <"s_movreld_b64">;
 } // End Uses = [M0]
 
-def S_CBRANCH_JOIN : SOP1_1  <"s_cbranch_join">;
+def S_CBRANCH_JOIN : SOP1_0_32R <"s_cbranch_join">;
 def S_MOV_REGRD_B32 : SOP1_32 <"s_mov_regrd_b32">;
 let Defs = [SCC] in {
 def S_ABS_I32 : SOP1_32 <"s_abs_i32">;
@@ -428,7 +448,7 @@ def S_BFE_I64 : SOP2_64_32 <"s_bfe_i64">;
 
 def S_CBRANCH_G_FORK : SOP2_Pseudo <
   "s_cbranch_g_fork", (outs),
-  (ins SReg_64:$src0, SReg_64:$src1),
+  (ins SCSrc_b64:$src0, SCSrc_b64:$src1),
   "$src0, $src1"
 > {
   let has_sdst = 0;
@@ -437,6 +457,17 @@ def S_CBRANCH_G_FORK : SOP2_Pseudo <
 let Defs = [SCC] in {
 def S_ABSDIFF_I32 : SOP2_32 <"s_absdiff_i32">;
 } // End Defs = [SCC]
+
+let SubtargetPredicate = isVI in {
+  def S_RFE_RESTORE_B64 : SOP2_Pseudo <
+    "s_rfe_restore_b64", (outs),
+    (ins SSrc_b64:$src0, SSrc_b32:$src1),
+    "$src0, $src1"
+  > {
+    let hasSideEffects = 1;
+    let has_sdst = 0;
+  }
+}
 
 let SubtargetPredicate = isGFX9 in {
   def S_PACK_LL_B32_B16 : SOP2_32<"s_pack_ll_b32_b16">;
@@ -513,14 +544,16 @@ class SOPKInstTable <bit is_sopk, string cmpOp = ""> {
 class SOPK_32 <string opName, list<dag> pattern=[]> : SOPK_Pseudo <
   opName,
   (outs SReg_32:$sdst),
-  (ins u16imm:$simm16),
+  (ins s16imm:$simm16),
   "$sdst, $simm16",
   pattern>;
 
-class SOPK_SCC <string opName, string base_op = ""> : SOPK_Pseudo <
+class SOPK_SCC <string opName, string base_op, bit isSignExt> : SOPK_Pseudo <
   opName,
   (outs),
-  (ins SReg_32:$sdst, u16imm:$simm16),
+  !if(isSignExt,
+      (ins SReg_32:$sdst, s16imm:$simm16),
+      (ins SReg_32:$sdst, u16imm:$simm16)),
   "$sdst, $simm16", []>,
   SOPKInstTable<1, base_op>{
   let Defs = [SCC];
@@ -529,7 +562,7 @@ class SOPK_SCC <string opName, string base_op = ""> : SOPK_Pseudo <
 class SOPK_32TIE <string opName, list<dag> pattern=[]> : SOPK_Pseudo <
   opName,
   (outs SReg_32:$sdst),
-  (ins SReg_32:$src0, u16imm:$simm16),
+  (ins SReg_32:$src0, s16imm:$simm16),
   "$sdst, $simm16",
   pattern
 >;
@@ -558,20 +591,20 @@ let isCompare = 1 in {
 //   [(set i1:$dst, (setcc i32:$src0, imm:$src1, SETEQ))]
 // >;
 
-def S_CMPK_EQ_I32 : SOPK_SCC <"s_cmpk_eq_i32", "s_cmp_eq_i32">;
-def S_CMPK_LG_I32 : SOPK_SCC <"s_cmpk_lg_i32", "s_cmp_lg_i32">;
-def S_CMPK_GT_I32 : SOPK_SCC <"s_cmpk_gt_i32", "s_cmp_gt_i32">;
-def S_CMPK_GE_I32 : SOPK_SCC <"s_cmpk_ge_i32", "s_cmp_ge_i32">;
-def S_CMPK_LT_I32 : SOPK_SCC <"s_cmpk_lt_i32", "s_cmp_lt_i32">;
-def S_CMPK_LE_I32 : SOPK_SCC <"s_cmpk_le_i32", "s_cmp_le_i32">;
+def S_CMPK_EQ_I32 : SOPK_SCC <"s_cmpk_eq_i32", "s_cmp_eq_i32", 1>;
+def S_CMPK_LG_I32 : SOPK_SCC <"s_cmpk_lg_i32", "s_cmp_lg_i32", 1>;
+def S_CMPK_GT_I32 : SOPK_SCC <"s_cmpk_gt_i32", "s_cmp_gt_i32", 1>;
+def S_CMPK_GE_I32 : SOPK_SCC <"s_cmpk_ge_i32", "s_cmp_ge_i32", 1>;
+def S_CMPK_LT_I32 : SOPK_SCC <"s_cmpk_lt_i32", "s_cmp_lt_i32", 1>;
+def S_CMPK_LE_I32 : SOPK_SCC <"s_cmpk_le_i32", "s_cmp_le_i32", 1>;
 
 let SOPKZext = 1 in {
-def S_CMPK_EQ_U32 : SOPK_SCC <"s_cmpk_eq_u32", "s_cmp_eq_u32">;
-def S_CMPK_LG_U32 : SOPK_SCC <"s_cmpk_lg_u32", "s_cmp_lg_u32">;
-def S_CMPK_GT_U32 : SOPK_SCC <"s_cmpk_gt_u32", "s_cmp_gt_u32">;
-def S_CMPK_GE_U32 : SOPK_SCC <"s_cmpk_ge_u32", "s_cmp_ge_u32">;
-def S_CMPK_LT_U32 : SOPK_SCC <"s_cmpk_lt_u32", "s_cmp_lt_u32">;
-def S_CMPK_LE_U32 : SOPK_SCC <"s_cmpk_le_u32", "s_cmp_le_u32">;
+def S_CMPK_EQ_U32 : SOPK_SCC <"s_cmpk_eq_u32", "s_cmp_eq_u32", 0>;
+def S_CMPK_LG_U32 : SOPK_SCC <"s_cmpk_lg_u32", "s_cmp_lg_u32", 0>;
+def S_CMPK_GT_U32 : SOPK_SCC <"s_cmpk_gt_u32", "s_cmp_gt_u32", 0>;
+def S_CMPK_GE_U32 : SOPK_SCC <"s_cmpk_ge_u32", "s_cmp_ge_u32", 0>;
+def S_CMPK_LT_U32 : SOPK_SCC <"s_cmpk_lt_u32", "s_cmp_lt_u32", 0>;
+def S_CMPK_LE_U32 : SOPK_SCC <"s_cmpk_le_u32", "s_cmp_le_u32", 0>;
 } // End SOPKZext = 1
 } // End isCompare = 1
 
@@ -583,7 +616,7 @@ let Defs = [SCC], isCommutable = 1, DisableEncoding = "$src0",
 
 def S_CBRANCH_I_FORK : SOPK_Pseudo <
   "s_cbranch_i_fork",
-  (outs), (ins SReg_64:$sdst, u16imm:$simm16),
+  (outs), (ins SReg_64:$sdst, s16imm:$simm16),
   "$sdst, $simm16"
 >;
 
@@ -756,6 +789,14 @@ def S_ENDPGM : SOPP <0x00000001, (ins), "s_endpgm",
   let isReturn = 1;
 }
 
+let SubtargetPredicate = isVI in {
+def S_ENDPGM_SAVED : SOPP <0x0000001B, (ins), "s_endpgm_saved"> {
+  let simm16 = 0;
+  let isBarrier = 1;
+  let isReturn = 1;
+}
+}
+
 let isBranch = 1, SchedRW = [WriteBranch] in {
 def S_BRANCH : SOPP <
   0x00000002, (ins sopp_brtarget:$simm16), "s_branch $simm16",
@@ -828,6 +869,14 @@ def S_BARRIER : SOPP <0x0000000a, (ins), "s_barrier",
   let mayLoad = 1;
   let mayStore = 1;
   let isConvergent = 1;
+}
+
+let SubtargetPredicate = isVI in {
+def S_WAKEUP : SOPP <0x00000003, (ins), "s_wakeup"> {
+  let simm16 = 0;
+  let mayLoad = 1;
+  let mayStore = 1;
+}
 }
 
 let mayLoad = 1, mayStore = 1, hasSideEffects = 1 in
@@ -1235,6 +1284,7 @@ def S_ABSDIFF_I32_vi       : SOP2_Real_vi <0x2a, S_ABSDIFF_I32>;
 def S_PACK_LL_B32_B16_vi   : SOP2_Real_vi <0x32, S_PACK_LL_B32_B16>;
 def S_PACK_LH_B32_B16_vi   : SOP2_Real_vi <0x33, S_PACK_LH_B32_B16>;
 def S_PACK_HH_B32_B16_vi   : SOP2_Real_vi <0x34, S_PACK_HH_B32_B16>;
+def S_RFE_RESTORE_B64_vi   : SOP2_Real_vi <0x2b, S_RFE_RESTORE_B64>;
 
 def S_MOVK_I32_vi          : SOPK_Real_vi <0x00, S_MOVK_I32>;
 def S_CMOVK_I32_vi         : SOPK_Real_vi <0x01, S_CMOVK_I32>;

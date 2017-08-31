@@ -7,8 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/FormatAdapters.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/FormatAdapters.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -542,6 +542,8 @@ TEST(FormatVariadicTest, Adapter) {
 
   EXPECT_EQ("  171  ",
             formatv("{0}", fmt_align(N, AlignStyle::Center, 7)).str());
+  EXPECT_EQ("--171--",
+            formatv("{0}", fmt_align(N, AlignStyle::Center, 7, '-')).str());
   EXPECT_EQ(" 171   ", formatv("{0}", fmt_pad(N, 1, 3)).str());
   EXPECT_EQ("171171171171171", formatv("{0}", fmt_repeat(N, 5)).str());
 
@@ -551,6 +553,12 @@ TEST(FormatVariadicTest, Adapter) {
             formatv("{0,=34:X-}", fmt_repeat(fmt_pad(N, 1, 3), 5)).str());
 }
 
+TEST(FormatVariadicTest, MoveConstructor) {
+  auto fmt = formatv("{0} {1}", 1, 2);
+  auto fmt2 = std::move(fmt);
+  std::string S = fmt2;
+  EXPECT_EQ("1 2", S);
+}
 TEST(FormatVariadicTest, ImplicitConversions) {
   std::string S = formatv("{0} {1}", 1, 2);
   EXPECT_EQ("1 2", S);

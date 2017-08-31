@@ -1,4 +1,4 @@
-//===---------------------- GCNRegPressure.h -*- C++ -*--------------------===//
+//===- GCNRegPressure.h -----------------------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -6,19 +6,25 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-/// \file
-//
-//===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_AMDGPU_GCNREGPRESSURE_H
 #define LLVM_LIB_TARGET_AMDGPU_GCNREGPRESSURE_H
 
 #include "AMDGPUSubtarget.h"
-
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/CodeGen/LiveIntervalAnalysis.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/MC/LaneBitmask.h"
+#include "llvm/Support/Debug.h"
+#include <algorithm>
 #include <limits>
 
 namespace llvm {
+
+class MachineRegisterInfo;
+class raw_ostream;
 
 struct GCNRegPressure {
   enum RegKind {
@@ -33,19 +39,19 @@ struct GCNRegPressure {
     clear();
   }
 
-  bool empty() const { return getSGRPNum() == 0 && getVGRPNum() == 0; }
+  bool empty() const { return getSGPRNum() == 0 && getVGPRNum() == 0; }
 
   void clear() { std::fill(&Value[0], &Value[TOTAL_KINDS], 0); }
 
-  unsigned getSGRPNum() const { return Value[SGPR32]; }
-  unsigned getVGRPNum() const { return Value[VGPR32]; }
+  unsigned getSGPRNum() const { return Value[SGPR32]; }
+  unsigned getVGPRNum() const { return Value[VGPR32]; }
 
   unsigned getVGPRTuplesWeight() const { return Value[VGPR_TUPLE]; }
   unsigned getSGPRTuplesWeight() const { return Value[SGPR_TUPLE]; }
 
   unsigned getOccupancy(const SISubtarget &ST) const {
-    return std::min(ST.getOccupancyWithNumSGPRs(getSGRPNum()),
-                    ST.getOccupancyWithNumVGPRs(getVGRPNum()));
+    return std::min(ST.getOccupancyWithNumSGPRs(getSGPRNum()),
+                    ST.getOccupancyWithNumVGPRs(getVGPRNum()));
   }
 
   void inc(unsigned Reg,
@@ -68,7 +74,7 @@ struct GCNRegPressure {
     return !(*this == O);
   }
 
-  void print(raw_ostream &OS, const SISubtarget *ST=nullptr) const;
+  void print(raw_ostream &OS, const SISubtarget *ST = nullptr) const;
   void dump() const { print(dbgs()); }
 
 private:
@@ -89,18 +95,23 @@ inline GCNRegPressure max(const GCNRegPressure &P1, const GCNRegPressure &P2) {
 
 class GCNRPTracker {
 public:
-  typedef DenseMap<unsigned, LaneBitmask> LiveRegSet;
+  using LiveRegSet = DenseMap<unsigned, LaneBitmask>;
 
 protected:
+  const LiveIntervals &LIS;
   LiveRegSet LiveRegs;
   GCNRegPressure CurPressure, MaxPressure;
   const MachineInstr *LastTrackedMI = nullptr;
   mutable const MachineRegisterInfo *MRI = nullptr;
-  GCNRPTracker() {}
+
+  GCNRPTracker(const LiveIntervals &LIS_) : LIS(LIS_) {}
+
 public:
   // live regs for the current state
   const decltype(LiveRegs) &getLiveRegs() const { return LiveRegs; }
   const MachineInstr *getLastTrackedMI() const { return LastTrackedMI; }
+
+  void clearMaxPressure() { MaxPressure.clear(); }
 
   // returns MaxPressure, resetting it
   decltype(MaxPressure) moveMaxPressure() {
@@ -108,20 +119,22 @@ public:
     MaxPressure.clear();
     return Res;
   }
+
   decltype(LiveRegs) moveLiveRegs() {
     return std::move(LiveRegs);
   }
+
+  static void printLiveRegs(raw_ostream &OS, const LiveRegSet& LiveRegs,
+                            const MachineRegisterInfo &MRI);
 };
 
 class GCNUpwardRPTracker : public GCNRPTracker {
-  const LiveIntervals &LIS;
-  LaneBitmask getDefRegMask(const MachineOperand &MO) const;
-  LaneBitmask getUsedRegMask(const MachineOperand &MO) const;
 public:
-  GCNUpwardRPTracker(const LiveIntervals &LIS_) : LIS(LIS_) {}
+  GCNUpwardRPTracker(const LiveIntervals &LIS_) : GCNRPTracker(LIS_) {}
+
   // reset tracker to the point just below MI
   // filling live regs upon this point using LIS
-  void reset(const MachineInstr &MI);
+  void reset(const MachineInstr &MI, const LiveRegSet *LiveRegs = nullptr);
 
   // move to the state just above the MI
   void recede(const MachineInstr &MI);
@@ -129,6 +142,41 @@ public:
   // checks whether the tracker's state after receding MI corresponds
   // to reported by LIS
   bool isValid() const;
+};
+
+class GCNDownwardRPTracker : public GCNRPTracker {
+  // Last position of reset or advanceBeforeNext
+  MachineBasicBlock::const_iterator NextMI;
+
+  MachineBasicBlock::const_iterator MBBEnd;
+
+public:
+  GCNDownwardRPTracker(const LiveIntervals &LIS_) : GCNRPTracker(LIS_) {}
+
+  const MachineBasicBlock::const_iterator getNext() const { return NextMI; }
+
+  // Reset tracker to the point before the MI
+  // filling live regs upon this point using LIS.
+  // Returns false if block is empty except debug values.
+  bool reset(const MachineInstr &MI, const LiveRegSet *LiveRegs = nullptr);
+
+  // Move to the state right before the next MI. Returns false if reached
+  // end of the block.
+  bool advanceBeforeNext();
+
+  // Move to the state at the MI, advanceBeforeNext has to be called first.
+  void advanceToNext();
+
+  // Move to the state at the next MI. Returns false if reached end of block.
+  bool advance();
+
+  // Advance instructions until before End.
+  bool advance(MachineBasicBlock::const_iterator End);
+
+  // Reset to Begin and advance to End.
+  bool advance(MachineBasicBlock::const_iterator Begin,
+               MachineBasicBlock::const_iterator End,
+               const LiveRegSet *LiveRegsCopy = nullptr);
 };
 
 LaneBitmask getLiveLaneMask(unsigned Reg,
@@ -165,6 +213,6 @@ void printLivesAt(SlotIndex SI,
                   const LiveIntervals &LIS,
                   const MachineRegisterInfo &MRI);
 
-} // End namespace llvm
+} // end namespace llvm
 
 #endif // LLVM_LIB_TARGET_AMDGPU_GCNREGPRESSURE_H

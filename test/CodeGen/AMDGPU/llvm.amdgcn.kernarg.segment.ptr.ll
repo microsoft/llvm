@@ -2,6 +2,8 @@
 ; RUN: llc -mtriple=amdgcn--amdhsa-opencl -mcpu=kaveri -verify-machineinstrs < %s | FileCheck -check-prefixes=CO-V2,HSA,ALL,HSA-OPENCL %s
 ; RUN: llc -mtriple=amdgcn-mesa-mesa3d -verify-machineinstrs < %s | FileCheck -check-prefixes=CO-V2,OS-MESA3D,MESA,ALL %s
 ; RUN: llc -mtriple=amdgcn-mesa-unknown -verify-machineinstrs < %s | FileCheck -check-prefixes=OS-UNKNOWN,MESA,ALL %s
+; RUN: llc -mtriple=amdgcn--amdhsa-amdgiz -mcpu=kaveri -verify-machineinstrs < %s | FileCheck -check-prefixes=CO-V2,HSA,ALL,HSA-NOENV %s
+; RUN: llc -mtriple=amdgcn--amdhsa-amdgizcl -mcpu=kaveri -verify-machineinstrs < %s | FileCheck -check-prefixes=CO-V2,HSA,ALL,HSA-OPENCL %s
 
 ; ALL-LABEL: {{^}}test:
 ; CO-V2: enable_sgpr_kernarg_segment_ptr = 1
@@ -44,6 +46,18 @@ define amdgpu_kernel void @test_implicit_alignment(i32 addrspace(1)* %out, <2 x 
   %arg.ptr = bitcast i8 addrspace(2)* %implicitarg.ptr to i32 addrspace(2)*
   %val = load i32, i32 addrspace(2)* %arg.ptr
   store i32 %val, i32 addrspace(1)* %out
+  ret void
+}
+
+; ALL-LABEL: {{^}}test_no_kernargs:
+; HSA: enable_sgpr_kernarg_segment_ptr = 1
+; HSA: s_load_dword s{{[0-9]+}}, s[4:5]
+define amdgpu_kernel void @test_no_kernargs() #1 {
+  %kernarg.segment.ptr = call noalias i8 addrspace(2)* @llvm.amdgcn.kernarg.segment.ptr()
+  %header.ptr = bitcast i8 addrspace(2)* %kernarg.segment.ptr to i32 addrspace(2)*
+  %gep = getelementptr i32, i32 addrspace(2)* %header.ptr, i64 10
+  %value = load i32, i32 addrspace(2)* %gep
+  store volatile i32 %value, i32 addrspace(1)* undef
   ret void
 }
 

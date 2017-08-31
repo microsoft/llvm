@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -22,6 +21,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
@@ -32,7 +32,7 @@
 #include <vector>
 using namespace llvm;
 
-#define DEBUG_TYPE "stackslotcoloring"
+#define DEBUG_TYPE "stack-slot-coloring"
 
 static cl::opt<bool>
 DisableSharing("no-stack-slot-sharing",
@@ -116,12 +116,12 @@ namespace {
 char StackSlotColoring::ID = 0;
 char &llvm::StackSlotColoringID = StackSlotColoring::ID;
 
-INITIALIZE_PASS_BEGIN(StackSlotColoring, "stack-slot-coloring",
+INITIALIZE_PASS_BEGIN(StackSlotColoring, DEBUG_TYPE,
                 "Stack Slot Coloring", false, false)
 INITIALIZE_PASS_DEPENDENCY(SlotIndexes)
 INITIALIZE_PASS_DEPENDENCY(LiveStacks)
 INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
-INITIALIZE_PASS_END(StackSlotColoring, "stack-slot-coloring",
+INITIALIZE_PASS_END(StackSlotColoring, DEBUG_TYPE,
                 "Stack Slot Coloring", false, false)
 
 namespace {
@@ -233,6 +233,8 @@ StackSlotColoring::OverlapWithAssignments(LiveInterval *li, int Color) const {
 int StackSlotColoring::ColorSlot(LiveInterval *li) {
   int Color = -1;
   bool Share = false;
+  int FI = TargetRegisterInfo::stackSlot2Index(li->reg);
+
   if (!DisableSharing) {
     // Check if it's possible to reuse any of the used colors.
     Color = UsedColors.find_first();
@@ -246,6 +248,11 @@ int StackSlotColoring::ColorSlot(LiveInterval *li) {
     }
   }
 
+  if (Color != -1 && MFI->getStackID(Color) != MFI->getStackID(FI)) {
+    DEBUG(dbgs() << "cannot share FIs with different stack IDs\n");
+    Share = false;
+  }
+
   // Assign it to the first available color (assumed to be the best) if it's
   // not possible to share a used color with other objects.
   if (!Share) {
@@ -257,7 +264,6 @@ int StackSlotColoring::ColorSlot(LiveInterval *li) {
 
   // Record the assignment.
   Assignments[Color].push_back(li);
-  int FI = TargetRegisterInfo::stackSlot2Index(li->reg);
   DEBUG(dbgs() << "Assigning fi#" << FI << " to fi#" << Color << "\n");
 
   // Change size and alignment of the allocated slot. If there are multiple

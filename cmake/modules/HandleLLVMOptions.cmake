@@ -17,6 +17,9 @@ else()
   set(LINKER_IS_LLD_LINK FALSE)
 endif()
 
+set(LLVM_ENABLE_LTO OFF CACHE STRING "Build LLVM with LTO. May be specified as Thin or Full to use a particular kind of LTO")
+string(TOUPPER "${LLVM_ENABLE_LTO}" uppercase_LLVM_ENABLE_LTO)
+
 # Ninja Job Pool support
 # The following only works with the Ninja generator in CMake >= 3.0.
 set(LLVM_PARALLEL_COMPILE_JOBS "" CACHE STRING
@@ -32,15 +35,18 @@ endif()
 
 set(LLVM_PARALLEL_LINK_JOBS "" CACHE STRING
   "Define the maximum number of concurrent link jobs.")
-if(LLVM_PARALLEL_LINK_JOBS)
-  if(NOT CMAKE_MAKE_PROGRAM MATCHES "ninja")
-    message(WARNING "Job pooling is only available with Ninja generators.")
-  else()
+if(CMAKE_MAKE_PROGRAM MATCHES "ninja")
+  if(NOT LLVM_PARALLEL_LINK_JOBS AND uppercase_LLVM_ENABLE_LTO STREQUAL "THIN")
+    message(STATUS "ThinLTO provides its own parallel linking - limiting parallel link jobs to 2.")
+    set(LLVM_PARALLEL_LINK_JOBS "2")
+  endif()
+  if(LLVM_PARALLEL_LINK_JOBS)
     set_property(GLOBAL APPEND PROPERTY JOB_POOLS link_job_pool=${LLVM_PARALLEL_LINK_JOBS})
     set(CMAKE_JOB_POOL_LINK link_job_pool)
   endif()
+elseif(LLVM_PARALLEL_LINK_JOBS)
+  message(WARNING "Job pooling is only available with Ninja generators.")
 endif()
-
 
 if (LINKER_IS_LLD_LINK)
   # Pass /MANIFEST:NO so that CMake doesn't run mt.exe on our binaries.  Adding
@@ -93,6 +99,10 @@ elseif( NOT DEFINED LLVM_ABI_BREAKING_CHECKS )
   # defined.
 else()
   message(FATAL_ERROR "Unknown value for LLVM_ABI_BREAKING_CHECKS: \"${LLVM_ABI_BREAKING_CHECKS}\"!")
+endif()
+
+if( LLVM_REVERSE_ITERATION )
+  set( LLVM_ENABLE_REVERSE_ITERATION 1 )
 endif()
 
 if(WIN32)
@@ -221,6 +231,13 @@ if( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
     set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -m32")
   endif( LLVM_BUILD_32_BITS )
 endif( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
+
+# If building on a GNU specific 32-bit system, make sure off_t is 64 bits
+# so that off_t can stored offset > 2GB
+if( CMAKE_SIZEOF_VOID_P EQUAL 4 )
+  add_definitions( -D_LARGEFILE_SOURCE )
+  add_definitions( -D_FILE_OFFSET_BITS=64 )
+endif()
 
 if( XCODE )
   # For Xcode enable several build settings that correspond to
@@ -364,10 +381,15 @@ if( MSVC )
 
 elseif( LLVM_COMPILER_IS_GCC_COMPATIBLE )
   append_if(LLVM_ENABLE_WERROR "-Werror" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+  append_if(LLVM_ENABLE_WERROR "-Wno-error" CMAKE_REQUIRED_FLAGS)
   add_flag_if_supported("-Werror=date-time" WERROR_DATE_TIME)
+  add_flag_if_supported("-Werror=unguarded-availability-new" WERROR_UNGUARDED_AVAILABILITY_NEW)
   if (LLVM_ENABLE_CXX1Y)
     check_cxx_compiler_flag("-std=c++1y" CXX_SUPPORTS_CXX1Y)
     append_if(CXX_SUPPORTS_CXX1Y "-std=c++1y" CMAKE_CXX_FLAGS)
+  elseif(LLVM_ENABLE_CXX1Z)
+    check_cxx_compiler_flag("-std=c++1z" CXX_SUPPORTS_CXX1Z)
+    append_if(CXX_SUPPORTS_CXX1Z "-std=c++1z" CMAKE_CXX_FLAGS)
   else()
     check_cxx_compiler_flag("-std=c++11" CXX_SUPPORTS_CXX11)
     if (CXX_SUPPORTS_CXX11)
@@ -561,6 +583,10 @@ if (LLVM_ENABLE_WARNINGS AND (LLVM_COMPILER_IS_GCC_COMPATIBLE OR CLANG_CL))
   add_flag_if_supported("-Wstring-conversion" STRING_CONVERSION_FLAG)
 endif (LLVM_ENABLE_WARNINGS AND (LLVM_COMPILER_IS_GCC_COMPATIBLE OR CLANG_CL))
 
+if (LLVM_COMPILER_IS_GCC_COMPATIBLE AND NOT LLVM_ENABLE_WARNINGS)
+  append("-w" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+endif()
+
 macro(append_common_sanitizer_flags)
   if (NOT MSVC)
     # Append -fno-omit-frame-pointer and turn on debug info to get better
@@ -618,6 +644,9 @@ if(LLVM_USE_SANITIZER)
       append_common_sanitizer_flags()
       append("-fsanitize=address,undefined -fno-sanitize=vptr,function -fno-sanitize-recover=all"
               CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+    elseif (LLVM_USE_SANITIZER STREQUAL "Leaks")
+      append_common_sanitizer_flags()
+      append("-fsanitize=leak" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
     else()
       message(FATAL_ERROR "Unsupported value of LLVM_USE_SANITIZER: ${LLVM_USE_SANITIZER}")
     endif()
@@ -636,7 +665,7 @@ if(LLVM_USE_SANITIZER)
                           FSANITIZE_USE_AFTER_SCOPE_FLAG)
   endif()
   if (LLVM_USE_SANITIZE_COVERAGE)
-    append("-fsanitize-coverage=trace-pc-guard,indirect-calls,trace-cmp" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+    append("-fsanitize=fuzzer-no-link" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
   endif()
 endif()
 
@@ -659,8 +688,8 @@ endif()
 # lld doesn't print colored diagnostics when invoked from Ninja
 if (UNIX AND CMAKE_GENERATOR STREQUAL "Ninja")
   include(CheckLinkerFlag)
-  check_linker_flag("-Wl,-color-diagnostics" LINKER_SUPPORTS_COLOR_DIAGNOSTICS)
-  append_if(LINKER_SUPPORTS_COLOR_DIAGNOSTICS "-Wl,-color-diagnostics"
+  check_linker_flag("-Wl,--color-diagnostics" LINKER_SUPPORTS_COLOR_DIAGNOSTICS)
+  append_if(LINKER_SUPPORTS_COLOR_DIAGNOSTICS "-Wl,--color-diagnostics"
     CMAKE_EXE_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS)
 endif()
 
@@ -713,8 +742,6 @@ append_if(LLVM_BUILD_INSTRUMENTED_COVERAGE "-fprofile-instr-generate='${LLVM_PRO
   CMAKE_EXE_LINKER_FLAGS
   CMAKE_SHARED_LINKER_FLAGS)
 
-set(LLVM_ENABLE_LTO OFF CACHE STRING "Build LLVM with LTO. May be specified as Thin or Full to use a particular kind of LTO")
-string(TOUPPER "${LLVM_ENABLE_LTO}" uppercase_LLVM_ENABLE_LTO)
 if(LLVM_ENABLE_LTO AND LLVM_ON_WIN32 AND NOT LINKER_IS_LLD_LINK)
   message(FATAL_ERROR "When compiling for Windows, LLVM_ENABLE_LTO requires using lld as the linker (point CMAKE_LINKER at lld-link.exe)")
 endif()
@@ -765,7 +792,7 @@ endif()
 # Plugin support
 # FIXME: Make this configurable.
 if(WIN32 OR CYGWIN)
-  if(BUILD_SHARED_LIBS)
+  if(BUILD_SHARED_LIBS OR LLVM_BUILD_LLVM_DYLIB)
     set(LLVM_ENABLE_PLUGINS ON)
   else()
     set(LLVM_ENABLE_PLUGINS OFF)

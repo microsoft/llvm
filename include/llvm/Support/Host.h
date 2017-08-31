@@ -21,6 +21,16 @@
 #include <endian.h>
 #elif defined(_AIX)
 #include <sys/machine.h>
+#elif defined(__sun)
+/* Solaris provides _BIG_ENDIAN/_LITTLE_ENDIAN selector in sys/types.h */
+#include <sys/types.h>
+#define BIG_ENDIAN 4321
+#define LITTLE_ENDIAN 1234
+#if defined(_BIG_ENDIAN)
+#define BYTE_ORDER BIG_ENDIAN
+#else
+#define BYTE_ORDER LITTLE_ENDIAN
+#endif
 #else
 #if !defined(BYTE_ORDER) && !defined(LLVM_ON_WIN32)
 #include <machine/endian.h>
@@ -82,6 +92,7 @@ constexpr bool IsBigEndianHost = false;
   StringRef getHostCPUNameForPowerPC(const StringRef &ProcCpuinfoContent);
   StringRef getHostCPUNameForARM(const StringRef &ProcCpuinfoContent);
   StringRef getHostCPUNameForS390x(const StringRef &ProcCpuinfoContent);
+  StringRef getHostCPUNameForBPF();
   }
 }
 }

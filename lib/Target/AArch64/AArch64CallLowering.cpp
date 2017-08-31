@@ -47,13 +47,10 @@
 
 using namespace llvm;
 
-#ifndef LLVM_BUILD_GLOBAL_ISEL
-#error "This shouldn't be built without GISel"
-#endif
-
 AArch64CallLowering::AArch64CallLowering(const AArch64TargetLowering &TLI)
   : CallLowering(&TLI) {}
 
+namespace {
 struct IncomingArgHandler : public CallLowering::ValueHandler {
   IncomingArgHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
                      CCAssignFn *AssignFn)
@@ -171,10 +168,11 @@ struct OutgoingArgHandler : public CallLowering::ValueHandler {
   CCAssignFn *AssignFnVarArg;
   uint64_t StackSize;
 };
+} // namespace
 
 void AArch64CallLowering::splitToValueTypes(
     const ArgInfo &OrigArg, SmallVectorImpl<ArgInfo> &SplitArgs,
-    const DataLayout &DL, MachineRegisterInfo &MRI,
+    const DataLayout &DL, MachineRegisterInfo &MRI, CallingConv::ID CallConv,
     const SplitArgTy &PerformArgSplit) const {
   const AArch64TargetLowering &TLI = *getTLI<AArch64TargetLowering>();
   LLVMContext &Ctx = OrigArg.Ty->getContext();
@@ -192,13 +190,18 @@ void AArch64CallLowering::splitToValueTypes(
   }
 
   unsigned FirstRegIdx = SplitArgs.size();
+  bool NeedsRegBlock = TLI.functionArgumentNeedsConsecutiveRegisters(
+      OrigArg.Ty, CallConv, false);
   for (auto SplitVT : SplitVTs) {
-    // FIXME: set split flags if they're actually used (e.g. i128 on AAPCS).
     Type *SplitTy = SplitVT.getTypeForEVT(Ctx);
     SplitArgs.push_back(
         ArgInfo{MRI.createGenericVirtualRegister(getLLTForType(*SplitTy, DL)),
                 SplitTy, OrigArg.Flags, OrigArg.IsFixed});
+    if (NeedsRegBlock)
+      SplitArgs.back().Flags.setInConsecutiveRegs();
   }
+
+  SplitArgs.back().Flags.setInConsecutiveRegsLast();
 
   for (unsigned i = 0; i < Offsets.size(); ++i)
     PerformArgSplit(SplitArgs[FirstRegIdx + i].Reg, Offsets[i] * 8);
@@ -222,7 +225,7 @@ bool AArch64CallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
     setArgFlags(OrigArg, AttributeList::ReturnIndex, DL, F);
 
     SmallVector<ArgInfo, 8> SplitArgs;
-    splitToValueTypes(OrigArg, SplitArgs, DL, MRI,
+    splitToValueTypes(OrigArg, SplitArgs, DL, MRI, F.getCallingConv(),
                       [&](unsigned Reg, uint64_t Offset) {
                         MIRBuilder.buildExtract(Reg, VReg, Offset);
                       });
@@ -247,12 +250,12 @@ bool AArch64CallLowering::lowerFormalArguments(MachineIRBuilder &MIRBuilder,
   unsigned i = 0;
   for (auto &Arg : F.args()) {
     ArgInfo OrigArg{VRegs[i], Arg.getType()};
-    setArgFlags(OrigArg, i + 1, DL, F);
+    setArgFlags(OrigArg, i + AttributeList::FirstArgIndex, DL, F);
     bool Split = false;
     LLT Ty = MRI.getType(VRegs[i]);
     unsigned Dst = VRegs[i];
 
-    splitToValueTypes(OrigArg, SplitArgs, DL, MRI,
+    splitToValueTypes(OrigArg, SplitArgs, DL, MRI, F.getCallingConv(),
                       [&](unsigned Reg, uint64_t Offset) {
                         if (!Split) {
                           Split = true;
@@ -313,7 +316,7 @@ bool AArch64CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
 
   SmallVector<ArgInfo, 8> SplitArgs;
   for (auto &OrigArg : OrigArgs) {
-    splitToValueTypes(OrigArg, SplitArgs, DL, MRI,
+    splitToValueTypes(OrigArg, SplitArgs, DL, MRI, CallConv,
                       [&](unsigned Reg, uint64_t Offset) {
                         MIRBuilder.buildExtract(Reg, OrigArg.Reg, Offset);
                       });
@@ -366,7 +369,7 @@ bool AArch64CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
 
     SmallVector<uint64_t, 8> RegOffsets;
     SmallVector<unsigned, 8> SplitRegs;
-    splitToValueTypes(OrigRet, SplitArgs, DL, MRI,
+    splitToValueTypes(OrigRet, SplitArgs, DL, MRI, F.getCallingConv(),
                       [&](unsigned Reg, uint64_t Offset) {
                         RegOffsets.push_back(Offset);
                         SplitRegs.push_back(Reg);
@@ -380,7 +383,7 @@ bool AArch64CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
       MIRBuilder.buildSequence(OrigRet.Reg, SplitRegs, RegOffsets);
   }
 
-  CallSeqStart.addImm(Handler.StackSize);
+  CallSeqStart.addImm(Handler.StackSize).addImm(0);
   MIRBuilder.buildInstr(AArch64::ADJCALLSTACKUP)
       .addImm(Handler.StackSize)
       .addImm(0);
