@@ -21,6 +21,7 @@
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/CodeGen/SlotIndexes.h"
 
+#define DEBUG_TYPE "tiled"
 
 namespace Tiled
 {
@@ -3467,7 +3468,7 @@ TileGraph::InsertTileBoundaryBlock
    llvm::MachineFunction *   MF = this->FunctionFlowGraph->machineFunction;
    GraphColor::Allocator *   allocator = this->Allocator;
 
-   if (isEntry)  {
+   if (isEntry) {
 
       llvm::SparseBitVector<> * scratchLiveBitVector = this->VisitedBitVector;
       scratchLiveBitVector->clear();
@@ -3489,13 +3490,13 @@ TileGraph::InsertTileBoundaryBlock
       assert(allRegisterTags != nullptr);
       *scratchLiveBitVector &= *allRegisterTags;
 
-#if defined(TILED_DEBUG_DUMPS)
-      if (this->Allocator->FunctionUnit->machineFunction->getName().str() == "main") {
-         std::cout << " **** T#" << tile->Id << " (kind=" << unsigned(tile->TileKind) << ")" << std::endl;
-         std::cout << "      SplitEntryEdge:  <mbb#" << edge.predecessorBlock->getNumber()
-                   << ", mbb#" << edge.successorBlock->getNumber() << ">" << std::endl;
-      }
-#endif
+      DEBUG({
+         if (this->Allocator->FunctionUnit->machineFunction->getName().str() == "main") {
+            llvm::dbgs() << " **** T#" << tile->Id << " (kind=" << unsigned(tile->TileKind) << ")\n";
+            llvm::dbgs() << "      SplitEntryEdge:  <mbb#" << edge.predecessorBlock->getNumber()
+                      << ", mbb#" << edge.successorBlock->getNumber() << ">\n";
+         }
+      });
 
       boundaryBlock = this->SplitEntryEdge(edge);
 
@@ -3517,19 +3518,19 @@ TileGraph::InsertTileBoundaryBlock
             llvm::MachineOperand tileBoundaryLiveRegisterOperand(llvm::MachineOperand::CreateReg(tileBoundaryLiveRegister, false));
 
             boundaryInstruction->addOperand(*MF, tileBoundaryLiveRegisterOperand);
-            //std::cout << " ENTER#" << boundaryBlock->getNumber() << ": tileBoundaryLiveRegisterOperand = " << tileBoundaryLiveRegister << std::endl;
+            //llvm::dbgs() << " ENTER#" << boundaryBlock->getNumber() << ": tileBoundaryLiveRegisterOperand = " << tileBoundaryLiveRegister << "\n";
          }
       }
 
    } else {
 
-#if defined(TILED_DEBUG_DUMPS)
-      if (this->Allocator->FunctionUnit->machineFunction->getName().str() == "main") {
-         std::cout << " **** T#" << tile->Id << " (kind=" << unsigned(tile->TileKind) << ")" << std::endl;
-         std::cout << "      SplitExitEdge:  <mbb#" << edge.predecessorBlock->getNumber()
-                   << ", mbb#" << edge.successorBlock->getNumber() << ">" << std::endl;
-      }
-#endif
+      DEBUG({
+         if (this->Allocator->FunctionUnit->machineFunction->getName().str() == "main") {
+            llvm::dbgs() << " **** T#" << tile->Id << " (kind=" << unsigned(tile->TileKind) << ")\n";
+            llvm::dbgs() << "      SplitExitEdge:  <mbb#" << edge.predecessorBlock->getNumber()
+                         << ", mbb#" << edge.successorBlock->getNumber() << ">\n";
+         }
+      });
 
       boundaryBlock = this->SplitExitEdge(edge);
 
@@ -3540,11 +3541,11 @@ TileGraph::InsertTileBoundaryBlock
    llvm::MachineBasicBlock::instr_iterator I(boundaryBlock->instr_back());
    boundaryBlock->insert(I, boundaryInstruction);
 
-#if defined(TILED_DEBUG_DUMPS)
-   if (this->Allocator->FunctionUnit->machineFunction->getName().str() == "****") {
-      std::cout << "      inserted BoundaryBlock#" << boundaryBlock->getNumber() << std::endl;
-   }
-#endif
+   DEBUG({
+      if (this->Allocator->FunctionUnit->machineFunction->getName().str() == "****") {
+         llvm::dbgs() << "      inserted BoundaryBlock#" << boundaryBlock->getNumber() << "\n";
+      }
+   });
 
    allocator->Indexes->insertMBBInMaps(boundaryBlock);
    allocator->Indexes->insertMachineInstrInMaps(*boundaryInstruction);
@@ -3666,15 +3667,15 @@ Tile::InsertEntryAndExit()
 {
    GraphColor::TileGraph * tileGraph = this->TileGraph;
 
-#if defined(TILED_DEBUG_DUMPS)
-      std::cout << "\n *** Tile# " << this->Id << std::endl;
-      std::cout << "      { ";
+   DEBUG({
+      llvm::dbgs() << "\n *** Tile# " << this->Id << "\n";
+      llvm::dbgs() << "      { ";
       llvm::SparseBitVector<>::iterator b;
       // foreach_body_block_in_tile_exclusive
       for (b = this->BodyBlockSet->begin(); b != this->BodyBlockSet->end(); ++b)
-         std::cout << " #" << *b;
-      std::cout << " }" << std::endl;
-#endif
+         llvm::dbgs() << " #" << *b;
+      llvm::dbgs() << " }\n";
+   });
 
    // Process entry edge list work list style.  After this point must
    // refer to the entry blocks.
@@ -4982,9 +4983,6 @@ Tile::ResetLiveRangeVector()
 void
 Tile::FreeMemory()
 {
-   //TODO: The above (when memory pools are implemented) will free at once all the leaf objects
-   //     The code below frees the container objects
-
    delete this->LiveRangeVector;
    this->LiveRangeVector = nullptr;
 
@@ -5688,7 +5686,7 @@ Tile::UpdateEnterTileAndExitTileInstructions()
          for (a = killedRegisterAliasTagSet->begin(); a != killedRegisterAliasTagSet->end(); ++a)
          {
             enterTileInstruction->addRegisterDefined(aliasInfo->GetRegister(*a));
-            //std::cout << " ENTER#" << enterTileInstruction->getParent()->getNumber() << ": registerDefined = " << aliasInfo->GetRegister(*a) << std::endl;
+            //llvm::dbgs() << " ENTER#" << enterTileInstruction->getParent()->getNumber() << ": registerDefined = " << aliasInfo->GetRegister(*a) << "\n";
          }
       }
    }

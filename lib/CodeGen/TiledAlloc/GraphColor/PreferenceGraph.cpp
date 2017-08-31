@@ -1547,7 +1547,7 @@ void
 PreferenceGraph::SetPreferenceCost
 (
    GraphColor::GraphIterator * iterator,
-   Tiled::Cost *                 cost
+   Tiled::Cost *               cost
 )
 {
    GraphColor::LiveRangePreferenceVector *  adjacencyVector = this->AdjacencyVector;
@@ -1744,7 +1744,7 @@ PreferenceGraph::GetFirstPreferenceLiveRange
 (
    GraphColor::GraphIterator *               iterator,
    GraphColor::LiveRange *                   liveRange,
-   Tiled::Cost *                               cost,
+   Tiled::Cost *                             cost,
    RegisterAllocator::PreferenceConstraint * preferenceConstraint
 )
 {

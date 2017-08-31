@@ -110,7 +110,6 @@ FlowGraph::Initialize
    this->machineFunction = unit;
    this->VersionNumber = 1;
    this->editDepth = 0;
-   //this->lifetime = lifetime;
    this->canBuildDepthFirstNumbers = canBuildDepthFirstNumbers;
 
    if (canBuildDepthFirstNumbers) {
@@ -327,7 +326,7 @@ FlowGraph::SplitEdge
    this->BeginEdit();
 
    // Instructions in the new block will be assigned the same line number
-   // as the last instruction in the predeccesor block.
+   // as the last instruction in the predecessor block.
    const llvm::DebugLoc& dl( predecessorLastInstruction->getDebugLoc() );
 
    // Split the edge, resulting in an empty basic block.

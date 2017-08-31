@@ -61,7 +61,7 @@ GraphColor::AllocatorCostModel::New
 // Remarks:
 //
 //    Implement two level compare. If we are optimizing for speed, then compare cycles
-//    and let code bytes be a the tie breaker.   If we optimizing for space, then compare
+//    and let code bytes be a tie breaker. If we optimizing for space, then compare
 //    code bytes and let cycles be the tie breaker.
 //
 // Returns:

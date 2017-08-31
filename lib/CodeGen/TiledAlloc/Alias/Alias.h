@@ -128,7 +128,14 @@ public:
       unsigned                 tag,
       llvm::SparseBitVector<>* tagsBitVector
    );
-   
+
+   bool
+   CommonMayPartialTags
+   (
+      llvm::SparseBitVector<>* tagsBitVector1,
+      llvm::SparseBitVector<>* tagsBitVector2
+   );
+
    bool
    MustTotallyOverlap
    (

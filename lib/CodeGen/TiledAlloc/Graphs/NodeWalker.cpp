@@ -11,8 +11,6 @@
 #include "NumberNodeVisitor.h"
 #include "../GraphColor/Tile.h"
 
-#include <iostream>
-
 namespace Tiled
 {
 namespace Graphs

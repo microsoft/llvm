@@ -12,21 +12,21 @@
 //
 // Components:
 //
-// allocator.h             - Base allocator object
-// tile.h                  - Region representation used to capture locality.
-// liveness.h              - Allocator view of variable 'liveness'
-// graph.h                 - Base graph implementation shared by conflict-graph and preference-graph
-// conflict-graph.h        - Graph representation capturing conflicts between live ranges.
-// preference-graph.h      - Graph representation capturing preference relationships between live ranges
+// Allocator.h             - Base allocator object
+// Tile.h                  - Region representation used to capture locality.
+// Liveness.h              - Allocator view of variable 'liveness'
+// Graph.h                 - Base graph implementation shared by conflict-graph and preference-graph
+// ConflictGraph.h         - Graph representation capturing conflicts between live ranges.
+// PreferenceGraph.h       - Graph representation capturing preference relationships between live ranges
 //                           and between live ranges and registers.
-// cost-model.h            - Defines allocator cost models.  Captures tradeoff between cycles and code
+// CostModel.h             - Defines allocator cost models.  Captures tradeoff between cycles and code
 //                           size for different regions of the program (tiles)
-// live-range.h            - Captures a variables live range and associated information.  This is the
+// LiveRange.h             - Captures a variables live range and associated information.  This is the
 //                           unit of allocation and is based on an objects alias tag.
-// summary-variable.h      - Summary information of a tile mapping of live ranges to allocated resource.
-// preference.h            - Preference edge information.
-// spill-optimizer.h       - Spill/reload/recalculate sharing logic and low-level spill costing routines.
-// available-expressions.h - Provides information about interesting expressions for use in recalculation.
+// SummaryVariable.h       - Summary information of a tile mapping of live ranges to allocated resource.
+// Preference.h            - Preference edge information.
+// SpillOptimizer.h        - Spill/reload/recalculate sharing logic and low-level spill costing routines.
+// AvailableExpressions.h  - Provides information about interesting expressions for use in recalculation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -45,11 +45,18 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Timer.h"
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetMachine.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 
+#define DEBUG_TYPE "tiled"
+
+const char TimerGroupName[] = "regalloc";
+const char TimerGroupDescription[] = "Register Allocation";
 
 namespace Tiled
 {
@@ -149,10 +156,6 @@ Allocator::Delete()
 {
    //TODO: it may be neccessary to insert here explicit delete statements
    //      for all the members until memory pools are implemented.
-
-   //TIMER_START(ra_cleanup, L"Cleanup", Toolbox::TimerKind::SubPhase);
-
-   //TIMER_END(ra_cleanup, L"Cleanup", Toolbox::TimerKind::SubPhase);
 }
 
 //------------------------------------------------------------------------------
@@ -244,7 +247,7 @@ Allocator::Initialize()
    // Initialize spill tracking alias tag bit vectors.
    this->PendingSpillAliasTagBitVector = new llvm::SparseBitVector<>();
    this->DoNotSpillAliasTagBitVector = new llvm::SparseBitVector<>();
-   this->callKilledRegBitVector = new llvm::SparseBitVector<>(/*this->Lifetime*/);
+   this->callKilledRegBitVector = new llvm::SparseBitVector<>();
 
    // Initialize undefined register alias tags bit vector
    llvm::SparseBitVector<> * undefinedRegisterAliasTagBitVector = new llvm::SparseBitVector<>();
@@ -322,7 +325,7 @@ Allocator::Initialize()
 
    // Build up global register costs
    GraphColor::CostVector * registerCostVector =
-      new GraphColor::CostVector(/*this->lifetime,*/ this->MaximumRegisterId + 1, this->ZeroCost);
+      new GraphColor::CostVector(this->MaximumRegisterId + 1, this->ZeroCost);
 
    Tiled::Cost infiniteCost = Tiled::Cost::InfiniteCost;
    this->InfiniteCost = infiniteCost;
@@ -1558,7 +1561,7 @@ Allocator::AddGlobalLiveRange
    unsigned  reg
 )
 {
-   Tiled::VR::Info *                vrInfo = this->VrInfo;
+   Tiled::VR::Info *              vrInfo = this->VrInfo;
 
    GraphColor::LiveRangeVector *  liveRangeVector = this->GlobalLiveRangeVector;
    unsigned                       liveRangeId;
@@ -1888,44 +1891,39 @@ filterRedundantCopyInstructions(llvm::MachineFunction * mf)
 void
 Allocator::Allocate()
 {
-   //TIMER_START(ra_allocate, L"Allocate", Toolbox::TimerKind::SubPhase);
+   {
+      llvm::NamedRegionTimer T("build", "Build", TimerGroupName,
+         TimerGroupDescription, llvm::TimePassesIsEnabled);
 
-   // ISSUE-REVIEW-aasmith-2017/02/17: Review handling of debug values
-   filterDbgValueInstructions(this->FunctionUnit->machineFunction);
-   //std::cout << " *** function :  " << this->FunctionUnit->machineFunction->getName().str() << std::endl;
+      // ISSUE-REVIEW-aasmith-2017/02/17: Review handling of debug values
+      filterDbgValueInstructions(this->FunctionUnit->machineFunction);
+      //llvm::dbgs() << " *** function :  " << this->FunctionUnit->machineFunction->getName().str() << "\n";
   
-#if defined(TILED_DEBUG_SUPPORT)
-   if (this->FunctionUnit->machineFunction->getName().str() == "***")
-   this->FunctionUnit->machineFunction->dump();
-#endif
+      // Begin register allocation.
 
-   // Begin register allocation.
+      SpillOptimizer::ResetIrExtensions();
+      this->Initialize();
+      this->VRM->grow();
 
-   SpillOptimizer::ResetIrExtensions();
-   this->Initialize();
-   this->VRM->grow();
+      DEBUG(llvm::dbgs() << "\n====== Allocating function " << MF->getName() << "\n");
+      // Build the necessary support data structures.  These steps must
+      // be done in order, since each step depends on the previous step.
 
-   // Build the necessary support data structures.  These steps must
-   // be done in order, since each step depends on the previous step.
+      this->BuildFlowGraph();
 
-   this->BuildFlowGraph();
-
-   // BuildLoopGraph() is just an empty stub, in this llvm implementation of Tiled RA the loop analysis was
-   // requested and done prior to calling this function, the analysis results were stored in this->LoopInfo.
-   this->BuildLoopGraph();
-
-   this->BuildLiveness();
-   this->BuildTileGraph();
-   this->BuildGlobalLiveRanges();
-   this->BuildGlobalConflictGraph();
-   this->BuildGlobalPreferenceGraph();   // if commented out, blocks execution of multi-tile code
-   this->BuildGlobalAvailable();
-   this->ScheduleTileGraph();
-   this->CostGlobalLiveRanges();   // if commented out, blocks execution of multi-tile code
-
+      // BuildLoopGraph() is just an empty stub, in this llvm implementation of Tiled RA the loop analysis was
+      // requested and done prior to calling this function, the analysis results were stored in this->LoopInfo.
+      this->BuildLoopGraph();
+      this->BuildLiveness();
+      this->BuildTileGraph();
+      this->BuildGlobalLiveRanges();
+      this->BuildGlobalConflictGraph();
+      this->BuildGlobalPreferenceGraph();   // if commented out, blocks execution of multi-tile code
+      this->BuildGlobalAvailable();
+      this->ScheduleTileGraph();
+      this->CostGlobalLiveRanges();   // if commented out, blocks execution of multi-tile code
+   }
    // Pass one - allocate bottom up each tile
-
-   //TIMER_START(ra_passone, L"Allocator pass one", Toolbox::TimerKind::SubPhase);
 
    this->BeginPass(GraphColor::Pass::Allocate);
 
@@ -1942,11 +1940,7 @@ Allocator::Allocate()
 
    this->EndPass(GraphColor::Pass::Allocate);
 
-   //TIMER_END(ra_passone, L"Allocator pass one", Toolbox::TimerKind::SubPhase);
-
    // Pass two - assign physical registers and insert tile compensation code.
-
-   //TIMER_START(ra_passtwo, L"Allocator pass two", Toolbox::TimerKind::SubPhase);
 
    this->BeginPass(GraphColor::Pass::Assign);
 
@@ -1961,7 +1955,14 @@ Allocator::Allocate()
    }
 
    this->EndPass(GraphColor::Pass::Assign);
-   //TIMER_END(ra_passtwo, L"Allocator pass two", Toolbox::TimerKind::SubPhase);
+
+   DEBUG({
+      if (this->SpillOptimizer->inFunctionSpilledLRs > 0) {
+         llvm::dbgs() << " +++ SpilledLRs = " << this->SpillOptimizer->inFunctionSpilledLRs << "  ("
+            << this->FunctionUnit->machineFunction->getName().str() << ")" << "\n";
+         llvm::dbgs() << " +++ RemovedLocalLRs = " << this->inFunctionRemovedLocalLRs << "\n";
+      }
+   });
 
    // Delete the support data structures.  Note, we may want to leave these around for
    // subsequent phases.
@@ -1973,18 +1974,16 @@ Allocator::Allocate()
 
    // ISSUE-REVIEW-aasmith-2017/02/17: Review handling of redundant copies
    filterRedundantCopyInstructions(this->FunctionUnit->machineFunction);
-  
+
 #if defined(TILED_DEBUG_SUPPORT)
    if (this->FunctionUnit->machineFunction->getName().str() == "***") {
-      std::cout << "\n\n **** CFG AFTER ALLOCATION ****" << std::endl;
+      llvm::dbgs() << "\n\n **** CFG AFTER ALLOCATION ****" << "\n";
       this->FunctionUnit->machineFunction->dump();
    }
 #endif
 
    ////this->ReverseCanonicalizeIR();
    this->Terminate();
-
-   //TIMER_END(ra_allocate, L"Allocate", Toolbox::TimerKind::SubPhase);
 
    return;
 }
@@ -2008,8 +2007,10 @@ Allocator::Allocate
    GraphColor::Tile * tile
 )
 {
+   llvm::NamedRegionTimer T("allocate", "Allocate", TimerGroupName,
+      TimerGroupDescription, llvm::TimePassesIsEnabled);
    // Begin allocation pass on this tile, allocate memory.
-
+   DEBUG(llvm::dbgs() << "\n==== Allocating tile " << tile->Id << " of kind " << (int)tile->TileKind << "\n");
    this->BeginPass(tile, this->Pass);
 
    // Graph coloring loop reduces the conflict graph to <= K colorable
@@ -2023,17 +2024,20 @@ Allocator::Allocate
       this->BeginIteration(tile, this->Pass);
 
       // Attempt to color the tile.
+      DEBUG(llvm::dbgs() << "== Color\n");
       isColored = this->Color(tile);
 
       // If there were uncolorable live ranges in tile insert spill code and keep iterating.
 
       if (!isColored) {
+         DEBUG(llvm::dbgs() << "== Spill\n");
          isColored = this->Spill(tile);
       }
 
       if (isColored) {
          // Otherwise summarize tile coloring, we are done iterating.
 
+         DEBUG(llvm::dbgs() << "== Summarize\n");
          this->Summarize(tile);
       }
 
@@ -2120,6 +2124,7 @@ Allocator::Build
    liveness->PruneRegisterLiveness(tile);
 
    liveness->BuildLiveRanges(tile);
+
    conflictGraph->Build();
 
    if (preferenceGraph != nullptr) {
@@ -2135,7 +2140,84 @@ Allocator::Build
    //TIMER_END(ra_tilebuild, L"Tile build", Toolbox::TimerKind::Function);
 }
 
-//------------------------------------------------------------------------------
+
+void
+markLiveRangesSpanningCall
+(
+   llvm::SparseBitVector<> * liveBitVector,
+   GraphColor::Tile *        tile
+)
+{
+   tile->NumberCalls++;
+   unsigned  liveAliasTag;
+
+   llvm::SparseBitVector<>::iterator l;
+
+   // foreach_sparse_bv_bit
+   for (l = liveBitVector->begin(); l != liveBitVector->end(); ++l)
+   {
+      liveAliasTag = *l;
+
+      GraphColor::LiveRange * liveRange = tile->GetLiveRange(liveAliasTag);
+
+      if ((liveRange != nullptr) && !liveRange->IsPreColored) {
+         if (!liveRange->IsCallSpanning) {
+            tile->NumberCallSpanningLiveRanges++;
+            liveRange->IsCallSpanning = true;
+         }
+      }
+   }
+}
+
+void
+Allocator::MarkLiveRangesSpanningCall
+(
+   GraphColor::Tile * tile
+)
+{
+   GraphColor::Liveness *   liveness = this->Liveness;
+   Dataflow::LivenessData * registerLivenessData;
+
+   // Create temporary bit vectors.
+   llvm::SparseBitVector<> liveBitVector;
+   llvm::SparseBitVector<> genBitVector;
+   llvm::SparseBitVector<> killBitVector;
+
+   Graphs::MachineBasicBlockVector::reverse_iterator biter;
+   Graphs::MachineBasicBlockVector * mbbVector = tile->BlockVector;
+
+   // foreach_block_in_tile_backward
+   for (biter = mbbVector->rbegin(); biter != mbbVector->rend(); ++biter)
+   {
+      llvm::MachineBasicBlock * block = *biter;
+
+      registerLivenessData = liveness->GetRegisterLivenessData(block);
+      liveBitVector = (*registerLivenessData->LiveOutBitVector);
+      // Process each instruction in the block moving backwards calculating liveness.
+
+      llvm::MachineBasicBlock::reverse_instr_iterator rii;
+
+      // foreach_instr_in_block_backward_editing
+      for (rii = block->instr_rbegin(); rii != block->instr_rend(); ++rii)
+      {
+         llvm::MachineInstr * instruction = &(*rii);
+
+         liveness->TransferInstruction(instruction, &genBitVector, &killBitVector);
+
+         if (!Tile::IsEnterTileInstruction(instruction)) {
+            // Note live ranges that span calls.
+            if (instruction->isCall()) {
+               markLiveRangesSpanningCall(&liveBitVector, tile);
+            }
+         }
+
+         // Update liveness gens and kills.
+         liveness->UpdateInstruction(instruction, &liveBitVector, &genBitVector, &killBitVector);
+      }
+   }
+}
+
+//-------------------------------------------------------------------------------------------------------------
 //
 // Description:
 //
@@ -3674,9 +3756,10 @@ Allocator::CalculateDegree
       return degree;
    }
 
+   const llvm::TargetRegisterClass *liveRangeRC = liveRange->GetRegisterCategory();
+   const llvm::TargetRegisterClass *conflictingLiveRangeRC = conflictingLiveRange->GetRegisterCategory();
    // Examine register hierarchy to determine degree.
-   if (liveRange->GetRegisterCategory()->getSize()
-      < conflictingLiveRange->GetRegisterCategory()->getSize()) {
+   if (this->TRI->getRegSizeInBits(*liveRangeRC) < this->TRI->getRegSizeInBits(*conflictingLiveRangeRC)) {
       const llvm::TargetRegisterClass *common = this->TRI->getCommonSubClass(liveRange->GetRegisterCategory(), conflictingLiveRange->GetRegisterCategory());
       if (common)
          llvm_unreachable("Implement to handle situation of sub-register class.");
@@ -5088,14 +5171,13 @@ Allocator::InsertCompensationCode
    bool                          doInsert = true;
    Tiled::Cost                   tileTransferCost = this->ZeroCost;
    Tiled::Cost                   spillCost;
-   Tiled::Cost                   allocationCost;
    Graphs::FlowGraph *           flowGraph = this->FunctionUnit;
    GraphColor::SpillOptimizer *  spillOptimizer = this->SpillOptimizer;
    GraphColor::Liveness *        liveness = this->Liveness;
    Tiled::VR::Info *             aliasInfo = this->VrInfo;
 
    // Iterate through tile summary and for each summary variable live
-   // in/out compute compute transfers from the parent.
+   // in/out compute transfers from the parent.
 
    GraphColor::Tile * parentTile = tile->ParentTile;
 
@@ -5168,7 +5250,7 @@ Allocator::InsertCompensationCode
 
             totalTransferCost.IncrementBy(&entryCost);
 #if defined(TILED_DEBUG_DUMPS)
-            std::cout << "\nENTRY#" << entryBlock->getNumber() << "   (compensated-summary)" << std::endl;
+            llvm::dbgs() << "\nENTRY#" << entryBlock->getNumber() << "   (compensated-summary)" << std::endl;
             entryBlock->dump();
 #endif
          }
@@ -5197,7 +5279,7 @@ Allocator::InsertCompensationCode
 
                totalTransferCost.IncrementBy(&exitCost);
 #if defined(TILED_DEBUG_DUMPS)
-               std::cout << "\nEXIT#" << exitBlock->getNumber() << "   (compensated-summary)" << std::endl;
+               llvm::dbgs() << "\nEXIT#" << exitBlock->getNumber() << "   (compensated-summary)" << std::endl;
                exitBlock->dump();
 #endif
             }
@@ -5217,7 +5299,7 @@ Allocator::InsertCompensationCode
                unsigned physReg = sourceOperand->getReg();
                assert(Tiled::VR::Info::IsPhysicalRegister(physReg));
                exitBlock->addLiveIn(physReg);
-               //std::cout << " ** BB#" << exitBlock->getNumber() << "  addLiveIn  R" << (sourceOperand->getReg() - 1) << std::endl;
+               //llvm::dbgs()  << " ** BB#" << exitBlock->getNumber() << "  addLiveIn  R" << (sourceOperand->getReg() - 1) << std::endl;
                registerLivenessData->LiveInBitVector->set(physReg);
                registerLivenessData->LiveOutBitVector->set(physReg);
             }
@@ -5291,7 +5373,7 @@ Allocator::InsertCompensationCode
             assert((summaryLiveRange == nullptr) || (globalLiveRange != nullptr && !globalLiveRange->IsCalleeSaveValue));
          }
 #if defined(TILED_DEBUG_DUMPS)
-         std::cout << "\nENTRY#" << entryBlock->getNumber() << "   (compensated-spill)" << std::endl;
+         llvm::dbgs() << "\nENTRY#" << entryBlock->getNumber() << "   (compensated-spill)" << std::endl;
          entryBlock->dump();
 #endif
       }
@@ -5410,7 +5492,7 @@ Allocator::InsertCompensationCode
       }
 
 #if defined(TILED_DEBUG_DUMPS)
-      std::cout << "\nEXIT#" << exitBlock->getNumber() << "   (compensated)" << std::endl;
+      llvm::dbgs() << "\nEXIT#" << exitBlock->getNumber() << "   (compensated)" << std::endl;
 #endif
    }
 
@@ -5485,8 +5567,6 @@ Allocator::InsertCompensationCode
          }
          assert(VR::Info::IsPhysicalRegister(physReg));
          tempBitVector.set(physReg);
-
-         //std::cout << "R" << (physReg - 1) << ", ";
       }
 
       llvm::MachineBasicBlock::reverse_instr_iterator rii;
@@ -5514,7 +5594,6 @@ Allocator::InsertCompensationCode
       {
          physReg = *r;
          entryBlock->addLiveIn(physReg);
-         //std::cout << " *** addLiveIn(R" << (physReg - 1) << ")" << std::endl;
          registerLivenessData->LiveInBitVector->set(physReg);
          registerLivenessData->LiveOutBitVector->set(physReg);
       }
@@ -5585,6 +5664,10 @@ Allocator::Assign
    }
 
    this->BeginPass(tile, GraphColor::Pass::Assign);
+   llvm::NamedRegionTimer T("assign", "Assign", TimerGroupName,
+      TimerGroupDescription, llvm::TimePassesIsEnabled);
+
+   DEBUG(llvm::dbgs() << "==== Assigning tile " << tile << "\n");
 
    // Assign is only single iteration but to enable sharing of allocation routines between passes we ensure
    // that set up is the same.
@@ -5607,9 +5690,11 @@ Allocator::Assign
       }
    }
 
+   DEBUG(llvm::dbgs() << "== SpillGlobals\n");
    this->SpillGlobals(tile);
 
    // Rewrite all tile appearances with the final physical register allocations.
+   DEBUG(llvm::dbgs() << "== RewriteRegisters\n");
    this->RewriteRegisters(tile);
 
    // Add transfers at entries and exits from the parent tile.
@@ -5654,7 +5739,7 @@ isBoundaryBlock
          return true;
       }
    }
-   return nullptr;
+   return false;
 }
 
 void
@@ -5706,7 +5791,7 @@ Allocator::RewriteRegistersInBlock
 
 #if defined(TILED_DEBUG_DUMPS)
       instruction->dump();
-      std::cout << "    ";
+      llvm::dbgs() << "    ";
 #endif
       bool isDBG_VALUE = (instruction->getOpcode() == llvm::TargetOpcode::DBG_VALUE);
 
@@ -5720,12 +5805,17 @@ Allocator::RewriteRegistersInBlock
 
 #if defined(TILED_DEBUG_DUMPS)
             if (!VR::Info::IsPhysicalRegister(reg)) {
-               std::cout << "\n **** vr" << pseudoReg << "/" << reg << std::endl;
+               llvm::dbgs() << "\n **** vr" << pseudoReg << "/" << reg << "\n";
                instruction->dump();
                block->dump();
             }
 #endif
             assert(VR::Info::IsPhysicalRegister(reg));
+            if (reg && operand->getSubReg()) {
+               reg = TRI->getSubReg(reg, operand->getSubReg());
+               assert(reg && "The register class does not have the required subregister");
+               operand->setSubReg(0);
+            }
             operand->setReg(reg);
 
             if (iteratingSources) {
@@ -5741,7 +5831,7 @@ Allocator::RewriteRegistersInBlock
             }
 #if defined(TILED_DEBUG_DUMPS)
             unsigned pseudo = pseudoReg & (~(1u << 31));
-            std::cout << "vreg" << pseudo << "(R" << (reg - 1) << ")" << (operand->isDef() ? " <= " : ", ");
+            llvm::dbgs() << "vreg" << pseudo << "(R" << (reg - 1) << ")" << (operand->isDef() ? " <= " : ", ");
 #endif
          }
 
@@ -5780,9 +5870,7 @@ Allocator::RewriteRegisters
    Dataflow::RegisterLivenessWalker * registerLivenessWalker = this->Liveness->RegisterLivenessWalker;
    VR::Info *  vrInfo = this->VrInfo;
 
-#if defined(TILED_DEBUG_DUMPS)
-   std::cout << "\nTILE#" << tile->Id << "   (allocated)" << std::endl;
-#endif
+   DEBUG(llvm::dbgs() << "\nTILE#" << tile->Id << "   (allocated)\n");
 
    Graphs::MachineBasicBlockVector::iterator tb;
 
@@ -5791,9 +5879,7 @@ Allocator::RewriteRegisters
    {
       llvm::MachineBasicBlock * block = *tb;
 
-#if defined(TILED_DEBUG_DUMPS)
-      std::cout << "\nMBB#" << block->getNumber() << "   (allocated)" << std::endl;
-#endif
+      DEBUG(llvm::dbgs() << "\nMBB#" << block->getNumber() << "   (allocated)\n");
 
       this->RewriteRegistersInBlock(tile, block, vrInfo);
 
@@ -5816,13 +5902,14 @@ Allocator::RewriteRegisters
             if (physReg != VR::Constants::InvalidReg) {
                assert(Tiled::VR::Info::IsPhysicalRegister(physReg));
                block->addLiveIn(physReg);
-               //std::cout << " >>> BB#" << block->getNumber() << "  addLiveIn  R" << (physReg-1) << std::endl;
+               // Why is there a -1 here ?
+               // DEBUG(llvm::dbgs() << " >>> BB#" << block->getNumber() << "  addLiveIn  R" << (physReg-1) << "\n");
                liveInBitVector->set(this->VrInfo->GetTag(physReg));
             }
          } else {
             assert(Tiled::VR::Info::IsPhysicalRegister(vrReg));
             block->addLiveIn(vrReg);
-            //std::cout << " >> BB#" << block->getNumber() << "  addLiveIn  R" << (vrReg-1) << std::endl;
+            // DEBUG(llvm::dbgs() << " >> BB#" << block->getNumber() << "  addLiveIn  R" << (vrReg-1) << "\n");
          }
       }
    }
@@ -6753,7 +6840,7 @@ Allocator::InsertOrUpdateRegisterPreference
 //    liveRange                        - live range to preference
 //    requiredReg                      - required register (pseudo or physical, constraints)
 //    searchDepth                      - depth to conduct search on preference graph
-//    allocatableRegisterTagBitVector - bit vector of allocatable register tags
+//    allocatableRegisterTagBitVector  - bit vector of allocatable register tags
 //    doOverridePreferredCost          - should we override the preferred cost
 //    overridePreferredCost            - cost to be used when overriding
 //    registerPreferenceVector         - output register preference vector (registers and costs)
@@ -7443,8 +7530,8 @@ Allocator::SelectPreferredRegister
 //
 // Arguments:
 //
-//    tile                             - Tile to preference with
-//    liveRange                        - LiveRange to preference
+//    tile                            - Tile to preference with
+//    liveRange                       - LiveRange to preference
 //    allocatableRegisterTagBitVector - BitVector of allocatable register tags
 //
 //------------------------------------------------------------------------------
@@ -7592,8 +7679,8 @@ Allocator::ComputePreference
             // second chance globals that fail their preference and has an anti preference
             // for the allocatable register.
 
-            Tiled::Cost             mostCost;
-            unsigned  mostPreferredRegister
+            Tiled::Cost  mostCost;
+            unsigned     mostPreferredRegister
                = this->GetMostPreferredRegister(costModel, &mostCost, registerPreferenceVector);
 
             if (doAllocate && liveRange->IsSecondChanceGlobal && (preferredReg != mostPreferredRegister)) {

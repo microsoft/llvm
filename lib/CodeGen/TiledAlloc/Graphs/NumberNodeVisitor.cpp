@@ -11,8 +11,6 @@
 #include "NodeFlowOrder.h"
 #include "../Graphs/Graph.h"
 
-#include <iostream>
-
 namespace Tiled
 {
 namespace Graphs

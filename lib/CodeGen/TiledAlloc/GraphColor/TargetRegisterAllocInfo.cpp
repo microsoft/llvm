@@ -25,8 +25,11 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetInstrInfo.h"
-#include "llvm/CodeGen/RegisterClassInfo.h"
+#include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
+#include "llvm/Target/TargetLowering.h"
 
+#define DEBUG_TYPE "tiled-trai"
 
 namespace Tiled
 {
@@ -42,8 +45,6 @@ TargetRegisterAllocInfo::TargetRegisterAllocInfo
 ) : vrInfo(vri), MF(mf), TRI(MF->getSubtarget().getRegisterInfo()),
     TII(MF->getSubtarget().getInstrInfo())
 {
-   const llvm::MachineRegisterInfo &MRI = this->MF->getRegInfo();
-
    const llvm::TargetRegisterInfo * const targetRegInfo = mf->getSubtarget().getRegisterInfo();
 
    this->MaximumRegisterCategoryId = 0;
@@ -84,6 +85,7 @@ TargetRegisterAllocInfo::TargetRegisterAllocInfo
       unsigned tag = vrInfo->GetTag(reg);
       doNotAllocateRegisterAliasTagBitVector->set(tag);
    }
+
    this->DoNotAllocateRegisterAliasTagBitVector = doNotAllocateRegisterAliasTagBitVector;
 
    llvm::SparseBitVector<> * calleeSaveRegisterAliasTagSet = new llvm::SparseBitVector<>();
@@ -113,12 +115,16 @@ TargetRegisterAllocInfo::Spill
 )
 {
    // note that the last 3 arguments are currently not used
-
-   //std::cout << "MBB#" << insertAfterInstruction->getParent()->getNumber() << "  ";  ///
-   //std::cout << "Spill:  vreg" << (operand->getReg() & ~(1u << 31)) << "  slot=" << spillOperand->getIndex() << std::endl;  ///
+   DEBUG(llvm::dbgs() << "MBB#" << insertAfterInstruction->getParent()->getNumber() << "  ");
+   DEBUG(llvm::dbgs() << "Spill:  vreg" << (registerOperand->getReg() & ~(1u << 31)) << "  slot=" << spillOperand->getIndex() << "\n");
 
    llvm::MachineBasicBlock *         MBB = insertAfterInstruction->getParent();
-   const llvm::TargetRegisterClass * RC = this->GetBaseIntegerRegisterCategory(/*srcReg*/);
+   const llvm::TargetRegisterClass * RC;
+   if (TRI->isVirtualRegister(srcReg))
+      RC = MF->getRegInfo().getRegClass(srcReg);
+   else
+      RC = TRI->getLargestLegalSuperClass(TRI->getMinimalPhysRegClass(srcReg), *MF);
+
    llvm::MachineBasicBlock::iterator MII;
    if (insertAfterInstruction->getNextNode()) {
       MII = insertAfterInstruction->getNextNode();
@@ -127,7 +133,16 @@ TargetRegisterAllocInfo::Spill
       MII = MBB->instr_end();
    }
 
-   this->TII->storeRegToStackSlot(*MBB, MII, srcReg, false, spillOperand->getIndex(), RC, this->TRI);
+   int frameIndex = spillOperand->getIndex();
+   if (MF->getFrameInfo().getObjectSize(frameIndex) < this->TRI->getRegSizeInBits(*RC)) {
+      // The default slot size for spilling is 64bits.
+     // Create the correctly sized stack slot (i.e. 80b for x86 fp)
+      frameIndex = MF->getFrameInfo().CreateSpillStackObject(this->TRI->getRegSizeInBits(*RC) / 8,
+                                                             this->TRI->getSpillAlignment(*RC));
+      spillOperand->setIndex(frameIndex);
+   }
+
+   this->TII->storeRegToStackSlot(*MBB, MII, srcReg, false, frameIndex, RC, this->TRI);
    //TBD: implementing the isKill (4th) argument, if relevant to this RA, would require bringing in from
    //     clients an extra argument set from llvm::MachineOperand::isKill() of the operand being spilled
 }
@@ -147,7 +162,12 @@ TargetRegisterAllocInfo::Reload
    // note that the last 3 arguments are currently not used
 
    llvm::MachineBasicBlock *         MBB = insertBeforeInstruction->getParent();
-   const llvm::TargetRegisterClass * RC = this->GetBaseIntegerRegisterCategory(/*destReg*/);
+   const llvm::TargetRegisterClass * RC;
+   if (TRI->isVirtualRegister(destReg))
+      RC = MF->getRegInfo().getRegClass(destReg);
+   else
+      RC = TRI->getLargestLegalSuperClass(TRI->getMinimalPhysRegClass(destReg), *MF);
+
    llvm::MachineBasicBlock::iterator MII = insertBeforeInstruction;
 
    this->TII->loadRegFromStackSlot(*MBB, MII, destReg, reloadOperand->getIndex(), RC, this->TRI);
@@ -252,22 +272,17 @@ TargetRegisterAllocInfo::GetRegisterCategory
    // So for regs that can potentially be conflicted, return identical RC!
    if (!Reg) {
       //issue - reg0 is noreg, return something here (refer to llvm/lib/CodeGen/TargetRegisterInfo.cpp).
-      return GetBaseIntegerRegisterCategory();
+      return TRI->getRegClass(0); //the returned valued can't be nullptr but is not really used
    }
    else if (this->TRI->isVirtualRegister(Reg)) {
-      const llvm::TargetRegisterClass *RC = this->MF->getRegInfo().getRegClassOrNull(Reg);
-      if (RC == nullptr) return nullptr;
-      return this->TRI->getLargestLegalSuperClass(RC, *(this->MF));
+      return MF->getRegInfo().getRegClass(Reg);
    }
    else if (this->TRI->isPhysicalRegister(Reg)) {
-      //TODO:
-      //issue - temporary fix here to only return this RC for any physical Reg.
-      return GetBaseIntegerRegisterCategory();
-      //return this->TRI->getMinimalPhysRegClass(Reg);
+      return TRI->getLargestLegalSuperClass(TRI->getMinimalPhysRegClass(Reg), *MF);
    }
    else {
       llvm_unreachable("Unimplemented register type.");
-      return GetBaseIntegerRegisterCategory();
+      return nullptr;
    }
 }
 
@@ -279,7 +294,6 @@ TargetRegisterAllocInfo::CanReuseSpillSymbol
    bool               mayBeParameter
 )
 {
-   //TBD: was defined in Arm target as: [thunk("(!symbol->AsVariableSymbol->IsParameter)")]
    return !mayBeParameter;
 }
 
@@ -294,33 +308,26 @@ TargetRegisterAllocInfo::Fold
    return Cost::InfiniteCost;
 }
 
-// By default return the pointer register class for integers
 const llvm::TargetRegisterClass *
 TargetRegisterAllocInfo::GetBaseIntegerRegisterCategory()
 {
-   const llvm::Triple &triple = this->MF->getTarget().getTargetTriple();
-
-   if (triple.getArch() != llvm::Triple::arm) {
-      llvm_unreachable("Your target is not yet supported by TiledRegAlloc.");
-      return nullptr;
-   }
-
-   return this->TRI->getPointerRegClass(*this->MF);
+   // QWordRegisters for amd64 and DWordRegisters for x86
+   const llvm::TargetLowering *TLI = MF->getSubtarget().getTargetLowering();
+   if (MF->getTarget().getTargetTriple().isArch64Bit())
+      return TLI->getRegClassFor(llvm::MVT::i64);
+   else
+      return TLI->getRegClassFor(llvm::MVT::i32);
 }
 
-// By default return the pointer register class for floats
 const llvm::TargetRegisterClass *
 TargetRegisterAllocInfo::GetBaseFloatRegisterCategory()
 {
-   //FIXME: implement this for FP regs instead of following Integers.
-   const llvm::Triple &triple = this->MF->getTarget().getTargetTriple();
-
-   if (triple.getArch() != llvm::Triple::arm) {
-      llvm_unreachable("Your target is not yet supported by TiledRegAlloc.");
-      return nullptr;
-   }
-
-   return this->TRI->getRegClass(0);
+   // XmmOWordRegisters for amd64
+   const llvm::TargetLowering *TLI = MF->getSubtarget().getTargetLowering();
+   if (MF->getTarget().getTargetTriple().isArch64Bit())
+      return TLI->getRegClassFor(llvm::MVT::f64);
+   else
+      return TLI->getRegClassFor(llvm::MVT::f32);
 }
 
 void

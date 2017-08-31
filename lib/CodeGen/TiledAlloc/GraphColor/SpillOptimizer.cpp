@@ -22,6 +22,7 @@
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/IR/DebugLoc.h"
 
+#define DEBUG_TYPE "tiled-spill"
 
 namespace Tiled
 {
@@ -419,6 +420,7 @@ SpillOptimizer::New
    spillOptimizer->ScratchBitVector1 = scratchBitVector1;
    spillOptimizer->ScratchBitVector2 = scratchBitVector2;
    spillOptimizer->LiveBitVector = liveBitVector;
+   spillOptimizer->inFunctionSpilledLRs = 0;
 
    return spillOptimizer;
 }
@@ -1948,6 +1950,7 @@ SpillOptimizer::ComputeReload
 
    targetRegisterAllocator->Reload(scratchOperand, reg, scratchSpill, endInstruction,
       doInsert, isTileReload, liveRange->IsGlobal());
+   if (doInsert) this->inFunctionSpilledLRs++;
 
    // Reload generates one or more instructions, get the start and end of that sequence.
 
@@ -2892,6 +2895,7 @@ SpillOptimizer::ComputePendingSpill
 
    targetRegisterAllocator->Spill(sourceOperand, reg, spillOperand,
       startInstruction, doInsert, isTileSpill, liveRange->IsGlobal());
+   if (doInsert) this->inFunctionSpilledLRs++;
 
    // Spill generates one or more instructions, get the start and end of that sequence.
 
@@ -3567,6 +3571,7 @@ SpillOptimizer::ComputeEnterLoad
       bool                    isGlobalLiveRange = true;
 
       targetRegisterAllocator->Reload(registerOperand, reg, spillOperand, insertInstruction, doInsert, isTileReload, isGlobalLiveRange);
+      if (doInsert) this->inFunctionSpilledLRs++;
 
       llvm::MachineInstr * transferInstruction = insertInstruction->getPrevNode();
       this->SetSpillKinds(transferInstruction, GraphColor::SpillKinds::Reload);
@@ -3785,6 +3790,7 @@ SpillOptimizer::ComputeExitSave
     bool  isGlobalLiveRange = true;
 
     targetRegisterAllocator->Spill(registerOperand, reg, spillOperand, insertInstruction, doInsert, isTileSpill, isGlobalLiveRange);
+    if (doInsert) this->inFunctionSpilledLRs++;
 
     llvm::MachineInstr *  transferInstruction = insertInstruction->getNextNode();
 
@@ -5854,162 +5860,154 @@ SpillOptimizer::TileBoundary
    bool                      doInsert
 )
 {
+   if (spillAliasTagBitVector == nullptr) return;
+
    GraphColor::Tile *        tile = this->Tile;
    GraphColor::TileGraph *   tileGraph = tile->TileGraph;
    GraphColor::Allocator *   allocator = this->Allocator;
    Tiled::VR::Info *         vrInfo = this->VrInfo;
    llvm::SparseBitVector<> * doNotSpillAliasTagBitVector = allocator->DoNotSpillAliasTagBitVector;
 
-   if (spillAliasTagBitVector != nullptr) {
-      // Process tile boundary instructions for any direct spills:
+   // Process tile boundary instructions for any direct spills:
+   GraphColor::Tile * nestedTile = tileGraph->GetNestedTile(instruction->getParent());
 
-      if (Tile::IsEnterTileInstruction(instruction)) {
-         llvm::MachineOperand * dstOperand;
-         unsigned dstIndex = instruction->getNumExplicitOperands();
+   if (Tile::IsEnterTileInstruction(instruction)) {
+      llvm::MachineOperand * dstOperand;
+      unsigned dstIndex = instruction->getNumExplicitOperands();
+      unsigned numOperands = instruction->getNumOperands();
 
-         // foreach_destination_opnd_editing
-         while (dstIndex < instruction->getNumOperands() && (dstOperand = &(instruction->getOperand(dstIndex))) && dstOperand->isDef())
-         {
-            unsigned destinationTag = vrInfo->GetTag(dstOperand->getReg());
+      // foreach_destination_opnd_editing
+      while (dstIndex < numOperands && (dstOperand = &(instruction->getOperand(dstIndex))) && dstOperand->isDef())
+      {
+         unsigned destinationTag = vrInfo->GetTag(dstOperand->getReg());
 
-            if (vrInfo->CommonMayPartialTags(destinationTag, spillAliasTagBitVector)) {
-               instruction->RemoveOperand(dstIndex);
+         if (vrInfo->CommonMayPartialTags(destinationTag, spillAliasTagBitVector)) {
+            instruction->RemoveOperand(dstIndex);
 
-               GraphColor::Tile *      nestedTile = tileGraph->GetNestedTile(instruction->getParent());
-               GraphColor::LiveRange * nestedSummaryLiveRange = nestedTile->GetSummaryLiveRange(destinationTag);
+            GraphColor::LiveRange * nestedSummaryLiveRange = nestedTile->GetSummaryLiveRange(destinationTag);
+            // if the nested summary live range is still mapped, spill it.
+            if (nestedSummaryLiveRange != nullptr) {
+               assert(!nestedSummaryLiveRange->HasReference());
+               nestedSummaryLiveRange->IsSecondChanceGlobal = true;
+            }
+            continue;
+         }
 
-               // if the nested summary live range is still mapped, spill it.
+         ++dstIndex;
+      }
 
-               if (nestedSummaryLiveRange != nullptr) {
-                  assert(!nestedSummaryLiveRange->HasUse() && !nestedSummaryLiveRange->HasDefinition());
-                  nestedSummaryLiveRange->IsSecondChanceGlobal = true;
-               }
+   } else {
+      assert(Tile::IsExitTileInstruction(instruction));
 
+      llvm::MachineOperand * srcOperand;
+      unsigned numExplicitOperands = instruction->getNumExplicitOperands();
+      unsigned srcIndex = 0;
+
+      // foreach_source_opnd_editing
+      while (srcIndex < numExplicitOperands && (srcOperand = &(instruction->getOperand(srcIndex))) && srcOperand->isUse())
+      {
+         unsigned sourceTag = vrInfo->GetTag(srcOperand->getReg());
+         GraphColor::LiveRange * nestedSummaryLiveRange = nestedTile->GetSummaryLiveRange(sourceTag);
+
+         if (vrInfo->CommonMayPartialTags(sourceTag, spillAliasTagBitVector)) {
+            instruction->RemoveOperand(srcIndex);
+            continue;
+         }
+
+         ++srcIndex;
+      }
+   }
+
+   // For EnterTiles, when we have spill tags, and we're inserting
+   // code to stretch spill live ranges if in "range" for reuse in pass 2.
+
+   if (doInsert) {
+      llvm::SparseBitVector<>::iterator sp;
+
+      // foreach_sparse_bv_bit
+      for (sp = spillAliasTagBitVector->begin(); sp != spillAliasTagBitVector->end(); ++sp)
+      {
+         unsigned spillTag = *sp;
+         GraphColor::LiveRange * globalLiveRange = allocator->GetGlobalLiveRange(spillTag);
+
+         if (globalLiveRange != nullptr) {
+            if (globalLiveRange->IsCalleeSaveValue) {
+               // Don't extend callee save values (spilled one place in a tile is enough - a kill is a
+               // kill). Once a "switch" spill is in then the value can not be extended past it. 
                continue;
             }
 
-            ++dstIndex;
-         }
+            // Boundary instructions are marked with the tile they Enter/Exit in the instructionId
 
-      } else {
-         assert(Tile::IsExitTileInstruction(instruction));
+            unsigned tileId = allocator->GetTileId(instruction);
+            GraphColor::Tile * childTile = tileGraph->GetTileByTileId(tileId);
 
-         llvm::MachineOperand * srcOperand = (instruction->uses()).begin();
-         unsigned srcIndex = instruction->getOperandNo(srcOperand);
+            assert(childTile->ParentTile == tile);
+            assert(childTile->EntryBlockSet->test(instruction->getParent()->getNumber())
+                  || childTile->ExitBlockSet->test(instruction->getParent()->getNumber()));
 
-         // foreach_source_opnd_editing
-         while (srcIndex < instruction->getNumExplicitOperands())
-         {
-            srcOperand = &(instruction->getOperand(srcIndex));
-            if (srcOperand->isReg() && !srcOperand->isImplicit()) {
+            GraphColor::LiveRange * summaryLiveRange = childTile->GetSummaryLiveRange(spillTag);
+
+            if ((summaryLiveRange != nullptr) && !summaryLiveRange->IsSecondChanceGlobal) {
+               // Append copy of last spill def for this tag if in range and associate
+               // it with the global live range tag.
+
+               llvm::MachineOperand * availableDefinition = this->GetDefinition(spillTag, instruction);
+
+               if ((availableDefinition != nullptr) && (Tile::IsEnterTileInstruction(instruction))) {
+                  //&& (availableDefinition->Field->BitSize >= globalLiveRangeBitSize)
+                  llvm::MachineOperand  operand = llvm::MachineOperand::CreateReg(availableDefinition->getReg(), false);
+                  instruction->addOperand(operand);
+                  //std::cout << " ENTER#" << instruction->getParent()->getNumber() << ": availableOperand = " << operand.getReg() << std::endl;
+
+                  unsigned lastExplicitOperandIndex = instruction->getNumExplicitOperands() - 1;
+                  llvm::MachineOperand * extendedUse = &(instruction->getOperand(lastExplicitOperandIndex));
+
+                  this->SetSpillAliasTag(extendedUse, globalLiveRange->VrTag);
+                  unsigned extendedUseTag = vrInfo->GetTag(extendedUse->getReg());
+                  vrInfo->MinusMayPartialTags(extendedUseTag, doNotSpillAliasTagBitVector);
+               }
+            }
+
+         } else {
+            // Do any spills of operands left from prior iterations.
+
+            llvm::MachineOperand * srcOperand;
+            unsigned srcIndex = (instruction->getNumExplicitOperands() > 0) ? 0 : 1;
+
+            // foreach_register_source_opnd_editing
+            while (srcIndex < instruction->getNumExplicitOperands())
+            {
+               srcOperand = &(instruction->getOperand(srcIndex));
+
                unsigned sourceTag = vrInfo->GetTag(srcOperand->getReg());
 
-               if (vrInfo->CommonMayPartialTags(sourceTag, spillAliasTagBitVector)) {
-                  instruction->RemoveOperand(srcIndex);
-                  continue;
-               }
-            }
-
-            ++srcIndex;
-         }
-
-      }
-
-      // For EnterTiles, when we have spill tags, and we're inserting
-      // code to stretch spill live ranges if in "range" for reuse in pass 2.
-
-      if (doInsert) {
-         llvm::SparseBitVector<>::iterator sp;
-
-         // foreach_sparse_bv_bit
-         for (sp = spillAliasTagBitVector->begin(); sp != spillAliasTagBitVector->end(); ++sp)
-         {
-            unsigned spillTag = *sp;
-            GraphColor::LiveRange * globalLiveRange = allocator->GetGlobalLiveRange(spillTag);
-
-            if (globalLiveRange != nullptr) {
-               if (globalLiveRange->IsCalleeSaveValue) {
-                  // Don't extend callee save values (spilled one place in a tile is enough - a kill is a
-                  // kill). Once a "switch" spill is in then the value can not be extended past it. 
-                  continue;
-               }
-
-               // Boundary instructions are marked with the tile they Enter/Exit in the instructionId
-
-               unsigned tileId = allocator->GetTileId(instruction);
-               GraphColor::Tile * childTile = tileGraph->GetTileByTileId(tileId);
-
-               assert(childTile->ParentTile == tile);
-               assert(childTile->EntryBlockSet->test(instruction->getParent()->getNumber())
-                     || childTile->ExitBlockSet->test(instruction->getParent()->getNumber()));
-
-               GraphColor::LiveRange * summaryLiveRange = childTile->GetSummaryLiveRange(spillTag);
-
-               if ((summaryLiveRange != nullptr) && !summaryLiveRange->IsSecondChanceGlobal) {
-                  // Append copy of last spill def for this tag if in range and associate
-                  // it with the global live range tag.
-
+               if (vrInfo->MayPartiallyOverlap(spillTag, sourceTag)) {
                   llvm::MachineOperand * availableDefinition = this->GetDefinition(spillTag, instruction);
 
-                  if ((availableDefinition != nullptr) && (Tile::IsEnterTileInstruction(instruction))) {
-                     //&& (availableDefinition->Field->BitSize >= globalLiveRangeBitSize)
-                     llvm::MachineOperand  operand = llvm::MachineOperand::CreateReg(availableDefinition->getReg(), false);
-                     instruction->addOperand(operand);
-                     //std::cout << " ENTER#" << instruction->getParent()->getNumber() << ": availableOperand = " << operand.getReg() << std::endl;
+                  if (availableDefinition != nullptr) {
+                     unsigned globalLiveRangeTag = this->GetSpillAliasTag(srcOperand);
+                     assert(globalLiveRangeTag != VR::Constants::InvalidTag);
 
-                     unsigned lastExplicitOperandIndex = instruction->getNumExplicitOperands() - 1;
-                     llvm::MachineOperand * extendedUse = &(instruction->getOperand(lastExplicitOperandIndex));
+                     //was: llvm::MachineOperand * extendedUse = instruction->ReplaceOperand(srcOperand, availableDefinition);
+                     //** In LLVM implementation there is no actual replacement here.
+                     srcOperand->setReg(availableDefinition->getReg());
+                     llvm::MachineOperand * extendedUse = srcOperand;
 
-                     this->SetSpillAliasTag(extendedUse, globalLiveRange->VrTag);
+                     this->SetSpillAliasTag(extendedUse, globalLiveRangeTag);
+
                      unsigned extendedUseTag = vrInfo->GetTag(extendedUse->getReg());
                      vrInfo->MinusMayPartialTags(extendedUseTag, doNotSpillAliasTagBitVector);
+                  } else {
+                     instruction->RemoveOperand(srcIndex);
+                     continue;
                   }
                }
 
-            } else {
-               // Do any spills of operands left from prior iterations.
-
-               llvm::MachineOperand * srcOperand;
-               unsigned srcIndex = (instruction->getNumExplicitOperands() > 0) ? 0 : 1;
-
-               // foreach_register_source_opnd_editing
-               while (srcIndex < instruction->getNumExplicitOperands())
-               {
-                  srcOperand = &(instruction->getOperand(srcIndex));
-
-                  unsigned sourceTag = vrInfo->GetTag(srcOperand->getReg());
-
-                  if (vrInfo->MayPartiallyOverlap(spillTag, sourceTag)) {
-                     llvm::MachineOperand * availableDefinition = this->GetDefinition(spillTag, instruction);
-
-                     if (availableDefinition != nullptr) {
-                        unsigned globalLiveRangeTag = this->GetSpillAliasTag(srcOperand);
-                        assert(globalLiveRangeTag != VR::Constants::InvalidTag);
-
-                        //was: llvm::MachineOperand * extendedUse = instruction->ReplaceOperand(srcOperand, availableDefinition);
-                        srcOperand->setReg(availableDefinition->getReg());
-                        //std::cout << " ENTER#" << instruction->getParent()->getNumber() << ": srcOperand = " << srcOperand->getReg() << std::endl;
-                        llvm::MachineOperand * extendedUse = srcOperand;
-                        //** In LLVM implementation there is no actual replacement here.
-
-                        this->SetSpillAliasTag(extendedUse, globalLiveRangeTag);
-
-                        unsigned extendedUseTag = vrInfo->GetTag(extendedUse->getReg());
-                        vrInfo->MinusMayPartialTags(extendedUseTag, doNotSpillAliasTagBitVector);
-                     } else {
-                        instruction->RemoveOperand(srcIndex);
-                        continue;
-                     }
-                  }
-
-                  ++srcIndex;
-               }
+               ++srcIndex;
             }
-
          }
-
       }
-
    }
 }
 
@@ -6177,7 +6175,6 @@ SpillOptimizer::IsLegalToReplaceOperand
     //}
 
     if (SpillOptimizer::IsCalleeSaveTransfer(instruction)) {
-
        return false;
     }
 
@@ -7193,8 +7190,7 @@ SlotWiseOptimizer::ComputeBlockData
 
             Dataflow::RegisterLivenessWalker ^ registerLivenessWalker = liveness->RegisterLivenessWalker;
 
-            registerLivenessWalker->TransferDestinations(danglingInstruction,
-                generateBitVector, killedBitVector, true, false);
+            registerLivenessWalker->TransferDestinations(danglingInstruction, generateBitVector, killedBitVector);
 
             if (aliasInfo->CommonMayPartialTags(liveRangeAliasTag, killedBitVector))
             {

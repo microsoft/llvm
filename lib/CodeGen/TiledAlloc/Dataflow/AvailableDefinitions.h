@@ -25,8 +25,7 @@ namespace Dataflow
 //
 // Description:
 //
-//    The Dataflow structure used by AvailableDefinitionWalker
-//    . 
+//    The Dataflow structure used by AvailableDefinitionWalker.
 //
 //------------------------------------------------------------------------------
 

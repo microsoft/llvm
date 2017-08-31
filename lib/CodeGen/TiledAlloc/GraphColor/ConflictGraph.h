@@ -34,9 +34,7 @@ class Tile;
 class ConflictGraph : public GraphColor::Graph
 {
 
- public:
-
-   //[nyi]   void Delete(); 
+public:
 
    static GraphColor::ConflictGraph *
    New
@@ -188,8 +186,6 @@ class SummaryConflictGraph : public GraphColor::ConflictGraph
 {
 
 public:
-
-   //[nyi] override void Delete();
 
    static GraphColor::SummaryConflictGraph *
    New

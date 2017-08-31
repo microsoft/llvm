@@ -16,13 +16,12 @@
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 
 #include <list>
 #include <map>
-#include <unordered_map>
 
 namespace Tiled
 {

@@ -169,7 +169,28 @@ Info::CommonMayPartialTags
    
    return hasCommon;
 }
-   
+
+bool
+Info::CommonMayPartialTags
+(
+   llvm::SparseBitVector<>* tagsBitVector1,
+   llvm::SparseBitVector<>* tagsBitVector2
+)
+{
+   bool  hasCommon;
+
+   // The alias tags are computed depending upon whether the operand
+   // is a direct reference Location or an indirect reference Reference.
+
+   // LLVM's VRs hold single values, NO locations with layouts, and NO references to locations
+
+   // <place for code supporting architectures with sub-registers>
+
+   hasCommon = tagsBitVector1->intersects(*tagsBitVector2);
+
+   return hasCommon;
+}
+
 //-----------------------------------------------------------------------------
 //
 // Description:
@@ -200,7 +221,7 @@ Info::MinusMayPartialTags
 )
 {
    //VR::Info*  info = this;
-  
+   
    assert(tagsBitVector != nullptr);
    
    // The alias tags are computed depending upon whether the operand
@@ -263,7 +284,7 @@ Info::OrMayTotalTags
 )
 {
    //VR::Info* info = this;
-  
+   
    assert(tagsBitVector != nullptr);
    
    // The alias tags are computed depending upon whether the operand
@@ -622,7 +643,7 @@ Info::DependencyForward
 //
 // Arguments:
 //
-//    operand      - IR::Operand to match against.
+//    operand         - Operand to match against.
 //    fromInstruction - Start of code range to search.
 //    toInstruction   - End of code range to search.
 //
@@ -678,7 +699,7 @@ Info::PartialDefinitionForward
 //
 // Arguments:
 //
-//    operand      - IR::Operand to match against.
+//    operand         - Operand to match against.
 //    fromInstruction - Start of code range to search.
 //    toInstruction   - End of code range to search.
 //
@@ -734,7 +755,7 @@ Info::PartialDefinitionBackward
 //
 // Arguments:
 //
-//    operand      - The IR::Operand to match against.
+//    operand         - Operand to match against.
 //    fromInstruction - Start of code range to search.
 //    toInstruction   - End of code range to search.
 //

@@ -410,7 +410,7 @@ LiveRange::Allocate
 //    or recalculation.  Needed for point lifetimes and special cases.
 //
 //------------------------------------------------------------------------------
-  
+
 void
 LiveRange::MarkAsInfinite()
 {
@@ -503,8 +503,8 @@ LiveRange::MaxPreferenceEdgeCost()
 {
    GraphColor::Allocator *          allocator = this->Allocator;
    GraphColor::Tile *               tile = this->Tile;
-   Tiled::Cost                        cost;
-   Tiled::Cost                        maxCost = allocator->ZeroCost;
+   Tiled::Cost                      cost;
+   Tiled::Cost                      maxCost = allocator->ZeroCost;
    GraphColor::AllocatorCostModel * costModel = tile->CostModel;
 
    RegisterAllocator::PreferenceConstraint preferenceConstraint;
@@ -771,11 +771,11 @@ LiveRange::AddLiveRange
 void
 LiveRange::RemoveFromSummary
 (
-   int vrTag
+   unsigned vrTag
 )
 {
    GraphColor::Allocator * allocator = this->Allocator;
-   Tiled::VR::Info *         vrInfo = allocator->VrInfo;
+   Tiled::VR::Info *       vrInfo = allocator->VrInfo;
 
    assert(this->IsSummary());
 

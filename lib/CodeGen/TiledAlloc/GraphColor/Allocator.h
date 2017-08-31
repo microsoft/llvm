@@ -12,21 +12,21 @@
 //
 // Components:
 //
-// allocator.h             - Base allocator object
-// tile.h                  - Region representation used to capture locality.
-// liveness.h              - Allocator view of variable 'liveness'
-// graph.h                 - Base graph implementation shared by conflict-graph and preference-graph
-// conflict-graph.h        - Graph representation capturing conflicts between live ranges.
-// preference-graph.h      - Graph representation capturing preference relationships between live ranges
+// Allocator.h             - Base allocator object
+// Tile.h                  - Region representation used to capture locality.
+// Liveness.h              - Allocator view of variable 'liveness'
+// Graph.h                 - Base graph implementation shared by conflict-graph and preference-graph
+// ConflictGraph.h         - Graph representation capturing conflicts between live ranges.
+// PreferenceGraph.h       - Graph representation capturing preference relationships between live ranges
 //                           and between live ranges and registers.
-// cost-model.h            - Defines allocator cost models.  Captures tradeoff between cycles and code
+// CostModel.h             - Defines allocator cost models.  Captures tradeoff between cycles and code
 //                           size for different regions of the program (tiles)
-// live-range.h            - Captures a variables live range and associated information.  This is the
+// LiveRange.h             - Captures a variables live range and associated information.  This is the
 //                           unit of allocation and is based on an objects alias tag.
-// summary-variable.h      - Summary information of a tile mapping of live ranges to allocated resource.
-// preference.h            - Preference edge information.
-// spill-optimizer.h       - Spill/reload/recalculate sharing logic and low-level spill costing routines.
-// available-expressions.h - Provides information about interesting expressions for use in recalculation.
+// SummaryVariable.h       - Summary information of a tile mapping of live ranges to allocated resource.
+// Preference.h            - Preference edge information.
+// SpillOptimizer.h        - Spill/reload/recalculate sharing logic and low-level spill costing routines.
+// AvailableExpressions.h  - Provides information about interesting expressions for use in recalculation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -242,14 +242,15 @@ public:
       PendingSpillAliasTagBitVector(nullptr), PreferenceSearchDepth(std::numeric_limits<unsigned>::max()),
       RegisterCategoryIdToAllocatableRegisterCount(nullptr), RegisterCostVector(nullptr), ScratchBitVector1(nullptr), ScratchBitVector2(nullptr),
       ScratchBitVector3(nullptr), SearchLiveRangeId(std::numeric_limits<unsigned>::max()), SearchNumber(std::numeric_limits<unsigned>::max()),
-      SpillOptimizer(nullptr), IdToSlotMap(nullptr), TargetRegisterAllocator(nullptr), TileGraph(nullptr), TotalSpillCost(), TotalTransferCost(),
-      UndefinedRegisterAliasTagBitVector(nullptr), UnitCost(),
-      ZeroCost(), BooleanVector(nullptr), CalleeSaveConservativeThreshold(std::numeric_limits<unsigned>::max()),
+      SpillOptimizer(nullptr), inFunctionRemovedLocalLRs(0), IdToSlotMap(nullptr), TargetRegisterAllocator(nullptr),
+      TileGraph(nullptr), TotalSpillCost(), TotalTransferCost(), UndefinedRegisterAliasTagBitVector(nullptr), UnitCost(), ZeroCost(),
+      BooleanVector(nullptr), CalleeSaveConservativeThreshold(std::numeric_limits<unsigned>::max()),
       ConservativeControlThreshold(std::numeric_limits<unsigned>::max()), ConservativeFatThreshold(std::numeric_limits<unsigned>::max()),
       ConservativeLoopThreshold(std::numeric_limits<unsigned>::max()), CostValueVector(nullptr), IterationLimit(std::numeric_limits<unsigned>::max()),
       MaximumRegisterId(std::numeric_limits<unsigned>::max()), ProfileBasisCount(), RegisterAntiPreferenceVector(nullptr),
       RegisterCategoryIdToAllocatableAliasTagBitVector(nullptr), RegisterPreferenceVector(nullptr), RegisterPressureVector(nullptr),
-      SimplificationHeuristic(GraphColor::Heuristic::Invalid), SimplificationStack(nullptr), TemporaryRegisterPreferenceVectors(nullptr), MappedVRs()
+      SimplificationHeuristic(GraphColor::Heuristic::Invalid), SimplificationStack(nullptr), TemporaryRegisterPreferenceVectors(nullptr),
+      BlockIdToMaxLocalRegister()
    {}
 
    void Delete();
@@ -471,12 +472,6 @@ public:
       GraphColor::Tile * tile
    );
 
-   //unsigned
-   //GetOperandId
-   //(
-   //   llvm::MachineOperand * operand
-   //);
-
    unsigned
    GetTileId
    (
@@ -508,7 +503,7 @@ public:
       GraphColor::PhysicalRegisterPreferenceVector * registerPreferenceVector,
       unsigned                                       requiredReg,
       unsigned                                       preferredReg,
-      Tiled::Cost                                      preferredCost,
+      Tiled::Cost                                    preferredCost,
       llvm::SparseBitVector<> *                      allocatableRegisterTagBitVector
    );
 
@@ -517,7 +512,7 @@ public:
    (
       GraphColor::PhysicalRegisterPreferenceVector * registerPreferenceVector,
       unsigned                                       reg,
-      Tiled::Cost                                      cost
+      Tiled::Cost                                    cost
    );
 
    bool
@@ -653,7 +648,7 @@ public:
    void
    ScaleCyclesByFrequency
    (
-      Tiled::Cost *           cost,
+      Tiled::Cost *         cost,
       llvm::MachineInstr *  instruction
    )
    {
@@ -679,15 +674,13 @@ public:
       unsigned Reg
    )
    {
-      // for now just return the single register category 
-      return this->BaseIntegerRegisterCategory;
+      if (TRI->isVirtualRegister(Reg))
+         MF->getRegInfo().getRegClass(Reg);
+      else
+         return TRI->getLargestLegalSuperClass(TRI->getMinimalPhysRegClass(Reg), *MF);
+
    }
 
-   unsigned
-   getNumRegisterCategories()
-   {
-      return 1;  // for now just 1
-   }
 
 public:
 
@@ -777,6 +770,7 @@ public:
    unsigned                                    SearchLiveRangeId;
    unsigned                                    SearchNumber;
    GraphColor::SpillOptimizer *                SpillOptimizer;
+   unsigned                                    inFunctionRemovedLocalLRs;
 
    Graphs::OperandToSlotMap *                  IdToSlotMap;
    TargetRegisterAllocInfo *                   TargetRegisterAllocator;
@@ -821,6 +815,12 @@ private:
 
    void
    Build
+   (
+      GraphColor::Tile * tile
+   );
+
+   void
+   MarkLiveRangesSpanningCall
    (
       GraphColor::Tile * tile
    );
@@ -922,7 +922,7 @@ private:
    EndBlock
    (
       llvm::MachineBasicBlock * block,
-     GraphColor::Tile *        tile
+      GraphColor::Tile *        tile
    );
 
    void
@@ -949,8 +949,8 @@ private:
       GraphColor::LiveRangeVector *                   preferenceLiveRangeVector,
       GraphColor::PhysicalRegisterPreferenceVector *  registerPreferenceVector,
       int                                             searchDepth,
-     llvm::SparseBitVector<> *                        allocatableRegisterTagBitVector,
-     llvm::SparseBitVector<> *                        antiPreferencePrunedAllocatableRegisterTagBitVector,
+      llvm::SparseBitVector<> *                       allocatableRegisterTagBitVector,
+      llvm::SparseBitVector<> *                       antiPreferencePrunedAllocatableRegisterTagBitVector,
       GraphColor::PhysicalRegisterPreferenceVector *  registerAntiPreferenceVector
    );
 
@@ -965,7 +965,7 @@ private:
    (
       GraphColor::LiveRange *                         liveRange,
       GraphColor::AllocatorCostModel *                costModel,
-      Tiled::Cost *                                     outCost,
+      Tiled::Cost *                                   outCost,
       GraphColor::PhysicalRegisterPreferenceVector *  registerPreferenceVector
    );
 
@@ -973,7 +973,7 @@ private:
    GetMostPreferredRegister
    (
       GraphColor::AllocatorCostModel *                costModel,
-      Tiled::Cost *                                     outCost,
+      Tiled::Cost *                                   outCost,
       GraphColor::PhysicalRegisterPreferenceVector *  registerPreferenceVector
    );
 
@@ -1071,7 +1071,7 @@ private:
    (
       GraphColor::LiveRange *                         liveRange,
       GraphColor::AllocatorCostModel *                costModel,
-      Tiled::Cost *                                     outCost,
+      Tiled::Cost *                                   outCost,
       GraphColor::PhysicalRegisterPreferenceVector *  registerPreferenceVector,
       GraphColor::PhysicalRegisterPreferenceVector *  registerAntiPreferenceVector
    );
@@ -1081,7 +1081,7 @@ private:
    (
       GraphColor::PhysicalRegisterPreferenceVector * registerPreferenceVector,
       GraphColor::AllocatorCostModel *               costModel,
-      Tiled::Cost                                      cost
+      Tiled::Cost                                    cost
    );
 
    void
@@ -1191,7 +1191,7 @@ private:
    GraphColor::Heuristic                                SimplificationHeuristic;
    GraphColor::IdVector *                               SimplificationStack;
    GraphColor::PhysicalRegisterPreferenceVectorVector * TemporaryRegisterPreferenceVectors;
-   std::unordered_set<unsigned>                         MappedVRs;
+   std::map<int, unsigned>                              BlockIdToMaxLocalRegister;
 
    static std::map<llvm::MachineInstr*, unsigned>  instruction2TileId;
 };

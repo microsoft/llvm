@@ -15,7 +15,6 @@
 #include "../Graphs/NodeFlowOrder.h"
 
 #include "llvm/ADT/SparseBitVector.h"
-#include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 

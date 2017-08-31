@@ -15,7 +15,8 @@
 #include "Traverser.h"
 #include "Liveness.h"
 #include "llvm/Target/TargetOpcodes.h"
-#include <typeinfo>
+
+#define DEBUG_TYPE "tiled-liveness"
 
 namespace Tiled
 {
@@ -276,7 +277,7 @@ LivenessWalker::ComputeLiveness
 void
 LivenessWalker::MarkNotTracked
 (
-   Tiled::VR::Info *      vrInfo,
+   Tiled::VR::Info *     vrInfo,
    unsigned              tag
 )
 {
@@ -378,7 +379,7 @@ LivenessWalker::AddToLiveOut
 bool
 LivenessWalker::IsTracked
 (
-   Tiled::VR::Info *      vrInfo,
+   Tiled::VR::Info *    vrInfo,
    unsigned             tag
 )
 {
@@ -483,15 +484,15 @@ LivenessWalker::EvaluateBlock
    LivenessData * blockData = static_cast<LivenessData *>(this->GetBlockData(block));
    assert(temporaryData && blockData);
 
-#if defined(TILED_DEBUG_DUMPS)
-   std::cout << "\nMBB#" << block->getNumber() << "   (liveness)" << std::endl;
-   llvm::SparseBitVector<>::iterator a;
-   std::cout << "  LiveOut:   {";
-   for (a = temporaryData->LiveOutBitVector->begin(); a != temporaryData->LiveOutBitVector->end(); ++a) {
-	   std::cout << *a << ", ";
-   }
-   std::cout << "}" << std::endl;
-#endif
+   DEBUG({
+      llvm::dbgs() << "\nMBB#" << block->getNumber() << "   (liveness)\n";
+      llvm::SparseBitVector<>::iterator a;
+      llvm::dbgs() << "  LiveOut:   {";
+      for (a = temporaryData->LiveOutBitVector->begin(); a != temporaryData->LiveOutBitVector->end(); ++a) {
+         llvm::dbgs() << *a << ", ";
+      }
+      llvm::dbgs() << "}\n";
+   });
 
    if (blockData->MustEvaluate) {
       // Compute gen and kill sets.
@@ -500,9 +501,8 @@ LivenessWalker::EvaluateBlock
       for (rii = block->instr_rbegin(); rii != block->instr_rend(); ++rii)
       {
          const llvm::MachineInstr * instruction = &(*rii);
-#if defined(TILED_DEBUG_DUMPS)
-       instruction->dump();
-#endif
+   
+         DEBUG(instruction->dump());
 
          /* instruction was a CHI or a non-renamable PHI */
          if (instruction->isPHI() && /*TBD: */ isNonRenamablePhi(instruction)) {
@@ -513,26 +513,24 @@ LivenessWalker::EvaluateBlock
 
          // Don't transfer dangling definitions on the last instruction in the
          // block; these are considered part of the unique non-EH successor.
-         this->TransferDestinations(instruction,
-            blockData->GenerateBitVector, blockData->KillBitVector, false, true);
+         this->TransferDestinations(instruction, blockData->GenerateBitVector, blockData->KillBitVector);
 
          // Always transfer source liveness
          this->TransferSources(instruction, blockData->GenerateBitVector, blockData->KillBitVector);
 
-#if defined(TILED_DEBUG_DUMPS)
-          llvm::SparseBitVector<>::iterator a;
-          std::cout << "    Generate:  {";
-          for (a = blockData->GenerateBitVector->begin(); a != blockData->GenerateBitVector->end(); ++a) {
-             std::cout << *a << ", ";
-          }
-          std::cout << "}" << std::endl;
-          std::cout << "    Kill:      {";
-          for (a = blockData->KillBitVector->begin(); a != blockData->KillBitVector->end(); ++a) {
-             std::cout << *a << ", ";
-          }
-          std::cout << "}" << std::endl;
-#endif // TILED_DEBUG_DUMPS
-
+         DEBUG({
+            llvm::SparseBitVector<>::iterator a;
+            llvm::dbgs() << "    Generate:  {";
+            for (a = blockData->GenerateBitVector->begin(); a != blockData->GenerateBitVector->end(); ++a) {
+               llvm::dbgs() << *a << ", ";
+            }
+            llvm::dbgs() << "}\n";
+            llvm::dbgs() << "    Kill:      {";
+            for (a = blockData->KillBitVector->begin(); a != blockData->KillBitVector->end(); ++a) {
+               llvm::dbgs() << *a << ", ";
+            }
+            llvm::dbgs() << "}\n";
+         });
       }
    }
 
@@ -541,13 +539,14 @@ LivenessWalker::EvaluateBlock
                                     blockData->KillBitVector,
                                     blockData->GenerateBitVector);
 
-#if defined(TILED_DEBUG_DUMPS)
-    std::cout << "  LiveIn:    {";
-    for (a = temporaryData->LiveInBitVector->begin(); a != temporaryData->LiveInBitVector->end(); ++a) {
-       std::cout << *a << ", ";
-    }
-    std::cout << "}\n" << std::endl;
-#endif // TILED_DEBUG_DUMPS
+   DEBUG({
+      llvm::SparseBitVector<>::iterator a;
+      llvm::dbgs() << "  LiveIn:    {";
+      for (a = temporaryData->LiveInBitVector->begin(); a != temporaryData->LiveInBitVector->end(); ++a) {
+         llvm::dbgs() << *a << ", ";
+      }
+      llvm::dbgs() << "}\n\n";
+   });
 }
 
 void
@@ -612,8 +611,7 @@ LivenessWalker::MarkLastUseOperands
             // that we used to seed the live set already represents the execution
             // point prior to the dangling definitions executing.
 
-            this->TransferDestinations(instruction, liveBitVector, temporaryData->KillBitVector,
-               false, true);
+            this->TransferDestinations(instruction, liveBitVector, temporaryData->KillBitVector);
 
             foreach_dataflow_source_opnd(sourceOperand, instruction)
             {
@@ -720,7 +718,7 @@ LivenessWalker::LiveAfter
 
          //  - process kills
          this->TransferDestinations(instruction,
-            temporaryData->GenerateBitVector, temporaryData->KillBitVector, false, true);
+            temporaryData->GenerateBitVector, temporaryData->KillBitVector);
 
          //  - process gens
          this->TransferSources(instruction,
@@ -752,7 +750,7 @@ LivenessWalker::LiveAfter
 //
 // Returns:
 //
-//    TRUE if the alias tag resource is live after the given instruciton
+//    TRUE if the alias tag resource is live after the given instruction
 //
 //-------------------------------------------------------------------------------
 
@@ -788,7 +786,7 @@ LivenessWalker::IsLiveAfter
 //
 // Returns:
 //
-//    TRUE if the alias tag resource is live after the given instruciton
+//    TRUE if the alias tag resource is live after the given instruction
 //
 //-------------------------------------------------------------------------------
 
@@ -802,11 +800,6 @@ LivenessWalker::IsLiveAfter
    assert(operand->isReg());
 
    Tiled::VR::Info * vrInfo = this->vrInfo;
-
-   if (!operand->isReg()) {
-      return false;
-   }
-
    unsigned tag = vrInfo->GetTag(operand->getReg());
 
    // call 'IsLiveAfter()' with operand's alias tag.
@@ -844,7 +837,7 @@ LivenessWalker::IsLiveOut
       return true;
    }
 
-   Tiled::VR::Info *           vrInfo = this->vrInfo;
+   Tiled::VR::Info *         vrInfo = this->vrInfo;
    llvm::SparseBitVector<> * currentLiveSet = livenessData->LiveOutBitVector;
 
    return !this->IsTracked(vrInfo, tag) || vrInfo->CommonMayPartialTags(tag, currentLiveSet);
@@ -875,10 +868,6 @@ LivenessWalker::IsLiveOut
 )
 {
    assert(operand->isReg());
-   
-   if (!operand->isReg()) {
-      return false;
-   }
 
    Tiled::VR::Info *  vrInfo = this->vrInfo;
    unsigned tag = vrInfo->GetTag(operand->getReg());
@@ -952,7 +941,7 @@ LivenessWalker::IsLiveIn
       return true;
    }
 
-   Tiled::VR::Info *            vrInfo      = this->vrInfo;
+   Tiled::VR::Info *          vrInfo         = this->vrInfo;
    llvm::SparseBitVector<> *  currentLiveSet = livenessData->LiveInBitVector;
 
    return !this->IsTracked(vrInfo, vrTag) || vrInfo->CommonMayPartialTags(vrTag, currentLiveSet);
@@ -1013,7 +1002,7 @@ RegisterLivenessWalker::New()
    RegisterLivenessWalker *  walker = new RegisterLivenessWalker();
 
    walker->IsIncomplete = true;
-   walker->callKilledBitVector = new llvm::SparseBitVector<>();
+   walker->callKilledRegBitVector = new llvm::SparseBitVector<>();
 
    return walker;
 }
@@ -1076,7 +1065,7 @@ RegisterLivenessWalker::IsTracked
 //
 //   Updates GEN and KILL - removing total definitions from the GEN
 //   set and adding the same total defs to KILL. (for tempraries)
-//G
+//
 // Returns:
 //
 //   True if liveness was changed (defined as any update to the
@@ -1089,9 +1078,7 @@ RegisterLivenessWalker::TransferDestinations
 (
    const llvm::MachineInstr* instruction,
    llvm::SparseBitVector<>*  generateBitVector,
-   llvm::SparseBitVector<>*  killBitVector,
-   bool                      doTransferDangling,
-   bool                      doTransferNonDangling
+   llvm::SparseBitVector<>*  killBitVector
 )
 {
    Tiled::VR::Info* vrInfo = this->vrInfo;
@@ -1099,31 +1086,24 @@ RegisterLivenessWalker::TransferDestinations
 
    // Add into the KILL set any totally overlapped must-def tag aliases.
 
-   llvm::iterator_range<llvm::MachineInstr::const_mop_iterator> range(instruction->defs());
-   if (instruction->getOpcode() == llvm::TargetOpcode::ENTERTILE) {
-      range = instruction->implicit_operands();
-   }
+   llvm::iterator_range<llvm::MachineInstr::const_mop_iterator> range(instruction->operands());
    llvm::MachineInstr::const_mop_iterator destinationOperand;
 
    // foreach_destination_opnd
    for (destinationOperand = range.begin(); destinationOperand != range.end(); ++destinationOperand)
    {
-      if (!this->IsTracked(destinationOperand)) continue;
-
-      bool isDD = false;  //EH: = isDanglingDefinition(destinationOperand);
-
-      if ((doTransferNonDangling && !isDD) || (doTransferDangling && isDD)) {
-         unsigned vrTag = vrInfo->GetTag(destinationOperand->getReg());
-
-         vrInfo->MinusMustTotalTags(vrTag, generateBitVector);
-         vrInfo->OrMustTotalTags(vrTag, killBitVector);
-         hasDataflowDestination = true;
+      if (!this->IsTracked(destinationOperand) || !destinationOperand->isDef()) {  //TODO: filter flag registers?
+         continue;
       }
+
+      unsigned vrTag = vrInfo->GetTag(destinationOperand->getReg());
+      vrInfo->MinusMustTotalTags(vrTag, generateBitVector);
+      vrInfo->OrMustTotalTags(vrTag, killBitVector);
+      hasDataflowDestination = true;
    }
 
    if (instruction->isCall()) {
-      for (unsigned i = 0, e = instruction->getNumOperands(); i != e; ++i)
-      {
+      for (unsigned i = 0, e = instruction->getNumOperands(); i != e; ++i) {
          const llvm::MachineOperand& mo = instruction->getOperand(i);
          if (mo.isReg() && (mo.isKill() || mo.isDef())) {
             unsigned rTag = vrInfo->GetTag(mo.getReg());
@@ -1134,29 +1114,28 @@ RegisterLivenessWalker::TransferDestinations
          }
       }
 
-      if (this->callKilledBitVector->empty()) {
+      if (this->callKilledRegBitVector->empty()) {
          llvm::MachineFunction * MF = this->FunctionUnit->machineFunction;
          const llvm::TargetRegisterInfo * TRI = MF->getSubtarget().getRegisterInfo();
          unsigned vectorSize = ((TRI->getNumRegs() + 31) / 32) * 32;
 
-         llvm::BitVector  callPreservedBitVector(vectorSize);
+         llvm::BitVector callPreservedBitVector(vectorSize);
          callPreservedBitVector.setBitsInMask(TRI->getCallPreservedMask(*MF, llvm::CallingConv::Fast));
 
-         llvm::BitVector  allocatableRegBitVector(vectorSize);
-         allocatableRegBitVector = TRI->getAllocatableSet(*MF);
-         allocatableRegBitVector.reset(65, 192);  allocatableRegBitVector.reset(0);
-         //TODO:    make it dependent only on TRI, no hardwired numbers
+         llvm::BitVector callKilledRegBitVector(vectorSize);
+         callKilledRegBitVector = TRI->getAllocatableSet(*MF);
+         callKilledRegBitVector.reset(Tiled::NoReg);
 
-         allocatableRegBitVector.reset(callPreservedBitVector);  // X &= ~Y
+         callKilledRegBitVector.reset(callPreservedBitVector);  // X &= ~Y
 
-         for (int reg = allocatableRegBitVector.find_first(); reg != -1; reg = allocatableRegBitVector.find_next(reg))
+         for (int reg = callKilledRegBitVector.find_first(); reg != -1; reg = callKilledRegBitVector.find_next(reg))
          {
             unsigned tag = vrInfo->GetTag(reg);
-            this->callKilledBitVector->set(tag);
+            this->callKilledRegBitVector->set(tag);
          }
       }
 
-      *killBitVector |= *(this->callKilledBitVector);
+      *killBitVector |= *(this->callKilledRegBitVector);
    }
 
    return hasDataflowDestination;

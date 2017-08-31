@@ -12,7 +12,11 @@
 #include "Liveness.h"
 #include "LiveRange.h"
 #include "Tile.h"
+#include "TargetRegisterAllocInfo.h"
+
 #include "llvm/CodeGen/ISDOpcodes.h"
+
+#define DEBUG_TYPE "tiled-conflicts"
 
 namespace Tiled
 {
@@ -62,6 +66,26 @@ ConflictGraph::HasConflict
    BitGraphs::UndirectedBitGraph * bitGraph = this->BitGraph;
 
    return bitGraph->TestEdge(liveRangeId1, liveRangeId2);
+
+}
+
+namespace {
+
+inline bool
+CanConflict
+(
+   GraphColor::Tile * tile,
+   LiveRange *        liveRange1,
+   LiveRange *        liveRange2
+)
+{
+   unsigned subIndexA, subIndexB;    // Unused return arguments
+   const llvm::TargetRegisterClass * liveRange1RC = liveRange1->BaseRegisterCategory();
+   const llvm::TargetRegisterClass * liveRange2RC = liveRange2->BaseRegisterCategory();
+
+   return tile->Allocator->TRI->getCommonSuperRegClass(
+     liveRange1RC, 1, liveRange2RC, 1, subIndexA, subIndexB) == nullptr;
+}
 
 }
 
@@ -163,10 +187,9 @@ ConflictGraph::AddGlobalConflicts
    // Get source live range of copy instruction.
    if ((instruction != nullptr) && (instruction->isCopy())) {
       const llvm::MachineOperand& sourceOperand(instruction->getOperand(1));
-      if (sourceOperand.isReg() && (instruction->getOperand(0)).isReg()) {
-         unsigned regNum = sourceOperand.getReg();
-         copySourceLiveRange = allocator->GetGlobalLiveRange(vrInfo->GetTag(regNum));
-      }
+      assert(sourceOperand.isReg() && (instruction->getOperand(0)).isReg());
+      unsigned regNum = sourceOperand.getReg();
+      copySourceLiveRange = allocator->GetGlobalLiveRange(vrInfo->GetTag(regNum));
    }
 
    doNotAllocateRegisterAliasTagBitVector = allocator->DoNotAllocateRegisterAliasTagBitVector;
@@ -184,7 +207,7 @@ ConflictGraph::AddGlobalConflicts
          if (doNotAllocateRegisterAliasTagBitVector->test(killGlobalAliasTag)) {
             continue;
          }
-       // allocatable physical register
+         // allocatable physical register
          killRegisterAliasTag = killGlobalAliasTag;
       }
 
@@ -205,11 +228,11 @@ ConflictGraph::AddGlobalConflicts
          liveRegisterAliasTag = notAnAliasTag;
 
          if (vrInfo->IsPhysicalRegisterTag(liveGlobalAliasTag)) {
-          if (doNotAllocateRegisterAliasTagBitVector->test(liveGlobalAliasTag)) {
+            if (doNotAllocateRegisterAliasTagBitVector->test(liveGlobalAliasTag)) {
                continue;
             }
-          // allocatable physical register
-          liveRegisterAliasTag = liveGlobalAliasTag;
+            // allocatable physical register
+            liveRegisterAliasTag = liveGlobalAliasTag;
          }
 
          liveGlobalLiveRange = allocator->GetGlobalLiveRange(liveGlobalAliasTag);
@@ -286,22 +309,18 @@ ConflictGraph::AddGlobalConflicts
             continue;
          }
 
-         if ((globalLiveRange == nullptr) || (conflictingGlobalLiveRange == nullptr)) {
+         if ((globalLiveRange == nullptr) || (conflictingGlobalLiveRange == nullptr))
             continue;
-         }
 
-         // note: This test is needed only for architectures with > 1 number of register categories
-         if (globalLiveRange->BaseRegisterCategory() != conflictingGlobalLiveRange->BaseRegisterCategory()) {
+         // Note: This test is only needed for architectures with > 1 number of register categories
+         if (CanConflict(tile, globalLiveRange, conflictingGlobalLiveRange))
             continue;
-         }
 
-         if (globalLiveRange->VrTag == conflictingGlobalLiveRange->VrTag) {
+         if (globalLiveRange->VrTag == conflictingGlobalLiveRange->VrTag)
             continue;
-         }
 
          // If we have a global live range and conflicting global live range, then add the
          // each global live range to the others conflicting live ranges.
-
          assert(!globalLiveRange->IsPhysicalRegister);
          assert(!conflictingGlobalLiveRange->IsPhysicalRegister);
          globalLiveRange->GlobalConflictAliasTagSet->set(conflictingGlobalLiveRange->VrTag);
@@ -390,7 +409,6 @@ ConflictGraph::BuildGlobalConflicts
 )
 {
    GraphColor::Liveness *             liveness = allocator->Liveness;
-   //Dataflow::RegisterLivenessWalker * registerLivenessWalker = liveness->RegisterLivenessWalker;
    Dataflow::LivenessData *           registerLivenessData;
 
    // Create temporary bit vectors.
@@ -415,8 +433,8 @@ ConflictGraph::BuildGlobalConflicts
          new GraphColor::SparseBitVectorVector((globalLiveRangeCount + 1), nullptr);
       tile->GlobalLiveRangeConflictsVector = globalLiveRangeConflictsVector;
 
-     Graphs::MachineBasicBlockVector * mbbVector = tile->BlockVector;
-     Graphs::MachineBasicBlockVector::reverse_iterator biter;
+      Graphs::MachineBasicBlockVector * mbbVector = tile->BlockVector;
+      Graphs::MachineBasicBlockVector::reverse_iterator biter;
 
       // foreach_block_in_tile_backward
       for (biter = mbbVector->rbegin(); biter != mbbVector->rend(); ++biter)
@@ -473,11 +491,9 @@ ConflictGraph::BuildGlobalConflicts
 
       GraphColor::LiveRangeVector * lrVector = allocator->GetGlobalLiveRangeEnumerator();
 
-     if (allocator->getNumRegisterCategories() > 1) {
-       // foreach_global_liverange_in_allocator
-       for (unsigned i = 1; i < lrVector->size(); ++i)
-       {
-          GraphColor::LiveRange *   globalLiveRange = (*lrVector)[i];
+      // foreach_global_liverange_in_allocator
+      for (unsigned i = 1; i < lrVector->size(); ++i) {
+         GraphColor::LiveRange *   globalLiveRange = (*lrVector)[i];
          llvm::SparseBitVector<> * allocatableRegistersAliasTagSet;
          llvm::SparseBitVector<> * globalConflictRegisterAliasTagSet;
 
@@ -487,8 +503,7 @@ ConflictGraph::BuildGlobalConflicts
             allocatableRegistersAliasTagSet = allocator->GetCategoryRegisters(globalLiveRange);
             (*globalConflictRegisterAliasTagSet) &= (*allocatableRegistersAliasTagSet);
          }
-       }
-     }
+      }
 
    }
 
@@ -580,11 +595,10 @@ ConflictGraph::BuildBitGraph()
 {
    this->InitializeBitGraph();
 
-   GraphColor::Tile *                 tile = this->Tile;
-   GraphColor::Allocator *            allocator = this->Allocator;
-   GraphColor::Liveness *             liveness = allocator->Liveness;
-   //Dataflow::RegisterLivenessWalker * registerLivenessWalker = liveness->RegisterLivenessWalker;
-   Dataflow::LivenessData *           registerLivenessData;
+   GraphColor::Tile *       tile = this->Tile;
+   GraphColor::Allocator *  allocator = this->Allocator;
+   GraphColor::Liveness *   liveness = allocator->Liveness;
+   Dataflow::LivenessData * registerLivenessData;
 
    // Create temporary bit vectors.
    llvm::SparseBitVector<> * liveBitVector = new llvm::SparseBitVector<>();
@@ -603,16 +617,16 @@ ConflictGraph::BuildBitGraph()
 
       registerLivenessData = liveness->GetRegisterLivenessData(block);
       (*liveBitVector) = (*registerLivenessData->LiveOutBitVector);
-
-#if defined(TILED_DEBUG_DUMPS)
-	  std::cout << "\nMBB#" << block->getNumber() << "   (Conflict/liveOutBitVector)" << std::endl;
-	  llvm::SparseBitVector<>::iterator a;
-	  std::cout << "  LiveOut:   {";
-	  for (a = liveBitVector->begin(); a != liveBitVector->end(); ++a) {
-		  std::cout << *a << ", ";
-	  }
-	  std::cout << "}" << std::endl;
-#endif
+      
+      DEBUG({
+         llvm::dbgs() << "\nMBB#" << block->getNumber() << "   (Conflict/liveOutBitVector)\n";
+         llvm::SparseBitVector<>::iterator a;
+         llvm::dbgs() << "  LiveOut:   {";
+         for (a = liveBitVector->begin(); a != liveBitVector->end(); ++a) {
+            llvm::dbgs() << *a << ", ";
+         }
+         llvm::dbgs() << "}\n";
+      });
 
       // Process each instruction in the block moving backwards calculating liveness, building
       // conflict graph and removing dead stores.
@@ -839,9 +853,8 @@ ConflictGraph::BuildBitGraph()
                      continue;
                   }
 
-                  if (liveRange->BaseRegisterCategory() != conflictLiveRange->BaseRegisterCategory()) {
+                  if (CanConflict(tile, liveRange, conflictLiveRange))
                      continue;
-                  }
 
                   bitGraph->AddEdge(liveRange->Id, conflictLiveRange->Id);
                }
@@ -948,7 +961,7 @@ ConflictGraph::AddConflictEdges
 )
 {
    GraphColor::Allocator *         allocator = this->Allocator;
-   Tiled::VR::Info *                 vrInfo = allocator->VrInfo;
+   Tiled::VR::Info *               vrInfo = allocator->VrInfo;
    GraphColor::Tile *              tile = this->Tile;
    BitGraphs::UndirectedBitGraph * bitGraph = this->BitGraph;
    unsigned                        definitionAliasTag;
@@ -962,8 +975,8 @@ ConflictGraph::AddConflictEdges
    bool                            isMaxIntegerKill = integerMaxKillBlockBitVector->test(basicBlockId);
    bool                            isMaxFloatKill = floatMaxKillBlockBitVector->test(basicBlockId);
    bool                            doPressureCalculation
-      = ((definitionBitVector != liveBitVector) && this->DoPressureCalculation && (!isMaxIntegerKill
-            || !isMaxFloatKill));
+      = ((definitionBitVector != liveBitVector) && this->DoPressureCalculation
+         && (!isMaxIntegerKill || !isMaxFloatKill));
    bool                            isFirstPass = true;
    unsigned                        maxIntegerRegisterCount = this->MaxIntegerRegisterCount;
    unsigned                        maxFloatRegisterCount = this->MaxFloatRegisterCount;
@@ -983,31 +996,27 @@ ConflictGraph::AddConflictEdges
       }
    }
 
-#if defined(TILED_DEBUG_DUMPS)
    if (instruction->isCall()) {
-      std::cout << "++++++ CALL instruction:" << std::endl;
-      instruction->dump();
-      std::cout << "\ndefinitionBitVector = { ";
-      llvm::SparseBitVector<>::iterator d;
+      DEBUG(
+         llvm::SparseBitVector<>::iterator d, l;
+         llvm::dbgs() << "++++++ CALL instruction:\n";
+         instruction->dump();
 
-      for (d = definitionBitVector->begin(); d != definitionBitVector->end(); ++d)
-      {
-         definitionAliasTag = *d;
-         std::cout << definitionAliasTag << ", ";
-      }
-      std::cout << "}" << std::endl;
+         llvm::dbgs() << "\ndefinitionBitVector = { ";
+         for (d = definitionBitVector->begin(); d != definitionBitVector->end(); ++d)
+         {
+            llvm::dbgs() << *d << ", ";
+         }
+         llvm::dbgs() << "}\n";
 
-      std::cout << "liveBitVector = { ";
-      llvm::SparseBitVector<>::iterator l;
-
-      for (l = liveBitVector->begin(); l != liveBitVector->end(); ++l)
-      {
-         liveAliasTag = *l;
-         std::cout << liveAliasTag << ", ";
-      }
-      std::cout << "}" << std::endl;
+         llvm::dbgs() << "liveBitVector = { ";
+         for (l = liveBitVector->begin(); l != liveBitVector->end(); ++l)
+         {
+            llvm::dbgs() << *l << ", ";
+         }
+         llvm::dbgs() << "}\n";
+      );
    }
-#endif
 
    // Loop through definition live ranges and currently live live ranges and
    // create conflicts as appropriate.
@@ -1018,9 +1027,7 @@ ConflictGraph::AddConflictEdges
    for (d = definitionBitVector->begin(); d != definitionBitVector->end(); ++d)
    {
       definitionAliasTag = *d;
-#if defined(TILED_DEBUG_DUMPS)
-      std::cout << "Def:" << definitionAliasTag << "  conflicts w/ Live:" << liveAliasTag << std::endl;
-#endif
+      //DEBUG(llvm::dbgs() << "Def:" << definitionAliasTag << "  conflicts w/ Live:" << liveAliasTag << "\n");
 
       GraphColor::LiveRange * definitionLiveRange = tile->GetLiveRange(definitionAliasTag);
       if (definitionLiveRange == nullptr) {
@@ -1035,13 +1042,11 @@ ConflictGraph::AddConflictEdges
          liveAliasTag = *l;
 
          GraphColor::LiveRange * liveRange = tile->GetLiveRange(liveAliasTag);
-         if (liveRange == nullptr) {
+         if (liveRange == nullptr)
             continue;
-         }
 
-         if (definitionLiveRange == liveRange) {
+         if (definitionLiveRange == liveRange)
             continue;
-         }
 
          // Optimization to allow preferencing across copies (ignore conflict).
 
@@ -1051,9 +1056,8 @@ ConflictGraph::AddConflictEdges
             continue;
          }
 
-         if (definitionLiveRange->BaseRegisterCategory() != liveRange->BaseRegisterCategory()) {
+         if (CanConflict(tile, liveRange, definitionLiveRange))
             continue;
-         }
 
          if (doPressureCalculation && isFirstPass) {
             const llvm::TargetRegisterClass * baseRegisterCategory = liveRange->BaseRegisterCategory();
@@ -1089,6 +1093,8 @@ ConflictGraph::AddConflictEdges
       }
    }
 }
+
+
 
 //-----------------------------------------------------------------------------
 //
@@ -1758,7 +1764,7 @@ SummaryConflictGraph::BuildBitGraph()
                }
             }
 
-            if (summaryLiveRange->BaseRegisterCategory() == conflictLiveRange->BaseRegisterCategory()) {
+            if (CanConflict(tile, summaryLiveRange, conflictLiveRange)) {
                bitGraph->AddEdge(conflictLiveRange->Id, summaryLiveRange->Id);
             }
          }

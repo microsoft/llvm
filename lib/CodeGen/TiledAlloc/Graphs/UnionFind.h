@@ -121,7 +121,6 @@ public:
    static UnionFind::IntToMemberMap *
    New
    (
-      //lifetime,
       unsigned size
    )
    {
@@ -147,7 +146,6 @@ private:
 
    IntToMemberMap
    (
-      //lifetime,
       unsigned size
    ) : UnionFind::UnorderedMap(size) {}
 

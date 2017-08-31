@@ -96,7 +96,7 @@ public:
    void
    RemoveFromSummary
    (
-      int tag
+      unsigned tag
    );
 
    void ResetDecision();

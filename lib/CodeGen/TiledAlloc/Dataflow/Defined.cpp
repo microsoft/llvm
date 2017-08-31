@@ -12,9 +12,7 @@
 #include "Defined.h"
 #include "../Graphs/Graph.h"
 
-#if defined(TILED_DEBUG_SUPPORT)
-#include <iostream>
-#endif
+#define DEBUG_TYPE "tiled-defined"
 
 namespace Tiled
 {
@@ -32,11 +30,6 @@ namespace Dataflow
 void
 DefinedWalker::StaticInitialize()
 {
-
-#if defined(TILED_DEBUG_SUPPORT)
-   DefinedWalker::debugControl = TILED_NEW_COMP_CTRL(L"Walker",
-      L"Defined walker");
-#endif
 
 }
 
@@ -133,9 +126,7 @@ DefinedWalker::EvaluateBlock
 
    assert(temporaryData && blockData);
 
-#if defined(TILED_DEBUG_DUMPS)
-   std::cout << "\nMBB#" << block->getNumber() << "   (DefinedWalker)" << std::endl;
-#endif
+   DEBUG(llvm::dbgs() << "\nMBB#" << block->getNumber() << "   (DefinedWalker)\n");
 
    llvm::SparseBitVector<> * outBitVector = temporaryData->OutBitVector;
    llvm::SparseBitVector<> * inBitVector = temporaryData->InBitVector;
@@ -168,9 +159,7 @@ DefinedWalker::EvaluateBlock
          //was: if (!isDanglingInstr(instruction)) {
          this->EvaluateInstruction(instruction, generateBitVector);
 
-#if defined(TILED_DEBUG_DUMPS)
-       instruction->dump();
-#endif
+         DEBUG(instruction->dump());
      }
 
       // If liveness walker has been provided, we can use it to trim definitions
@@ -194,14 +183,14 @@ DefinedWalker::EvaluateBlock
             vrInfo->OrMayPartialTags(vrTag, killBitVector);
          }
 
-#if defined(TILED_DEBUG_DUMPS)
-       llvm::SparseBitVector<>::iterator a;
-       std::cout << "  LiveIn:    {";
-       for (a = liveInBitVector->begin(); a != liveInBitVector->end(); ++a) {
-          std::cout << *a << ", ";
-       }
-       std::cout << "}" << std::endl;
-#endif // TILED_DEBUG_DUMPS
+         DEBUG({
+            llvm::SparseBitVector<>::iterator a;
+            llvm::dbgs() << "  LiveIn:    {";
+            for (a = liveInBitVector->begin(); a != liveInBitVector->end(); ++a) {
+               llvm::dbgs() << *a << ", ";
+            }
+            llvm::dbgs() << "}\n";
+         });
      }
    }
 
@@ -220,25 +209,25 @@ DefinedWalker::EvaluateBlock
    (*outBitVector) = (*inBitVector);
    (*outBitVector) |= (*generateBitVector);
 
-#if defined(TILED_DEBUG_DUMPS)
-   llvm::SparseBitVector<>::iterator a;
-   std::cout << "  Generate:  {";
-   for (a = generateBitVector->begin(); a != generateBitVector->end(); ++a) {
-      std::cout << *a << ", ";
-   }
-   std::cout << "}" << std::endl;
-   std::cout << "  Kill:      {";
-   for (a = killBitVector->begin(); a != killBitVector->end(); ++a) {
-      std::cout << *a << ", ";
-   }
-   std::cout << "}" << std::endl;
+   DEBUG({
+      llvm::SparseBitVector<>::iterator a;
+      llvm::dbgs() << "  Generate:  {";
+      for (a = generateBitVector->begin(); a != generateBitVector->end(); ++a) {
+         llvm::dbgs() << *a << ", ";
+      }
+      llvm::dbgs() << "}\n";
+      llvm::dbgs() << "  Kill:      {";
+      for (a = killBitVector->begin(); a != killBitVector->end(); ++a) {
+         llvm::dbgs() << *a << ", ";
+      }
+      llvm::dbgs() << "}\n";
 
-   std::cout << "\n  TmpLiveOut:   {";
-   for (a = outBitVector->begin(); a != outBitVector->end(); ++a) {
-      std::cout << *a << ", ";
-   }
-   std::cout << "}\n" << std::endl;
-#endif // TILED_DEBUG_DUMPS
+      llvm::dbgs() << "\n  TmpLiveOut:   {";
+      for (a = outBitVector->begin(); a != outBitVector->end(); ++a) {
+         llvm::dbgs() << *a << ", ";
+      }
+      llvm::dbgs() << "}\n\n";
+   });
 }
 
 //------------------------------------------------------------------------------

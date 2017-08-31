@@ -16,6 +16,7 @@
 
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/Target/TargetMachine.h"
 
 namespace Tiled
 {
@@ -1018,8 +1019,7 @@ Liveness::EnumerateLiveRanges
    llvm::SparseBitVector<> *     allocatableRegisterAliasTagSet = tile->AllocatableRegisterAliasTagSet;
    llvm::SparseBitVector<> *     killedRegisterAliasTagSet = tile->KilledRegisterAliasTagSet;
    llvm::SparseBitVector<> *     categoryRegisterAliasTagSet;
-      //This code supports only 1 category of registers, the vector is kept for future ports
-   llvm::MachineFunction *          MF = allocator->FunctionUnit->machineFunction;
+   llvm::MachineFunction *       MF = allocator->FunctionUnit->machineFunction;
    const llvm::TargetRegisterInfo * TRI = MF->getSubtarget().getRegisterInfo();
    unsigned                      aliasTag;
    unsigned                      reg;
@@ -1123,12 +1123,13 @@ Liveness::EnumerateLiveRanges
          // foreach_dataflow_source_and_destination_opnd => foreach_register_source_and_destination_opnd
          foreach_source_and_destination_opnd_v2(operand, instruction, end_iter)
             reg = operand->getReg();
-            if (reg == 0 || allocator->GetRegisterCategory(reg) == nullptr) {
+
+            registerCategory = allocator->GetRegisterCategory(reg);
+            if (reg == 0 || registerCategory == nullptr || !(registerCategory->isAllocatable())) {
                next_source_and_destination_opnd_v2(operand, instruction, end_iter);
                continue;
             }
 
-            registerCategory = allocator->GetRegisterCategory(reg);
             registerCategoryId = registerCategory->getID();
 
             if (!(reg == VR::Constants::InitialPseudoReg || VR::Info::IsVirtualRegister(reg))) {
@@ -1224,7 +1225,6 @@ Liveness::EnumerateLiveRanges
       llvm::MachineInstr * firstInstruction = nonEmptyBlock? &(block->front()) : nullptr;
       llvm::MachineInstr * firstRealInstruction = nonEmptyBlock ? this->FindFirstRealInstruction(block) : nullptr;
       bool                 isRegionEntry = nonEmptyBlock ? (firstInstruction->isLabel()) : false;
-        /*TODO ??: && (firstInstruction->IsBoundary);   //attribute on entry label of a bunch of region kinds */
 
       llvm::MachineBasicBlock::instr_iterator(i);
 
@@ -1232,7 +1232,6 @@ Liveness::EnumerateLiveRanges
       for (i = block->instr_begin(); i != block->instr_end(); ++i)
       {
          llvm::MachineInstr * instruction = &(*i);
-
 #if defined(TILED_DEBUG_DUMPS)
          instruction->dump();
 #endif
@@ -2335,7 +2334,7 @@ Liveness::TransferInstruction
    // Don't transfer dangling definitions on the last instruction in the
    // block; these are considered part of the unique non-EH successor.
 
-   registerLivenessWalker->TransferDestinations(instruction, generateBitVector, killBitVector, false, true);
+   registerLivenessWalker->TransferDestinations(instruction, generateBitVector, killBitVector);
 
    // Process instructions gens.
    // Always transfer source liveness
@@ -2440,8 +2439,8 @@ Liveness::RemoveDeadCode
       // Merge incoming dataflow and initialize liveness.
 
       temporaryRegisterLivenessData = registerLivenessWalker->Merge(block, registerLivenessData);
-	   registerLivenessData->Update(temporaryRegisterLivenessData);
-	   *liveBitVector = *(registerLivenessData->LiveOutBitVector);
+      registerLivenessData->Update(temporaryRegisterLivenessData);
+      *liveBitVector = *(registerLivenessData->LiveOutBitVector);
 
       // Process each instruction in the block moving backwards calculating liveness and removing dead code.
 
@@ -2541,7 +2540,6 @@ Liveness::UpdateInstruction
    llvm::SparseBitVector<> * killBitVector
 )
 {
-   (instruction);
    // Update liveness with gens and kills.
 
    liveBitVector->intersectWithComplement(*killBitVector);

@@ -877,7 +877,6 @@ public:
 
    void UpdateGlobalConflicts();
 
-   void computeRegsOverwrittenInTile();
    void pruneCompensatingCopysOfTile();
 
 public:

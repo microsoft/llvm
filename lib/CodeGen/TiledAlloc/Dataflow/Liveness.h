@@ -237,7 +237,7 @@ public:
    void
    MarkNotTracked
    (
-      Tiled::VR::Info *     vrInfo,
+      Tiled::VR::Info *   vrInfo,
       unsigned            tag
    );
 
@@ -253,7 +253,7 @@ protected:
    bool
    IsTracked
    (
-      Tiled::VR::Info *      vrInfo,
+      Tiled::VR::Info *    vrInfo,
       unsigned             tag
    );
 
@@ -261,10 +261,8 @@ protected:
    TransferDestinations
    (
       const llvm::MachineInstr * instruction,
-      llvm::SparseBitVector<> * generateBitVector,
-      llvm::SparseBitVector<> * killBitVector,
-      bool                      doTransferDangling,
-      bool                      doTransferNonDangling
+      llvm::SparseBitVector<> *  generateBitVector,
+      llvm::SparseBitVector<> *  killBitVector
    ) = 0;
 
    virtual bool
@@ -319,9 +317,7 @@ public:
    (
       IR::Instruction *   instruction,
       BitVector::Sparse * generateBitVector,
-      BitVector::Sparse * killBitVector,
-      bool                doTransferDangling,
-      bool                doTransferNonDangling
+      BitVector::Sparse * killBitVector
    ) override;
 
    bool
@@ -363,10 +359,8 @@ public:
    TransferDestinations
    (
       const llvm::MachineInstr * instruction,
-      llvm::SparseBitVector<> * generateBitVector,
-      llvm::SparseBitVector<> * killBitVector,
-      bool                doTransferDangling,
-      bool                doTransferNonDangling
+      llvm::SparseBitVector<> *  generateBitVector,
+      llvm::SparseBitVector<> *  killBitVector
    ) override;
 
    bool
@@ -378,7 +372,7 @@ public:
    ) override;
 
 private:
-   llvm::SparseBitVector<> * callKilledBitVector;
+   llvm::SparseBitVector<> * callKilledRegBitVector;
 };
 } // namespace Dataflow
 } // namespace Tiled

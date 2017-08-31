@@ -233,7 +233,6 @@ public:
    static GraphColor::AliasTagToSpillRecordIterableMap *
    New
    (
-      //lifetime,
       unsigned size
    )
    {
@@ -333,10 +332,7 @@ public:
 
 private:
 
-   AliasTagToSpillRecordIterableMap
-   (
-      //lifetime,
-   )
+   AliasTagToSpillRecordIterableMap()
       : GraphColor::AliasTagToSpillRecordMap()
    {
          this->firstIterationHashItem = nullptr;
@@ -1270,6 +1266,7 @@ public:
    unsigned                InstructionCount;
    double                  InstructionShareDecayRateValue;
    unsigned                InstructionShareLimit;
+   unsigned                inFunctionSpilledLRs;
 
    static OperandToSpillExtensionObjectMap OperandToSpillExtension;
 
@@ -1436,14 +1433,6 @@ public:
    (
       llvm::MachineInstr * instruction,
       unsigned             srcOperandIdx
-   );
-
-   static void
-   AddExtensionObject
-   (
-      llvm::MachineInstr *   instruction,
-      unsigned               srcOperandIdx,
-      SpillExtensionObject * object
    );
 
    static void

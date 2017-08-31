@@ -13,7 +13,7 @@
 
 #include "Traverser.h"
 
-static const char * tiledDbgMsg = "tiled";
+#define DEBUG_TYPE "tiled-traverser"
 
 namespace Tiled
 {
@@ -156,13 +156,13 @@ Walker::Initialize
   
    // ISSUE-TODO-aasmith-2015/11/07: Remove RTTI which is not allowed in LLVM
 #if defined(_MSC_VER)
-   DEBUG_WITH_TYPE(tiledDbgMsg, llvm::errs() << "Before allocateData " << typeid(this).name() << "\n");
+   DEBUG(llvm::dbgs() << "Before allocateData " << typeid(this).name() << "\n");
 #else
-   DEBUG_WITH_TYPE(tiledDbgMsg, llvm::errs() << "Before allocateData\n");
+   DEBUG(llvm::dbgs() << "Before allocateData\n");
 #endif
   
    this->AllocateData((this->MaxBlockId + 1) + 1 + 1);
-   DEBUG_WITH_TYPE(tiledDbgMsg, llvm::errs() << "After allocateData\n");
+   DEBUG(llvm::dbgs() << "After allocateData\n");
    this->InitializeData = (*this->BlockDataArray)[1];
    this->TemporaryData = (*this->BlockDataArray)[0];
 
@@ -358,7 +358,7 @@ Walker::AllocateData
    unsigned numberElements
 )
 {
-   DEBUG_WITH_TYPE(tiledDbgMsg, llvm::errs() << "Inside allocateData\n");
+   DEBUG(llvm::dbgs() << "Inside allocateData\n");
    assert(0 && "Implement AllocateData if initializing from scratch");
 }
 
@@ -837,11 +837,11 @@ Walker::GetBlockDataInternal
    // (rather than indexing too far)
 
    if (id > this->MaxBlockId + 2) {
-      DEBUG_WITH_TYPE(tiledDbgMsg, llvm::errs() << "ID is " << id << ". Returning nullptr\n");
+      DEBUG(llvm::dbgs() << "ID is " << id << ". Returning nullptr\n");
       return nullptr;
    }
    else {
-      DEBUG_WITH_TYPE(tiledDbgMsg, llvm::errs() << "ID is " << id << " and BlockData.size is " << this->BlockDataArray->size() << "\n");
+      DEBUG(llvm::dbgs() << "ID is " << id << " and BlockData.size is " << this->BlockDataArray->size() << "\n");
       return (*this->BlockDataArray)[id];
    }
 }
