@@ -155,9 +155,41 @@ add_llvm_library(LLVMCodeGen
   WinEHPrepare.cpp
   XRayInstrumentation.cpp
 
+  TiledAlloc/Cost.cpp
+  TiledAlloc/Preference.cpp
+  TiledAlloc/Alias/Alias.cpp
+  TiledAlloc/Dataflow/AvailableDefinitions.cpp
+  TiledAlloc/Dataflow/Dataflow.cpp
+  TiledAlloc/Dataflow/Defined.cpp
+  TiledAlloc/Dataflow/LivenessWalker.cpp
+  TiledAlloc/Dataflow/Traverser.cpp
+  TiledAlloc/GraphColor/Allocator.cpp
+  TiledAlloc/GraphColor/AvailableExpressions.cpp
+  TiledAlloc/GraphColor/ConflictGraph.cpp
+  TiledAlloc/GraphColor/CostModel.cpp
+  TiledAlloc/GraphColor/GraphColorGraph.cpp
+  TiledAlloc/GraphColor/Liveness.cpp
+  TiledAlloc/GraphColor/LiveRange.cpp
+  TiledAlloc/GraphColor/PreferenceGraph.cpp
+  TiledAlloc/GraphColor/SpillOptimizer.cpp
+  TiledAlloc/GraphColor/TargetRegisterAllocInfo.cpp
+  TiledAlloc/GraphColor/Tile.cpp
+  TiledAlloc/Graphs/Graph.cpp
+  TiledAlloc/Graphs/BitGraph.cpp
+  TiledAlloc/Graphs/NodeWalker.cpp
+  TiledAlloc/Graphs/NumberNodeVisitor.cpp
+  TiledAlloc/Graphs/NodeFlowOrder.cpp
+  TiledAlloc/Graphs/UnionFind.cpp
+
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen/PBQP
+
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/TiledAlloc/Graphs
+  ${CMAKE_CURRENT_SOURCE_DIR}/TiledAlloc/GraphColor
+  ${CMAKE_CURRENT_SOURCE_DIR}/TiledAlloc/BitVector
+  ${CMAKE_CURRENT_SOURCE_DIR}/TiledAlloc/Dataflow
 
   LINK_LIBS ${LLVM_PTHREAD_LIB}
 
@@ -165,8 +197,13 @@ add_llvm_library(LLVMCodeGen
   intrinsics_gen
   )
 
+set(INLFILES TiledAlloc/cost.inl)
+  
+set_source_files_properties(${INLFILES} PROPERTIES LANGUAGE CXX)
+
+include_directories(${LLVM_MAIN_SRC_DIR}/lib)
+
 add_subdirectory(SelectionDAG)
 add_subdirectory(AsmPrinter)
 add_subdirectory(MIRParser)
 add_subdirectory(GlobalISel)
-add_subdirectory(TiledAlloc)
