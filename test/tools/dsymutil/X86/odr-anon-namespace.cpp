@@ -9,7 +9,7 @@
 #ifdef FILE1
 // Currently dsymutil will unique the contents of anonymous
 // namespaces if they are from the same file/line. Force this
-// namespace to appear different eventhough it's the same (this
+// namespace to appear different even though it's the same (this
 // uniquing is actually a bug kept for backward compatibility, see the
 // comments in DeclContextTree::getChildDeclContext()).
 #line 42
